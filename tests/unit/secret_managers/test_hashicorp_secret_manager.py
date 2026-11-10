@@ -4,12 +4,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 import respx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
+from pydantic import JsonValue, TypeAdapter
 
 import litellm.proxy.proxy_server
 from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretManager
@@ -17,6 +19,7 @@ from litellm.secret_managers.hashicorp_secret_manager import HashicorpSecretMana
 VAULT_ADDR: Final = "http://vault.test:8200"
 LOGIN_RESPONSE: Final = {"auth": {"client_token": "hvs.login-token", "lease_duration": 3600}}
 SECRET_RESPONSE: Final = {"data": {"data": {"key": "sk-from-vault", "password": "pw-from-vault"}}}
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 NAMESPACE_ENV_VARS: Final = ("HCP_VAULT_NAMESPACE", "HCP_VAULT_LOGIN_NAMESPACE", "HCP_VAULT_SECRET_NAMESPACE")
 PARITY_ENV_VARS: Final = (
@@ -42,7 +45,10 @@ def _build_manager(monkeypatch: pytest.MonkeyPatch, env: Mapping[str, str]) -> H
     monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
     for name in NAMESPACE_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    for name in ("HCP_VAULT_CLIENT_CERT", "HCP_VAULT_CLIENT_KEY", "HCP_VAULT_CERT_ROLE"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HCP_VAULT_ADDR", VAULT_ADDR)
+    monkeypatch.delenv("HCP_VAULT_TOKEN", raising=False)
     monkeypatch.setenv("HCP_VAULT_APPROLE_ROLE_ID", "role-id")
     monkeypatch.setenv("HCP_VAULT_APPROLE_SECRET_ID", "secret-id")
     for name, value in env.items():
@@ -210,17 +216,18 @@ async def test_async_write_and_read_share_the_secret_namespace_target(monkeypatc
 
 
 def _write_self_signed_cert(directory: Path) -> tuple[Path, Path]:
-    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key: Final = ec.derive_private_key(1, ec.SECP256R1())
     name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "litellm-test")])
-    now: Final = datetime.datetime.now(datetime.timezone.utc)
+    valid_from: Final = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+    valid_until: Final = datetime.datetime(2049, 12, 31, tzinfo=datetime.timezone.utc)
     certificate: Final = (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
         .public_key(private_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now)
-        .not_valid_after(now + datetime.timedelta(days=1))
+        .serial_number(1)
+        .not_valid_before(valid_from)
+        .not_valid_after(valid_until)
         .sign(private_key, hashes.SHA256())
     )
     cert_path: Final = directory / "client.crt"
@@ -242,11 +249,13 @@ def test_tls_login_uses_login_namespace(monkeypatch: pytest.MonkeyPatch, tmp_pat
     monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
     for name in NAMESPACE_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("HCP_VAULT_TOKEN", raising=False)
     monkeypatch.delenv("HCP_VAULT_APPROLE_ROLE_ID", raising=False)
     monkeypatch.delenv("HCP_VAULT_APPROLE_SECRET_ID", raising=False)
     monkeypatch.setenv("HCP_VAULT_ADDR", VAULT_ADDR)
     monkeypatch.setenv("HCP_VAULT_CLIENT_CERT", str(cert))
     monkeypatch.setenv("HCP_VAULT_CLIENT_KEY", str(key))
+    monkeypatch.setenv("HCP_VAULT_CERT_ROLE", "test-role")
     monkeypatch.setenv("HCP_VAULT_NAMESPACE", "admin")
     monkeypatch.setenv("HCP_VAULT_LOGIN_NAMESPACE", "root")
     manager: Final = HashicorpSecretManager()
@@ -254,6 +263,349 @@ def test_tls_login_uses_login_namespace(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
     assert manager._auth_via_tls_cert() == "hvs.login-token"
     assert login_route.calls.last.request.headers["X-Vault-Namespace"] == "root"
+    assert _JSON_OBJECT.validate_json(login_route.calls.last.request.content) == {"name": "test-role"}
+    assert manager.cache.get_cache("hcp_vault_token") == "hvs.login-token"
+
+
+@respx.mock
+def test_hashicorp_secret_manager_get_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager: Final = _build_manager(monkeypatch, {"HCP_VAULT_NAMESPACE": "admin"})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    read_route: Final = respx.get(f"{VAULT_ADDR}/v1/admin/secret/data/sample-secret-mock").respond(
+        json=SECRET_RESPONSE
+    )
+
+    assert manager.sync_read_secret("sample-secret-mock") == "sk-from-vault"
+
+    assert read_route.call_count == 1
+    assert read_route.calls.last.request.headers["X-Vault-Token"] == "hvs.login-token"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_write_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {"HCP_VAULT_NAMESPACE": "admin"})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    write_route: Final = respx.post(f"{VAULT_ADDR}/v1/admin/secret/data/sample-secret").respond(
+        json={"data": {"version": 1}}
+    )
+
+    response: Final = await manager.async_write_secret("sample-secret", "value-mock")
+
+    assert response == {"data": {"version": 1}}
+    assert write_route.call_count == 1
+    assert _JSON_OBJECT.validate_json(write_route.calls.last.request.content) == {"data": {"key": "value-mock"}}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_write_secret_with_team_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    write_route: Final = respx.post(
+        f"{VAULT_ADDR}/v1/team-namespace/kv-team/data/teams/custom/team-secret"
+    ).respond(json={"data": {"version": 1}})
+    settings: Final = {
+        "secret_manager_settings": {
+            "namespace": "team-namespace",
+            "mount": "kv-team",
+            "path_prefix": "teams/custom",
+            "data": "password",
+        }
+    }
+
+    response: Final = await manager.async_write_secret(
+        "team-secret", "value-mock", optional_params=settings
+    )
+
+    assert response == {"data": {"version": 1}}
+    assert _JSON_OBJECT.validate_json(write_route.calls.last.request.content) == {"data": {"password": "value-mock"}}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_delete_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {"HCP_VAULT_NAMESPACE": "admin"})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    delete_route: Final = respx.delete(f"{VAULT_ADDR}/v1/admin/secret/data/sample-secret").respond(
+        status_code=204
+    )
+
+    response: Final = await manager.async_delete_secret("sample-secret")
+
+    assert response == {
+        "status": "success",
+        "message": "Secret sample-secret deleted successfully",
+    }
+    assert delete_route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_delete_secret_with_team_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    delete_route: Final = respx.delete(
+        f"{VAULT_ADDR}/v1/team-namespace/kv-team/data/teams/custom/team-secret"
+    ).respond(status_code=204)
+    settings: Final = {
+        "secret_manager_settings": {
+            "namespace": "team-namespace",
+            "mount": "kv-team",
+            "path_prefix": "teams/custom",
+        }
+    }
+
+    response: Final = await manager.async_delete_secret("team-secret", optional_params=settings)
+
+    assert response == {
+        "status": "success",
+        "message": "Secret team-secret deleted successfully",
+    }
+    assert delete_route.call_count == 1
+
+
+@respx.mock
+def test_hashicorp_secret_manager_approle_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager: Final = _build_manager(
+        monkeypatch,
+        {
+            "HCP_VAULT_APPROLE_ROLE_ID": "test-role-id-123",
+            "HCP_VAULT_APPROLE_SECRET_ID": "test-secret-id-456",
+            "HCP_VAULT_APPROLE_MOUNT_PATH": "approle",
+        },
+    )
+    login_route: Final = respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+
+    assert manager._auth_via_approle() == "hvs.login-token"
+
+    assert _JSON_OBJECT.validate_json(login_route.calls.last.request.content) == {
+        "role_id": "test-role-id-123",
+        "secret_id": "test-secret-id-456",
+    }
+    assert manager.cache.get_cache("hcp_vault_approle_token") == "hvs.login-token"
+
+
+def test_hashicorp_custom_mount_and_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager: Final = _build_manager(monkeypatch, {"HCP_VAULT_NAMESPACE": "admin"})
+
+    assert manager.get_url("my-secret") == f"{VAULT_ADDR}/v1/admin/secret/data/my-secret"
+    assert manager.get_url("my-secret", mount_name="kv") == f"{VAULT_ADDR}/v1/admin/kv/data/my-secret"
+    assert manager.get_url("my-secret", path_prefix="myapp") == (
+        f"{VAULT_ADDR}/v1/admin/secret/data/myapp/my-secret"
+    )
+    assert manager.get_url("my-secret", mount_name="kv", path_prefix="production") == (
+        f"{VAULT_ADDR}/v1/admin/kv/data/production/my-secret"
+    )
+
+
+@pytest.mark.parametrize(
+    "malicious_secret_name",
+    [
+        "../../../other-app/creds",
+        "litellm/../../secret",
+        "foo\nbar",
+        "foo\u2028bar",
+        "foo\u2029bar",
+        "foo\x85bar",
+    ],
+)
+def test_hashicorp_get_url_rejects_path_traversal(
+    monkeypatch: pytest.MonkeyPatch, malicious_secret_name: str
+) -> None:
+    manager: Final = _build_manager(monkeypatch, {})
+
+    with pytest.raises(ValueError, match="Invalid secret_name"):
+        manager.get_url(malicious_secret_name)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_rotate_secret_different_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    current_route: Final = respx.get(f"{VAULT_ADDR}/v1/secret/data/old-secret").respond(
+        json={"data": {"data": {"key": "old-secret-value"}}}
+    )
+    write_route: Final = respx.post(f"{VAULT_ADDR}/v1/secret/data/new-secret").respond(
+        json={"data": {"version": 1}}
+    )
+    new_route: Final = respx.get(f"{VAULT_ADDR}/v1/secret/data/new-secret").respond(
+        json={"data": {"data": {"key": "new-secret-value"}}}
+    )
+    delete_route: Final = respx.delete(f"{VAULT_ADDR}/v1/secret/data/old-secret").respond(
+        status_code=204
+    )
+
+    response: Final = await manager.async_rotate_secret(
+        "old-secret", "new-secret", "new-secret-value"
+    )
+
+    assert response == {"data": {"version": 1}}
+    assert current_route.call_count == 1
+    assert _JSON_OBJECT.validate_json(write_route.calls.last.request.content) == {
+        "data": {"key": "new-secret-value", "description": "Rotated from old-secret"}
+    }
+    assert new_route.call_count == 1
+    assert delete_route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_rotate_secret_same_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    secret_route: Final = respx.get(f"{VAULT_ADDR}/v1/secret/data/same-secret").mock(
+        side_effect=[
+            httpx.Response(200, json={"data": {"data": {"key": "old-secret-value"}}}),
+            httpx.Response(200, json={"data": {"data": {"key": "updated-secret-value"}}}),
+        ]
+    )
+    write_route: Final = respx.post(f"{VAULT_ADDR}/v1/secret/data/same-secret").respond(
+        json={"data": {"version": 1}}
+    )
+    delete_route: Final = respx.delete(f"{VAULT_ADDR}/v1/secret/data/same-secret").respond(
+        status_code=204
+    )
+
+    response: Final = await manager.async_rotate_secret(
+        "same-secret", "same-secret", "updated-secret-value"
+    )
+
+    assert response == {"data": {"version": 1}}
+    assert secret_route.call_count == 2
+    assert write_route.call_count == 1
+    assert delete_route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_rotate_secret_current_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    respx.get(f"{VAULT_ADDR}/v1/secret/data/non-existent").respond(
+        status_code=404, text="Not Found"
+    )
+
+    response: Final = await manager.async_rotate_secret(
+        "non-existent", "new-secret", "new-value"
+    )
+
+    assert response["status"] == "error"
+    assert "non-existent" in response["message"]
+    assert "not found" in response["message"].lower()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_rotate_secret_write_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    respx.get(f"{VAULT_ADDR}/v1/secret/data/old-secret").respond(
+        json={"data": {"data": {"key": "old-secret-value"}}}
+    )
+    write_route: Final = respx.post(f"{VAULT_ADDR}/v1/secret/data/new-secret").respond(
+        json={"status": "error", "message": "Write failed"}
+    )
+
+    response: Final = await manager.async_rotate_secret(
+        "old-secret", "new-secret", "new-value"
+    )
+
+    assert response == {"status": "error", "message": "Write failed"}
+    assert write_route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_rotate_secret_with_team_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    current_route: Final = respx.get(
+        f"{VAULT_ADDR}/v1/team-namespace/kv-team/data/teams/custom/team-old-secret"
+    ).respond(json={"data": {"data": {"password": "old-secret-value"}}})
+    write_route: Final = respx.post(
+        f"{VAULT_ADDR}/v1/team-namespace/kv-team/data/teams/custom/team-new-secret"
+    ).respond(json={"data": {"version": 1}})
+    new_route: Final = respx.get(
+        f"{VAULT_ADDR}/v1/team-namespace/kv-team/data/teams/custom/team-new-secret"
+    ).respond(json={"data": {"data": {"password": "new-team-secret-value"}}})
+    delete_route: Final = respx.delete(
+        f"{VAULT_ADDR}/v1/team-namespace/kv-team/data/teams/custom/team-old-secret"
+    ).respond(status_code=204)
+    settings: Final = {
+        "secret_manager_settings": {
+            "namespace": "team-namespace",
+            "mount": "kv-team",
+            "path_prefix": "teams/custom",
+            "data": "password",
+        }
+    }
+
+    response: Final = await manager.async_rotate_secret(
+        "team-old-secret", "team-new-secret", "new-team-secret-value", optional_params=settings
+    )
+
+    assert response == {"data": {"version": 1}}
+    assert current_route.call_count == 1
+    assert _JSON_OBJECT.validate_json(write_route.calls.last.request.content) == {
+        "data": {
+            "password": "new-team-secret-value",
+            "description": "Rotated from team-old-secret",
+        }
+    }
+    assert new_route.call_count == 1
+    assert delete_route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_hashicorp_secret_manager_rotate_secret_value_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    manager: Final = _build_manager(monkeypatch, {})
+    respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
+    respx.get(f"{VAULT_ADDR}/v1/secret/data/old-secret").respond(
+        json={"data": {"data": {"key": "old-secret-value"}}}
+    )
+    respx.post(f"{VAULT_ADDR}/v1/secret/data/new-secret").respond(
+        json={"data": {"version": 1}}
+    )
+    respx.get(f"{VAULT_ADDR}/v1/secret/data/new-secret").respond(
+        json={"data": {"data": {"key": "different-value"}}}
+    )
+
+    response: Final = await manager.async_rotate_secret(
+        "old-secret", "new-secret", "expected-value"
+    )
+
+    assert response["status"] == "error"
+    assert "mismatch" in response["message"].lower()
+    assert "expected-value" in response["message"]
 
 
 with Path(__file__).with_name("hashicorp_vault_parity.json").open() as parity_file:

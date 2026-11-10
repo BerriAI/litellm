@@ -1,3 +1,4 @@
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.image_generation.gpt_transformation import (
     GPTImageGenerationConfig,
 )
@@ -33,5 +34,4 @@ class LiteLLMProxyImageGenerationConfig(GPTImageGenerationConfig):
         api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
         if api_base is None:
             raise ValueError("api_base not set for LiteLLM Proxy route. Set in env via `LITELLM_PROXY_API_BASE`")
-        api_base = api_base.rstrip("/")
-        return f"{api_base}/images/generations"
+        return join_api_base(api_base, "images/generations")

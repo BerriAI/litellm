@@ -1,10 +1,19 @@
 "use client";
 
+import type { ParseKeys } from "i18next";
 import { CircleHelp } from "lucide-react";
 import React, { useEffect, useId } from "react";
-import { useController, type Control, type ControllerRenderProps, type RegisterOptions } from "react-hook-form";
+import { useTranslation } from "react-i18next";
+import {
+  useController,
+  useWatch,
+  type Control,
+  type ControllerRenderProps,
+  type RegisterOptions,
+} from "react-hook-form";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   getLoggingOnlyScopeOptions,
@@ -22,6 +31,7 @@ export interface GuardrailCriterion {
 export interface GuardrailFormValues extends Record<string, unknown> {
   criteria?: GuardrailCriterion[];
   logging_only_scope_choice?: LoggingOnlyScopeChoice;
+  logging_only_continue_on_input_failure?: boolean;
 }
 export type GuardrailFormControl = Control<GuardrailFormValues>;
 export type GuardrailFieldRules = Pick<RegisterOptions<GuardrailFormValues, string>, "validate">;
@@ -113,22 +123,24 @@ export const GuardrailField: React.FC<GuardrailFieldProps> = ({
   );
 };
 
-const SKIP_MESSAGE_ITEMS = [
-  { label: "Use global default", value: "inherit" },
-  { label: "Yes — exclude from guardrail scan", value: "yes" },
-  { label: "No — always include in scan", value: "no" },
+const SKIP_MESSAGE_ITEMS: { labelKey: ParseKeys; value: string }[] = [
+  { labelKey: "guardrails.formField.skipMessage.options.inherit", value: "inherit" },
+  { labelKey: "guardrails.formField.skipMessage.options.yes", value: "yes" },
+  { labelKey: "guardrails.formField.skipMessage.options.no", value: "no" },
 ];
 
 export const SkipMessageSelect: React.FC<{ control: GuardrailFieldControlProps }> = ({ control }) => {
+  const { t } = useTranslation();
   const { id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy } = control;
+  const items = SKIP_MESSAGE_ITEMS.map(({ labelKey, value: itemValue }) => ({ label: t(labelKey), value: itemValue }));
 
   return (
-    <Select items={SKIP_MESSAGE_ITEMS} value={asText(value) || null} onValueChange={onChange}>
+    <Select items={items} value={asText(value) || null} onValueChange={onChange}>
       <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy} className="w-full">
-        <SelectValue placeholder="Select an option" />
+        <SelectValue placeholder={t("guardrails.formField.skipMessage.placeholder")} />
       </SelectTrigger>
       <SelectContent>
-        {SKIP_MESSAGE_ITEMS.map((item) => (
+        {items.map((item) => (
           <SelectItem key={item.value} value={item.value}>
             {item.label}
           </SelectItem>
@@ -142,8 +154,9 @@ export const LoggingOnlyScopeSelect: React.FC<{
   control: GuardrailFieldControlProps;
   directionalScopeSupported: boolean;
 }> = ({ control, directionalScopeSupported }) => {
+  const { t } = useTranslation();
   const { id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy } = control;
-  const items = getLoggingOnlyScopeOptions(directionalScopeSupported);
+  const items = getLoggingOnlyScopeOptions(directionalScopeSupported, t);
 
   useEffect(() => {
     const currentChoice = isLoggingOnlyScopeChoice(value) ? value : "default";
@@ -154,7 +167,7 @@ export const LoggingOnlyScopeSelect: React.FC<{
   return (
     <Select items={items} value={asText(value) || "default"} onValueChange={onChange}>
       <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy} className="w-full">
-        <SelectValue placeholder="Select an option" />
+        <SelectValue placeholder={t("guardrails.formField.loggingOnlyScope.placeholder")} />
       </SelectTrigger>
       <SelectContent>
         {items.map((item) => (
@@ -172,20 +185,45 @@ export const LoggingOnlyScopeField: React.FC<{
   mode: unknown;
   directionalScopeSupported: boolean;
 }> = ({ control, mode, directionalScopeSupported }) => {
+  const { t } = useTranslation();
+  const scopeChoice = useWatch({ control, name: "logging_only_scope_choice" });
+  const continueDisabled = scopeChoice === "input" || scopeChoice === "output";
   if (!modeIncludesLoggingOnly(mode)) return null;
 
   return (
-    <GuardrailField
-      control={control}
-      name="logging_only_scope_choice"
-      label={labelWithHint(
-        "Logging only scope",
-        "Which direction a logging_only scan observes. Observe-only scans never block; pre_call and post_call on this guardrail still block.",
-      )}
-    >
-      {(fieldControl) => (
-        <LoggingOnlyScopeSelect control={fieldControl} directionalScopeSupported={directionalScopeSupported} />
-      )}
-    </GuardrailField>
+    <>
+      <GuardrailField
+        control={control}
+        name="logging_only_scope_choice"
+        label={labelWithHint(
+          t("guardrails.formField.loggingOnlyScope.label"),
+          t("guardrails.formField.loggingOnlyScope.hint"),
+        )}
+      >
+        {(fieldControl) => (
+          <LoggingOnlyScopeSelect control={fieldControl} directionalScopeSupported={directionalScopeSupported} />
+        )}
+      </GuardrailField>
+      <GuardrailField
+        control={control}
+        name="logging_only_continue_on_input_failure"
+        label={labelWithHint(
+          t("guardrails.formField.continueOnInputFailure.label"),
+          t("guardrails.formField.continueOnInputFailure.hint"),
+        )}
+      >
+        {(fieldControl) => (
+          <Switch
+            id={fieldControl.id}
+            checked={!continueDisabled && fieldControl.value === true}
+            disabled={continueDisabled}
+            onCheckedChange={fieldControl.onChange}
+            aria-invalid={fieldControl["aria-invalid"]}
+            aria-describedby={fieldControl["aria-describedby"]}
+            aria-label={t("guardrails.formField.continueOnInputFailure.label")}
+          />
+        )}
+      </GuardrailField>
+    </>
   );
 };

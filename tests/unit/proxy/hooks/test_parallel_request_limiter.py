@@ -3,7 +3,7 @@ Unit Tests for the max parallel request limiter v1 for the proxy
 """
 
 import itertools
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from typing import Final
 
@@ -15,8 +15,8 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitErro
 from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
-from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.types.utils import EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.types.utils import CallTypes, EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
 
 FROZEN_INSTANT: Final = datetime(2026, 1, 31, 23, 59, 30)
 LAST_MICROSECOND_OF_JANUARY: Final = datetime(2026, 1, 31, 23, 59, 59, 999999)
@@ -38,6 +38,39 @@ def _clock_rolling_over_after_first_read() -> Callable[[], datetime]:
     return _clock_reading(
         itertools.chain([LAST_MICROSECOND_OF_JANUARY], itertools.repeat(FIRST_MICROSECOND_OF_FEBRUARY))
     )
+
+
+@pytest.mark.parametrize(
+    "current,rpm_limit",
+    [
+        (None, 0),
+        ({"current_requests": 0, "current_tpm": 0, "current_rpm": 1}, 1),
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_per_key_rate_limit_error_carries_descriptor_key(
+    current: Mapping[str, int] | None, rpm_limit: int
+):
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        await handler.check_key_in_limits(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(),
+            data={"model": "gpt-4o-mini"},
+            call_type="completion",
+            max_parallel_requests=10,
+            tpm_limit=100,
+            rpm_limit=rpm_limit,
+            current=dict(current) if current is not None else None,
+            request_count_api_key="test-key:model_per_key",
+            rate_limit_type="model_per_key",
+            values_to_update_in_cache=[],
+        )
+
+    assert exc_info.value.descriptor_key == "model_per_key"
 
 
 @pytest.mark.asyncio
@@ -77,8 +110,9 @@ async def test_pre_call_hook_counts_a_cli_session_under_the_per_user_alias_not_t
         ),
     ],
 )
+@pytest.mark.parametrize("opened_this_minute", [True, False], ids=["opened-this-minute", "opened-last-minute"])
 @pytest.mark.asyncio
-async def test_async_log_success_event_counts_non_chat_response_tokens(response_obj):
+async def test_async_log_success_event_counts_non_chat_response_tokens(response_obj, opened_this_minute):
     """
     Embedding and text completion responses must increment the per key, user,
     team, and end user TPM counters, not just chat completion ModelResponse
@@ -96,7 +130,7 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
     precise_minute = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
 
     scope_ids = [_api_key, user_id, team_id, end_user_id]
-    for scope_id in scope_ids:
+    for scope_id in scope_ids if opened_this_minute else ():
         await parallel_request_handler.internal_usage_cache.async_set_cache(
             key=f"{scope_id}::{precise_minute}::request_count",
             value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
@@ -131,6 +165,73 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
             f"expected 50 tokens counted for {scope_id}, "
             f"got {current['current_tpm']}"
         )
+
+
+def _socket_turn_events(input_tokens: int, output_tokens: int) -> list[dict[str, object]]:
+    usage: Final = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+    return [
+        {"type": "response.created", "response": {"id": "resp_ws_turn", "status": "in_progress", "output": []}},
+        {"type": "response.completed", "response": {"id": "resp_ws_turn", "status": "completed", "usage": usage}},
+    ]
+
+
+@pytest.mark.parametrize(
+    "call_type, events, tokens",
+    [
+        (CallTypes.aresponses_websocket.value, _socket_turn_events(input_tokens=590, output_tokens=10), 600),
+        (CallTypes.aresponses.value, _socket_turn_events(input_tokens=590, output_tokens=10), 0),
+    ],
+    ids=["responses-websocket-turn", "events-of-a-non-socket-call"],
+)
+@pytest.mark.parametrize("opened_this_minute", [True, False], ids=["opened-this-minute", "opened-last-minute"])
+@pytest.mark.asyncio
+async def test_async_log_success_event_counts_socket_session_tokens(
+    call_type: str, events: list[dict[str, object]], tokens: int, opened_this_minute: bool
+):
+    api_key: Final = hash_token("sk-socket-session")
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
+    )
+    precise_minute: Final = FROZEN_INSTANT.strftime("%Y-%m-%d-%H-%M")
+    scope_ids: Final = (api_key, "socket-user", "socket-team", "socket-end-user")
+    for scope_id in scope_ids if opened_this_minute else ():
+        await handler.internal_usage_cache.async_set_cache(
+            key=f"{scope_id}::{precise_minute}::request_count",
+            value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+            litellm_parent_otel_span=None,
+        )
+
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": call_type,
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": api_key,
+                    "user_api_key_user_id": "socket-user",
+                    "user_api_key_team_id": "socket-team",
+                    "user_api_key_model_max_budget": {},
+                }
+            },
+            "user": "socket-end-user",
+        },
+        response_obj=events,
+        start_time=FROZEN_INSTANT,
+        end_time=FROZEN_INSTANT,
+    )
+
+    counted: Final = [
+        (
+            await handler.internal_usage_cache.async_get_cache(
+                key=f"{scope_id}::{precise_minute}::request_count", litellm_parent_otel_span=None
+            )
+        )["current_tpm"]
+        for scope_id in scope_ids
+    ]
+    assert counted == [tokens, tokens, tokens, tokens]
 
 
 @pytest.mark.asyncio
@@ -290,3 +391,56 @@ async def test_retry_after_is_the_seconds_until_the_next_minute_of_the_injected_
         )
 
     assert exc_info.value.headers["retry-after"] == "14.5"
+
+
+@pytest.mark.asyncio
+async def test_websocket_turn_callbacks_keep_the_sockets_slot_until_the_disconnect_release():
+    api_key = hash_token("sk-websocket")
+    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock)
+    bucket = f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count"
+    await handler.internal_usage_cache.async_set_cache(
+        key=bucket,
+        value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+        litellm_parent_otel_span=None,
+    )
+    turn_kwargs = {
+        "call_type": CallTypes.aresponses_websocket.value,
+        "litellm_params": {"metadata": {"user_api_key": api_key}},
+        "exception": RuntimeError("provider rejected the turn"),
+    }
+
+    await handler.async_log_success_event(
+        kwargs=turn_kwargs, response_obj=None, start_time=FROZEN_INSTANT, end_time=FROZEN_INSTANT
+    )
+    await handler.async_log_failure_event(
+        kwargs=turn_kwargs, response_obj=None, start_time=FROZEN_INSTANT, end_time=FROZEN_INSTANT
+    )
+    after_two_turns = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_two_turns["current_requests"] == 1, after_two_turns
+
+    await handler.async_release_max_parallel_requests_on_disconnect(UserAPIKeyAuth(api_key=api_key))
+    after_disconnect = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_disconnect["current_requests"] == 0, after_disconnect
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_realtime_attempt_does_not_free_a_slot_it_never_took():
+    api_key = hash_token("sk-at-limit")
+    handler = PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock)
+    bucket = f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count"
+    await handler.internal_usage_cache.async_set_cache(
+        key=bucket,
+        value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+        litellm_parent_otel_span=None,
+    )
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+    auth = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=1)
+
+    await proxy_logging_obj.arelease_max_parallel_requests_on_disconnect(auth)
+    after_rejection = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_rejection["current_requests"] == 1, after_rejection
+
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
+    after_socket_close = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_socket_close["current_requests"] == 0, after_socket_close

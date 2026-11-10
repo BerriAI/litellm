@@ -1,9 +1,12 @@
+import type { ParseKeys } from "i18next";
 import { Input } from "@/components/ui/input";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
+import { authTypeFieldKeys } from "../add_model/provider_auth_types";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
@@ -17,9 +20,16 @@ import {
 import { CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { resetCredentialFormOnProviderChange, withoutRestrictedFields } from "./credential_form_helpers";
+import {
+  displayNameChange,
+  initialFormValues,
+  resetCredentialFormOnProviderChange,
+  withoutRestrictedFields,
+  type CredentialSubmission,
+} from "./credential_form_helpers";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import FederationFields from "./FederationFields";
+import InternalIssuerJwks from "./InternalIssuerJwks";
 import { DEFAULT_IDENTITY_SOURCE, inferIdentitySource, type IdentitySourceId } from "./anthropic_federation";
 import {
   buildCreateCredentialValues,
@@ -28,6 +38,7 @@ import {
   federatedProviderOf,
   inferAuthMethod,
   isFederatedCredential,
+  jwksPanelFor,
   providerFieldValidators,
   selectionFor,
   type AuthMethod,
@@ -44,57 +55,25 @@ const AUTH_METHOD_SELECT_ID = "credential_auth_method";
 const API_KEY_FIELDS: readonly string[] = ["api_key"];
 const NO_HIDDEN_FIELDS: readonly string[] = [];
 
-const authMethodItems: { value: AuthMethod; label: string }[] = [
-  { value: "api_key", label: "API key" },
-  { value: "federation", label: "Workload identity federation" },
+const authMethodItems: { value: AuthMethod; labelKey: ParseKeys }[] = [
+  { value: "api_key", labelKey: "modelAdd.credentialModal.authMethods.apiKey" },
+  { value: "federation", labelKey: "modelAdd.credentialModal.authMethods.federation" },
 ];
 
 interface CredentialModalProps {
   open: boolean;
   onCancel: () => void;
-  onSubmit: (values: Record<string, unknown>, valuesToDelete: readonly string[]) => void;
+  onSubmit: (submission: CredentialSubmission, valuesToDelete: readonly string[]) => void;
   mode: "add" | "edit";
   existingCredential?: CredentialItem | null;
   initialProvider?: string | null;
   initialAuthMethod?: AuthMethod;
+  initialAuthTypeId?: string;
   providerLocked?: boolean;
 }
 
 const sameProvider = (left: string | null | undefined, right: string | null | undefined): boolean =>
   (left ?? "").toLowerCase() === (right ?? "").toLowerCase();
-
-const DISPLAY_NAME_MAX_LENGTH = 255;
-
-const displayNameChange = (
-  value: unknown,
-  existingCredential: CredentialItem | null | undefined,
-): { display_name?: string | null } => {
-  const trimmed = typeof value === "string" ? value.trim() : "";
-  if (!existingCredential) {
-    return trimmed ? { display_name: trimmed } : {};
-  }
-  if (trimmed === (existingCredential.display_name ?? "")) {
-    return {};
-  }
-  return { display_name: trimmed || null };
-};
-
-const initialFormValues = (
-  existingCredential: CredentialItem | null | undefined,
-  initialProvider: string | null | undefined,
-): MountedFormValues | undefined => {
-  if (existingCredential) {
-    return {
-      credential_name: existingCredential.credential_name,
-      display_name: existingCredential.display_name ?? "",
-      custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
-      ...Object.fromEntries(
-        Object.entries(existingCredential.credential_values || {}).map(([key, value]) => [key, value ?? null]),
-      ),
-    };
-  }
-  return initialProvider ? { custom_llm_provider: initialProvider } : undefined;
-};
 
 export default function CredentialModal({
   open,
@@ -104,8 +83,10 @@ export default function CredentialModal({
   existingCredential = null,
   initialProvider = null,
   initialAuthMethod,
+  initialAuthTypeId,
   providerLocked = false,
 }: CredentialModalProps) {
+  const { t } = useTranslation();
   const isEdit = mode === "edit";
   const [selectedProvider, setSelectedProvider] = useState<string | null>(
     (existingCredential?.credential_info.custom_llm_provider as Providers) ?? initialProvider ?? Providers.OpenAI,
@@ -153,18 +134,27 @@ export default function CredentialModal({
     }
     const values = projectMountedValues(registry, form.getValues);
     const meta = {
-      credential_name: values.credential_name,
-      custom_llm_provider: values.custom_llm_provider,
+      credential_name: String(values.credential_name),
+      custom_llm_provider: String(values.custom_llm_provider),
       ...displayNameChange(values.display_name, existingCredential),
     };
     if (!isEdit) {
-      onSubmit({ ...meta, ...buildCreateCredentialValues(withoutRestrictedFields(values), selection) }, []);
+      onSubmit(
+        { ...meta, credential_values: buildCreateCredentialValues(withoutRestrictedFields(values), selection) },
+        [],
+      );
       return;
     }
-    const patch = sameProvider(selectedProvider, storedProvider)
-      ? buildCredentialPatch(storedValues, withoutRestrictedFields(values), storedSelection, selection)
-      : buildProviderChangePatch(storedValues, withoutRestrictedFields(values), selection);
-    onSubmit({ ...meta, ...patch.credential_values }, patch.credential_values_to_delete);
+    const sameStoredProvider = sameProvider(selectedProvider, storedProvider);
+    const projectedValues = withoutRestrictedFields(values);
+    const patch = sameStoredProvider
+      ? buildCredentialPatch(storedValues, projectedValues, storedSelection, selection)
+      : buildProviderChangePatch(storedValues, projectedValues, selection);
+    const authTypeValuesToDelete = sameStoredProvider
+      ? authTypeFieldKeys(selectedProvider).filter((key) => key in storedValues && !(key in projectedValues))
+      : [];
+    const valuesToDelete = Array.from(new Set([...patch.credential_values_to_delete, ...authTypeValuesToDelete]));
+    onSubmit({ ...meta, credential_values: patch.credential_values }, valuesToDelete);
   };
 
   const closeAndReset = () => {
@@ -176,7 +166,9 @@ export default function CredentialModal({
     <Dialog open={open} onOpenChange={(open) => !open && closeAndReset()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Credential" : "Add New Credential"}</DialogTitle>
+          <DialogTitle>
+            {isEdit ? t("modelAdd.credentialModal.editTitle") : t("modelAdd.credentialModal.addTitle")}
+          </DialogTitle>
         </DialogHeader>
         <FormProvider {...form}>
           <MountedFormProvider value={{ control: form.control, registry }}>
@@ -187,10 +179,10 @@ export default function CredentialModal({
               }}
             >
               <MountedFormField
-                label="Credential Name:"
+                label={t("modelAdd.credentialModal.credentialName")}
                 name="credential_name"
                 required
-                rules={{ validate: { required: requiredRule("Credential name is required") } }}
+                rules={{ validate: { required: requiredRule(t("modelAdd.credentialModal.credentialNameRequired")) } }}
                 className="mb-4"
               >
                 {(control) => (
@@ -199,47 +191,38 @@ export default function CredentialModal({
                     value={typeof control.value === "string" ? control.value : ""}
                     onChange={control.onChange}
                     onBlur={control.onBlur}
-                    placeholder="Unique name that models reference this credential by"
+                    placeholder={t("modelAdd.credentialModal.credentialNamePlaceholder")}
                     disabled={isEdit}
                   />
                 )}
               </MountedFormField>
 
-              <MountedFormField
-                label="Display Name:"
-                name="display_name"
-                rules={{
-                  validate: {
-                    maxLength: (value: unknown) =>
-                      typeof value !== "string" ||
-                      value.trim().length <= DISPLAY_NAME_MAX_LENGTH ||
-                      `Display name must be at most ${DISPLAY_NAME_MAX_LENGTH} characters`,
-                  },
-                }}
-                className="mb-4"
-              >
+              <MountedFormField label={t("modelAdd.credentialModal.displayName")} name="display_name" className="mb-4">
                 {(control) => (
                   <Input
                     id={control.id}
                     value={typeof control.value === "string" ? control.value : ""}
                     onChange={control.onChange}
                     onBlur={control.onBlur}
-                    placeholder="e.g. Production OpenAI"
+                    placeholder={t("modelAdd.credentialModal.displayNamePlaceholder")}
                   />
                 )}
               </MountedFormField>
 
               <MountedFormField
-                label={labelWithHint("Provider:", "Helper to auto-populate provider specific fields")}
+                label={labelWithHint(
+                  t("modelAdd.credentialModal.provider"),
+                  t("modelAdd.credentialModal.providerHint"),
+                )}
                 name="custom_llm_provider"
                 required
-                rules={{ validate: { required: requiredRule("Required") } }}
+                rules={{ validate: { required: requiredRule(t("modelAdd.credentialModal.required")) } }}
                 className="mb-4"
               >
                 {(control) => (
                   <SearchSelect
                     inputId={control.id}
-                    placeholder="Select a provider"
+                    placeholder={t("modelAdd.credentialModal.selectProvider")}
                     options={providerOptions}
                     value={typeof control.value === "string" ? control.value : null}
                     disabled={providerLocked}
@@ -255,12 +238,12 @@ export default function CredentialModal({
                 <div className="mb-4 flex flex-col gap-2">
                   <label htmlFor={AUTH_METHOD_SELECT_ID} className="text-sm font-medium">
                     {labelWithHint(
-                      "Authentication:",
-                      "Workload identity federation exchanges an identity token for a short-lived access token from the provider, so no API key is stored.",
+                      t("modelAdd.credentialModal.authentication"),
+                      t("modelAdd.credentialModal.authenticationHint"),
                     )}
                   </label>
                   <Select
-                    items={authMethodItems}
+                    items={authMethodItems.map((item) => ({ value: item.value, label: t(item.labelKey) }))}
                     value={authMethod}
                     onValueChange={(value) => changeAuthMethod(value as AuthMethod)}
                   >
@@ -270,7 +253,7 @@ export default function CredentialModal({
                     <SelectContent>
                       {authMethodItems.map((item) => (
                         <SelectItem key={item.value} value={item.value}>
-                          {item.label}
+                          {t(item.labelKey)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -281,6 +264,7 @@ export default function CredentialModal({
               <ProviderSpecificFields
                 selectedProvider={selectedProvider}
                 hiddenFieldKeys={selection.authMethod === "federation" ? API_KEY_FIELDS : NO_HIDDEN_FIELDS}
+                initialAuthTypeId={initialAuthTypeId}
                 fieldValidators={providerFieldValidators(selection)}
               />
 
@@ -292,18 +276,22 @@ export default function CredentialModal({
                 />
               )}
 
+              <InternalIssuerJwks panel={jwksPanelFor(existingCredential, selection)} />
+
               <div className="flex justify-between items-center">
-                <SimpleTooltip content="Get help on our github">
+                <SimpleTooltip content={t("modelAdd.credentialModal.helpTooltip")}>
                   <a href="https://github.com/BerriAI/litellm/issues" className="text-sm text-primary hover:underline">
-                    Need Help?
+                    {t("modelAdd.credentialModal.needHelp")}
                   </a>
                 </SimpleTooltip>
 
                 <div>
                   <Button variant="outline" className="mr-2.5" onClick={closeAndReset}>
-                    Cancel
+                    {t("modelAdd.credentialModal.cancel")}
                   </Button>
-                  <Button type="submit">{isEdit ? "Update Credential" : "Add Credential"}</Button>
+                  <Button type="submit">
+                    {isEdit ? t("modelAdd.credentialModal.updateSubmit") : t("modelAdd.credentialModal.addSubmit")}
+                  </Button>
                 </div>
               </div>
             </form>

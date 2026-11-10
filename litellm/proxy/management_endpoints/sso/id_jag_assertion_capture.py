@@ -1,25 +1,26 @@
 """Whether the SSO provider the login callback dispatches to can capture an IdP identity assertion.
 
 An ``oauth2_id_jag`` MCP server spends the ``id_token`` captured at SSO login as its RFC 8693
-subject token. Only the generic OIDC login path reaches a token response the gateway retains one
-from, so a deployment whose SSO runs through Google, Microsoft or SAML never stores an assertion
-and every store-sourced ID-JAG exchange fails for every user, however many times they sign in.
-Neither side can see that alone: the MCP registration knows nothing about SSO and the login knows
-nothing about MCP. This module is the one shared answer both warn from.
+subject token. The Google, Microsoft and generic OIDC login paths all reach a token response the
+gateway retains one from, and the SAML login retains the signed assertion itself as a ``saml2``
+subject token. A deployment with no SSO never signs anyone in, so every store-sourced ID-JAG
+exchange fails for every user. Neither side can see that alone: the MCP registration knows nothing
+about SSO and the login knows nothing about MCP. This module is the one shared answer both warn from.
 """
 
 from __future__ import annotations
 
 import os
 from enum import Enum
+from typing import Final
 
 from typing_extensions import assert_never
 
 from litellm.proxy.management_endpoints.sso.saml_sso import SAMLAuthHandler
 
-_GENERIC_OIDC_REMEDY = (
-    "Point SSO at the generic OIDC provider (GENERIC_CLIENT_ID), the one login path whose token "
-    "response the gateway retains an id_token from"
+_OIDC_REMEDY: Final = (
+    "Point SSO at an OIDC provider (GOOGLE_CLIENT_ID, MICROSOFT_CLIENT_ID or GENERIC_CLIENT_ID) or at SAML, "
+    "the login paths the gateway retains an identity assertion from"
 )
 
 
@@ -55,18 +56,14 @@ def id_jag_assertion_capture_gap() -> str | None:
     or ``None`` when that provider does capture an assertion."""
     provider = active_sso_provider()
     match provider:
-        case ActiveSSOProvider.generic:
+        case (
+            ActiveSSOProvider.google | ActiveSSOProvider.microsoft | ActiveSSOProvider.generic | ActiveSSOProvider.saml
+        ):
             return None
         case ActiveSSOProvider.none:
             return (
                 "no SSO provider is configured, so no IdP identity assertion is ever captured and "
-                f"ID-JAG credential resolution fails for every user. {_GENERIC_OIDC_REMEDY}"
-            )
-        case ActiveSSOProvider.google | ActiveSSOProvider.microsoft | ActiveSSOProvider.saml:
-            return (
-                f"the active SSO provider ({provider.value}) has no identity-assertion capture path, so no "
-                "IdP id_token is ever stored and ID-JAG credential resolution fails for every user no matter "
-                f"how often they sign in. {_GENERIC_OIDC_REMEDY}"
+                f"ID-JAG credential resolution fails for every user. {_OIDC_REMEDY}"
             )
         case _:
             assert_never(provider)

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import secrets
-import signal
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -36,7 +34,7 @@ from tests.integration._support.process import OwnedProxy, group_members, owned_
 from tests.integration._support.provider import SharedProvider
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
-pytestmark: Final = pytest.mark.timeout(300)
+pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 CLI_SOURCE: Final = "litellm-cli"
 CLI_STATE_PREFIX: Final = "litellm-session-token"
@@ -523,7 +521,6 @@ def test_login_survives_a_worker_kill(idp: Idp, tmp_path: Path) -> None:
             link: Final = browser.get(_cli_link(proxy, session.login_id))
             at_idp: Final = browser.get(_assert_idp_redirect(proxy, idp, link, session.login_id))
             assert at_idp.status_code == 302, f"{at_idp.status_code} {at_idp.text}"
-            os.kill(victim, signal.SIGKILL)
 
             def callback_attempt() -> httpx.Response | None:
                 try:
@@ -531,9 +528,11 @@ def test_login_survives_a_worker_kill(idp: Idp, tmp_path: Path) -> None:
                 except httpx.TransportError:
                     return None
 
-            callback: Final = eventually(
-                callback_attempt, lambda response: response is not None and response.status_code == 200, seconds=60
-            )
+            with owned.replacing_worker(victim) as kill:
+                kill()
+                callback: Final = eventually(
+                    callback_attempt, lambda response: response is not None and response.status_code == 200, seconds=60
+                )
             assert callback is not None
             done: Final = _complete_in_browser(browser, callback, session.user_code)
             assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"
@@ -696,9 +695,11 @@ def test_cli_session_token_is_denied_once_its_team_budget_is_exhausted(
             key=key,
         )
         assert refused.status_code == 422, f"{refused.status_code} {refused.text}"
-        error: Final = object_value(JSON_OBJECT.validate_json(refused.content)["error"])
-        assert error["type"] == "budget_exceeded", refused.text
-        assert error["code"] == "422", refused.text
+        body: Final = JSON_OBJECT.validate_json(refused.content)
+        assert body["type"] == "error", refused.text
+        error: Final = object_value(body["error"])
+        assert error["type"] == "invalid_request_error", refused.text
+        assert "param" not in error and "code" not in error, refused.text
         message: Final = string_value(error["message"])
         assert "Budget has been exceeded!" in message, refused.text
         assert f"Team={team}" in message, refused.text

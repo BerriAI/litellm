@@ -1,60 +1,114 @@
 "use client";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { cn } from "@/lib/cva.config";
+import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
+import { getGatewayBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { uiHref } from "@/utils/uiHref";
 import { useMutation } from "@tanstack/react-query";
-import { Code, Info, LoaderCircle, RotateCcw, Send } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { makeSystemOneRequest } from "../../llm_calls/system_one";
-import { DECISIONS_EXAMPLE, SYSTEM_ONE_EXAMPLE } from "./lib/example";
-import type { DecisionEndpoint, PlaygroundRequest } from "./lib/schemas";
-import JsonEditor from "./JsonEditor";
-import QuestionBreakdown from "./QuestionBreakdown";
+import { BookOpen, ChevronDown, Eraser, FileText, LoaderCircle, Send } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import { makePlaygroundDecisionRequest, type PlaygroundDecisionRequest } from "../../llm_calls/system_one";
+import { DECISION_PRESETS, emptyPayload, presetPayload } from "./lib/example";
+import { payloadModel, withPayloadModel } from "./lib/payloadModel";
+import CurlPreview from "./CurlPreview";
 import ResponseView from "./ResponseView";
-import { validateSystemOnePayload } from "./lib/validatePayload";
+import { ValidationSummary } from "./ValidationFeedback";
+import SystemOneForm from "./SystemOneForm";
+import OpenAIDecisionsForm from "./OpenAIDecisionsForm";
+import { validateSystemOnePayload, validateOpenAIDecisionsPayload, errorCount } from "./lib/validatePayload";
+import { useDecisionModels, type ApiKeySource } from "./useDecisionModels";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 interface SystemOneUIProps {
   accessToken: string | null;
   disabledPersonalKeyCreation?: boolean;
 }
 
-type ApiKeySource = "session" | "custom";
+type EditorView = "form" | "curl";
 
 interface SystemOneSendVariables {
-  payload: PlaygroundRequest;
-  endpoint: DecisionEndpoint;
+  request: PlaygroundDecisionRequest;
   apiKey: string;
   signal: AbortSignal;
 }
 
-const EXAMPLE_PAYLOAD = JSON.stringify(SYSTEM_ONE_EXAMPLE, null, 2);
-const DECISIONS_EXAMPLE_PAYLOAD = JSON.stringify(DECISIONS_EXAMPLE, null, 2);
-const DECISION_MODELS_DISCUSSION_URL = "https://github.com/BerriAI/litellm/discussions/44231";
+function SetupField({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
+  return (
+    <div className="grid min-w-0 content-start gap-1.5">
+      <label htmlFor={htmlFor} className="text-xs font-medium text-muted-foreground">
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function ExamplesMenu({ onPick }: { onPick: (id: string) => void }) {
+  const { t } = useTranslation();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+        <FileText className="text-muted-foreground" />
+        {t("playground.systemOne.systemOneUi.loadExample")}
+        <ChevronDown className="text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        {DECISION_PRESETS.map((preset) => (
+          <DropdownMenuItem key={preset.id} onClick={() => onPick(preset.id)}>
+            {t(preset.label)}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function getCustomProxyBaseUrl(): string | undefined {
   return typeof window === "undefined" ? undefined : window.sessionStorage.getItem("customProxyBaseUrl") || undefined;
 }
 
 export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation = false }: SystemOneUIProps) {
+  const { t } = useTranslation();
   const [apiKeySource, setApiKeySource] = useState<ApiKeySource>(disabledPersonalKeyCreation ? "custom" : "session");
   const [customApiKey, setCustomApiKey] = useState("");
-  const [endpoint, setEndpoint] = useState<DecisionEndpoint>("/typesafe/v1/systemone");
-  const [payloads, setPayloads] = useState<Record<DecisionEndpoint, string>>({
-    "/v1/systemone": DECISIONS_EXAMPLE_PAYLOAD,
-    "/typesafe/v1/systemone": EXAMPLE_PAYLOAD,
-  });
-  const rawPayload = payloads[endpoint];
-  const examplePayload = endpoint === "/v1/systemone" ? DECISIONS_EXAMPLE_PAYLOAD : EXAMPLE_PAYLOAD;
-  const activeController = useRef<AbortController | null>(null);
-  const validation = useMemo(() => validateSystemOnePayload(rawPayload, endpoint), [rawPayload, endpoint]);
   const effectiveApiKey = apiKeySource === "session" ? accessToken || "" : customApiKey.trim();
-  const hasSyntaxError = validation.issues.some((issue) => issue.path === "syntax");
+  const { decisionModels, isLoaded: decisionModelsLoaded } = useDecisionModels(
+    apiKeySource,
+    effectiveApiKey,
+    getCustomProxyBaseUrl(),
+  );
+  const [endpoint, setEndpoint] = useState<PlaygroundDecisionRequest["endpoint"]>("/v1/systemone");
+  const [drafts, setDrafts] = useState<Partial<Record<PlaygroundDecisionRequest["endpoint"], string>>>({});
+  const [view, setView] = useState<EditorView>("form");
+  const rawPayload = drafts[endpoint] ?? emptyPayload(endpoint, decisionModels[0]);
+  const draftModel = drafts[endpoint] === undefined ? decisionModels[0] : payloadModel(rawPayload);
+  const clearedPayload = emptyPayload(endpoint, draftModel);
+  const activeController = useRef<AbortController | null>(null);
+  const validated = useMemo(
+    () =>
+      endpoint === "/v1/decisions"
+        ? ({ endpoint, validation: validateOpenAIDecisionsPayload(rawPayload, t) } as const)
+        : ({ endpoint, validation: validateSystemOnePayload(rawPayload, endpoint, t) } as const),
+    [rawPayload, endpoint, t],
+  );
+  const validation = validated.validation;
 
   const systemOne = useMutation({
-    mutationFn: ({ payload, apiKey, signal, endpoint }: SystemOneSendVariables) =>
-      makeSystemOneRequest(payload, apiKey, getCustomProxyBaseUrl(), { signal, endpoint }),
+    mutationFn: ({ request, apiKey, signal }: SystemOneSendVariables) =>
+      makePlaygroundDecisionRequest(request, apiKey, getCustomProxyBaseUrl(), { signal }),
   });
   const isLoading = systemOne.isPending;
   const { reset: resetSystemOne } = systemOne;
@@ -73,141 +127,240 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     systemOne.reset();
   }
 
+  function handleReset() {
+    handlePayloadChange(presetPayload(DECISION_PRESETS[0], endpoint, draftModel ?? decisionModels[0]));
+  }
+
   function handlePayloadChange(value: string) {
     if (value !== rawPayload) {
       clearRequestState();
-      setPayloads((current) => ({ ...current, [endpoint]: value }));
+      setDrafts((current) => ({ ...current, [endpoint]: value }));
     }
   }
 
-  function handleFormatJson() {
-    if (rawPayload.trim() && !hasSyntaxError) {
-      handlePayloadChange(JSON.stringify(JSON.parse(rawPayload), null, 2));
+  function handlePresetPick(id: string) {
+    const preset = DECISION_PRESETS.find((candidate) => candidate.id === id);
+    if (preset !== undefined) {
+      handlePayloadChange(presetPayload(preset, endpoint, draftModel));
+    }
+  }
+
+  function handleModelPick(model: string | null) {
+    const next = model === null ? undefined : withPayloadModel(rawPayload, model);
+    if (next !== undefined) {
+      handlePayloadChange(next);
     }
   }
 
   function handleSend() {
-    if (!validation.payload || !effectiveApiKey) {
+    const request: PlaygroundDecisionRequest | undefined =
+      validated.endpoint === "/v1/decisions"
+        ? validated.validation.payload && { endpoint: validated.endpoint, payload: validated.validation.payload }
+        : validated.validation.payload && { endpoint: validated.endpoint, payload: validated.validation.payload };
+    if (!request || !effectiveApiKey) {
       return;
     }
     clearRequestState();
+    setDrafts((current) => ({ ...current, [endpoint]: rawPayload }));
     const controller = new AbortController();
     activeController.current = controller;
-    const variables = { payload: validation.payload, apiKey: effectiveApiKey, signal: controller.signal, endpoint };
+    const variables = { request, apiKey: effectiveApiKey, signal: controller.signal };
     systemOne.mutate(variables);
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4 xl:overflow-hidden">
-      <section className="grid gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium text-muted-foreground">Endpoint</span>
-          <Select
-            value={endpoint}
-            onValueChange={(value) => {
-              if (value === "/v1/systemone" || value === "/typesafe/v1/systemone") {
-                clearRequestState();
-                setEndpoint(value);
-              }
-            }}
-          >
-            <SelectTrigger className="w-80" aria-label="Decision endpoint">
-              <SelectValue>
-                {endpoint === "/v1/systemone" ? "System One · /v1/systemone" : "TypeSafe · /typesafe/v1/systemone"}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="/v1/systemone">System One · /v1/systemone</SelectItem>
-              <SelectItem value="/typesafe/v1/systemone">TypeSafe · /typesafe/v1/systemone</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-muted-foreground">Virtual Key Source</span>
-            <Select
-              value={apiKeySource}
-              onValueChange={(value) => {
-                if (value === "session" || value === "custom") {
-                  setApiKeySource(value);
+    <div className="flex h-full min-h-0 flex-col overflow-auto p-4 xl:overflow-hidden">
+      <div className="mx-auto grid w-full max-w-[1400px] gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,11fr)_minmax(0,9fr)]">
+        <section
+          className="flex min-h-96 flex-col gap-4 xl:min-h-0"
+          aria-label={t("playground.systemOne.systemOneUi.editorRegion")}
+        >
+          <div className="grid gap-3 rounded-lg border bg-card p-3 sm:grid-cols-3">
+            <SetupField label={t("playground.systemOne.systemOneUi.endpoint")} htmlFor="decision-endpoint">
+              <Select
+                value={endpoint}
+                onValueChange={(value) => {
+                  if (value === "/v1/decisions" || value === "/v1/systemone") {
+                    clearRequestState();
+                    setEndpoint(value);
+                  }
+                }}
+              >
+                <SelectTrigger
+                  id="decision-endpoint"
+                  className="w-full"
+                  aria-label={t("playground.systemOne.systemOneUi.endpointLabel")}
+                >
+                  <SelectValue>{endpoint}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="/v1/decisions">/v1/decisions</SelectItem>
+                  <SelectItem value="/v1/systemone">/v1/systemone</SelectItem>
+                </SelectContent>
+              </Select>
+            </SetupField>
+            <SetupField label={t("playground.systemOne.systemOneUi.model")} htmlFor="decision-model">
+              <SearchSelect
+                id="decision-model"
+                aria-label={t("playground.systemOne.systemOneUi.modelLabel")}
+                options={decisionModels.map((model) => ({ label: model, value: model }))}
+                value={payloadModel(rawPayload) ?? null}
+                onValueChange={handleModelPick}
+                placeholder={
+                  decisionModels.length > 0
+                    ? t("playground.systemOne.systemOneUi.pickModel")
+                    : t("playground.systemOne.systemOneUi.noModelsYet")
                 }
-              }}
-              disabled={disabledPersonalKeyCreation}
-            >
-              <SelectTrigger className="w-48" aria-label="Virtual Key Source">
-                <SelectValue>{apiKeySource === "custom" ? "Virtual Key" : "Current UI Session"}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="session" disabled={!accessToken}>
-                  Current UI Session
-                </SelectItem>
-                <SelectItem value="custom">Virtual Key</SelectItem>
-              </SelectContent>
-            </Select>
-            {apiKeySource === "custom" && (
-              <Input
-                type="password"
-                aria-label="Virtual Key"
-                value={customApiKey}
-                onChange={(event) => setCustomApiKey(event.target.value)}
-                placeholder="Enter Virtual Key"
-                className="w-56"
+                emptyText={t("playground.systemOne.systemOneUi.noModelsFound")}
+                allowClear={false}
               />
-            )}
+              {decisionModelsLoaded && decisionModels.length === 0 && (
+                <a href={uiHref("models-and-endpoints")} className="text-xs text-primary underline">
+                  {t("playground.systemOne.systemOneUi.addModel")}
+                </a>
+              )}
+            </SetupField>
+            <SetupField label={t("playground.systemOne.systemOneUi.apiKey")} htmlFor="decision-key-source">
+              <Select
+                value={apiKeySource}
+                onValueChange={(value) => {
+                  if (value === "session" || value === "custom") {
+                    setApiKeySource(value);
+                  }
+                }}
+                disabled={disabledPersonalKeyCreation}
+              >
+                <SelectTrigger
+                  id="decision-key-source"
+                  className="w-full"
+                  aria-label={t("playground.systemOne.systemOneUi.keySource")}
+                >
+                  <SelectValue>
+                    {apiKeySource === "custom"
+                      ? t("playground.systemOne.systemOneUi.virtualKey")
+                      : t("playground.systemOne.systemOneUi.currentSession")}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="session" disabled={!accessToken}>
+                    {t("playground.systemOne.systemOneUi.currentSession")}
+                  </SelectItem>
+                  <SelectItem value="custom">{t("playground.systemOne.systemOneUi.virtualKey")}</SelectItem>
+                </SelectContent>
+              </Select>
+              {apiKeySource === "custom" && (
+                <Input
+                  type="password"
+                  aria-label={t("playground.systemOne.systemOneUi.virtualKey")}
+                  value={customApiKey}
+                  onChange={(event) => setCustomApiKey(event.target.value)}
+                  placeholder={t("playground.systemOne.systemOneUi.virtualKeyPlaceholder")}
+                />
+              )}
+            </SetupField>
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => handlePayloadChange(examplePayload)}
-              disabled={rawPayload === examplePayload}
-            >
-              <RotateCcw />
-              Reset example
-            </Button>
-            <Button variant="outline" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
-              <Code />
-              Format JSON
-            </Button>
-            {isLoading && (
-              <Button variant="outline" onClick={clearRequestState}>
-                Cancel request
-              </Button>
-            )}
-            <Button onClick={handleSend} disabled={!validation.isValid || isLoading || !effectiveApiKey}>
-              {isLoading ? <LoaderCircle className="animate-spin" /> : <Send />}
-              Send
-            </Button>
-          </div>
-        </div>
-        <Alert role="note" aria-label="Decision endpoint notice">
-          <Info />
-          <AlertTitle>
-            {endpoint === "/v1/systemone" ? "Decision models · System One" : "TypeSafe Jev · System One"}
-          </AlertTitle>
-          <AlertDescription>
-            {endpoint === "/v1/systemone"
-              ? "Sends choice, noul, and score questions through /v1/systemone. Replace the example model with a decision model configured on your proxy, or omit model to use the proxy's configured default."
-              : "Sends requests through /typesafe/v1/systemone and requires TYPESAFE_API_KEY on the proxy."}{" "}
-            <a href={DECISION_MODELS_DISCUSSION_URL} target="_blank" rel="noopener noreferrer" className="underline">
-              Give us feedback on what you want for decision models
-            </a>
-          </AlertDescription>
-        </Alert>
-      </section>
 
-      <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-2">
-        <section className="flex min-h-96 flex-col xl:min-h-0" aria-label="System One request editor">
-          <JsonEditor value={rawPayload} onChange={handlePayloadChange} validation={validation} />
+          <Tabs
+            role="group"
+            aria-label={t("playground.systemOne.systemOneUi.requestEditor")}
+            value={view}
+            onValueChange={(value) => (value === "form" || value === "curl") && setView(value)}
+            className={cn(
+              "flex min-h-0 flex-1 flex-col gap-0 overflow-hidden rounded-lg border bg-card",
+              !validation.isValid && "border-destructive/60",
+            )}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+              <TabsList aria-label={t("playground.systemOne.systemOneUi.requestEditorView")}>
+                <TabsTrigger value="form">{t("playground.systemOne.systemOneUi.formTab")}</TabsTrigger>
+                <TabsTrigger value="curl">{productNames.curl}</TabsTrigger>
+              </TabsList>
+              <div className="flex items-center gap-2">
+                <ExamplesMenu onPick={handlePresetPick} />
+                <SimpleTooltip content={t("playground.systemOne.systemOneUi.clearForm")}>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("playground.systemOne.systemOneUi.clearForm")}
+                    className="hover:text-destructive"
+                    onClick={() => handlePayloadChange(clearedPayload)}
+                    disabled={rawPayload === clearedPayload || isLoading}
+                  >
+                    <Eraser />
+                  </Button>
+                </SimpleTooltip>
+                <SimpleTooltip content={t("playground.systemOne.systemOneUi.docs")}>
+                  <a
+                    href={DECISIONS_DOCS_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={t("playground.systemOne.systemOneUi.docs")}
+                    className={cn(buttonVariants({ variant: "ghost", size: "icon" }), "shrink-0")}
+                  >
+                    <BookOpen />
+                  </a>
+                </SimpleTooltip>
+              </div>
+            </div>
+            <TabsContent value="form" className="flex min-h-0 flex-1 flex-col">
+              {validated.endpoint === "/v1/decisions" ? (
+                <OpenAIDecisionsForm
+                  value={rawPayload}
+                  onChange={handlePayloadChange}
+                  validation={validated.validation}
+                  onReset={handleReset}
+                />
+              ) : (
+                <SystemOneForm
+                  value={rawPayload}
+                  onChange={handlePayloadChange}
+                  validation={validated.validation}
+                  onReset={handleReset}
+                />
+              )}
+            </TabsContent>
+            <TabsContent value="curl" className="flex min-h-0 flex-1 flex-col">
+              <CurlPreview
+                baseUrl={getCustomProxyBaseUrl() ?? getGatewayBaseUrl()}
+                endpoint={endpoint}
+                payload={validation.payload === undefined ? rawPayload : JSON.stringify(validation.payload)}
+                authHeaderName={getGlobalLitellmHeaderName()}
+                errorCount={errorCount(validation)}
+              />
+            </TabsContent>
+            <div
+              role="toolbar"
+              aria-label={t("playground.systemOne.systemOneUi.requestActions")}
+              className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/50 px-4 py-3"
+            >
+              <ValidationSummary validation={validation} />
+              <div className="flex items-center gap-2">
+                {isLoading && (
+                  <Button variant="outline" onClick={clearRequestState}>
+                    {t("playground.systemOne.systemOneUi.cancelRequest")}
+                  </Button>
+                )}
+                <Button size="sm" onClick={handleSend} disabled={!validation.isValid || isLoading || !effectiveApiKey}>
+                  {isLoading ? <LoaderCircle className="animate-spin" /> : <Send />}
+                  {t("playground.systemOne.systemOneUi.send")}
+                </Button>
+              </div>
+            </div>
+          </Tabs>
         </section>
-        <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="System One results">
+
+        <section
+          className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto"
+          aria-label={t("playground.systemOne.systemOneUi.results")}
+        >
           <ResponseView
             response={systemOne.data?.response}
+            view={view}
             fallbackModel={validation.payload?.model}
             latencyMs={systemOne.data?.latencyMs}
             error={systemOne.error?.message}
             isLoading={isLoading}
           />
-          <QuestionBreakdown payload={validation.payload} />
         </section>
       </div>
     </div>

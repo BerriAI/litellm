@@ -1,12 +1,18 @@
 import copy
+import itertools
 import json
-from typing import Final
+import logging
+import sys
+from collections.abc import Iterator, Mapping
+from itertools import chain
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
-from httpx import Headers
 import pytest
 import respx
+from httpx import Headers
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.constants import (
@@ -17,25 +23,42 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
+    RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    encrypted_reasoning_signature,
+)
 from litellm.llms.anthropic.chat import ModelResponseIterator
-from litellm.llms.anthropic.common_utils import process_anthropic_headers
+from litellm.llms.anthropic.common_utils import (
+    AnthropicError,
+    anthropic_server_tool_call_params,
+    process_anthropic_headers,
+    validated_object_mapping,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
-from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.bedrock.claude_platform.transformation import BedrockClaudePlatformConfig
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
-from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
-from litellm.types.utils import ChatCompletionToolCallChunk, ServerToolUse, Usage
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
+    AllAnthropicPassThroughMessageValues,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallFunctionChunk
+from litellm.types.utils import ChatCompletionToolCallChunk, Choices, Message, ModelResponse, ServerToolUse, Usage
+from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
 def test_response_format_transformation_unit_test():
@@ -1057,6 +1080,40 @@ def test_transform_response_with_prefix_prompt():
     assert result.choices[0].message.content == "You are a helpful assistant. The grass is green."
 
 
+def test_pdf_file_input_becomes_anthropic_document():
+    config = AnthropicConfig()
+    file_data = "data:application/pdf;base64,JVBERi0xLjQKJSBQT05H"
+
+    result = config.transform_request(
+        model="claude-sonnet-5-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [{"type": "file", "file": {"file_data": file_data, "filename": "document.pdf"}}],
+            }
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQKJSBQT05H",
+                    },
+                }
+            ],
+        }
+    ]
+
+
 def test_get_supported_params_thinking():
     config = AnthropicConfig()
     params = config.get_supported_openai_params(model="claude-sonnet-4-20250514")
@@ -1305,6 +1362,107 @@ def test_opus_uses_native_structured_output(model_name):
 
     # Should set json_mode
     assert optional_params.get("json_mode") is True
+
+
+@pytest.mark.parametrize(
+    ("field_schema", "native"),
+    [
+        ({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}, True),
+        ({"type": "object", "additionalProperties": {"type": "integer"}}, False),
+        ({"anyOf": [{"type": "object"}, {"type": "null"}]}, False),
+    ],
+    ids=["closed-object", "dict-field", "nullable-dict-field"],
+)
+def test_dict_fields_take_the_json_tool_on_a_native_structured_output_model(field_schema, native):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {"type": "object", "properties": {"field": field_schema}, "required": ["field"]},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert ("output_format" in optional_params) is native
+    assert ([tool["name"] for tool in optional_params.get("tools", [])] == ["json_tool_call"]) is not native
+
+
+@pytest.mark.parametrize(
+    ("model", "thinking_params"),
+    [
+        ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}),
+        ("claude-opus-4-8", {"reasoning_effort": "low"}),
+        ("claude-opus-4-8", {"reasoning_effort": "none"}),
+        ("claude-sonnet-5-5", {}),
+        (
+            "claude-opus-4-8",
+            {"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]},
+        ),
+    ],
+    ids=[
+        "adaptive-thinking",
+        "reasoning-effort",
+        "reasoning-effort-none",
+        "model-without-forced-tools",
+        "caller-tools",
+    ],
+)
+def test_dict_fields_keep_native_output_when_the_json_tool_would_not_be_forced(model, thinking_params):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            **thinking_params,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" in optional_params
+    assert "json_tool_call" not in [tool["name"] for tool in optional_params.get("tools", [])]
+
+
+def test_dict_fields_take_the_unforced_json_tool_on_a_default_thinking_model(local_model_cost_map):
+    optional_params: Final = AnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "out",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"field": {"type": "object", "additionalProperties": {"type": "integer"}}},
+                        "required": ["field"],
+                    },
+                },
+            }
+        },
+        optional_params={},
+        model="claude-opus-5",
+        drop_params=False,
+    )
+
+    assert "output_format" not in optional_params
+    assert "tool_choice" not in optional_params
+    assert [(tool["name"], tool["input_schema"]["properties"]["field"]) for tool in optional_params["tools"]] == [
+        ("json_tool_call", {"type": "object", "additionalProperties": {"type": "integer"}})
+    ]
 
 
 def test_native_structured_output_uses_bundled_capability_when_remote_map_lags(
@@ -1571,6 +1729,19 @@ def test_defer_loading_preserved_in_transformation():
     assert mapped_tool.get("defer_loading") is True
     assert mapped_tool["name"] == "get_weather"
     assert mcp_server is None
+
+
+def test_defer_loading_rejects_non_boolean_values():
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+        "defer_loading": "true",
+    }
+
+    with pytest.raises(ValueError, match="defer_loading must be a boolean"):
+        config.map_tool_helper(tool)
 
 
 def test_tool_search_complete_response_parsing():
@@ -2125,6 +2296,38 @@ def test_effort_with_other_features():
     assert "thinking" in result
 
 
+_OBJECT_OUTPUT_FORMAT: Final = {"type": "json_schema", "schema": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.parametrize(
+    ("output_format", "request_drop_params", "global_drop_params", "forwarded"),
+    [
+        pytest.param("json", True, False, False, id="string_dropped_under_request_drop_params"),
+        pytest.param("json", None, True, False, id="string_dropped_under_global_drop_params"),
+        pytest.param("json", None, False, True, id="string_forwarded_without_drop_params"),
+        pytest.param(_OBJECT_OUTPUT_FORMAT, True, False, True, id="object_kept_under_drop_params"),
+    ],
+)
+def test_anthropic_chat_drops_only_a_non_object_output_format_and_only_under_drop_params(
+    output_format: object,
+    request_drop_params: bool | None,
+    global_drop_params: bool,
+    forwarded: bool,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    result = AnthropicConfig().transform_request(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"output_format": output_format},
+        litellm_params={"drop_params": request_drop_params},
+        headers={},
+    )
+
+    assert result.get("output_format") == (output_format if forwarded else None)
+
+
 def test_anthropic_drop_params_strips_output_config_for_pre_4_5_models():
     """``drop_params=True`` strips unsupported ``output_config`` for pre-4.5 models."""
     config = AnthropicConfig()
@@ -2220,10 +2423,8 @@ def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(mod
     "model",
     [
         "claude-opus-4-6",
-        "claude-opus-4-7",
         "claude-opus-4-8",
         "claude-opus-4-6-20260205",
-        "claude-opus-4-7-20260416",
     ],
 )
 def test_anthropic_model_supports_speed_param_recognizes_supporting_models(model):
@@ -2239,6 +2440,10 @@ def test_anthropic_model_supports_speed_param_recognizes_supporting_models(model
         "vertex_ai/claude-opus-4-8",
         "azure_ai/claude-opus-4-8",
         "anthropic.claude-opus-4-8",
+        # Anthropic removed Opus 4.7 fast mode on 2026-07-24 and answers 400 for `speed` on it
+        # (code.claude.com/docs/en/fast-mode, platform.claude.com/docs/en/build-with-claude/fast-mode, read 2026-10-28)
+        "claude-opus-4-7",
+        "claude-opus-4-7-20260416",
     ],
 )
 def test_anthropic_model_supports_speed_param_rejects_non_supporting_models(model):
@@ -2391,18 +2596,6 @@ def test_translate_system_message_preserves_cache_control():
 # ============ Dynamic max_tokens Tests ============
 
 
-def test_get_max_tokens_for_model_claude_3():
-    """
-    Test that get_max_tokens_for_model returns correct value for Claude 3 models.
-    Claude 3 models have max_output_tokens of 4096.
-    """
-    config = AnthropicConfig()
-
-    # Claude 3 Sonnet should return 4096
-    max_tokens = config.get_max_tokens_for_model("claude-3-sonnet-20240229")
-    assert max_tokens == 4096
-
-
 def test_get_max_tokens_for_model_claude_35():
     """
     Test that get_max_tokens_for_model returns correct value for Claude 3.5 models.
@@ -2423,24 +2616,24 @@ def test_get_max_tokens_for_model_claude_35():
 
 def test_get_max_tokens_for_model_unknown():
     """
-    Test that get_max_tokens_for_model returns 4096 fallback for unknown models.
+    Test that get_max_tokens_for_model returns 128000 fallback for unknown models.
     """
     config = AnthropicConfig()
 
-    # Unknown model should return 4096 as fallback
+    # Unknown model should return 128000 as fallback
     max_tokens = config.get_max_tokens_for_model("unknown-model-xyz")
-    assert max_tokens == 4096
+    assert max_tokens == 128000
 
 
 def test_get_max_tokens_for_model_none():
     """
-    Test that get_max_tokens_for_model returns 4096 fallback when model is None.
+    Test that get_max_tokens_for_model returns 128000 fallback when model is None.
     """
     config = AnthropicConfig()
 
-    # None model should return 4096 as fallback
+    # None model should return 128000 as fallback
     max_tokens = config.get_max_tokens_for_model(None)
-    assert max_tokens == 4096
+    assert max_tokens == 128000
 
 
 def test_get_config_with_model_uses_dynamic_max_tokens():
@@ -2479,12 +2672,52 @@ def test_get_config_with_model_uses_dynamic_max_tokens():
         assert config_claude37["max_tokens"] == 64000
 
 
+def test_transform_request_uses_deployment_max_output_tokens_before_catalog() -> None:
+    model: Final = "claude-sonnet-4-6"
+    catalog_max_output_tokens: Final = litellm.get_model_info(model)["max_output_tokens"]
+    config: Final = AnthropicConfig()
+
+    configured: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={"model_info": {"max_output_tokens": 987}},
+        headers={},
+    )
+    catalog_default: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    non_mapping_model_info: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={"model_info": "invalid"},
+        headers={},
+    )
+    requested: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 654},
+        litellm_params={"model_info": {"max_output_tokens": 987}},
+        headers={},
+    )
+
+    assert configured["max_tokens"] == 987
+    assert catalog_default["max_tokens"] == catalog_max_output_tokens
+    assert non_mapping_model_info["max_tokens"] == catalog_max_output_tokens
+    assert requested["max_tokens"] == 654
+
+
 def test_get_config_without_model_uses_fallback():
     """
-    Test that get_config without model parameter uses 4096 fallback.
+    Test that get_config without model parameter uses 128000 fallback.
     """
     config = AnthropicConfig.get_config()
-    assert config["max_tokens"] == 4096
+    assert config["max_tokens"] == 128000
 
 
 def test_get_config_does_not_leak_module_constants():
@@ -2787,7 +3020,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
         ("claude-opus-4-8", True),
         ("anthropic.claude-opus-4-8", True),
         ("vertex_ai/claude-opus-4-6@default", True),
-        ("openrouter/anthropic/claude-opus-4.7", True),
         ("us.anthropic.claude-sonnet-4-6", True),
         ("claude-opus-4-6-20260205", True),
         # unmapped future models -> anthropic-claude fallback rule
@@ -3040,6 +3272,47 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
     assert "output_config" not in result, (
         f"output_config should not be set for non-adaptive model (reasoning_effort={reasoning_effort_value!r})"
     )
+
+
+def _reasoning_effort_drop_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        record.getMessage() for record in caplog.records if "Dropping reasoning_effort=" in record.getMessage()
+    )
+
+
+@pytest.mark.parametrize("reasoning_effort_value", [5, {"effort": 5, "summary": "concise"}])
+def test_reasoning_effort_that_is_not_a_level_name_is_dropped_with_one_warning(
+    reasoning_effort_value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = AnthropicConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort_value},
+            optional_params={},
+            model="claude-sonnet-4-6-20260219",
+            drop_params=False,
+        )
+
+    warnings: Final = _reasoning_effort_drop_warnings(caplog)
+    assert "thinking" not in result
+    assert "output_config" not in result
+    assert len(warnings) == 1
+    assert f"reasoning_effort={reasoning_effort_value!r}" in warnings[0]
+    assert "claude-sonnet-4-6-20260219" in warnings[0]
+
+
+@pytest.mark.parametrize("reasoning_effort_value", [{"summary": "concise"}, {"effort": "low", "summary": "concise"}])
+def test_reasoning_effort_with_a_level_name_or_no_level_logs_no_drop(
+    reasoning_effort_value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        AnthropicConfig().map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort_value},
+            optional_params={},
+            model="claude-sonnet-4-6-20260219",
+            drop_params=False,
+        )
+
+    assert _reasoning_effort_drop_warnings(caplog) == ()
 
 
 @pytest.mark.parametrize(
@@ -3362,21 +3635,17 @@ def test_code_execution_tool_results_extraction():
         prefix_prompt=None,
     )
 
-    # Verify tool calls are present
-    assert transformed_response.choices[0].message.tool_calls is not None
-    assert len(transformed_response.choices[0].message.tool_calls) == 2
+    assert transformed_response.choices[0].message.tool_calls is None
 
-    # Verify first tool call
-    assert transformed_response.choices[0].message.tool_calls[0].id == "srvtoolu_01ABC"
-    assert transformed_response.choices[0].message.tool_calls[0].function.name == "bash_code_execution"
-
-    # Verify second tool call
-    assert transformed_response.choices[0].message.tool_calls[1].id == "srvtoolu_01DEF"
-    assert transformed_response.choices[0].message.tool_calls[1].function.name == "text_editor_code_execution"
-
-    # Verify tool results are in provider_specific_fields
     provider_fields = transformed_response.choices[0].message.provider_specific_fields
     assert provider_fields is not None
+    server_tool_calls: Final = anthropic_server_tool_call_params(transformed_response.choices[0].message)
+    assert [(call["id"], call["function"].get("name")) for call in server_tool_calls] == [
+        ("srvtoolu_01ABC", "bash_code_execution"),
+        ("srvtoolu_01DEF", "text_editor_code_execution"),
+    ]
+
+    # Verify tool results are in provider_specific_fields
     assert "tool_results" in provider_fields
     assert provider_fields["tool_results"] is not None
     assert len(provider_fields["tool_results"]) == 2
@@ -3397,6 +3666,45 @@ def test_code_execution_tool_results_extraction():
     # Verify text content is properly concatenated
     assert "I'll calculate that for you." in transformed_response.choices[0].message.content
     assert "Done!" in transformed_response.choices[0].message.content
+
+
+def test_server_and_client_tool_calls_split_by_block_type_not_id_prefix():
+    completion_response: Final = {
+        "id": "msg_split",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {"type": "server_tool_use", "id": "toolu_server", "name": "web_search", "input": {"query": "persimmon"}},
+            {"type": "tool_use", "id": "srvtoolu_client", "name": "get_weather", "input": {"city": "Paris"}},
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+    raw_response: Final = MagicMock(spec=httpx.Response)
+    raw_response.headers = {}
+
+    message: Final = (
+        AnthropicConfig()
+        .transform_parsed_response(
+            completion_response=completion_response,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            json_mode=False,
+            prefix_prompt=None,
+        )
+        .choices[0]
+        .message
+    )
+
+    assert [
+        (call["id"], call["function"].get("name"), call["function"].get("arguments"))
+        for call in anthropic_server_tool_call_params(message)
+    ] == [("toolu_server", "web_search", '{"query": "persimmon"}')]
+    assert [
+        (tool_call.id, tool_call.function.name, tool_call.function.arguments) for tool_call in message.tool_calls or ()
+    ] == [("srvtoolu_client", "get_weather", '{"city": "Paris"}')]
 
 
 def test_code_execution_tool_results_in_hidden_params():
@@ -3466,49 +3774,480 @@ def test_code_execution_tool_results_in_hidden_params():
     assert hidden["provider_specific_fields"]["tool_results"][0]["content"]["stdout"] == "hello\n"
 
 
-def test_tool_search_tool_result_not_in_tool_results():
-    """
-    Test that tool_search_tool_result is NOT included in tool_results
-    since it's internal metadata, not actual tool execution results.
-    """
-    import httpx
+def _tool_search_turn(tool_references: list[str], last_block: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01Search",
+            "name": "tool_search_tool_bm25",
+            "input": {"query": "weather"},
+        },
+        {
+            "type": "tool_search_tool_result",
+            "tool_use_id": "srvtoolu_01Search",
+            "content": {
+                "type": "tool_search_tool_search_result",
+                "tool_references": [{"type": "tool_reference", "tool_name": name} for name in tool_references],
+            },
+        },
+        last_block,
+    ]
 
-    from litellm.types.utils import ModelResponse
 
-    config = AnthropicConfig()
-
-    mock_anthropic_response = {
+def _parsed_choice(
+    content: list[dict[str, object]], stop_reason: str, tool_name_reverse_map: dict[str, str] | None = None
+) -> Choices:
+    anthropic_response: Final = {
         "id": "msg_01XYZ",
         "type": "message",
         "role": "assistant",
-        "model": "claude-sonnet-4-5-20250929",
-        "content": [
-            {"type": "text", "text": "Found tools."},
-            {"type": "tool_search_tool_result", "tool_references": ["tool1", "tool2"]},
-        ],
-        "stop_reason": "stop",
+        "model": "claude-opus-5-5",
+        "content": content,
+        "stop_reason": stop_reason,
         "stop_sequence": None,
         "usage": {"input_tokens": 100, "output_tokens": 50},
     }
+    raw_response: Final = MagicMock(spec=httpx.Response)
+    raw_response.json.return_value = anthropic_response
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    choice: Final = (
+        AnthropicConfig()
+        .transform_parsed_response(
+            completion_response=anthropic_response,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            json_mode=False,
+            prefix_prompt=None,
+            tool_name_reverse_map=tool_name_reverse_map,
+        )
+        .choices[0]
+    )
+    assert isinstance(choice, Choices)
+    return choice
 
-    mock_raw_response = MagicMock(spec=httpx.Response)
-    mock_raw_response.json.return_value = mock_anthropic_response
-    mock_raw_response.status_code = 200
-    mock_raw_response.headers = {}
 
-    model_response = ModelResponse()
+def _parsed_assistant_message(
+    content: list[dict[str, object]], stop_reason: str, tool_name_reverse_map: dict[str, str] | None = None
+) -> Message:
+    return _parsed_choice(content, stop_reason, tool_name_reverse_map).message
 
-    transformed_response = config.transform_parsed_response(
-        completion_response=mock_anthropic_response,
-        raw_response=mock_raw_response,
-        model_response=model_response,
-        json_mode=False,
-        prefix_prompt=None,
+
+_WEATHER_TOOL_USE: Final = {
+    "type": "tool_use",
+    "id": "toolu_01Weather",
+    "name": "get_weather",
+    "input": {"city": "Paris"},
+}
+
+
+def _web_search_turn(last_block: Mapping[str, object]) -> list[dict[str, object]]:
+    return [
+        {"type": "server_tool_use", "id": "srvtoolu_01Web", "name": "web_search", "input": {"query": "Paris facts"}},
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": "srvtoolu_01Web",
+            "content": [
+                {
+                    "type": "web_search_result",
+                    "url": "https://example.com/paris",
+                    "title": "Paris",
+                    "encrypted_content": "EqgfCioIARgB",
+                    "page_age": None,
+                }
+            ],
+        },
+        dict(last_block),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("server_call_answered", "client_call_answered", "modify_params"),
+    [
+        pytest.param(False, True, False, id="client_answers_its_own_call"),
+        pytest.param(False, True, True, id="client_answers_its_own_call_with_modify_params"),
+        pytest.param(True, True, False, id="client_also_answers_the_server_call"),
+        pytest.param(False, False, True, id="modify_params_answers_the_unanswered_client_call"),
+    ],
+)
+@pytest.mark.parametrize(
+    "content",
+    [_tool_search_turn(["get_weather"], _WEATHER_TOOL_USE), _web_search_turn(_WEATHER_TOOL_USE)],
+    ids=["tool_search", "web_search"],
+)
+def test_server_tool_result_round_trips_right_after_its_call(
+    content: list[dict[str, object]],
+    server_call_answered: bool,
+    client_call_answered: bool,
+    modify_params: bool,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    message: Final = _parsed_assistant_message(content, "tool_use")
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    server_answer: Final = {"role": "tool", "tool_call_id": content[0]["id"], "content": "Error: unknown tool"}
+    client_answer: Final = {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}
+
+    replayed: Final = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *((server_answer,) if server_call_answered else ()),
+            *((client_answer,) if client_call_answered else ()),
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+    assert replayed[1]["content"] == content
+    assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
+    assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
+
+
+_FETCH_STILL_WAITING_ON_ITS_RESULT: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_01Fetch",
+    "name": "web_fetch",
+    "input": {"url": "https://example.com/"},
+}
+
+
+@pytest.mark.parametrize("modify_params", [False, True])
+def test_server_call_still_waiting_on_its_result_is_replayed_as_a_server_call(
+    modify_params: bool, monkeypatch: pytest.MonkeyPatch
+):
+    content: Final = [_FETCH_STILL_WAITING_ON_ITS_RESULT, _WEATHER_TOOL_USE]
+    message: Final = _parsed_assistant_message(content, "tool_use")
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Fetch example.com, then tell me the weather in Paris"},
+        message.model_dump(),
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
     )
 
-    # Verify tool_search_tool_result is NOT in tool_results
-    provider_fields = transformed_response.choices[0].message.provider_specific_fields
-    assert provider_fields.get("tool_results") is None
+    assert replayed[1]["content"] == content
+    assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
+    assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
+
+
+_FETCH_AND_WEATHER_THINKING: Final = {
+    "type": "thinking",
+    "thinking": "Fetch the page, then check the weather.",
+    "signature": "sig_fetch_weather",
+}
+_CHECKING_BOTH: Final = {"type": "text", "text": "Checking both."}
+
+
+@pytest.mark.parametrize("thinking_inline", [False, True], ids=["thinking_blocks", "inline_thinking"])
+def test_tool_use_turn_waiting_on_a_server_call_keeps_its_thinking_and_both_calls(thinking_inline: bool):
+    parsed: Final = _parsed_assistant_message(
+        [_FETCH_AND_WEATHER_THINKING, _CHECKING_BOTH, _FETCH_STILL_WAITING_ON_ITS_RESULT, _WEATHER_TOOL_USE], "tool_use"
+    ).model_dump()
+    message: Final = (
+        {**parsed, "thinking_blocks": None, "content": [_FETCH_AND_WEATHER_THINKING, _CHECKING_BOTH]}
+        if thinking_inline
+        else parsed
+    )
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Fetch example.com, then tell me the weather in Paris"},
+        message,
+        {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+    )
+
+    assistant_content: Final = replayed[1]["content"]
+    assert assistant_content[:2] == [_FETCH_AND_WEATHER_THINKING, _CHECKING_BOTH]
+    assert sorted(assistant_content[2:], key=lambda block: block["id"]) == [
+        _FETCH_STILL_WAITING_ON_ITS_RESULT,
+        _WEATHER_TOOL_USE,
+    ]
+    assert [block["tool_use_id"] for block in replayed[2]["content"]] == ["toolu_01Weather"]
+
+
+_PARIS_TEXT: Final = "Paris is the capital of France."
+_PARIS_ANSWER: Final[Mapping[str, str]] = {"type": "text", "text": _PARIS_TEXT}
+
+
+@pytest.mark.parametrize(
+    ("content", "stop_reason", "expected_tool_call_ids", "expected_finish_reason"),
+    [
+        pytest.param(_web_search_turn(_PARIS_ANSWER), "end_turn", [], "stop", id="web_search_then_answer"),
+        pytest.param(
+            _web_search_turn(_WEATHER_TOOL_USE),
+            "tool_use",
+            ["toolu_01Weather"],
+            "tool_calls",
+            id="web_search_then_tool",
+        ),
+        pytest.param([_WEATHER_TOOL_USE], "tool_use", ["toolu_01Weather"], "tool_calls", id="client_tool_only"),
+    ],
+)
+def test_server_tool_use_is_not_returned_as_a_client_tool_call(
+    content: list[dict[str, object]],
+    stop_reason: str,
+    expected_tool_call_ids: list[str],
+    expected_finish_reason: str,
+):
+    choice: Final = _parsed_choice(content, stop_reason)
+
+    assert (choice.message.tool_calls is None) == (not expected_tool_call_ids)
+    assert [call.id for call in choice.message.tool_calls or ()] == expected_tool_call_ids
+    assert choice.finish_reason == expected_finish_reason
+    assert [
+        (call["id"], call["function"].get("name"), call["function"].get("arguments"))
+        for call in anthropic_server_tool_call_params(choice.message)
+    ] == [
+        (block["id"], block["name"], json.dumps(block["input"]))
+        for block in content
+        if block["type"] == "server_tool_use"
+    ]
+    if not expected_tool_call_ids:
+        assert choice.message.content == _PARIS_TEXT
+
+
+def _replayed(*messages: Mapping[str, object]) -> list[AllAnthropicPassThroughMessageValues]:
+    return anthropic_messages_pt(
+        messages=cast(list[AllMessageValues], list(messages)),  # cast-ok: replays history the way clients send it back
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+
+
+def test_web_search_answer_round_trips_without_any_client_tool_call():
+    message: Final = _parsed_assistant_message(_web_search_turn(_PARIS_ANSWER), "end_turn")
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Tell me about Paris"},
+        message.model_dump(),
+        {"role": "user", "content": "And Lyon?"},
+    )
+
+    assert _block_ids(replayed[1], "server_tool_use", "id") == ["srvtoolu_01Web"]
+    assert _block_ids(replayed[1], "web_search_tool_result", "tool_use_id") == ["srvtoolu_01Web"]
+    assert [
+        message_field(block, "text")
+        for block in parts_of(replayed[1]["content"])
+        if message_field(block, "type") == "text"
+    ] == [_PARIS_TEXT]
+
+
+def _block_ids(message: Mapping[str, object], block_type: str, id_key: str) -> list[str]:
+    return sorted(
+        block_id
+        for block in parts_of(message["content"])
+        if message_field(block, "type") == block_type and isinstance(block_id := message_field(block, id_key), str)
+    )
+
+
+def _as_returned_before_server_tool_calls_moved(message: Message) -> Mapping[str, object]:
+    dumped: Final[Mapping[str, object]] = message.model_dump()
+    provider_fields: Final = validated_object_mapping(dumped.get("provider_specific_fields")) or {}
+    return {
+        **dumped,
+        "tool_calls": [*anthropic_server_tool_call_params(message), *parts_of(dumped.get("tool_calls"))],
+        "provider_specific_fields": {
+            key: value for key, value in provider_fields.items() if key != "server_tool_calls"
+        },
+    }
+
+
+_SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn(
+    [], {"type": "text", "text": "I have no tool that books flights."}
+)
+
+
+@pytest.mark.parametrize(
+    ("follow_ups", "modify_params", "server_tool_use_ids"),
+    [
+        pytest.param(
+            ({"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "no tool found"},),
+            False,
+            [],
+            id="client_answers_a_search_that_found_nothing",
+        ),
+        pytest.param(
+            (
+                {"role": "tool", "tool_call_id": "srvtoolu_01Search", "content": "no tool found"},
+                {"role": "user", "content": "Book it anyway"},
+            ),
+            False,
+            ["srvtoolu_01Search"],
+            id="client_answers_a_search_that_found_nothing_and_writes_again",
+        ),
+        pytest.param((), True, [], id="modify_params_with_nothing_after_a_search_that_found_nothing"),
+    ],
+)
+def test_replayed_search_that_found_nothing_answers_every_tool_use_and_ends_on_a_user_turn(
+    follow_ups: tuple[dict[str, str], ...],
+    modify_params: bool,
+    server_tool_use_ids: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    message: Final = _parsed_assistant_message(_SEARCH_THAT_FOUND_NOTHING, "end_turn")
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Find a tool and use it"},
+        _as_returned_before_server_tool_calls_moved(message),
+        *follow_ups,
+    )
+    assert [turn["role"] for turn in replayed] == ["user", "assistant", "user"]
+    assert _block_ids(replayed[2], "tool_result", "tool_use_id") == _block_ids(replayed[1], "tool_use", "id")
+    assert _block_ids(replayed[1], "server_tool_use", "id") == server_tool_use_ids
+
+
+def _function_tool(name: str) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {"name": name, "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+        "defer_loading": True,
+    }
+
+
+def _anthropic_request_after(
+    assistant_content: list[dict[str, object]], stop_reason: str, tool_names: tuple[str, ...] | None
+) -> dict[str, object]:
+    config: Final = AnthropicConfig()
+    message: Final = _parsed_assistant_message(assistant_content, stop_reason)
+    answers: Final = [
+        {"role": "tool", "tool_call_id": block["id"], "content": "18C"}
+        for block in assistant_content
+        if block["type"] == "tool_use"
+    ]
+    optional_params: Final = (
+        {}
+        if tool_names is None
+        else config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    *map(_function_tool, tool_names),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        )
+    )
+    return config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *answers,
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_names", "search_replayed"),
+    [
+        pytest.param(("get_weather", "get_local_time"), True, id="every_loaded_tool_is_still_sent"),
+        pytest.param(("get_local_time",), False, id="a_loaded_tool_is_no_longer_sent"),
+        pytest.param(None, False, id="no_tools_so_litellm_sends_a_dummy_tool"),
+    ],
+)
+def test_replayed_tool_search_is_sent_only_while_every_tool_it_loaded_is_still_sent(
+    tool_names: tuple[str, ...] | None, search_replayed: bool
+):
+    search_turn: Final = _tool_search_turn(["get_weather"], _WEATHER_TOOL_USE)
+
+    request: Final = _anthropic_request_after(search_turn, "tool_use", tool_names)
+
+    assert request["messages"][1]["content"] == (search_turn if search_replayed else [_WEATHER_TOOL_USE])
+    assert [block["type"] for block in request["messages"][2]["content"]] == ["tool_result", "text"]
+
+
+def test_replayed_tool_search_turn_that_held_only_the_search_is_dropped_once_its_tool_is_no_longer_sent():
+    request: Final = _anthropic_request_after(_tool_search_turn(["get_weather"], _WEATHER_TOOL_USE)[:2], "end_turn", ())
+
+    assert [message["role"] for message in request["messages"]] == ["user", "user"]
+    assert "srvtoolu_01Search" not in json.dumps(request["messages"])
+
+
+def test_replayed_tool_search_result_litellm_cannot_read_is_sent_as_the_client_replayed_it():
+    unreadable_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {"tool_references": "get_weather"},
+    }
+    message: Final = _parsed_assistant_message(_tool_search_turn(["get_weather"], _WEATHER_TOOL_USE), "tool_use")
+    provider_fields: Final = {**(message.provider_specific_fields or {}), "tool_results": [unreadable_result]}
+    replayed: Final = message.model_copy(update={"provider_specific_fields": provider_fields})
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            replayed.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={"tools": [_function_tool("get_local_time")]},
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert unreadable_result in request["messages"][1]["content"]
+
+
+def test_replayed_search_that_found_nothing_keeps_its_result_when_the_call_never_reached_the_client(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    message: Final = _parsed_assistant_message(_SEARCH_THAT_FOUND_NOTHING, "end_turn")
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    replayed: Final = _replayed({"role": "user", "content": "Find a tool and use it"}, message.model_dump())
+
+    assert [turn["role"] for turn in replayed] == ["user", "assistant"]
+    assert _block_ids(replayed[1], "server_tool_use", "id") == ["srvtoolu_01Search"]
+    assert _block_ids(replayed[1], "tool_search_tool_result", "tool_use_id") == ["srvtoolu_01Search"]
+    assert _block_ids(replayed[1], "tool_use", "id") == []
+
+
+_CODE_EXECUTION_BLOCKS: Final = [
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Bash",
+        "name": "bash_code_execution",
+        "input": {"command": "python3 -c 'print(2 + 2)'"},
+    },
+    {
+        "type": "bash_code_execution_tool_result",
+        "tool_use_id": "srvtoolu_01Bash",
+        "content": {"type": "bash_code_execution_result", "stdout": "4\n", "stderr": "", "return_code": 0},
+    },
+]
+
+
+@pytest.mark.parametrize(
+    ("code_execution_blocks", "code_interpreter_call_ids"),
+    [
+        pytest.param([], None, id="tool_search_only"),
+        pytest.param(_CODE_EXECUTION_BLOCKS, ["srvtoolu_01Bash"], id="tool_search_and_code_execution"),
+    ],
+)
+def test_parsed_tool_search_turn_adds_code_interpreter_results_only_for_code_execution(
+    code_execution_blocks: list[dict[str, object]], code_interpreter_call_ids: list[str] | None
+):
+    search_turn: Final = _tool_search_turn(["get_weather"], {"type": "text", "text": "2 + 2 is 4"})
+    message: Final = _parsed_assistant_message([*code_execution_blocks, *search_turn], "end_turn")
+    code_interpreter_results: Final = message.provider_specific_fields.get("code_interpreter_results")
+
+    assert search_turn[1] in message.provider_specific_fields["tool_results"]
+    assert (
+        None if code_interpreter_results is None else [call.id for call in code_interpreter_results]
+    ) == code_interpreter_call_ids
 
 
 def test_web_search_tool_result_backwards_compatibility():
@@ -4075,6 +4814,191 @@ def test_transform_request_includes_cache_control():
     assert result["cache_control"] == {"type": "ephemeral"}
 
 
+def _anthropic_body(messages: list, litellm_params: dict | None = None, tools: list | None = None) -> dict:
+    return AnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=messages,
+        optional_params={"max_tokens": 100, **({"tools": tools} if tools else {})},
+        litellm_params=litellm_params or {},
+        headers={},
+    )
+
+
+def test_transform_request_carries_prompt_cache_breakpoint_to_cache_control():
+    body: Final = _anthropic_body(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse.", "prompt_cache_breakpoint": {"mode": "explicit"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                    {
+                        "type": "text",
+                        "text": "Bye",
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        "prompt_cache_breakpoint": {"mode": "explicit"},
+                    },
+                ],
+            },
+        ]
+    )
+
+    assert body["system"] == [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]
+    assert body["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "Bye", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "marker, expected_block",
+    [
+        ({"mode": "explicit", "ttl": "30m"}, {"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}),
+        ({"mode": "implicit"}, {"type": "text", "text": "Hello"}),
+    ],
+)
+def test_transform_request_prompt_cache_breakpoint_without_claude_equivalent(marker, expected_block):
+    messages: Final = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": marker}]}
+    ]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        _anthropic_body(copy.deepcopy(messages))
+
+    body: Final = _anthropic_body(messages, litellm_params={"drop_params": True})
+    assert body["messages"] == [{"role": "user", "content": [expected_block]}]
+
+
+def test_transform_request_names_the_marker_ttl_rule_for_a_ttl_only_claude_takes():
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "1h"}}
+            ],
+        }
+    ]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="optional ttl of '30m' or '12h'"):
+        _anthropic_body(messages)
+
+
+def test_transform_request_keeps_the_first_and_last_prompt_cache_breakpoints_within_the_cap():
+    client_marked_part: Final = {"type": "text", "text": "part 0", "cache_control": {"type": "ephemeral"}}
+    marked_parts: Final = [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}
+        for index in range(1, 5)
+    ]
+    messages: Final = [{"role": "user", "content": [client_marked_part, *marked_parts]}]
+    tools: Final = [{"name": "lookup", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}}]
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="at most 4 cache breakpoints"):
+        _anthropic_body(copy.deepcopy(messages), tools=copy.deepcopy(tools))
+
+    body: Final = _anthropic_body(messages, litellm_params={"drop_params": True}, tools=tools)
+    assert [part.get("cache_control") for part in body["messages"][0]["content"]] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+        None,
+        None,
+        {"type": "ephemeral"},
+    ]
+    assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_transform_request_counts_a_cache_marked_tool_search_tool_toward_the_cap():
+    config: Final = AnthropicConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 100,
+            "tools": [
+                {
+                    "type": "tool_search_tool_regex_20251119",
+                    "name": "tool_search_tool_regex",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=False,
+    )
+    marked_turns: Final = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": f"turn {index}", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        }
+        for index in range(4)
+    ]
+
+    def body(litellm_params: dict) -> dict:
+        return config.transform_request(
+            model="claude-sonnet-5-5",
+            messages=copy.deepcopy(marked_turns),
+            optional_params=copy.deepcopy(optional_params),
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="this request has 5"):
+        body({})
+
+    capped: Final = body({"drop_params": True})
+    assert capped["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    sent_parts: Final = itertools.chain.from_iterable(message["content"] for message in capped["messages"])
+    assert [part.get("cache_control") for part in sent_parts] == [
+        {"type": "ephemeral"},
+        {"type": "ephemeral"},
+        None,
+        {"type": "ephemeral"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "unsent_marks",
+    [
+        pytest.param(
+            [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Noted.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+                }
+            ],
+            id="assistant_part",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Also this.", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+            id="message_level",
+        ),
+    ],
+)
+def test_transform_request_caps_only_the_marks_claude_receives(unsent_marks: list[dict]):
+    marked_parts: Final = [
+        {"type": "text", "text": f"part {index}", "prompt_cache_breakpoint": {"mode": "explicit"}} for index in range(4)
+    ]
+
+    body: Final = _anthropic_body(
+        [{"role": "user", "content": marked_parts}, *unsent_marks, {"role": "user", "content": "Go on."}]
+    )
+
+    sent_marks: Final = [
+        part.get("cache_control")
+        for part in itertools.chain.from_iterable(message["content"] for message in body["messages"])
+        if isinstance(part, dict)
+    ]
+    assert sent_marks.count({"type": "ephemeral"}) == 4
+
+
 def test_compaction_block_empty_list_not_added():
     """
     Test that empty compaction_blocks list is not added to provider_specific_fields.
@@ -4282,6 +5206,69 @@ def test_calculate_usage_service_tier_defaults_to_none():
     assert usage.service_tier is None
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
+@pytest.mark.parametrize(
+    ("openai_tier", "anthropic_tier"),
+    [("auto", "auto"), ("default", "standard_only"), ("standard_only", "standard_only")],
+)
+def test_service_tier_reaches_anthropic_request_body(provider, openai_tier, anthropic_tier):
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-6", custom_llm_provider=provider, service_tier=openai_tier
+    )
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["service_tier"] == anthropic_tier
+
+
+@pytest.mark.parametrize("tier", ["flex", "priority", "fast", "scale"])
+def test_service_tier_without_anthropic_equivalent_raises_with_drop_params_hint(monkeypatch, tier):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params") as exc_info:
+        litellm.utils.get_optional_params(model="claude-sonnet-4-6", custom_llm_provider="anthropic", service_tier=tier)
+
+    assert exc_info.value.status_code == 400
+
+
+def test_service_tier_without_anthropic_equivalent_dropped_with_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="claude-sonnet-4-6", custom_llm_provider="anthropic", service_tier="flex", drop_params=True
+    )
+
+    assert "service_tier" not in optional_params
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("bedrock", "invoke/us.anthropic.claude-sonnet-4-6"), ("vertex_ai", "claude-sonnet-4-6")],
+)
+def test_service_tier_still_rejected_for_claude_hosts_that_400_on_it(monkeypatch, provider, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="service_tier"):
+        litellm.utils.get_optional_params(model=model, custom_llm_provider=provider, service_tier="auto")
+
+
+def test_bedrock_invoke_service_tier_opt_in_is_sent_untranslated():
+    optional_params: Final = litellm.utils.get_optional_params(
+        model="invoke/us.anthropic.claude-sonnet-4-6",
+        custom_llm_provider="bedrock",
+        service_tier="default",
+        allowed_openai_params=["service_tier"],
+    )
+
+    assert optional_params["service_tier"] == "default"
+
+
 def test_fast_mode_parameter_in_supported_params():
     """
     Test that 'speed' is in the list of supported OpenAI params.
@@ -4313,8 +5300,9 @@ def test_fast_mode_parameter_mapping():
     assert result["speed"] == "fast"
 
 
-def test_anthropic_drop_params_strips_speed_for_unsupported_models():
-    """``drop_params=True`` strips unsupported ``speed`` for non-Opus models."""
+@pytest.mark.parametrize("model", ["claude-sonnet-4-6", "claude-opus-4-7"])
+def test_anthropic_drop_params_strips_speed_for_unsupported_models(model: str):
+    """``drop_params=True`` strips ``speed`` for models without fast mode."""
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Hello"}]
 
@@ -4322,7 +5310,7 @@ def test_anthropic_drop_params_strips_speed_for_unsupported_models():
     litellm.drop_params = True
     try:
         result = config.transform_request(
-            model="claude-sonnet-4-6",
+            model=model,
             messages=messages,
             optional_params={"speed": "fast", "max_tokens": 1024},
             litellm_params={},
@@ -4777,10 +5765,10 @@ def test_basic_sanitize_anthropic_tool_name_replaces_invalid_chars():
 def test_build_anthropic_tool_name_maps_no_collisions():
     """Names that need rewriting go in the maps; valid names stay out."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(
+    forward, reverse = build_anthropic_tool_name_maps(
         [
             "fine_name",
             "actions/download-job-logs-for-workflow-run",
@@ -4802,10 +5790,10 @@ def test_build_anthropic_tool_name_maps_disambiguates_collision_with_existing_va
     the rewritten one must get a unique suffix and only THAT one shows up in
     the reverse map. The legitimately-named `foo_bar` round-trips identically."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo_bar", "foo/bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo_bar", "foo/bar"])
     # The original valid name keeps its slot.
     assert "foo_bar" not in forward  # untouched
     # The rewritten one gets a disambiguating suffix.
@@ -4821,10 +5809,10 @@ def test_build_anthropic_tool_name_maps_disambiguates_two_rewrites_to_same_targe
     """Two different invalid names that collapse to the same candidate must
     both end up with unique sanitized forms."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo.bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo/bar", "foo.bar"])
     # First wins the canonical slot, second gets a suffix.
     assert forward["foo/bar"] == "foo_bar"
     assert forward["foo.bar"] == "foo_bar_2"
@@ -4836,10 +5824,10 @@ def test_build_anthropic_tool_name_maps_disambiguates_two_rewrites_to_same_targe
 def test_build_anthropic_tool_name_maps_three_way_collision():
     """`foo/bar`, `foo.bar`, and an existing `foo_bar` must all coexist."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo_bar", "foo/bar", "foo.bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo_bar", "foo/bar", "foo.bar"])
     assert "foo_bar" not in forward  # untouched
     assert forward["foo/bar"] == "foo_bar_2"
     assert forward["foo.bar"] == "foo_bar_3"
@@ -4854,10 +5842,10 @@ def test_build_anthropic_tool_name_maps_reverse_order_collision():
     its sanitized form collides with, both must still end up with distinct
     names on the wire."""
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo_bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo/bar", "foo_bar"])
     # The valid name keeps its slot untouched.
     assert "foo_bar" not in forward
     # The rewritten one gets a disambiguating suffix.
@@ -4877,10 +5865,10 @@ def test_build_anthropic_tool_name_maps_duplicate_originals():
     on duplicates.
     """
     from litellm.llms.anthropic.chat.transformation import (
-        _build_anthropic_tool_name_maps,
+        build_anthropic_tool_name_maps,
     )
 
-    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo/bar"])
+    forward, reverse = build_anthropic_tool_name_maps(["foo/bar", "foo/bar"])
     # Same original sanitizes to the same target — no spurious suffix.
     assert forward == {"foo/bar": "foo_bar"}
     assert reverse == {"foo_bar": "foo/bar"}
@@ -5769,7 +6757,7 @@ def test_anthropic_messages_request_strips_billing_header_for_minimax():
 
 
 def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
-    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig,
     )
 
@@ -5788,7 +6776,7 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
     [
         ("litellm.llms.anthropic.chat.transformation", "AnthropicConfig", False),
         (
-            "litellm.llms.anthropic.pass_through.messages.transformation",
+            "litellm.llms.anthropic.messages.native.transformation",
             "AnthropicMessagesConfig",
             False,
         ),
@@ -5798,10 +6786,16 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
-            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation",
+            "litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation",
             "AmazonAnthropicClaudeConfig",
             True,
         ),
+        (
+            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation",
+            "AmazonAnthropicClaudeMessagesConfig",
+            True,
+        ),
+        ("litellm.llms.databricks.messages.transformation", "DatabricksAnthropicMessagesConfig", False),
         (
             "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation",
             "VertexAIAnthropicConfig",
@@ -5824,7 +6818,7 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
             True,
         ),
         (
-            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation",
+            "litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation",
             "VertexAIPartnerModelsAnthropicMessagesConfig",
             True,
         ),
@@ -6313,6 +7307,63 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
     assert "tool_choice" not in result
 
 
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "forced"),
+    [
+        ("claude-opus-4-8", {"thinking": {"type": "adaptive"}}, False),
+        ("claude-opus-5", {}, False),
+        ("claude-sonnet-5", {}, False),
+        ("claude-haiku-5-5", {}, False),
+        ("claude-fable-5", {"reasoning_effort": "none"}, False),
+        ("claude-opus-4-8", {}, True),
+        ("claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+        ("claude-haiku-5-5", {"reasoning_effort": "none"}, True),
+    ],
+    ids=[
+        "opus-4-8-adaptive",
+        "opus-5-default-thinking",
+        "sonnet-5-default-thinking",
+        "haiku-5-5-default-thinking",
+        "fable-5-always-on-reasoning-effort-none",
+        "opus-4-8-default-off",
+        "opus-5-thinking-disabled",
+        "haiku-5-5-reasoning-effort-none",
+    ],
+)
+def test_response_format_tool_is_forced_only_when_the_model_will_not_think(
+    set_native_structured_output, model, thinking_params, forced
+):
+    set_native_structured_output(model, None)
+    config: Final = AnthropicConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            **thinking_params,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "capital",
+                    "schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                },
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert [tool["name"] for tool in request["tools"]] == ["json_tool_call"]
+    assert (request.get("tool_choice") == {"name": "json_tool_call", "type": "tool"}) is forced
+    assert request["tools"][0].get("description") == (None if forced else RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION)
+
+
 def _eager_chat_function(**extra: object) -> dict[str, object]:
     return {
         "name": "write_file",
@@ -6370,6 +7421,34 @@ def test_eager_input_streaming_not_set_on_computer_use_tool():
 
     assert mapped_tool["type"] == "computer_20250124"
     assert "eager_input_streaming" not in mapped_tool
+
+
+def _computer_tool_with_defer_loading_and_allowed_callers(tool_type: str) -> dict[str, object]:
+    return {
+        "type": tool_type,
+        "function": {"name": "computer", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+        "defer_loading": True,
+        "allowed_callers": ["code_execution_20250825"],
+    }
+
+
+@pytest.mark.parametrize("tool_type", ["computer_20241022", "computer_20250124"])
+def test_legacy_computer_tools_drop_defer_loading_and_allowed_callers(tool_type: str):
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(_computer_tool_with_defer_loading_and_allowed_callers(tool_type))
+
+    assert mapped_tool["type"] == tool_type
+    assert "defer_loading" not in mapped_tool
+    assert "allowed_callers" not in mapped_tool
+
+
+def test_computer_20251124_keeps_defer_loading_and_allowed_callers():
+    mapped_tool, _ = AnthropicConfig().map_tool_helper(
+        _computer_tool_with_defer_loading_and_allowed_callers("computer_20251124")
+    )
+
+    assert mapped_tool["type"] == "computer_20251124"
+    assert mapped_tool["defer_loading"] is True
+    assert mapped_tool["allowed_callers"] == ["code_execution_20250825"]
 
 
 def test_eager_input_streaming_reaches_anthropic_request_tools():
@@ -6495,15 +7574,11 @@ def test_chat_flagged_model_converts_system_with_no_following_user_turn(local_mo
     assert _texts(result["messages"][2]) == [CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
 
 
-@pytest.mark.parametrize(
-    "empty_content",
-    [[], None, [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]],
-    ids=["empty-list", "none", "unsupported-part-only"],
-)
-def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_nothing(
-    local_model_cost_map, empty_content
-):
-    messages = [
+@pytest.mark.parametrize("empty_content", [[], None], ids=["empty-list", "none"])
+def test_chat_flagged_model_anchors_a_system_on_an_empty_user_turn(
+    local_model_cost_map: None, empty_content: list[object] | None
+) -> None:
+    messages: Final = [
         {"role": "system", "content": "You are terse."},
         {"role": "user", "content": empty_content},
         {"role": "system", "content": REMINDER_TEXT},
@@ -6511,7 +7586,22 @@ def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_noth
         {"role": "user", "content": "Second question"},
     ]
 
-    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+    result: Final = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert [m["role"] for m in result["messages"]] == ["user", "system", "assistant", "user"]
+    assert _texts(result["messages"][1]) == [REMINDER_TEXT]
+
+
+def test_chat_flagged_model_converts_a_system_behind_a_user_turn_that_sends_nothing(local_model_cost_map: None) -> None:
+    messages: Final = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]},
+        {"role": "system", "content": REMINDER_TEXT},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+    ]
+
+    result: Final = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
 
     assert [m["role"] for m in result["messages"]] == ["user", "assistant", "user"]
     assert _texts(result["messages"][0]) == [CONVERTED_SYSTEM_NOTE, REMINDER_TEXT]
@@ -7093,10 +8183,10 @@ def test_process_anthropic_headers_with_no_matching_headers():
 @pytest.mark.parametrize(
     "computer_tool_used, prompt_caching_set, expected_beta_header",
     [
-        (True, False, True),
-        (False, True, False),
-        (True, True, True),
-        (False, False, False),
+        ("computer_20250124", False, True),
+        (None, True, False),
+        ("computer_20250124", True, True),
+        (None, False, False),
     ],
 )
 def test_anthropic_beta_header(computer_tool_used, prompt_caching_set, expected_beta_header):
@@ -7259,6 +8349,893 @@ def test_convert_tool_response_to_message_no_arguments():
     message = AnthropicConfig.convert_tool_response_to_message(tool_calls=tool_calls)
 
     assert message is None
+
+
+_RISK_SCHEMA: Final = {
+    "$defs": {"Owner": {"title": "Owner", "type": "object", "properties": {"team": {"type": "string"}}}},
+    "title": "RiskAssessment",
+    "type": "object",
+    "properties": {
+        "tier": {"title": "Tier", "type": "integer"},
+        "summary": {"title": "Summary", "type": "string"},
+        "owner": {"$ref": "#/$defs/Owner"},
+    },
+    "required": ["tier", "summary"],
+}
+_RISK_OBJECT: Final = {"tier": 3, "summary": "Two-hour read-only window on the loyalty APIs"}
+_PERSON_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+    "required": ["name", "age"],
+}
+_OPTIONAL_FIELDS_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"note": {"type": "string"}, "score": {"type": "integer"}},
+}
+_TREE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"value": {"type": "integer"}, "child": {"type": "object"}},
+    "required": ["value"],
+}
+_OPEN_SCORE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"score": {"type": "integer"}},
+    "additionalProperties": True,
+}
+_VALUES_SCHEMA: Final = {"type": "object", "properties": {"values": {"type": "array"}}, "required": ["values"]}
+_REMOTE_REF_SCHEMA: Final = {**_PERSON_SCHEMA, "$ref": "https://schemas.example.com/person.json"}
+_LOOSE_SCHEMA: Final = {"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}}}
+_CLOSED_CONTACT_SCHEMA: Final = {**_LOOSE_SCHEMA, "additionalProperties": False}
+_CONTACT: Final = {"name": "Ada", "email": "ada@example.com"}
+_NAMED_BOOK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "parameters": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "author": {"type": "string"}},
+            "required": ["title", "author"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["name", "parameters"],
+    "additionalProperties": False,
+}
+_NAMED_BOOK: Final = {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"title": "Dune", "author": "Frank Herbert"}}
+_RECURSIVE_NODE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string"},
+        "title": {"type": "string"},
+        "parent": {"anyOf": [{"$ref": "#"}, {"type": "null"}]},
+    },
+    "required": ["id", "title"],
+}
+_CHILD_WITHOUT_TITLE: Final = {"id": "child-7", "parent": {"id": "root-1", "title": "Root", "parent": None}}
+_JSON_OBJECT_MODE_SCHEMA: Final = {"type": "object", "properties": {}, "additionalProperties": True}
+_SUMMARY_PROPERTIES: Final = {"summary": {"type": "string"}}
+_PER_USER_SCHEMA: Final = {
+    "type": "object",
+    "properties": _SUMMARY_PROPERTIES,
+    "additionalProperties": {"type": "object"},
+}
+_PER_USER_PATTERN_SCHEMA: Final = {
+    "type": "object",
+    "properties": _SUMMARY_PROPERTIES,
+    "patternProperties": {"^user_": {"type": "object"}},
+}
+_PER_USER_ANSWER: Final = {"user_1": {"summary": "likes tea", "visits": 3}}
+
+
+def _schema(document: dict[str, object]) -> ResponseFormatSchema:
+    schema = response_format_schema(document)
+    assert schema is not None
+    return schema
+
+
+def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
+    return [
+        ChatCompletionToolCallChunk(
+            id="toolu_1",
+            type="function",
+            function=ChatCompletionToolCallFunctionChunk(
+                name=RESPONSE_FORMAT_TOOL_NAME, arguments=json.dumps(arguments)
+            ),
+            index=0,
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "schema, tool_input, expected_content",
+    [
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="name_and_parameters_envelope",
+        ),
+        pytest.param(_RISK_SCHEMA, {"input": _RISK_OBJECT}, _RISK_OBJECT, id="input_wrapper"),
+        pytest.param(_RISK_SCHEMA, {"arguments": _RISK_OBJECT}, _RISK_OBJECT, id="arguments_wrapper"),
+        pytest.param(
+            _PERSON_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"name": "Ada", "age": 36}},
+            {"name": "Ada", "age": 36},
+            id="envelope_key_shared_with_a_schema_property",
+        ),
+        pytest.param(
+            _OPTIONAL_FIELDS_SCHEMA,
+            {"input": {"score": 7}},
+            {"score": 7},
+            id="wrapper_around_an_all_optional_schema",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter": {"value": _RISK_OBJECT}},
+            _RISK_OBJECT,
+            id="two_level_envelope",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="string_label_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME, "PARAMETER_VALUE": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="foreign_tool_name_key_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"note": "read-only window", **_RISK_OBJECT},
+            {"note": "read-only window", **_RISK_OBJECT},
+            id="string_label_beside_schema_keys",
+        ),
+        pytest.param(
+            {**_RISK_SCHEMA, "required": "tier"},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            id="string_label_when_required_is_malformed",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": json.dumps(_RISK_OBJECT)},
+            _RISK_OBJECT,
+            id="tool_name_envelope_holding_encoded_json",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"tier": 1, "parameters": _RISK_OBJECT},
+            {"tier": 1, "parameters": _RISK_OBJECT},
+            id="schema_key_beside_a_wrapper_key",
+        ),
+        pytest.param(
+            _RECURSIVE_NODE_SCHEMA,
+            _CHILD_WITHOUT_TITLE,
+            _CHILD_WITHOUT_TITLE,
+            id="recursive_schema_keeps_the_answer_over_its_complete_parent",
+        ),
+        pytest.param(
+            {**_RISK_SCHEMA, "$schema": 5},
+            {"input": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="non_string_dollar_schema",
+        ),
+        pytest.param(
+            _OPEN_SCORE_SCHEMA,
+            {"meta": {"score": 7}, "label": "keep"},
+            {"meta": {"score": 7}, "label": "keep"},
+            id="valid_answer_with_extra_keys_and_a_schema_shaped_nested_object",
+        ),
+        pytest.param(_VALUES_SCHEMA, {"values": [1, 2]}, {"values": [1, 2]}, id="values_is_a_schema_property"),
+        pytest.param(
+            _REMOTE_REF_SCHEMA,
+            {"input": {"name": "Ada", "age": 36}},
+            {"name": "Ada", "age": 36},
+            id="remote_ref_schema_falls_back_to_key_matching",
+        ),
+        pytest.param(
+            _CLOSED_CONTACT_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
+            _CONTACT,
+            id="tool_name_envelope_when_the_schema_lists_no_required_keys",
+        ),
+        pytest.param(
+            _LOOSE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
+            _CONTACT,
+            id="tool_name_envelope_on_an_open_schema",
+        ),
+        pytest.param(_NAMED_BOOK_SCHEMA, _NAMED_BOOK, _NAMED_BOOK, id="accepted_answer_whose_name_is_the_tool_name"),
+        pytest.param(
+            _LOOSE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "email": "ada@example.com"},
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "email": "ada@example.com"},
+            id="tool_name_value_without_a_nested_object_stays",
+        ),
+        pytest.param(_RISK_SCHEMA, _RISK_OBJECT, _RISK_OBJECT, id="plain_schema_object"),
+        pytest.param(
+            _TREE_SCHEMA,
+            {"value": 1, "child": {"value": 2}},
+            {"value": 1, "child": {"value": 2}},
+            id="schema_object_whose_property_holds_a_schema_shaped_object",
+        ),
+        pytest.param(_RISK_SCHEMA, {"input": {"tier": 3}}, {"tier": 3}, id="inner_object_missing_required_key"),
+        pytest.param(_RISK_SCHEMA, {"values": {"tier": 2}}, {"tier": 2}, id="values_wrapper_missing_required_key"),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
+            {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
+            id="two_candidate_objects",
+        ),
+        pytest.param(
+            _OPTIONAL_FIELDS_SCHEMA,
+            {"meta": {"source": "change-request"}},
+            {"meta": {"source": "change-request"}},
+            id="inner_object_without_schema_keys",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"input": _RISK_OBJECT},
+            {"input": _RISK_OBJECT},
+            id="json_object_mode_without_schema_properties",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"values": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="json_object_mode_values_wrapper",
+        ),
+        pytest.param(
+            _JSON_OBJECT_MODE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="json_object_mode_tool_name_envelope",
+        ),
+        pytest.param(_PER_USER_SCHEMA, _PER_USER_ANSWER, _PER_USER_ANSWER, id="key_allowed_by_additional_properties"),
+        pytest.param(
+            _PER_USER_PATTERN_SCHEMA, _PER_USER_ANSWER, _PER_USER_ANSWER, id="key_allowed_by_pattern_properties"
+        ),
+        pytest.param(_OPEN_SCORE_SCHEMA, {"input": {"score": 7}}, {"input": {"score": 7}}, id="key_allowed_by_true"),
+        pytest.param(
+            {**_PER_USER_SCHEMA, "required": ["summary"]},
+            {"input": {"summary": "likes tea"}},
+            {"summary": "likes tea"},
+            id="allowed_key_on_a_schema_with_required_keys",
+        ),
+        pytest.param(
+            _PER_USER_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"summary": "likes tea"}},
+            {"summary": "likes tea"},
+            id="tool_name_envelope_on_a_schema_allowing_extra_keys",
+        ),
+        pytest.param(
+            {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["payload"]},
+            {"payload": {"id": "abc", "rows": 3}},
+            {"payload": {"id": "abc", "rows": 3}},
+            id="key_listed_only_in_required",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": {"input": _RISK_OBJECT}},
+            _RISK_OBJECT,
+            id="tool_name_envelope_around_an_input_wrapper",
+        ),
+        pytest.param(
+            _PER_USER_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _PER_USER_ANSWER},
+            _PER_USER_ANSWER,
+            id="tool_name_envelope_around_an_answer_with_one_allowed_key",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_envelope(
+    schema: dict, tool_input: dict, expected_content: dict
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call(tool_input),
+        response_format_schema=_schema(schema),
+    )
+
+    assert message is not None
+    assert json.loads(message.content) == expected_content
+
+
+def test_convert_tool_response_to_message_keeps_non_ascii_text_in_an_unwrapped_answer():
+    answer = {"tier": 3, "summary": "Hôtel Lutetia, 東京"}
+
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call({"input": answer}),
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert "Hôtel Lutetia, 東京" in message.content
+    assert json.loads(message.content) == answer
+
+
+def test_convert_tool_response_to_message_answer_with_a_lone_surrogate_stays_utf8_encodable():
+    answer = {"tier": 3, "summary": "smile \ud83d end"}
+
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=_json_tool_call({"input": answer}),
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert json.loads(message.content.encode("utf-8")) == answer
+
+
+_TOO_DEEP_TO_DECODE: Final = "[" * 100_000 + "]" * 100_000
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": _TOO_DEEP_TO_DECODE}), _TOO_DEEP_TO_DECODE],
+    ids=["encoded_inner_object", "whole_arguments"],
+)
+def test_convert_tool_response_to_message_keeps_arguments_too_deep_to_decode(arguments: str):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert message.content == arguments
+
+
+@pytest.mark.parametrize("arguments", ["[1, 2]", '"x"', "5"])
+def test_convert_tool_response_to_message_keeps_a_non_object_answer_as_written(arguments: str) -> None:
+    message: Final = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None,
+    )
+
+    assert message is not None
+    assert message.content == arguments
+
+
+_DEEPLY_NESTED: Final = "[" * 300 + "]" * 300
+
+
+@pytest.mark.parametrize(
+    "arguments, schema, expected",
+    [
+        pytest.param('{"values": ' + _DEEPLY_NESTED + "}", None, _DEEPLY_NESTED, id="values_answer"),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": ' + _DEEPLY_NESTED + ', "summary": "x"}}',
+            _RISK_SCHEMA,
+            '{"tier": ' + _DEEPLY_NESTED + ', "summary": "x"}',
+            id="envelope",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_unwraps_a_deeply_nested_answer(
+    arguments: str, schema: dict[str, object] | None, expected: str
+) -> None:
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None if schema is None else _schema(schema),
+    )
+
+    assert message is not None
+    assert message.content == expected
+
+
+_DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
+
+
+@pytest.mark.parametrize(
+    "arguments, schema, expected",
+    [
+        pytest.param('{"values": [1e400, "\u00e9"]}', None, '[1e400, "\\u00e9"]', id="values_number_past_a_float"),
+        pytest.param(
+            '{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}",
+            None,
+            "[" + _DIGITS_PAST_THE_INT_LIMIT + "]",
+            id="values_integer_past_the_digit_limit",
+        ),
+        pytest.param('{"count":-1e400}', None, '{"count": -1e400}', id="schemaless_answer_number_past_a_float"),
+        pytest.param(
+            '{"values": [1e400, -1E-400, 0e-400]}',
+            None,
+            "[1e400, -1E-400, 0.0]",
+            id="values_numbers_past_a_float_both_ways",
+        ),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": 2.5e-400, "summary": "x"}}',
+            _RISK_SCHEMA,
+            '{"tier": 2.5e-400, "summary": "x"}',
+            id="envelope_number_below_a_float",
+        ),
+        pytest.param(
+            '{"name": "json_tool_call", "parameters": {"tier": 1e400, "summary": "\u00e9"}}',
+            _RISK_SCHEMA,
+            '{"tier": 1e400, "summary": "\u00e9"}',
+            id="envelope_number_past_a_float",
+        ),
+        pytest.param(
+            '{"tier":' + _DIGITS_PAST_THE_INT_LIMIT + ',"summary":"x"}',
+            _RISK_SCHEMA,
+            '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + ', "summary": "x"}',
+            id="answer_integer_past_the_digit_limit",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_keeps_out_of_range_numbers_as_the_model_wrote_them(
+    arguments: str, schema: dict[str, object] | None, expected: str
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=None if schema is None else _schema(schema),
+    )
+
+    assert message is not None
+    assert message.content == expected
+
+
+@pytest.mark.parametrize(
+    "blocks, expected",
+    [
+        pytest.param(
+            ('{"tier": 1e400}', '{"summary": "x"}'), '{"tier": 1e400, "summary": "x"}', id="number_past_a_float_first"
+        ),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"),
+            '{"summary": "x", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="integer_past_the_digit_limit_last",
+        ),
+        pytest.param(
+            (
+                '{"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 1e400}',
+                '{"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "x"}',
+            ),
+            '{"tier": 1e400, "summary": "x"}',
+            id="named_field_number_past_a_float_first",
+        ),
+        pytest.param(
+            (
+                ' {"$PARAMETER_NAME":"summary","$PARAMETER_VALUE":"Jos\u00e9"} ',
+                '{"$PARAMETER_NAME":"tier","$PARAMETER_VALUE":' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            ),
+            '{"summary": "Jos\u00e9", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="compact_named_field_integer_past_the_digit_limit_last",
+        ),
+    ],
+)
+def test_convert_tool_response_to_message_joins_split_fields_keeping_out_of_range_numbers_as_written(
+    blocks: tuple[str, ...], expected: str
+):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id=f"toolu_{index}",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=block),
+                index=index,
+            )
+            for index, block in enumerate(blocks)
+        ],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert message.content == expected
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"type": "object", "properties": ["tier", "summary"]},
+        {"type": "object", "properties": "tier"},
+        ["tier", "summary"],
+    ],
+    ids=["properties_list", "properties_string", "schema_list"],
+)
+def test_response_format_schema_rejects_a_malformed_schema(document: object):
+    assert response_format_schema(document) is None
+
+
+def test_json_mode_with_user_tool_call_unwraps_the_envelope_into_content():
+    user_tool_call: Final = ChatCompletionToolCallChunk(
+        id="toolu_user",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name="lookup_change_window", arguments='{"system": "ledger"}'),
+        index=1,
+    )
+
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=[*_json_tool_call({"input": _RISK_OBJECT}), user_tool_call],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert replacement is None
+    assert remaining_tool_calls == [user_tool_call]
+    assert extra_content is not None
+    assert json.loads(extra_content) == _RISK_OBJECT
+
+
+def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_model_wrapped():
+    config = VertexAIAnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_change_window",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"system": {"type": "string"}},
+                            "required": ["system"],
+                        },
+                    },
+                }
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "RiskAssessment", "schema": _RISK_SCHEMA},
+            },
+        },
+        optional_params={},
+        model="claude-emulated-structured-output",
+        drop_params=False,
+    )
+    json_mode = optional_params.pop("json_mode")
+    request = config.transform_request(
+        model="claude-emulated-structured-output",
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params={**optional_params, "is_vertex_request": True},
+        litellm_params={},
+        headers={},
+    )
+    json_tool = next(tool for tool in request["tools"] if tool["name"] == RESPONSE_FORMAT_TOOL_NAME)
+    assert json_tool["input_schema"]["required"] == ["tier", "summary"]
+    assert "output_format" not in request
+    assert "output_config" not in request
+    completion_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-emulated-structured-output",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "input": {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _RISK_OBJECT},
+            }
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 30},
+    }
+
+    result = config.transform_response(
+        model="claude-emulated-structured-output",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data=request,
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params=optional_params,
+        litellm_params={},
+        encoding=None,
+        json_mode=json_mode,
+    )
+
+    assert json.loads(result.choices[0].message.content) == _RISK_OBJECT
+    assert result.choices[0].message.tool_calls is None
+    assert result.choices[0].finish_reason == "stop"
+
+
+_SPLIT_RISK_SCHEMA: Final = {
+    "title": "RiskAssessment",
+    "type": "object",
+    "properties": {
+        "tier": {"type": "integer"},
+        "risk_level": {"type": "string", "enum": ["low", "medium", "high"]},
+        "score": {"type": "integer"},
+        "summary": {"type": "string"},
+        "affected_systems": {"type": "array", "items": {"type": "string"}},
+        "findings": {"type": "array", "items": {"type": "object"}},
+        "rollback_plan": {"type": "string"},
+        "requires_downtime": {"type": "boolean"},
+    },
+    "required": [
+        "tier",
+        "risk_level",
+        "score",
+        "summary",
+        "affected_systems",
+        "findings",
+        "rollback_plan",
+        "requires_downtime",
+    ],
+}
+_SPLIT_RISK_OBJECT: Final = {
+    "tier": 1,
+    "risk_level": "high",
+    "score": 78,
+    "summary": "Migrating loyalty-points ledger DB to managed cloud with weekend read-only cutover; financial data, high risk.",
+    "affected_systems": ["Loyalty-points ledger DB", "Loyalty rewards API", "Reporting/analytics pipeline"],
+    "findings": [
+        {
+            "title": "Financial data integrity risk",
+            "severity": "high",
+            "detail": "Loyalty points are monetary-equivalent; any sync error causes customer-facing balance discrepancies.",
+        },
+        {
+            "title": "Weekend support coverage",
+            "severity": "low",
+            "detail": "Reduced staff availability over weekend may delay incident response if issues arise.",
+        },
+    ],
+    "rollback_plan": "Keep old cluster live/read-only; revert DNS/connection strings to original cluster if migration fails.",
+    "requires_downtime": True,
+}
+# Block shape captured from vertex_ai/claude-sonnet-5 tool emulation on 2026-10-13, one tool_use block per field
+_SPLIT_RISK_BLOCKS: Final = tuple(
+    {"$FUNCTION_NAME": "RiskAssessment", "$PARAMETER_NAME": name, "$PARAMETER_VALUE": value}
+    for name, value in _SPLIT_RISK_OBJECT.items()
+)
+_CONTACT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    "required": ["name", "email"],
+}
+_OPTIONAL_CONTACT_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}},
+}
+_FLAGS_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"urgent": {"type": "boolean"}, "reviewed": {"type": "boolean"}},
+    "required": ["urgent", "reviewed"],
+}
+
+
+def _json_tool_calls(*blocks: object) -> list[ChatCompletionToolCallChunk]:
+    return list(chain.from_iterable(_json_tool_call(block) for block in blocks))
+
+
+def test_vertex_claude_json_answer_split_into_one_tool_block_per_field_returns_one_schema_object():
+    config = VertexAIAnthropicConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "RiskAssessment", "schema": _SPLIT_RISK_SCHEMA},
+            },
+        },
+        optional_params={},
+        model="claude-emulated-structured-output",
+        drop_params=False,
+    )
+    json_mode = optional_params.pop("json_mode")
+    completion_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-emulated-structured-output",
+        "content": [
+            {"type": "tool_use", "id": f"toolu_{index}", "name": RESPONSE_FORMAT_TOOL_NAME, "input": block}
+            for index, block in enumerate(_SPLIT_RISK_BLOCKS)
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 30},
+    }
+
+    result = config.transform_response(
+        model="claude-emulated-structured-output",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params=optional_params,
+        litellm_params={},
+        encoding=None,
+        json_mode=json_mode,
+    )
+
+    assert json.loads(result.choices[0].message.content) == _SPLIT_RISK_OBJECT
+    assert result.choices[0].message.tool_calls is None
+    assert result.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "schema, blocks, expected_content",
+    [
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": _RISK_OBJECT["tier"]},
+                {"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": _RISK_OBJECT["summary"]},
+            ),
+            _RISK_OBJECT,
+            id="name_and_value_keys_only",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            (
+                {"function": "Contact", "parameter_name": "name", "parameter_value": "Ada"},
+                {"function": "Contact", "parameter_name": "email", "parameter_value": "ada@example.com"},
+            ),
+            {"name": "Ada", "email": "ada@example.com"},
+            id="string_values_beside_a_repeated_label",
+        ),
+        pytest.param(
+            _FLAGS_SCHEMA,
+            ({"field": "urgent", "value": True}, {"field": "reviewed", "value": True}),
+            {"urgent": True, "reviewed": True},
+            id="every_field_holds_the_same_value",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"field": "name", "value": "unknown"}, {"field": "email", "value": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="every_field_holds_the_same_string",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"name": "unknown"}, {"email": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="one_partial_object_per_field",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({}, {"name": "unknown"}, {"email": "unknown"}),
+            {"name": "unknown", "email": "unknown"},
+            id="empty_object_then_one_partial_object_per_field",
+        ),
+        pytest.param(
+            _OPTIONAL_CONTACT_SCHEMA,
+            ({"name": "Ada", "email": "ada@example.com"}, {"phone": "555-0100"}),
+            {"name": "Ada", "email": "ada@example.com", "phone": "555-0100"},
+            id="partial_objects_of_uneven_size_on_a_schema_with_no_required_list",
+        ),
+    ],
+)
+def test_json_tool_blocks_that_each_name_one_schema_property_become_one_object(
+    schema: dict[str, object], blocks: tuple[object, ...], expected_content: dict[str, object]
+):
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=_json_tool_calls(*blocks),
+        response_format_schema=_schema(schema),
+    )
+
+    assert replacement is not None
+    assert replacement.content == json.dumps(expected_content)
+    assert remaining_tool_calls == []
+    assert extra_content is None
+
+
+@pytest.mark.parametrize(
+    "schema, blocks",
+    [
+        pytest.param(_RISK_SCHEMA, ({"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3},), id="one_field_alone"),
+        pytest.param(
+            _RISK_SCHEMA,
+            ({"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3}, {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 4}),
+            id="same_property_named_twice",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3},
+                {"$PARAMETER_NAME": "color", "$PARAMETER_VALUE": "red"},
+            ),
+            id="property_the_schema_does_not_declare",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3},
+                {"parameter_name": "summary", "parameter_value": "Read-only window"},
+            ),
+            id="blocks_with_different_keys",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            (
+                {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3, "note": "first"},
+                {"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "Read-only window", "note": "second"},
+            ),
+            id="two_keys_that_could_hold_the_value",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            ({"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 3}, ["summary", "Read-only window"]),
+            id="block_that_is_not_an_object",
+        ),
+        pytest.param(
+            _PERSON_SCHEMA,
+            ({"name": "name", "age": 1}, {"name": "age", "age": 2}),
+            id="blocks_keyed_by_schema_properties",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"name": "Ada"}, {"name": "Grace"}),
+            id="partial_objects_that_repeat_a_field",
+        ),
+        pytest.param(
+            _CONTACT_SCHEMA,
+            ({"name": "Ada"}, {"nickname": "A"}),
+            id="partial_object_with_a_key_the_schema_does_not_declare",
+        ),
+    ],
+)
+def test_json_tool_blocks_that_are_not_one_field_each_keep_the_first_block(
+    schema: dict[str, object], blocks: tuple[object, ...]
+):
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=_json_tool_calls(*blocks),
+        response_format_schema=_schema(schema),
+    )
+
+    assert replacement is not None
+    assert json.loads(replacement.content) == blocks[0]
+    assert remaining_tool_calls == []
+    assert extra_content is None
+
+
+def test_json_mode_with_user_tool_call_joins_the_split_answer_into_content():
+    user_tool_call: Final = ChatCompletionToolCallChunk(
+        id="toolu_user",
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(name="lookup_change_window", arguments='{"system": "ledger"}'),
+        index=2,
+    )
+    first_field, second_field = _json_tool_calls(
+        {"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": _RISK_OBJECT["tier"]},
+        {"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": _RISK_OBJECT["summary"]},
+    )
+
+    replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=[first_field, user_tool_call, second_field],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert replacement is None
+    assert remaining_tool_calls == [user_tool_call]
+    assert extra_content is not None
+    assert json.loads(extra_content) == _RISK_OBJECT
 
 
 def test_anthropic_tool_with_image():
@@ -7572,18 +9549,17 @@ async def test_anthropic_api_max_completion_tokens(model: str):
         print("request_body: ", request_body)
 
         assert request_body == {
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
-            ],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}],
             "max_tokens": 10,
             "model": model.split("/")[-1],
         }
 
 
 def test_anthropic_tool_cache_control():
-    from litellm.utils import return_raw_request
-    from litellm.types.utils import CallTypes
     import json
+
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
 
     tool_content = "Result: 4. " * 1000
     messages = [
@@ -7753,6 +9729,15 @@ def test_metadata_user_id_from_litellm_params_strips_extras():
     assert data.get("metadata") == {"user_id": "abc123"}
 
 
+@pytest.mark.parametrize("user_id", [12345, {"id": "abc123"}, ["abc123"]])
+def test_metadata_non_string_user_id_is_skipped_instead_of_raising(user_id):
+    data: Final = _make_transform_request(
+        optional_params={},
+        litellm_params={"metadata": {"user_id": user_id}},
+    )
+    assert "metadata" not in data
+
+
 def test_metadata_filter_applies_to_vertex_anthropic():
     """VertexAIAnthropicConfig inherits the metadata filter."""
     from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
@@ -7792,9 +9777,7 @@ async def test_anthropic_api_prompt_caching_with_content_str():
             "cache_control": {"type": "ephemeral"},
         },
     ]
-    translated_system_message = litellm.AnthropicConfig().translate_system_message(
-        messages=system_message
-    )
+    translated_system_message = litellm.AnthropicConfig().translate_system_message(messages=system_message)
 
     assert translated_system_message == [
         # System Message
@@ -7864,9 +9847,9 @@ async def test_anthropic_api_prompt_caching_with_content_str():
 
     assert len(translated_messages) == len(expected_messages)
     for idx, i in enumerate(translated_messages):
-        assert (
-            i == expected_messages[idx]
-        ), "Error on idx={}. Got={}, Expected={}".format(idx, i, expected_messages[idx])
+        assert i == expected_messages[idx], "Error on idx={}. Got={}, Expected={}".format(
+            idx, i, expected_messages[idx]
+        )
 
 
 @pytest.fixture
@@ -7968,3 +9951,1740 @@ def test_calculate_usage_sums_cache_tokens_across_compaction_iterations():
     assert usage.completion_tokens == 250
     assert usage.prompt_tokens_details.cache_creation_tokens == 60
     assert usage.prompt_tokens_details.cached_tokens == 17020
+
+
+PROMPT_CACHING_MODEL: Final = "claude-sonnet-5-5"
+EPHEMERAL: Final = {"type": "ephemeral"}
+WEATHER_PARAMETERS: Final = {
+    "type": "object",
+    "properties": {
+        "location": {"type": "string", "description": "The city and state, e.g. San Francisco, CA"},
+        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+    },
+    "required": ["location"],
+}
+
+
+async def _send_prompt_caching_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, **params: object
+) -> httpx.Request:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Hello!"}],
+                "model": PROMPT_CACHING_MODEL,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 6},
+            },
+        )
+    )
+    await litellm.acompletion(
+        api_key="mock_api_key",
+        model=f"anthropic/{PROMPT_CACHING_MODEL}",
+        extra_headers={"anthropic-version": "2023-06-01"},
+        **params,
+    )
+    assert route.call_count == 1
+    request: Final = route.calls.last.request
+    assert request.headers["x-api-key"] == "mock_api_key"
+    assert request.headers["anthropic-version"] == "2023-06-01"
+    assert "anthropic-beta" not in request.headers
+    return request
+
+
+async def test_litellm_anthropic_prompt_caching_tools(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[{"role": "user", "content": "What's the weather like in Boston today?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": WEATHER_PARAMETERS,
+                    "cache_control": EPHEMERAL,
+                },
+            }
+        ],
+    )
+    assert json.loads(request.content) == {
+        "model": PROMPT_CACHING_MODEL,
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "What's the weather like in Boston today?"}]}
+        ],
+        "tools": [
+            {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "input_schema": WEATHER_PARAMETERS,
+                "type": "custom",
+                "cache_control": EPHEMERAL,
+            }
+        ],
+        "max_tokens": litellm.get_max_tokens(PROMPT_CACHING_MODEL),
+    }
+
+
+async def test_litellm_anthropic_prompt_caching_system(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    system_blocks: Final = [
+        {"type": "text", "text": "You are an AI assistant tasked with analyzing legal documents."},
+        {"type": "text", "text": "Here is the full text of a complex legal agreement", "cache_control": EPHEMERAL},
+    ]
+    request: Final = await _send_prompt_caching_request(
+        respx_mock,
+        monkeypatch,
+        messages=[
+            {"role": "system", "content": system_blocks},
+            {"role": "user", "content": "what are the key terms and conditions in this agreement?"},
+        ],
+    )
+    assert json.loads(request.content) == {
+        "model": PROMPT_CACHING_MODEL,
+        "system": system_blocks,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "what are the key terms and conditions in this agreement?"}],
+            }
+        ],
+        "max_tokens": litellm.get_max_tokens(PROMPT_CACHING_MODEL),
+    }
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_custom_headers",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Paris"}],
+                "model": "claude-sonnet-4-5-20250929",
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        headers={"anthropic-beta": "computer-use-2025-01-24"},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        tools=[
+            {
+                "type": "computer_20241022",
+                "function": {
+                    "name": "get_current_weather",
+                    "parameters": {"display_height_px": 100, "display_width_px": 100, "display_number": 1},
+                },
+            }
+        ],
+    )
+
+    assert response.choices[0].message.content == "Paris"
+    assert route.call_count == 1
+    sent_betas: Final = frozenset(
+        beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
+    )
+    assert sent_betas == frozenset({"computer-use-2024-10-22", "computer-use-2025-01-24"})
+    assert json.loads(route.calls.last.request.content)["tools"] == [
+        {
+            "type": "computer_20241022",
+            "name": "get_current_weather",
+            "display_width_px": 100,
+            "display_height_px": 100,
+            "display_number": 1,
+        }
+    ]
+
+
+# Tool-to-beta pairs from Anthropic's computer use docs; api.anthropic.com answered 400 to
+# computer_20251124 without computer-use-2025-11-24 and 200 with it on 2026-10-31
+@pytest.mark.usefixtures("local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("tool_type", "expected_beta"),
+    [
+        ("computer_20241022", "computer-use-2024-10-22"),
+        ("computer_20250124", "computer-use-2025-01-24"),
+        ("computer_20251124", "computer-use-2025-11-24"),
+    ],
+)
+def test_completion_adds_the_beta_matching_the_computer_tool_version(
+    respx_mock: respx.MockRouter, tool_type: str, expected_beta: str
+):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "hi"}], "end_turn"))
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-5",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": "Say hi"}],
+        tools=[
+            {
+                "type": tool_type,
+                "function": {
+                    "name": "computer",
+                    "parameters": {"display_height_px": 768, "display_width_px": 1024},
+                },
+            }
+        ],
+    )
+
+    sent_betas: Final = frozenset(
+        beta.strip() for beta in route.calls.last.request.headers["anthropic-beta"].split(",")
+    )
+    assert sent_betas == frozenset({expected_beta})
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+def test_completion_sends_no_computer_use_beta_for_an_unknown_computer_tool_version(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "hi"}], "end_turn"))
+    )
+
+    litellm.completion(
+        model="anthropic/claude-opus-5",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": "Say hi"}],
+        tools=[
+            {
+                "type": "computer_20991231",
+                "function": {
+                    "name": "computer",
+                    "parameters": {"display_height_px": 768, "display_width_px": 1024},
+                },
+            }
+        ],
+    )
+
+    assert "anthropic-beta" not in route.calls.last.request.headers
+
+
+def _anthropic_message_body(content: list[dict[str, object]], stop_reason: str) -> dict[str, object]:
+    return {
+        "id": "msg_01XrAv7gc5tQNDuoADra7vB4",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 610,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 51,
+        },
+    }
+
+
+def test_completion_sends_prefix_as_trailing_assistant_turn_and_prepends_it(respx_mock: respx.MockRouter):
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, json=_anthropic_message_body([{"type": "text", "text": " won the 2022 World Cup."}], "end_turn")
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[
+            {"role": "user", "content": "Who won the World Cup in 2022?"},
+            {"role": "assistant", "content": "Argentina", "prefix": True},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "Who won the World Cup in 2022?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Argentina"}]},
+    ]
+    assert response.choices[0].message.content == "Argentina won the 2022 World Cup."
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_completion_with_required_tool_choice_and_response_format_returns_tool_calls(respx_mock: respx.MockRouter):
+    class WeatherAnswer(BaseModel):
+        model_config = ConfigDict(frozen=True)
+
+        question: str
+        answer: str
+
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_message_body(
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_weather",
+                        "name": "get_current_weather",
+                        "input": {"location": "NYC"},
+                    }
+                ],
+                "tool_use",
+            ),
+        )
+    )
+    weather_parameters: Final = {
+        "type": "object",
+        "properties": {"location": {"type": "string"}, "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}},
+        "required": ["location"],
+    }
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[
+            {"role": "system", "content": "response user question with JSON object"},
+            {"role": "user", "content": "Hey! What's the weather in NewYork?"},
+        ],
+        tool_choice="required",
+        response_format=WeatherAnswer,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": weather_parameters,
+                },
+            }
+        ],
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["tool_choice"] == {"type": "any"}
+    assert request_body["tools"] == [
+        {
+            "name": "get_current_weather",
+            "input_schema": weather_parameters,
+            "type": "custom",
+            "description": "Get the current weather in a given location",
+        }
+    ]
+    assert request_body["output_format"] == {
+        "type": "json_schema",
+        "schema": {
+            "properties": {
+                "question": {"title": "Question", "type": "string"},
+                "answer": {"title": "Answer", "type": "string"},
+            },
+            "required": ["question", "answer"],
+            "title": "WeatherAnswer",
+            "type": "object",
+            "additionalProperties": False,
+        },
+    }
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert [tool_call.model_dump() for tool_call in response.choices[0].message.tool_calls] == [
+        {
+            "index": 0,
+            "function": {"arguments": '{"location": "NYC"}', "name": "get_current_weather"},
+            "id": "toolu_weather",
+            "type": "function",
+        }
+    ]
+
+
+def test_completion_surfaces_response_citations_in_provider_specific_fields(respx_mock: respx.MockRouter):
+    citation: Final = {
+        "type": "char_location",
+        "cited_text": "The grass is green. ",
+        "document_index": 0,
+        "document_title": "My Document",
+        "start_char_index": 0,
+        "end_char_index": 20,
+    }
+    document: Final = {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": "The grass is green. The sky is blue."},
+        "title": "My Document",
+        "context": "This is a trustworthy document.",
+        "citations": {"enabled": True},
+    }
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_message_body(
+                [
+                    {"type": "text", "text": "According to the document, "},
+                    {"type": "text", "text": "the grass is green", "citations": [citation]},
+                ],
+                "end_turn",
+            ),
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        api_key="mock_api_key",
+        messages=[{"role": "user", "content": [document, {"type": "text", "text": "What color is the grass?"}]}],
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [
+        {"role": "user", "content": [document, {"type": "text", "text": "What color is the grass?"}]}
+    ]
+    assert response.choices[0].message.content == "According to the document, the grass is green"
+    assert response.choices[0].message.provider_specific_fields["citations"] == [
+        [{**citation, "supported_text": "the grass is green"}]
+    ]
+
+
+def _openai_tool_search_with_deferred_functions(
+    search_tools: tuple[dict[str, object], ...] = ({"type": "tool_search", "execution": "server"},),
+) -> list[dict[str, object]]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            "defer_loading": True,
+        },
+        *search_tools,
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_price",
+                "parameters": {"type": "object", "properties": {}},
+                "defer_loading": True,
+            },
+        },
+        {
+            "type": "namespace",
+            "name": "crm",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup_customer",
+                    "parameters": {"type": "object", "properties": {}},
+                    "defer_loading": True,
+                }
+            ],
+        },
+    ]
+
+
+_DEFERRED_FUNCTION_NAMES: Final = ["get_weather", "get_stock_price", "lookup_customer"]
+
+
+def _search_tools_sent(tools: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {"type": tool["type"], "name": tool["name"]}
+        for tool in tools
+        if tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    ]
+
+
+def _deferral_by_function_name(tools: list[dict[str, object]]) -> dict[object, object]:
+    return {
+        tool["name"]: tool.get("defer_loading")
+        for tool in tools
+        if tool.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+    }
+
+
+@pytest.mark.parametrize(
+    ("config", "model", "provider"),
+    [
+        pytest.param(AnthropicConfig(), "claude-sonnet-5-5", "anthropic", id="anthropic"),
+        pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-sonnet-5-5", "bedrock", id="bedrock-invoke"),
+        pytest.param(VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", id="vertex_ai"),
+        pytest.param(AzureAnthropicConfig(), "claude-sonnet-5-5", "azure_ai", id="azure_ai"),
+        pytest.param(
+            BedrockClaudePlatformConfig(), "claude_platform/claude-opus-5-5", "bedrock", id="bedrock-claude-platform"
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "search_tools",
+    [
+        pytest.param(({"type": "tool_search", "execution": "server"},), id="one-search-item"),
+        pytest.param(({"type": "tool_search"}, {"type": "tool_search", "execution": "server"}), id="two-search-items"),
+    ],
+)
+def test_map_openai_params_sends_one_anthropic_search_tool_and_keeps_deferral_on_a_route_that_runs_it(
+    config, model, provider, search_tools
+):
+    from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
+
+    assert litellm.supports_tool_search(model, provider)
+    mapped: Final = config.map_openai_params(
+        non_default_params={"tools": _openai_tool_search_with_deferred_functions(search_tools)},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert _search_tools_sent(mapped["tools"]) == [anthropic_tool_search_chat_tool()]
+    assert _deferral_by_function_name(mapped["tools"]) == dict.fromkeys(_DEFERRED_FUNCTION_NAMES, True)
+
+
+@pytest.mark.parametrize("native_type", sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES))
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        pytest.param(AnthropicConfig(), "claude-sonnet-5-5", id="model-with-tool-search"),
+        pytest.param(AnthropicConfig(), "claude-3-haiku-20240307", id="model-without-tool-search"),
+    ],
+)
+def test_map_openai_params_lets_a_native_anthropic_search_tool_replace_the_openai_one(
+    monkeypatch, config, model, native_type
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    native_name: Final = native_type.removesuffix("_20251119")
+    mapped: Final = config.map_openai_params(
+        non_default_params={
+            "tools": _openai_tool_search_with_deferred_functions(
+                ({"type": "tool_search", "execution": "server"}, {"type": native_type, "name": native_name})
+            )
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert _search_tools_sent(mapped["tools"]) == [{"type": native_type, "name": native_name}]
+    assert _deferral_by_function_name(mapped["tools"]) == dict.fromkeys(_DEFERRED_FUNCTION_NAMES, True)
+
+
+@pytest.mark.parametrize(
+    ("config", "model", "provider", "model_cost_key"),
+    [
+        pytest.param(
+            AmazonAnthropicClaudeConfig(),
+            "us.anthropic.claude-sonnet-5-5",
+            "bedrock",
+            "us.anthropic.claude-sonnet-5-5",
+            id="bedrock-invoke",
+        ),
+        pytest.param(
+            VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", "vertex_ai/claude-sonnet-5-5", id="vertex_ai"
+        ),
+    ],
+)
+def test_map_openai_params_judges_tool_search_on_the_real_model_when_tool_based_response_format_swaps_it(
+    set_native_structured_output, config, model, provider, model_cost_key
+):
+    from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
+
+    set_native_structured_output(model_cost_key, None)
+    assert litellm.supports_tool_search(model, provider)
+    mapped: Final = config.map_openai_params(
+        non_default_params={
+            "tools": _openai_tool_search_with_deferred_functions(),
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "weather", "schema": {"type": "object", "properties": {}}},
+            },
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    deferral: Final = _deferral_by_function_name(mapped["tools"])
+    assert RESPONSE_FORMAT_TOOL_NAME in deferral
+    assert _search_tools_sent(mapped["tools"]) == [anthropic_tool_search_chat_tool()]
+    assert {name: deferral[name] for name in _DEFERRED_FUNCTION_NAMES} == dict.fromkeys(_DEFERRED_FUNCTION_NAMES, True)
+
+
+_UNRUNNABLE_TOOL_SEARCH_CASES: Final = [
+    pytest.param(AnthropicConfig(), "claude-3-haiku-20240307", "anthropic", "server", id="model-without-tool-search"),
+    pytest.param(AnthropicConfig(), "claude-sonnet-5-5", None, "client", id="client-executed-search"),
+    pytest.param(AnthropicConfig(), "claude-sonnet-5-5", None, 123, id="malformed-execution-search"),
+]
+
+
+@pytest.mark.parametrize(("config", "model", "provider", "execution"), _UNRUNNABLE_TOOL_SEARCH_CASES)
+def test_map_openai_params_answers_400_for_an_openai_tool_search_tool_it_cannot_run(
+    monkeypatch, config, model, provider, execution
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert provider is None or not litellm.supports_tool_search(model, provider)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config.map_openai_params(
+            non_default_params={
+                "tools": _openai_tool_search_with_deferred_functions(({"type": "tool_search", "execution": execution},))
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "tool_search" in str(raised.value)
+    assert "drop_params: true" in str(raised.value)
+    assert ("supports_tool_search: true" in str(raised.value)) is (execution == "server")
+
+
+def test_map_openai_params_runs_tool_search_on_a_custom_named_deployment_whose_model_info_says_it_can(monkeypatch):
+    from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    tools: Final = _openai_tool_search_with_deferred_functions()
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        AzureAnthropicConfig().map_openai_params(
+            non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
+        )
+    litellm.register_model(
+        {"azure_ai/my-claude-deployment": {"supports_tool_search": True, "litellm_provider": "azure_ai"}}
+    )
+    mapped: Final = AzureAnthropicConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="my-claude-deployment", drop_params=False
+    )
+    assert _search_tools_sent(mapped["tools"]) == [anthropic_tool_search_chat_tool()]
+    assert _deferral_by_function_name(mapped["tools"]) == dict.fromkeys(_DEFERRED_FUNCTION_NAMES, True)
+
+
+@pytest.mark.parametrize(("config", "model", "provider", "execution"), _UNRUNNABLE_TOOL_SEARCH_CASES)
+def test_map_openai_params_drops_the_openai_tool_search_tool_and_every_deferral_under_drop_params(
+    monkeypatch, config, model, provider, execution
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert provider is None or not litellm.supports_tool_search(model, provider)
+    mapped: Final = config.map_openai_params(
+        non_default_params={
+            "tools": _openai_tool_search_with_deferred_functions(({"type": "tool_search", "execution": execution},))
+        },
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+    assert [tool["name"] for tool in mapped["tools"]] == _DEFERRED_FUNCTION_NAMES
+    assert all("defer_loading" not in tool for tool in mapped["tools"])
+
+
+def _refusal_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "stop_reason": stop_reason, "stop_details": stop_details}
+
+
+def _transform_message_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+
+def test_refusal_stop_details_kept_in_provider_specific_fields():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    result: Final = _transform_message_body(ANTHROPIC_DOCS_REFUSAL_MESSAGE)
+
+    assert result.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"] == stop_details
+    assert result._hidden_params["provider_specific_fields"]["stop_details"] == stop_details
+
+
+def test_refusal_without_stop_details_keeps_the_native_stop_reason():
+    result: Final = _transform_message_body(_refusal_message_body("refusal", None))
+
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert "stop_details" not in provider_fields
+
+
+def test_end_turn_response_carries_no_stop_details():
+    result: Final = _transform_message_body(_refusal_message_body("end_turn", None))
+
+    assert result.choices[0].finish_reason == "stop"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert "stop_details" not in provider_fields
+    assert "stop_reason" not in provider_fields
+
+
+def test_refusal_explanation_reaches_the_client_as_the_message_refusal():
+    result: Final = _transform_message_body(ANTHROPIC_DOCS_REFUSAL_MESSAGE)
+
+    assert result.choices[0].message.refusal == ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]["explanation"]
+
+
+@pytest.mark.parametrize(
+    "stop_details",
+    [None, {"type": "refusal", "category": "cyber", "explanation": None}, {"type": "refusal", "explanation": ""}],
+    ids=["no_stop_details", "null_explanation", "empty_explanation"],
+)
+def test_refusal_without_an_explanation_sets_no_message_refusal(stop_details: dict | None):
+    result: Final = _transform_message_body(_refusal_message_body("refusal", stop_details))
+
+    assert result.choices[0].message.get("refusal") is None
+
+
+_RAN_SEARCH: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_ran",
+    "name": "web_search",
+    "input": {"query": "tokyo"},
+}
+_RAN_SEARCH_RESULT: Final = {
+    "type": "web_search_tool_result",
+    "tool_use_id": "srvtoolu_ran",
+    "content": [
+        {"type": "web_search_result", "url": "https://tokyo.example", "title": "Tokyo", "encrypted_content": "e"}
+    ],
+}
+_PENDING_SEARCH: Final = {
+    "type": "server_tool_use",
+    "id": "srvtoolu_pending",
+    "name": "web_search",
+    "input": {"query": "next city"},
+}
+
+
+def _paused_turn(*content: dict) -> dict:
+    return {**_refusal_message_body("pause_turn", None), "content": list(content)}
+
+
+def test_pause_turn_is_an_unfinished_turn_that_keeps_its_native_stop_reason():
+    result: Final = _transform_message_body(_paused_turn(_RAN_SEARCH, _RAN_SEARCH_RESULT, _PENDING_SEARCH))
+
+    assert result.choices[0].finish_reason == "length"
+    assert result.choices[0].message.provider_specific_fields["stop_reason"] == "pause_turn"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_calls"),
+    [
+        (
+            (_RAN_SEARCH, _RAN_SEARCH_RESULT, _PENDING_SEARCH),
+            [("ws_srvtoolu_ran", "completed", "tokyo"), ("ws_srvtoolu_pending", "in_progress", "next city")],
+        ),
+        ((_PENDING_SEARCH,), [("ws_srvtoolu_pending", "in_progress", "next city")]),
+    ],
+    ids=["after_a_finished_search", "before_any_search_result"],
+)
+def test_pause_turn_lists_the_search_it_has_not_run_yet_as_in_progress(
+    content: tuple[dict, ...], expected_calls: list[tuple[str, str, str]]
+):
+    result: Final = _transform_message_body(_paused_turn(*content))
+
+    calls: Final = result.choices[0].message.provider_specific_fields["web_search_calls"]
+    assert [(call.id, call.status, call.action.query) for call in calls] == expected_calls
+
+
+def _json_mode_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {
+        **_refusal_message_body(stop_reason, stop_details),
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": "Hello"}}
+        ],
+    }
+
+
+def _transform_json_mode_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=True,
+        prefix_prompt=None,
+    )
+
+
+def test_json_mode_refusal_keeps_stop_details_on_the_message():
+    stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
+    result: Final = _transform_json_mode_body(_json_mode_message_body("refusal", stop_details))
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert message.provider_specific_fields == {"stop_reason": "refusal", "stop_details": stop_details}
+    assert message.refusal == stop_details["explanation"]
+
+
+def test_json_mode_tool_use_turn_adds_no_stop_fields_to_the_message():
+    result: Final = _transform_json_mode_body(_json_mode_message_body("tool_use", None))
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert not message.provider_specific_fields
+
+
+def test_json_mode_keeps_the_thinking_that_preceded_the_json_tool_call():
+    thinking_block: Final = {"type": "thinking", "thinking": "The user wants a greeting.", "signature": "sig-1"}
+    body: Final = _json_mode_message_body("tool_use", None)
+    result: Final = _transform_json_mode_body({**body, "content": [thinking_block, *body["content"]]})
+
+    message: Final = result.choices[0].message
+    assert json.loads(message.content) == {"answer": "Hello"}
+    assert message.reasoning_content == thinking_block["thinking"]
+    assert [block["signature"] for block in message.thinking_blocks] == [thinking_block["signature"]]
+
+
+def test_non_dict_upstream_body_still_transforms_without_refusal_fields() -> None:
+    result = AnthropicConfig().transform_parsed_response(
+        completion_response=MagicMock(),
+        raw_response=httpx.Response(200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    provider_specific_fields = result.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_specific_fields
+
+
+def _two_function_tools() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {"name": f"tool_{i}", "description": f"Tool {i}", "parameters": {"type": "object"}},
+        }
+        for i in range(2)
+    ]
+
+
+@pytest.mark.parametrize(
+    "control, expected_control",
+    [
+        (None, {"type": "ephemeral"}),
+        ({"type": "ephemeral", "ttl": "1h"}, {"type": "ephemeral", "ttl": "1h"}),
+    ],
+)
+def test_transform_request_tool_config_point_marks_last_tool_and_drops_the_key(control, expected_control):
+    """LIT-9880: a tool_config injection point used to be spread into the Anthropic body, which
+    Anthropic rejected with 400 Extra inputs are not permitted."""
+    tools = _two_function_tools()
+    tools_before = copy.deepcopy(tools)
+    point = {"location": "tool_config", **({"control": control} if control is not None else {})}
+    litellm_params = {"metadata": {}, "model_info": {"id": "deployment-1"}}
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [point]},
+        litellm_params=litellm_params,
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert data["tools"][-1]["cache_control"] == expected_control
+    assert "cache_control" not in data["tools"][0]
+    assert tools == tools_before
+    assert litellm_params["metadata"]["litellm_gateway_injected_cache"] == "deployment-1"
+
+
+def test_transform_request_tool_config_point_keeps_the_clients_tool_marker():
+    tools = _two_function_tools()
+    tools[0]["cache_control"] = {"type": "ephemeral"}
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params={},
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert data["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in data["tools"][1]
+
+
+def test_transform_request_tool_config_point_skips_tool_search_tools():
+    tool_search_type = next(iter(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES))
+    tools = [*_two_function_tools(), {"type": tool_search_type, "name": "tool_search"}]
+
+    data = _make_transform_request(
+        optional_params={"tools": tools, "cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params={},
+    )
+
+    assert data["tools"][1]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in data["tools"][2]
+    assert "cache_control" not in data["tools"][0]
+
+
+def test_transform_request_tool_config_point_without_tools_drops_the_key():
+    litellm_params = {"metadata": {}}
+
+    data = _make_transform_request(
+        optional_params={"cache_control_injection_points": [{"location": "tool_config"}]},
+        litellm_params=litellm_params,
+    )
+
+    assert "cache_control_injection_points" not in data
+    assert "tools" not in data
+    assert litellm_params["metadata"] == {}
+
+
+def test_a_renamed_tool_leaves_tool_results_without_tool_references_as_claude_sent_them():
+    errored_search: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {"type": "tool_search_tool_result_error", "error_code": "unavailable"},
+    }
+    results: Final = [_CODE_EXECUTION_BLOCKS[1], errored_search]
+    message: Final = _parsed_assistant_message(
+        [
+            *_CODE_EXECUTION_BLOCKS,
+            _tool_search_turn([], _WEATHER_TOOL_USE)[0],
+            errored_search,
+            {**_WEATHER_TOOL_USE, "name": "weather_get"},
+        ],
+        "tool_use",
+        {"weather_get": "weather.get"},
+    )
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    _function_tool("weather.get"),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert message.provider_specific_fields["tool_results"] == results
+    assert message.tool_calls[-1].function.name == "weather.get"
+    sent: Final = request["messages"][1]["content"]
+    assert [block for block in sent if block["type"].endswith("_tool_result")] == results
+    assert [block["name"] for block in sent if block["type"] == "tool_use"] == ["weather_get"]
+
+
+@pytest.mark.parametrize(
+    ("last_block", "stop_reason"),
+    [
+        pytest.param(dict(_PARIS_ANSWER), "end_turn", id="search_then_answer"),
+        pytest.param({**_WEATHER_TOOL_USE, "name": "weather_get"}, "tool_use", id="search_then_tool"),
+    ],
+)
+def test_a_renamed_tool_keeps_the_replayed_search_that_loaded_it(last_block: dict[str, object], stop_reason: str):
+    search_turn: Final = _tool_search_turn(["weather_get"], last_block)
+    message: Final = _parsed_assistant_message(search_turn, stop_reason, {"weather_get": "weather.get"})
+    answers: Final = (
+        [{"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}] if stop_reason == "tool_use" else []
+    )
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *answers,
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    _function_tool("weather.get"),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    sent: Final = request["messages"][1]["content"]
+    assert [block for block in sent if block["type"] == "tool_search_tool_result"] == [search_turn[1]]
+    assert [block["id"] for block in sent if block["type"] == "server_tool_use"] == ["srvtoolu_01Search"]
+
+
+def _parsed_tool_search_fields(
+    content: list[dict[str, object]], tool_name_reverse_map: dict[str, str]
+) -> tuple[object, list[str]]:
+    message: Final = _parsed_assistant_message(content, "tool_use", tool_name_reverse_map)
+    return message.provider_specific_fields["tool_results"], [call.function.name for call in message.tool_calls]
+
+
+def _streamed_tool_search_fields(
+    content: list[dict[str, object]], tool_name_reverse_map: dict[str, str]
+) -> tuple[object, list[str]]:
+    iterator: Final = ModelResponseIterator(None, sync_stream=True, tool_name_reverse_map=tool_name_reverse_map)
+    events: Final = chain.from_iterable(
+        (
+            {"type": "content_block_start", "index": index, "content_block": block},
+            {"type": "content_block_stop", "index": index},
+        )
+        for index, block in enumerate(content)
+    )
+    deltas: Final = [iterator.chunk_parser(event).choices[0].delta for event in events]
+    fields: Final = [delta.provider_specific_fields for delta in deltas if delta.provider_specific_fields]
+    calls: Final = chain.from_iterable(delta.tool_calls or () for delta in deltas)
+    return fields[-1]["tool_results"], [call.function.name for call in calls]
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["sync", "stream"])
+def test_a_renamed_tool_search_result_keeps_claudes_names_so_an_older_proxy_accepts_the_replay(stream: bool):
+    search_turn: Final = _tool_search_turn(["weather_get"], {**_WEATHER_TOOL_USE, "name": "weather_get", "input": {}})
+    reverse_map: Final = {"weather_get": "weather.get"}
+
+    tool_results, tool_names = (
+        _streamed_tool_search_fields(search_turn, reverse_map)
+        if stream
+        else _parsed_tool_search_fields(search_turn, reverse_map)
+    )
+
+    assert tool_results == [search_turn[1]]
+    assert tool_names == ["weather.get"]
+
+
+_INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]
+
+
+def _input_transformations_response() -> AnthropicMessagesResponse:
+    return AnthropicMessagesResponse(
+        id="msg_input_transformations",
+        type="message",
+        role="assistant",
+        model="claude-sonnet-4-6",
+        content=[{"type": "text", "text": "ok"}],
+        stop_reason="end_turn",
+        stop_sequence=None,
+        usage={"input_tokens": 12, "output_tokens": 3},
+        input_transformations=_INPUT_TRANSFORMATIONS,
+    )
+
+
+def test_chat_response_surfaces_input_transformations_in_provider_specific_fields() -> None:
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=_input_transformations_response()),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
+
+
+def test_chat_response_without_input_transformations_adds_no_key() -> None:
+    completion_response: Final = {
+        key: value for key, value in _input_transformations_response().items() if key != "input_transformations"
+    }
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert "input_transformations" not in result.choices[0].message.provider_specific_fields
+
+
+def test_json_mode_chat_response_keeps_input_transformations() -> None:
+    completion_response: Final = {
+        **_input_transformations_response(),
+        "content": [
+            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}
+        ],
+        "stop_reason": "tool_use",
+    }
+    result: Final = AnthropicConfig().transform_response(
+        model="claude-sonnet-4-6",
+        raw_response=httpx.Response(200, json=completion_response),
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        json_mode=True,
+    )
+
+    assert json.loads(result.choices[0].message.content) == {"answer": 42}
+    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
+
+
+_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_FUNCTION_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+_ROUTES_WITHOUT_THE_MCP_CONNECTOR: Final = (
+    pytest.param(AmazonAnthropicClaudeConfig, "bedrock", id="bedrock_invoke"),
+    pytest.param(VertexAIAnthropicConfig, "vertex_ai", id="vertex_ai"),
+)
+
+
+@pytest.mark.parametrize("config_class", [AnthropicConfig, AzureAnthropicConfig, BedrockClaudePlatformConfig])
+def test_routes_with_the_mcp_connector_send_a_hosted_mcp_tool_as_an_mcp_server(monkeypatch, config_class):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+        optional_params={},
+        model="claude-haiku-5-5",
+        drop_params=False,
+    )
+    assert [server["url"] for server in mapped["mcp_servers"]] == [_HOSTED_MCP_TOOL["server_url"]]
+    assert [tool["name"] for tool in mapped["tools"]] == ["get_weather"]
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_a_hosted_mcp_tool_answers_400_on_claude_routes_without_the_mcp_connector(monkeypatch, config_class, route):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config_class().map_openai_params(
+            non_default_params={"tools": [_WEATHER_FUNCTION_TOOL, _HOSTED_MCP_TOOL]},
+            optional_params={},
+            model="claude-haiku-5-5",
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert f"claude-haiku-5-5 on {route} " in str(raised.value)
+    assert "`deepwiki`" in str(raised.value)
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_claude_routes_without_the_mcp_connector_drop_a_hosted_mcp_tool_under_drop_params(
+    monkeypatch, caplog, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with caplog.at_level("WARNING"):
+        mapped: Final = config_class().map_openai_params(
+            non_default_params={"tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL]},
+            optional_params={},
+            model="claude-haiku-5-5",
+            drop_params=True,
+        )
+    assert [tool["name"] for tool in mapped["tools"]] == ["get_weather"]
+    assert "mcp_servers" not in mapped
+    assert any(
+        "`deepwiki`" in record.getMessage() and f" on {route} (" in record.getMessage() for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(("config_class", "route"), _ROUTES_WITHOUT_THE_MCP_CONNECTOR)
+def test_claude_routes_without_the_mcp_connector_send_no_tools_when_drop_params_drops_every_one(
+    monkeypatch, config_class, route
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    mapped: Final = config_class().map_openai_params(
+        non_default_params={"tools": [_HOSTED_MCP_TOOL], "tool_choice": "required"},
+        optional_params={},
+        model="claude-haiku-5-5",
+        drop_params=True,
+    )
+    assert "tools" not in mapped
+    assert "mcp_servers" not in mapped
+    assert "tool_choice" not in mapped
+
+
+_KEPT_SEARCH_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {
+            "id": "srvtoolu_01Search",
+            "type": "function",
+            "function": {"name": "tool_search_tool_bm25", "arguments": "{}"},
+        }
+    ],
+    "provider_specific_fields": {
+        "tool_results": [
+            {
+                "type": "tool_search_tool_result",
+                "tool_use_id": "srvtoolu_01Search",
+                "content": {"type": "tool_search_tool_search_result", "tool_references": []},
+            }
+        ]
+    },
+}
+_WEATHER_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "toolu_01", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+}
+_ASK: Final = {"role": "user", "content": "Weather in Paris?"}
+
+
+def _search_answered_with(tool_call_id: object) -> list[dict[str, object]]:
+    return [
+        _ASK,
+        _KEPT_SEARCH_CALL,
+        {"role": "tool", "tool_call_id": tool_call_id, "content": "found get_weather"},
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+def _orphan_answer_with(tool_call_id: object) -> list[dict[str, object]]:
+    return [
+        _ASK,
+        {"role": "assistant", "content": "Checking"},
+        {"role": "tool", "tool_call_id": tool_call_id, "content": "sunny"},
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("messages", "field_path", "type_name"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello"},
+                {"role": ["user"], "content": "Go on"},
+                {"role": "system", "content": "Answer in one sentence."},
+            ],
+            "messages[2].role",
+            "list",
+            id="list_role_before_a_later_system_message",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello"},
+                {"role": ["user"], "content": "Go on"},
+            ],
+            "messages[2].role",
+            "list",
+            id="list_role",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello"},
+                {"role": 123, "content": "Go on"},
+                {"role": "system", "content": "Answer in one sentence."},
+            ],
+            "messages[2].role",
+            "int",
+            id="int_role_before_a_later_system_message",
+        ),
+        pytest.param(
+            [*_orphan_answer_with({"id": "toolu_01"})[:3], {"role": True, "content": "Go on"}],
+            "messages[3].role",
+            "bool",
+            id="bool_role_after_an_orphan_object_tool_call_id",
+        ),
+        pytest.param(
+            _search_answered_with({"id": "srvtoolu_01Search"}),
+            "messages[2].tool_call_id",
+            "dict",
+            id="object_tool_call_id_after_a_kept_server_result",
+        ),
+        pytest.param(
+            _search_answered_with(["srvtoolu_01Search"]),
+            "messages[2].tool_call_id",
+            "list",
+            id="list_tool_call_id_after_a_kept_server_result",
+        ),
+        pytest.param(
+            [_ASK, _WEATHER_CALL, {"role": "tool", "tool_call_id": {"id": "toolu_01"}, "content": "sunny"}],
+            "messages[2].tool_call_id",
+            "dict",
+            id="object_tool_call_id_answering_a_client_tool_call",
+        ),
+        pytest.param(
+            [
+                _ASK,
+                _WEATHER_CALL,
+                {"role": "function", "name": "get_weather", "tool_call_id": {"id": "toolu_01"}, "content": "sunny"},
+            ],
+            "messages[2].tool_call_id",
+            "dict",
+            id="object_tool_call_id_on_a_function_message",
+        ),
+        pytest.param(
+            [
+                _ASK,
+                {**_WEATHER_CALL, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": {"value": "toolu_01"}}]},
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+            ],
+            "messages[1].tool_calls[0].id",
+            "dict",
+            id="object_assistant_tool_call_id",
+        ),
+        pytest.param(
+            [
+                _ASK,
+                {**_WEATHER_CALL, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": 7}]},
+                {"role": "tool", "tool_call_id": "7", "content": "sunny"},
+            ],
+            "messages[1].tool_calls[0].id",
+            "int",
+            id="int_assistant_tool_call_id",
+        ),
+        pytest.param(
+            [*_orphan_answer_with({"id": "toolu_01"})[:3], {"role": ["user"], "content": "Go on"}],
+            "messages[3].role",
+            "list",
+            id="list_role_after_an_orphan_object_tool_call_id",
+        ),
+        pytest.param(
+            [
+                *_orphan_answer_with({"id": "toolu_01"})[:3],
+                {**_WEATHER_CALL, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": {"value": "toolu_01"}}]},
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+            ],
+            "messages[3].tool_calls[0].id",
+            "dict",
+            id="object_assistant_tool_call_id_after_an_orphan_object_tool_call_id",
+        ),
+        pytest.param(
+            [
+                {**_ASK, "tool_call_id": {"id": "stray"}},
+                _WEATHER_CALL,
+                {"role": "tool", "tool_call_id": {"id": "toolu_01"}, "content": "sunny"},
+            ],
+            "messages[2].tool_call_id",
+            "dict",
+            id="object_tool_call_id_after_a_stray_id_on_a_user_message",
+        ),
+        pytest.param(
+            [
+                {**_ASK, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": {"value": "stray"}}]},
+                {**_WEATHER_CALL, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": {"value": "toolu_01"}}]},
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+            ],
+            "messages[1].tool_calls[0].id",
+            "dict",
+            id="object_assistant_tool_call_id_after_stray_tool_calls_on_a_user_message",
+        ),
+        pytest.param(
+            [_ASK, {"role": [], "content": "ok"}, {"role": "system", "content": "Be terse."}],
+            "messages[1].role",
+            "list",
+            id="empty_list_role_before_a_system_message",
+        ),
+        pytest.param(
+            [_ASK, {"role": {}, "content": "ok"}, {"role": "user", "content": "again"}],
+            "messages[1].role",
+            "dict",
+            id="empty_object_role",
+        ),
+    ],
+)
+@pytest.mark.parametrize("modify_params", [False, True])
+@pytest.mark.parametrize("model", [UNFLAGGED_CLAUDE, FLAGGED_CLAUDE])
+def test_chat_transform_request_answers_400_naming_a_non_string_role_or_tool_call_id(
+    local_model_cost_map,
+    monkeypatch: pytest.MonkeyPatch,
+    messages: list[dict[str, object]],
+    field_path: str,
+    type_name: str,
+    modify_params: bool,
+    model: str,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), model, copy.deepcopy(messages))
+
+    assert (raised.value.status_code, raised.value.message) == (
+        400,
+        f"Invalid type for '{field_path}': expected a string, got {type_name}",
+    )
+
+
+@pytest.mark.parametrize(("role", "type_name"), [(["user"], "list"), ({"name": "user"}, "dict"), ([], "list")])
+def test_chat_transform_request_names_a_non_string_role_on_a_cache_marked_message_under_drop_params(
+    local_model_cost_map, role: object, type_name: str
+):
+    marked: Final = {"role": role, "content": [{"type": "text", "text": "ok"}], "cache_control": {"type": "ephemeral"}}
+
+    with pytest.raises(AnthropicError) as raised:
+        AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=[_ASK, marked],
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )
+
+    assert (raised.value.status_code, raised.value.message) == (
+        400,
+        f"Invalid type for 'messages[1].role': expected a string, got {type_name}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("malformed", "well_formed", "modify_params"),
+    [
+        pytest.param(
+            [{**_ASK, "tool_call_id": {"id": "stray"}}], [_ASK], False, id="stray_tool_call_id_on_a_user_message"
+        ),
+        pytest.param(
+            [{**_ASK, "tool_calls": [{**_WEATHER_CALL["tool_calls"][0], "id": {"value": "toolu_01"}}]}],
+            [_ASK],
+            False,
+            id="stray_tool_calls_on_a_user_message",
+        ),
+        pytest.param(
+            _orphan_answer_with({"id": "toolu_01"}),
+            _orphan_answer_with("toolu_01"),
+            True,
+            id="orphan_answer_dropped_under_modify_params",
+        ),
+    ],
+)
+def test_chat_transform_request_keeps_converting_a_non_string_id_it_never_reads(
+    local_model_cost_map,
+    monkeypatch: pytest.MonkeyPatch,
+    malformed: list[dict[str, object]],
+    well_formed: list[dict[str, object]],
+    modify_params: bool,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+
+    converted: Final = _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, copy.deepcopy(malformed))
+
+    assert (
+        converted["messages"]
+        == _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, copy.deepcopy(well_formed))["messages"]
+    )
+
+
+def test_chat_transform_request_keeps_a_conversion_error_that_a_dropped_orphan_answer_did_not_cause(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [*_orphan_answer_with({"id": "toolu_01"})[:3], {"role": "bogus", "content": "Go on"}],
+        )
+
+    assert raised.value.status_code == 400
+    assert "Invalid Message passed in {'role': 'bogus'" in raised.value.message
+
+
+@pytest.mark.parametrize(
+    ("later_turn", "real_cause"),
+    [
+        pytest.param(
+            [{"role": "user", "content": ["hi", "there"]}],
+            "'str' object has no attribute 'get'",
+            id="string_content_parts",
+        ),
+        pytest.param(
+            [
+                {
+                    **_WEATHER_CALL,
+                    "tool_calls": [
+                        {
+                            **_WEATHER_CALL["tool_calls"][0],
+                            "function": {"name": "get_weather", "arguments": {"city": "Paris"}},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
+            ],
+            "'dict' object has no attribute 'strip'",
+            id="object_tool_call_arguments",
+        ),
+        pytest.param(
+            [{"role": "user", "content": [{"type": "image_url", "image_url": ["x"]}]}],
+            "list indices must be integers or slices, not str",
+            id="list_image_url",
+        ),
+    ],
+)
+@pytest.mark.parametrize("dropped_answer_id", [7, {"id": "toolu_01"}], ids=["int", "object"])
+def test_chat_transform_request_never_blames_a_dropped_tool_answer_id_for_another_failure(
+    local_model_cost_map,
+    monkeypatch: pytest.MonkeyPatch,
+    later_turn: list[dict[str, object]],
+    real_cause: str,
+    dropped_answer_id: object,
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, [*_orphan_answer_with(dropped_answer_id)[:3], *later_turn])
+
+    assert raised.value.status_code == 400
+    assert raised.value.message.startswith(real_cause)
+
+
+def test_chat_transform_request_never_blames_a_numeric_assistant_tool_call_id_for_an_earlier_failure(
+    local_model_cost_map,
+):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [
+                {"role": "user", "content": ["hi", "there"]},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": 5, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "5", "content": "rain"},
+            ],
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.message.startswith("'str' object has no attribute 'get'")
+
+
+@pytest.mark.parametrize("empty_role", [0, False])
+def test_chat_transform_request_never_blames_an_empty_role_for_another_failure(local_model_cost_map, empty_role):
+    list_part_type_after_an_empty_role: Final = [
+        _ASK,
+        {"role": empty_role, "content": "ok"},
+        {"role": "user", "content": [{"type": ["text"], "text": "again"}]},
+        {"role": "system", "content": "Be terse."},
+    ]
+
+    with pytest.raises(TypeError):
+        _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, list_part_type_after_an_empty_role)
+
+
+def test_chat_transform_request_names_no_field_for_a_failure_outside_roles_and_tool_call_ids(local_model_cost_map):
+    list_part_type: Final = [
+        _ASK,
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": [{"type": ["text"], "text": "again"}]},
+        {"role": "system", "content": "Be terse."},
+    ]
+
+    with pytest.raises(TypeError):
+        _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, list_part_type)
+
+
+def _five_cache_hint_conversation() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "turn 1", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "turn 2", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": "answer 2"},
+        {"role": "user", "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}]},
+    ]
+
+
+def _cached_texts(node: object) -> Iterator[str]:
+    if isinstance(node, dict):
+        yield from ((node["text"],) if "cache_control" in node and "text" in node else ())
+        yield from chain.from_iterable(map(_cached_texts, node.values()))
+    elif isinstance(node, list):
+        yield from chain.from_iterable(map(_cached_texts, node))
+
+
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        (AnthropicConfig(), "claude-haiku-5-5"),
+        (VertexAIAnthropicConfig(), "claude-haiku-5-5"),
+        (AmazonAnthropicClaudeConfig(), "anthropic.claude-haiku-5-5"),
+        (AzureAnthropicConfig(), "claude-haiku-5-5"),
+    ],
+    ids=["anthropic", "vertex_ai", "bedrock_invoke", "azure_ai"],
+)
+@pytest.mark.parametrize(
+    ("drop_params", "expected_cached_texts"),
+    [
+        (True, ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        ("true", ["answer 1", "turn 1", "turn 2", "turn 3"]),
+        (False, ["answer 1", "system prompt", "turn 1", "turn 2", "turn 3"]),
+    ],
+    ids=[
+        "drop_params_keeps_the_newest_four",
+        "string_drop_params_keeps_the_newest_four",
+        "without_drop_params_all_five_pass_through",
+    ],
+)
+def test_claude_request_over_the_cache_control_cap_drops_the_oldest_hints_only_under_drop_params(
+    config: AnthropicConfig,
+    model: str,
+    drop_params: bool | str,
+    expected_cached_texts: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = _five_cache_hint_conversation()
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+    assert sorted(_cached_texts(body)) == expected_cached_texts
+    assert json.dumps(body).count('"cache_control"') == len(expected_cached_texts)
+    assert messages == messages_before
+
+
+def test_claude_cache_control_cap_keeps_a_cached_tool_and_drops_the_oldest_message_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    messages: Final = _five_cache_hint_conversation()[1:]
+    tool: Final = {
+        "name": "get_weather",
+        "description": "Get the weather",
+        "input_schema": {"type": "object", "properties": {}},
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-haiku-5-5",
+        messages=messages,
+        optional_params={"tools": [tool]},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+    assert sorted(_cached_texts(body["messages"])) == ["answer 1", "turn 2", "turn 3"]
+
+
+def test_claude_cache_control_cap_drops_a_string_assistant_turns_text_hint_before_its_tool_call_hints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    hint: Final = {"type": "ephemeral"}
+    tool_calls: Final = [
+        {"id": f"call_{name}", "type": "function", "function": {"name": name, "arguments": "{}"}, "cache_control": hint}
+        for name in ("lookup", "search")
+    ]
+    follow_up: Final = [
+        {"type": "text", "text": "follow-up", "cache_control": hint},
+        {"type": "text", "text": "and more", "cache_control": hint},
+    ]
+    messages: Final = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "checking both", "cache_control": hint, "tool_calls": tool_calls},
+        {"role": "tool", "tool_call_id": "call_lookup", "content": "found"},
+        {"role": "tool", "tool_call_id": "call_search", "content": "none"},
+        {"role": "user", "content": follow_up},
+    ]
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-haiku-5-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assistant_blocks: Final = body["messages"][1]["content"]
+    assert [block["type"] for block in assistant_blocks] == ["text", "tool_use", "tool_use"]
+    assert ["cache_control" in block for block in assistant_blocks] == [False, True, True]
+    assert json.dumps(body).count('"cache_control"') == 4
+    assert json.dumps(body).count('"cache_control"') == 4
+
+
+def test_claude_cache_control_cap_keeps_the_newest_hints_inside_one_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                *({"type": "text", "text": f"part {n}", "cache_control": {"type": "ephemeral"}} for n in range(1, 6)),
+                {"type": "text", "text": "Reply with the single word OK."},
+            ],
+        }
+    ]
+    messages_before: Final = copy.deepcopy(messages)
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-haiku-5-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert sorted(_cached_texts(body["messages"])) == ["part 2", "part 3", "part 4", "part 5"]
+    assert json.dumps(body).count('"cache_control"') == 4
+    assert messages == messages_before
+
+
+def test_claude_cache_control_cap_does_not_count_a_message_level_hint_that_list_content_never_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    messages: Final = [
+        {"role": "system", "content": "system prompt", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": "turn 1", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 1"},
+        {"role": "user", "content": "turn 2", "cache_control": {"type": "ephemeral"}},
+        {"role": "assistant", "content": "answer 2"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}],
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+    body: Final = AnthropicConfig().transform_request(
+        model="claude-haiku-5-5",
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert sorted(_cached_texts(body)) == ["system prompt", "turn 1", "turn 2", "turn 3"]
+    assert json.dumps(body).count('"cache_control"') == 4
+
+
+@pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-haiku-4-5-20251001"])
+def test_get_supported_params_reports_sampling_params_only_when_the_request_keeps_them(
+    local_model_cost_map, model: str
+):
+    """What get_supported_openai_params says about temperature/top_p must match what
+    map_openai_params does with them under drop_params, so a caller that pre-flights
+    from the list is never told a param is fine that the request path then drops."""
+    config = AnthropicConfig()
+
+    supported = config.get_supported_openai_params(model=model)
+    sent = config.map_openai_params(
+        non_default_params={"temperature": 0.1, "top_p": 0.5},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert ("temperature" in supported) == ("temperature" in sent), (model, supported, sent)
+    assert ("top_p" in supported) == ("top_p" in sent), (model, supported, sent)

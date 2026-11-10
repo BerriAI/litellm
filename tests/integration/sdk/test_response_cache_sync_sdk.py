@@ -9,17 +9,23 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from itertools import chain
 from typing import Final
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.caching.caching import Cache
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.utils import ModelResponse, TextCompletionResponse
+from tests.integration._support.client import JSON_OBJECT
 from tests.integration.caching.response_cache_case import (
     CHAT,
+    CHAT_CHUNK,
     CHAT_MODEL,
+    CHAT_STREAM,
     PROVIDER_KEY,
     TEXT,
     TEXT_MODEL,
@@ -31,8 +37,10 @@ from tests.integration.caching.response_cache_case import (
     prompt,
     redis_store,
     rescript,
+    rewrite_usage_details,
     scripted_in_process,
 )
+from tests.integration.cost_calculation.cost_tracking_case import SseResponse
 
 
 @pytest.fixture
@@ -123,3 +131,77 @@ def test_sync_text_completion_with_empty_choices_reaches_upstream_again() -> Non
         hit: Final = _text_completion(handle.api_base(), text)
         assert hit.id == refilled.id, hit.model_dump_json()
         assert upstream.calls(handle.scenario_id) == 2
+
+
+_REASONING_USAGE_FRAME: Final = (
+    CHAT_CHUNK + '[],"usage":{"prompt_tokens":5,"completion_tokens":7,"total_tokens":12,'
+    '"completion_tokens_details":{"reasoning_tokens":4}}}'
+)
+_REASONING_STREAM: Final = SseResponse(
+    content_type="text/event-stream",
+    frames=(*CHAT_STREAM.frames[:-1], _REASONING_USAGE_FRAME, CHAT_STREAM.frames[-1]),
+)
+_JSON_LIST: Final = TypeAdapter(list[JsonValue])
+_UNVALIDATED_USAGE_DETAILS: Final[dict[str, JsonValue]] = {
+    "text": {"reasoning_tokens": "abc"},
+    "fraction": {"reasoning_tokens": 1.5},
+    "object": {"reasoning_tokens": {"a": 1}},
+}
+
+
+def _stream(api_base: str, text: str) -> tuple[dict[str, JsonValue], ...]:
+    stream: Final = litellm.completion(
+        model=CHAT_MODEL,
+        messages=[{"role": "user", "content": text}],
+        api_base=api_base,
+        api_key=PROVIDER_KEY,
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    assert isinstance(stream, CustomStreamWrapper), type(stream)
+    return tuple(JSON_OBJECT.validate_python(chunk.model_dump(mode="json")) for chunk in stream)
+
+
+def _replayed(chunks: tuple[dict[str, JsonValue], ...]) -> tuple[frozenset[JsonValue], str, tuple[JsonValue, ...]]:
+    choices: Final = tuple(
+        JSON_OBJECT.validate_python(choice)
+        for choice in chain.from_iterable(_JSON_LIST.validate_python(chunk.get("choices") or []) for chunk in chunks)
+    )
+    text: Final = "".join(str(JSON_OBJECT.validate_python(choice["delta"]).get("content") or "") for choice in choices)
+    usages: Final = tuple(JSON_OBJECT.validate_python(chunk["usage"]) for chunk in chunks if chunk.get("usage"))
+    reasoning: Final = tuple(
+        JSON_OBJECT.validate_python(usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+        for usage in usages
+    )
+    return frozenset(chunk["id"] for chunk in chunks), text, reasoning
+
+
+@pytest.mark.usefixtures("sdk_cache")
+def test_sync_stream_cache_hit_replays_the_usage_details_of_the_miss() -> None:
+    upstream: Final = Upstream()
+    text: Final = prompt()
+    with scripted_in_process(_REASONING_STREAM) as handle, redis_store() as store:
+        first: Final = _replayed(_stream(handle.api_base(), text))
+        (first_id,) = first[0]
+        assert first[1:] == ("streamed response", (4,)), first
+        await_entry(store, str(first_id))
+        hit: Final = _replayed(_stream(handle.api_base(), text))
+        assert hit == first, hit
+        assert upstream.calls(handle.scenario_id) == 1
+
+
+@pytest.mark.usefixtures("sdk_cache")
+@pytest.mark.parametrize("variant", tuple(_UNVALIDATED_USAGE_DETAILS))
+def test_sync_stream_cache_hit_skips_cached_usage_details_that_fail_validation(variant: str) -> None:
+    upstream: Final = Upstream()
+    text: Final = prompt()
+    with scripted_in_process(_REASONING_STREAM) as handle, redis_store() as store:
+        first: Final = _replayed(_stream(handle.api_base(), text))
+        (first_id,) = first[0]
+        assert first[1:] == ("streamed response", (4,)), first
+        stale_id: Final = rewrite_usage_details(
+            store, await_entry(store, str(first_id)), _UNVALIDATED_USAGE_DETAILS[variant]
+        )
+        hit: Final = _replayed(_stream(handle.api_base(), text))
+        assert hit == (frozenset({stale_id}), "streamed response", (0,)), hit
+        assert upstream.calls(handle.scenario_id) == 1

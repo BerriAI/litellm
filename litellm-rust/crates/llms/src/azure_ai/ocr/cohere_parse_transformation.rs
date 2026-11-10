@@ -120,7 +120,8 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
 
 impl AzureAICohereParseConfig {
     fn get_complete_url(&self, base: &str) -> Result<String, Error> {
-        let mut url = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
+        let mut url =
+            reqwest::Url::parse(base).map_err(|error| Error::request_field("api_base", error))?;
         if !matches!(url.scheme(), "http" | "https") {
             return Err(invalid_api_base());
         }
@@ -133,13 +134,14 @@ impl AzureAICohereParseConfig {
         ApiUrl::parse(url.as_str())
             .and_then(|url| url.complete_path(&AZURE_COHERE_PARSE_PATH))
             .map(|url| url.into_string())
-            .map_err(|_| invalid_api_base())
+            .map_err(|error| Error::request_field("api_base", error))
     }
 }
 
 fn invalid_api_base() -> Error {
     Error::RequestField {
         path: "api_base".into(),
+        cause: None,
     }
 }
 

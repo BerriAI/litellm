@@ -1,5 +1,7 @@
 use crate::base_llm::messages::context::MessagesModelCapabilities;
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{
     has_header, header_value, header_values, with_header, without_headers,
@@ -7,14 +9,17 @@ use litellm_http::request::{
 use litellm_llms_types::{
     formats::messages::{
         ContentBlock, ContentBlockType, EffortLevel, Message, MessageContent, MessagesTool,
+        SystemPrompt,
     },
-    providers::anthropic::{AnthropicBeta, BetaSet},
+    providers::anthropic::{
+        API_BASE, API_KEY_HEADER, AnthropicBeta, BETA_HEADER, BetaSet,
+        DIRECT_BROWSER_ACCESS_HEADER, MESSAGES_PATH,
+    },
     recognized::Recognized,
 };
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::base_llm::messages::transformation::MESSAGES_PATH_SUFFIX;
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
     base_llm::auth::{AuthScheme, Headers},
@@ -24,14 +29,10 @@ pub const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 pub const ANTHROPIC_AUTH_TOKEN_ENV: &str = "ANTHROPIC_AUTH_TOKEN";
 pub const ENCRYPTED_REASONING_SIGNATURE_PREFIX: &str = "litellm_encrypted_reasoning:";
 const THOUGHT_SIGNATURE_SEPARATOR: &str = "__thought__";
-const BETA_HEADER: &str = "anthropic-beta";
 pub const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
-pub const DEFAULT_ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
-pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
-const API_KEY_HEADER: &str = API_KEY_PLACEMENT.header_name();
+pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header(API_KEY_HEADER);
 const AUTHORIZATION: &str = CredentialPlacement::Bearer.header_name();
-const DIRECT_BROWSER_ACCESS_HEADER: &str = "anthropic-dangerous-direct-browser-access";
 
 pub fn supports_effort_tier(capabilities: &MessagesModelCapabilities, level: EffortLevel) -> bool {
     match level {
@@ -144,7 +145,7 @@ pub fn resolve_anthropic_api_base(
         env_lookup,
         &[ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV],
     )
-    .unwrap_or_else(|| DEFAULT_ANTHROPIC_API_BASE.to_string())
+    .unwrap_or_else(|| API_BASE.to_string())
 }
 
 pub fn complete_anthropic_url(
@@ -153,11 +154,42 @@ pub fn complete_anthropic_url(
 ) -> String {
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
 
-    let api_base = api_base.trim_end_matches('/');
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
+    ensure_api_route(&api_base, MESSAGES_PATH)
+}
+
+/// Python's `urlsplit(url).path`, for the URLs an `api_base` holds.
+fn url_path(url: &str) -> &str {
+    let before_fragment = url.split('#').next().unwrap_or_default();
+    let before_query = before_fragment.split('?').next().unwrap_or_default();
+    match before_query.split_once("://") {
+        Some((_, rest)) => rest.find('/').map_or("", |slash| &rest[slash..]),
+        None => before_query,
+    }
+}
+
+/// Python's `_strip_trailing_slashes_keeping_the_scheme`.
+fn strip_trailing_slashes(api_base: &str) -> String {
+    let stripped = api_base.trim_end_matches('/');
+    if stripped.ends_with(':') && !stripped.contains('/') && !stripped.contains('?') {
         return api_base.to_string();
     }
-    format!("{api_base}{MESSAGES_PATH_SUFFIX}")
+    match stripped.split_once('?') {
+        Some((before, query)) if url_path(stripped).ends_with('/') => {
+            format!("{}?{query}", before.trim_end_matches('/'))
+        }
+        _ => stripped.to_string(),
+    }
+}
+
+/// Python's `ensure_api_route`: an `api_base` whose path already ends in the route is kept as
+/// it is, query string included; anything else gets the route appended to the whole string.
+fn ensure_api_route(api_base: &str, route: &str) -> String {
+    let base = strip_trailing_slashes(api_base);
+    let route = route.trim_start_matches('/');
+    if url_path(&base).ends_with(&format!("/{route}")) {
+        return base;
+    }
+    format!("{}/{route}", strip_trailing_slashes(&base))
 }
 
 pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {
@@ -383,6 +415,33 @@ pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
         _ => None,
     };
     field.is_some_and(|value| value.starts_with(ENCRYPTED_REASONING_SIGNATURE_PREFIX))
+}
+
+const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
+
+fn is_billing_header_block(block: &ContentBlock) -> bool {
+    block.block_type == Some(ContentBlockType::Text)
+        && block
+            .text
+            .as_deref()
+            .is_some_and(|text| text.starts_with(BILLING_HEADER_PREFIX))
+}
+
+/// Python's `AnthropicMessagesConfig._filter_billing_headers_from_system`: the Claude Code
+/// attribution blocks the first-party API reads, dropped for hosts that reject them. `None`
+/// when nothing else was in the system prompt.
+pub fn filter_billing_headers_from_system(system: SystemPrompt) -> Option<SystemPrompt> {
+    match system {
+        SystemPrompt::Text(text) if text.starts_with(BILLING_HEADER_PREFIX) => None,
+        SystemPrompt::Text(text) => Some(SystemPrompt::Text(text)),
+        SystemPrompt::Blocks(blocks) => {
+            let kept: Vec<ContentBlock> = blocks
+                .into_iter()
+                .filter(|block| !is_billing_header_block(block))
+                .collect();
+            (!kept.is_empty()).then_some(SystemPrompt::Blocks(kept))
+        }
+    }
 }
 
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
@@ -1854,10 +1913,12 @@ mod tests {
                 supports_reasoning: false,
                 supports_adaptive_thinking: false,
                 thinking_always_on: false,
+                thinking_on_by_default: false,
                 supports_legacy_thinking: false,
                 supports_output_config: false,
                 supports_sampling_params: true,
                 supports_speed: false,
+                supports_mid_conversation_system: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
             }
         );
@@ -1892,5 +1953,25 @@ mod tests {
             serde_json::from_value::<MessagesModelCapabilities>(input).unwrap(),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::bare_host("https://api.example.com", "https://api.example.com/v1/messages")]
+    #[case::trailing_slash("https://api.example.com/", "https://api.example.com/v1/messages")]
+    #[case::route_present(
+        "https://api.example.com/v1/messages/",
+        "https://api.example.com/v1/messages"
+    )]
+    #[case::route_and_query(
+        "https://api.example.com/v1/messages?beta=true",
+        "https://api.example.com/v1/messages?beta=true"
+    )]
+    #[case::query_without_route(
+        "https://api.example.com/?x=1",
+        "https://api.example.com?x=1/v1/messages"
+    )]
+    #[case::scheme_only("https://", "https:///v1/messages")]
+    fn the_messages_url_follows_python_ensure_api_route(#[case] api_base: &str, #[case] url: &str) {
+        assert_eq!(complete_anthropic_url(Some(api_base), &|_| None), url);
     }
 }

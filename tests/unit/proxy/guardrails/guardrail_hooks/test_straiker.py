@@ -1,5 +1,6 @@
 import json
 from types import MappingProxyType, SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1216,7 +1217,25 @@ def test_v3_initializer_reads_api_version_from_config():
     assert g._webhook_url().endswith("/api/v3/detect")
 
 
-@pytest.mark.parametrize("api_version", ["2024-09-01", "", "v2"])
+@pytest.mark.parametrize(("api_key", "expected"), [("c4ac433a-uuid", "v1"), (V3_KEY, "v3")])
+def test_blank_api_version_follows_key_prefix_without_warning(
+    api_key: str, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import litellm
+    from litellm._logging import verbose_proxy_logger
+    from litellm.types.guardrails import Guardrail, LitellmParams
+
+    monkeypatch.setattr(litellm, "callbacks", litellm.callbacks.copy())
+    params: Final = LitellmParams(guardrail="straiker", mode="pre_call", api_key=api_key, api_version="")
+
+    with patch.object(verbose_proxy_logger, "warning") as warning:
+        g = initialize_guardrail(params, Guardrail(guardrail_name="straiker", litellm_params=params))
+
+    assert g.api_version == expected
+    warning.assert_not_called()
+
+
+@pytest.mark.parametrize("api_version", ["2024-09-01", "v2"])
 @pytest.mark.parametrize(("api_key", "expected"), [("c4ac433a-uuid", "v1"), (V3_KEY, "v3")])
 def test_unknown_api_version_follows_key_prefix(api_version, api_key, expected, monkeypatch):
     import litellm

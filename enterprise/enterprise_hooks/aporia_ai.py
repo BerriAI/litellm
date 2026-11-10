@@ -15,9 +15,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import json
 import sys
-from typing import Any, List, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -29,11 +30,13 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_helpers import should_proceed_based_on_metadata
 from litellm.types.guardrails import GuardrailEventHooks
 
 GUARDRAIL_NAME = "aporia"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AporiaGuardrail(CustomGuardrail):
@@ -68,7 +71,7 @@ class AporiaGuardrail(CustomGuardrail):
     async def prepare_aporia_request(
         self, new_messages: List[dict], response_string: Optional[str] = None
     ) -> dict:
-        data: dict[str, Any] = {}
+        data: dict[str, object] = {}
         if new_messages is not None:
             data["messages"] = new_messages
         if response_string is not None:
@@ -122,8 +125,10 @@ class AporiaGuardrail(CustomGuardrail):
         verbose_proxy_logger.debug("Aporia AI response: %s", response.text)
         if response.status_code == 200:
             # check if the response was flagged
-            _json_response = response.json()
-            action: str = _json_response.get(
+            _json_response: Final = decoded_json_object(
+                _DECODED_JSON.validate_python(response.json())
+            )
+            action: Final = _json_response.get(
                 "action"
             )  # possible values are modify, passthrough, block, rephrase
             if action == "block":

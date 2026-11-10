@@ -4,9 +4,9 @@ from typing import Final, cast
 import pytest
 
 from litellm.constants import AGENT_TRACING_AGENT_LIST_LIMIT
-from litellm.rust_bridge.trace.generated.models import TraceAgentRow, TraceAgentsParams
-from litellm.rust_bridge.trace.generated.types import TraceScope
-from litellm.rust_bridge.trace.storage import ClickHouseStorage
+from litellm.tracing.generated.models import TraceAgentRow, TraceAgentsParams
+from litellm.tracing.generated.types import TraceScope
+from litellm.tracing.storage import LensTraceStorage
 from litellm.tracing import TraceReceiver
 from litellm.tracing.types import TraceAgent
 
@@ -40,7 +40,7 @@ async def test_list_agents_queries_the_reader_scope_and_shapes_rows(
             TraceAgentRow(agent_name="research", runs=1, failed_runs=0, last_seen_ms=0),
         )
     )
-    receiver: Final = TraceReceiver(storage=cast(ClickHouseStorage, storage))
+    receiver: Final = TraceReceiver(storage=cast(LensTraceStorage, storage))
 
     result: Final = await receiver.list_agents(scope, start_ms=10, end_ms=20)
 

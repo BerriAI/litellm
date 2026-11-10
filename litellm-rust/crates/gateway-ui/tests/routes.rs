@@ -16,8 +16,8 @@ use tower_sessions::{
     session::{Id, Record},
 };
 
-use litellm_auth_types::SecretValue;
 use litellm_gateway_auth::UiBackend;
+use litellm_secret_value::SecretValue;
 
 struct App {
     router: Router,
@@ -330,24 +330,45 @@ async fn reauthentication_rotates_and_revokes_the_previous_session(app: App) {
     );
 }
 
+async fn failed_login(app: &App, username: &str) -> Response {
+    app.router
+        .clone()
+        .oneshot(
+            Request::post("/v2/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"username": username, "password": "wrong-password"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
 #[rstest]
 #[tokio::test]
 async fn failed_logins_are_generic_and_rate_limited(app: App) {
-    for attempt in 0..11 {
-        let response = app.router.clone().oneshot(Request::post("/v2/login")
-            .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(json!({"username": format!("unknown-{attempt}"), "password": "wrong-password"}).to_string())).unwrap()).await.unwrap();
-        if attempt < 10 {
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-            assert_eq!(
-                body(response).await["error"]["message"],
-                "Invalid username or password"
-            );
-        } else {
-            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-            assert!(response.headers().contains_key(header::RETRY_AFTER));
-        }
-    }
+    let first = failed_login(&app, "unknown-0").await;
+    assert_eq!(first.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        body(first).await["error"]["message"],
+        "Invalid username or password"
+    );
+    let usernames: Vec<String> = (1..10)
+        .map(|attempt| format!("unknown-{attempt}"))
+        .collect();
+    let burst = futures_util::future::join_all(
+        usernames
+            .iter()
+            .map(|username| failed_login(&app, username)),
+    )
+    .await;
+    let statuses: Vec<StatusCode> = burst.iter().map(Response::status).collect();
+    assert_eq!(statuses, vec![StatusCode::UNAUTHORIZED; 9]);
+    let limited = failed_login(&app, "unknown-10").await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers().contains_key(header::RETRY_AFTER));
+    assert!(body(limited).await["error"]["message"].is_string());
 }
 
 #[rstest]
@@ -365,6 +386,7 @@ async fn login_rejects_browser_form_posts(app: App) {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert!(!response.headers().contains_key(header::SET_COOKIE));
+    assert!(body(response).await["error"]["message"].is_string());
 }
 
 #[rstest]
@@ -468,6 +490,7 @@ async fn invalid_login_payloads_do_not_create_sessions(
         .unwrap();
     assert_eq!(response.status(), status);
     assert!(!response.headers().contains_key(header::SET_COOKIE));
+    assert!(body(response).await["error"]["message"].is_string());
 }
 
 #[rstest]

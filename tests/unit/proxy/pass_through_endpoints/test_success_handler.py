@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
+from pydantic import TypeAdapter
+
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.pass_through_endpoints.streaming_handler import (
@@ -16,7 +21,10 @@ from litellm.proxy.pass_through_endpoints.streaming_handler import (
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    EndpointType,
+    PassthroughStandardLoggingPayload,
+)
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -204,6 +212,65 @@ async def test_handle_logging_runs_async_handler_for_passthrough():
 
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
+@pytest.mark.asyncio
+async def test_unhandled_route_passes_passthrough_payload_to_custom_logger():
+    class _PayloadLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.payload: PassthroughStandardLoggingPayload | None = None
+
+        async def async_log_success_event(
+            self,
+            kwargs: dict[str, object],
+            response_obj: object,
+            start_time: datetime,
+            end_time: datetime,
+        ) -> None:
+            self.payload = TypeAdapter(PassthroughStandardLoggingPayload).validate_python(
+                kwargs["passthrough_logging_payload"]
+            )
+
+    start_time: Final = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    end_time: Final = datetime(2025, 1, 2, 3, 4, 9, tzinfo=timezone.utc)
+    url: Final = "https://upstream.example/v1/moderations"
+    request_body: Final = {"model": "omni-moderation-latest", "input": "check this"}
+    response_body: Final = {"id": "moderation-1", "results": [{"flagged": False}]}
+    payload: Final = PassthroughStandardLoggingPayload(
+        url=url,
+        request_body=request_body,
+        request_method="POST",
+        response_body=response_body,
+    )
+    logger: Final = _PayloadLogger()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="omni-moderation-latest",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start_time,
+        litellm_call_id="moderation-1",
+        function_id="moderations",
+        dynamic_async_success_callbacks=[logger],
+    )
+    response: Final = httpx.Response(200, request=httpx.Request("POST", url), json=response_body)
+
+    await PassThroughEndpointLogging().pass_through_async_success_handler(
+        httpx_response=response,
+        response_body=response_body,
+        logging_obj=logging_obj,
+        url_route="/v1/moderations",
+        result="",
+        start_time=start_time,
+        end_time=end_time,
+        cache_hit=False,
+        request_body=request_body,
+        passthrough_logging_payload=payload,
+    )
+
+    assert logger.payload == payload
+
+
+@pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 def test_convert_raw_bytes_to_str_lines():
     """
     Test that the _convert_raw_bytes_to_str_lines method correctly converts raw bytes to a list of strings
@@ -282,6 +349,7 @@ async def test_vertex_ai_anthropic_streaming_cost_injection_enabled():
 
         # Setup logging object with model info
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+        litellm_logging_obj.model = "claude-sonnet-4@20250514"
         litellm_logging_obj.litellm_params = {}
         litellm_logging_obj.model_call_details = {"model": "claude-sonnet-4@20250514"}
         litellm_logging_obj.completion_start_time = None
@@ -480,6 +548,7 @@ async def test_vertex_ai_anthropic_streaming_model_extraction():
         response.aiter_bytes = mock_aiter_bytes
 
         litellm_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+        litellm_logging_obj.model = "claude-sonnet-4@20250514"
         litellm_logging_obj.litellm_params = {}
         litellm_logging_obj.model_call_details = {}
         litellm_logging_obj.completion_start_time = None
@@ -584,3 +653,210 @@ def test_vertex_ai_live_route_without_usage_frames_yields_no_logging_response(
 
     assert normalized["standard_logging_response_object"] is None
     assert normalized["kwargs"] == {"model": _LIVE_MODEL}
+
+
+REALTIME_FRAMES: Final = [
+    {"type": "session.created", "session": {"id": "sess_fake", "model": "gpt-realtime-2.1"}},
+    {
+        "type": "response.done",
+        "response": {
+            "usage": {
+                "input_tokens": 33,
+                "output_tokens": 16,
+                "total_tokens": 49,
+                "input_token_details": {"text_tokens": 33, "audio_tokens": 0, "cached_tokens": 0},
+                "output_token_details": {"text_tokens": 16, "audio_tokens": 0},
+            }
+        },
+    },
+]
+
+
+def _normalize(url_route: str, response_body: dict[str, object] | list[dict[str, object]]) -> dict:
+    logging_obj: Final = MagicMock(model_call_details={}, litellm_call_id="call-fake")
+    return PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+        httpx_response=MagicMock(spec=httpx.Response),
+        response_body=response_body,
+        request_body={},
+        logging_obj=logging_obj,
+        url_route=url_route,
+        result="websocket_connection_successful",
+        start_time=_START,
+        end_time=_END,
+        cache_hit=False,
+        litellm_call_id="call-fake",
+    )
+
+
+@pytest.mark.parametrize("url_route", ["/openai/v1/realtime", "/openai_passthrough/v1/realtime"])
+def test_openai_websocket_frames_reach_the_websocket_cost_handler(url_route):
+    normalized: Final = _normalize(url_route, REALTIME_FRAMES)
+
+    assert normalized["kwargs"]["model"] == "gpt-realtime-2.1"
+    assert normalized["kwargs"]["custom_llm_provider"] == "openai"
+    prices: Final = litellm.model_cost["gpt-realtime-2.1"]
+    assert normalized["kwargs"]["response_cost"] == pytest.approx(
+        33 * prices["input_cost_per_token"] + 16 * prices["output_cost_per_token"]
+    )
+    assert normalized["standard_logging_response_object"].usage.total_tokens == 49
+
+
+def test_openai_http_passthrough_bodies_are_left_to_the_http_handlers():
+    normalized: Final = _normalize("/openai/v1/responses", {"model": "gpt-5.4-mini", "usage": {"input_tokens": 13}})
+
+    assert normalized["standard_logging_response_object"] is None
+    assert normalized["kwargs"] == {"litellm_call_id": "call-fake"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_mode", ["once", "twice", "scope", "none"])
+@pytest.mark.parametrize("cancel_phase", ["allocation", "lock"])
+async def test_completed_passthrough_cancellation_preserves_accounting(
+    monkeypatch: pytest.MonkeyPatch, cancel_mode: str, cancel_phase: str
+) -> None:
+    from unittest.mock import create_autospec
+
+    import anyio
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.budget_reservation import release_unbound_budget_reservation
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+
+    class AllowanceCounter:
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls = 0
+            self.units = 0.0
+
+        async def async_increment(self, key: str, value: float, ttl: int | None = None) -> float:
+            self.started.set()
+            await self.release.wait()
+            self.calls += 1
+            self.units += value
+            return self.units
+
+    now: Final = datetime(2026, 10, 20, tzinfo=timezone.utc)
+    model: Final = "passthrough-cancellation-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "vertex_ai",
+            "mode": "chat",
+            "input_cost_per_token": 0.01,
+            "output_cost_per_token": 0.02,
+            "web_search_billing_unit": "per_query",
+            "search_context_cost_per_query": {"search_context_size_medium": 0.01},
+            "search_free_requests": {"count": 2, "period": "month", "shared_group": "cancelled-pass-through"},
+        },
+    )
+    monkeypatch.setattr(litellm, "apply_search_free_tier", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    counters: Final = SpendCounterStore(connect(None).spend_counters())
+    for key in ("spend:key:pass-through-key", "spend:team:pass-through-team"):
+        counters.set_local(key, 1.9)
+    monkeypatch.setattr(proxy_server, "spend_counter_store", counters)
+    reservation: Final = {
+        "reserved_cost": 0.4,
+        "callback_bound": False,
+        "entries": [
+            {"counter_key": key, "entity_type": "Key", "entity_id": key, "reserved_cost": 0.4}
+            for key in ("spend:key:pass-through-key", "spend:team:pass-through-team")
+        ],
+    }
+    writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging.db_spend_update_writer = writer
+    allowance: Final = AllowanceCounter()
+    monkeypatch.setattr(proxy_logging.internal_usage_cache.dual_cache, "redis_cache", allowance)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=now,
+        litellm_call_id="cancelled-pass-through",
+        function_id="cancelled-pass-through",
+    )
+    logging_obj.add_dynamic_callback(ProxyDBLogger(spend_writer=lambda: writer))
+    logging_obj.update_environment_variables(
+        model=model,
+        custom_llm_provider="vertex_ai",
+        optional_params={},
+        litellm_params={
+            "metadata": {
+                "user_api_key": "pass-through-key",
+                "user_api_key_user_id": "pass-through-user",
+                "user_api_key_team_id": "pass-through-team",
+                "user_api_key_budget_reservation": reservation,
+            }
+        },
+    )
+    result: Final = ModelResponse(
+        model=model,
+        usage=Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=3),
+        ),
+    )
+    result._hidden_params["response_cost"] = 0.5
+    scope: Final = anyio.CancelScope()
+    entered: Final = asyncio.Event()
+
+    async def dispatch() -> None:
+        with scope:
+            entered.set()
+            await PassThroughEndpointLogging().handle_logging(
+                logging_obj=logging_obj,
+                standard_logging_response_object=result,
+                result="",
+                start_time=now,
+                end_time=now,
+                cache_hit=False,
+                finalize_before_dispatch=True,
+            )
+
+    if cancel_phase == "lock":
+        await logging_obj.cost_finalization_lock.acquire()
+    pending: Final = asyncio.create_task(dispatch())
+    await entered.wait()
+    if cancel_phase == "allocation":
+        await allowance.started.wait()
+    if cancel_mode == "scope":
+        scope.cancel()
+    elif cancel_mode != "none":
+        pending.cancel()
+        await asyncio.sleep(0)
+        if cancel_mode == "twice":
+            pending.cancel()
+    if cancel_phase == "lock":
+        logging_obj.cost_finalization_lock.release()
+    allowance.release.set()
+    if cancel_mode in ("once", "twice"):
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    else:
+        await pending
+        assert scope.cancelled_caught is (cancel_mode == "scope")
+    assert reservation["callback_bound"] is True
+    await release_unbound_budget_reservation(reservation)
+    await GLOBAL_LOGGING_WORKER.flush()
+    assert allowance.calls == 1
+    assert allowance.units == 3
+    assert writer.update_database.await_count == 1
+    recorded: Final = writer.update_database.call_args.kwargs
+    assert recorded["response_cost"] == pytest.approx(0.48)
+    payload: Final = recorded["kwargs"]["standard_logging_object"]
+    assert payload["cost_finalized"] is True
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (10, 5)
+    assert reservation["finalized"] is True
+    for key in ("spend:key:pass-through-key", "spend:team:pass-through-team"):
+        assert counters.get_local(key) == pytest.approx(1.98)

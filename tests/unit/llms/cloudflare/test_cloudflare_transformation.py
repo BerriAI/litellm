@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -380,6 +380,35 @@ def test_completion_cloudflare_stream(sync_mode: bool, _cloudflare_httpx_transpo
     assert "language" in content.lower()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_cloudflare_stream_keeps_unicode_line_separators_inside_content(
+    sync_mode: bool, _cloudflare_httpx_transport: None
+) -> None:
+    streamed_text: Final = ("alpha\u2028", "beta\u2029", "gamma")
+    base: Final = {"id": "chatcmpl-cf", "object": "chat.completion.chunk", "created": 1, "model": "@cf/glm"}
+    body: Final = "".join(
+        f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'content': text}}]}, ensure_ascii=False)}\n\n"
+        for text in streamed_text
+    )
+    with respx.mock(assert_all_called=True) as api:
+        api.post(f"{FAKE_API_BASE}/chat/completions").respond(
+            200, headers={"content-type": "text/event-stream"}, content=(body + "data: [DONE]\n\n").encode()
+        )
+        request: Final = {
+            "model": "cloudflare/@cf/glm",
+            "messages": [{"role": "user", "content": "repeat"}],
+            "stream": True,
+            "api_base": FAKE_API_BASE,
+            "api_key": FAKE_API_KEY,
+        }
+        chunks: Final = (
+            tuple(completion(**request)) if sync_mode else tuple([c async for c in await acompletion(**request)])
+        )
+
+    assert "".join(c.choices[0].delta.content or "" for c in chunks) == "".join(streamed_text)
+
+
 def _make_mock_response(json_data: Dict[str, Any]) -> MagicMock:
     mock = MagicMock(spec=httpx.Response)
     mock.status_code = 200
@@ -387,3 +416,67 @@ def _make_mock_response(json_data: Dict[str, Any]) -> MagicMock:
     mock.json.return_value = json_data
     mock.text = json.dumps(json_data)
     return mock
+
+
+@pytest.mark.parametrize("sync_mode", [False])
+def test_acompletion_cloudflare_stream(sync_mode, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True)
+    messages = [{"role": "user", "content": "what llm are you"}]
+    raw_chunks = _streaming_chunks()
+
+    if sync_mode:
+
+        def _iter_text() -> Iterator[str]:
+            for chunk in raw_chunks:
+                yield f"data: {chunk}\n\n"
+            yield "data: [DONE]\n\n"
+
+        mock_resp = MagicMock()
+        mock_resp.iter_text.return_value = _iter_text()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "text/event-stream"}
+
+        with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+            response = completion(
+                model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
+                messages=messages,
+                max_tokens=15,
+                stream=True,
+                api_base=FAKE_API_BASE,
+                api_key=FAKE_API_KEY,
+            )
+            chunks_received = list(response)
+            mock_post.assert_called_once()
+    else:
+
+        async def _aiter_text() -> AsyncIterator[str]:
+            for chunk in raw_chunks:
+                yield f"data: {chunk}\n\n"
+            yield "data: [DONE]\n\n"
+
+        mock_resp = MagicMock()
+        mock_resp.aiter_text.return_value = _aiter_text()
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "text/event-stream"}
+
+        async def _run():
+            with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
+                resp = await acompletion(
+                    model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
+                    messages=messages,
+                    max_tokens=15,
+                    stream=True,
+                    api_base=FAKE_API_BASE,
+                    api_key=FAKE_API_KEY,
+                )
+                received = []
+                async for chunk in resp:
+                    received.append(chunk)
+                mock_post.assert_called_once()
+                return received
+
+        chunks_received = asyncio.run(_run())
+
+    assert len(chunks_received) > 0
+    content = "".join(c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content)
+    assert "language" in content.lower()

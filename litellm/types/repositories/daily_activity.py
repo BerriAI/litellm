@@ -39,6 +39,7 @@ class DailyActivityScope:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
+    team_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
@@ -63,6 +64,30 @@ class KeySpendRow:
 class KeyPage:
     rows: tuple[KeySpendRow, ...]
     total_api_keys: int
+
+
+@dataclass(frozen=True, slots=True)
+class UserSpendRow:
+    user_id: str | None
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+
+
+@dataclass(frozen=True, slots=True)
+class UserPage:
+    rows: tuple[UserSpendRow, ...]
+    total_users: int
+
+
+@dataclass(frozen=True, slots=True)
+class UserMetadataRow:
+    user_email: str | None
+    user_alias: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +144,7 @@ class RollupMetricsRow:
     prompt_caching_savings_spend: float | None
     gateway_injected_caching_savings_spend: float | None
     autorouter_savings_spend: float | None
+    guardrail_spend: float | None = field(default=None, kw_only=True)
     api_requests: int | None
     successful_requests: int | None
     failed_requests: int | None
@@ -142,6 +168,22 @@ class EntityRollupRow(RollupMetricsRow):
     entity_id: str | None
     api_key_rolled: int
     distinct_api_keys: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerTeamRollupRow(RollupMetricsRow):
+    team_id: str
+    team_alias: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GuardrailSpendRow:
+    date: str
+    guardrail_id: str
+    guardrail_name: str
+    api_key: str
+    spend: float
+    untracked_units: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +220,7 @@ class DailyActivityRow(Protocol):
     prompt_caching_savings_spend: float
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
+    guardrail_spend: float
     spend: float
     api_requests: int
     successful_requests: int

@@ -13,7 +13,9 @@ import asyncio
 import json
 import os
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import print_verbose
@@ -38,6 +40,7 @@ from ._embedding_router import (
 from .base_cache import BaseCache
 
 _WAIT_FOR_INDEXING: Final = MappingProxyType({"wait": "true"})
+_EMBEDDING_VECTOR: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -289,13 +292,10 @@ class QdrantSemanticCache(BaseCache):
         prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # create an embedding for prompt
-        embedding_response: Final = cast(
-            EmbeddingResponse,
-            self._get_embedding(prompt, metadata=kwargs.get("metadata")),
-        )
+        embedding_response: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         value = str(value)
         assert isinstance(value, str)
@@ -328,13 +328,10 @@ class QdrantSemanticCache(BaseCache):
         prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # convert to embedding
-        embedding_response: Final = cast(
-            EmbeddingResponse,
-            self._get_embedding(prompt, metadata=kwargs.get("metadata")),
-        )
+        embedding_response: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         data: Final = {
             "vector": embedding,
@@ -404,7 +401,7 @@ class QdrantSemanticCache(BaseCache):
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         value = str(value)
         assert isinstance(value, str)
@@ -440,7 +437,7 @@ class QdrantSemanticCache(BaseCache):
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         data: Final = {
             "vector": embedding,

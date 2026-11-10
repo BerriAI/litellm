@@ -1,5 +1,10 @@
+import json
+
 import pytest
+import respx
 import litellm
+import httpx
+from typing import Final
 
 
 @pytest.fixture(autouse=True)
@@ -168,3 +173,155 @@ async def test_mistral_transform_request_name_field_removal(
     assert user_message["role"] == "user"
     assert user_message["content"] == "Hello"
     assert "name" not in user_message  # The 'name' field should have been removed
+
+
+def test_mistral_401_maps_to_authentication_error(respx_mock):
+    route = respx_mock.post("https://api.mistral.ai/v1/chat/completions").mock(
+        return_value=httpx.Response(401, json={"message": "invalid API key"})
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as exc_info:
+        litellm.completion(
+            model="mistral/mistral-tiny",
+            messages=[{"role": "user", "content": "hello"}],
+            api_key="bad-mistral-key",
+            max_retries=0,
+        )
+
+    assert exc_info.value.status_code == 401
+    assert "invalid API key" in str(exc_info.value)
+    assert route.calls.last.request.headers["Authorization"] == "Bearer bad-mistral-key"
+
+
+def test_mistral_streaming_function_call_arguments_are_assembled(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    chunks: Final = (
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "mistral-medium-latest",
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+        },
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "mistral-medium-latest",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_weather",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_current_weather",
+                                    "arguments": '{"location":"',
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "mistral-medium-latest",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {"arguments": 'Boston","unit":"fahrenheit"}'},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-stream",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "mistral-medium-latest",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+        },
+    )
+    body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(
+        200,
+        text=body,
+        headers={"content-type": "text/event-stream"},
+    )
+    messages: Final = [{"role": "user", "content": "What is the weather in Boston?"}]
+    stream: Final = litellm.completion(
+        model="mistral/mistral-medium-latest",
+        messages=messages,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_weather",
+                    "description": "Get the current weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                            "unit": {"type": "string"},
+                        },
+                        "required": ["location", "unit"],
+                    },
+                },
+            }
+        ],
+        stream=True,
+    )
+    stream_chunks: Final = tuple(stream)
+    assert {chunk._hidden_params["custom_llm_provider"] for chunk in stream_chunks} == {"mistral"}
+    argument_fragments: Final = tuple(
+        chunk.choices[0].delta.tool_calls[0].function.arguments
+        for chunk in stream_chunks
+        if chunk.choices and chunk.choices[0].delta.tool_calls is not None
+    )
+    assert "".join(argument or "" for argument in argument_fragments) == (
+        '{"location":"Boston","unit":"fahrenheit"}'
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
+    assert assembled is not None
+    assert assembled.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+    assert json.loads(assembled.choices[0].message.tool_calls[0].function.arguments) == {
+        "location": "Boston",
+        "unit": "fahrenheit",
+    }
+    assert assembled.choices[0].finish_reason == "tool_calls"
+
+
+def test_mistral_completion_cost_is_priced_from_the_returned_usage(
+    respx_mock, mistral_api_response, local_model_cost_map
+):
+    route: Final = respx_mock.post("https://api.mistral.ai/v1/chat/completions").respond(json=mistral_api_response)
+
+    response: Final = litellm.completion(
+        model="mistral/mistral-medium-latest",
+        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        max_tokens=5,
+        seed=10,
+        input_cost_per_token=4e-07,
+        output_cost_per_token=2e-06,
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    assert (body["random_seed"], body["max_tokens"]) == (10, 5)
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (10, 15)
+    assert response._hidden_params["response_cost"] == pytest.approx(10 * 4e-07 + 15 * 2e-06)

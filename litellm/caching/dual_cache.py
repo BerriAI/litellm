@@ -12,14 +12,14 @@ import asyncio
 import itertools
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger
-from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
+from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE, DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS
 from litellm.types.caching import RedisPipelineIncrementOperation
 
 from .base_cache import BaseCache
@@ -59,16 +59,6 @@ class PendingBatchRead:
     previous_access_times: dict[str, float | None]
 
 
-@dataclass(frozen=True, slots=True)
-class DeclaredBatchRead:
-    """A ``async_batch_get_cache`` split in two: the memory half done, the Redis half declared on a ``RedisBatch``
-    so it rides that batch's next round trip, resolved later with ``async_resolve_batch_get``."""
-
-    keys: tuple[str, ...]
-    pending: PendingBatchRead
-    result: BatchResult[Mapping[str, object]] | None
-
-
 def _log_deferred_increment_failure(future: asyncio.Future[float]) -> None:
     if future.cancelled():
         return
@@ -101,7 +91,9 @@ class DualCache(BaseCache):
         self.last_redis_batch_access_time = LimitedSizeOrderedDict(max_size=default_max_redis_batch_cache_size)
         self._last_redis_batch_access_time_lock = Lock()
         self.redis_batch_cache_expiry = (
-            default_redis_batch_cache_expiry or litellm.default_redis_batch_cache_expiry or 10
+            default_redis_batch_cache_expiry
+            or litellm.default_redis_batch_cache_expiry
+            or DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS
         )
         self.default_in_memory_ttl = default_in_memory_ttl or litellm.default_in_memory_ttl
         self.default_redis_ttl = default_redis_ttl or litellm.default_redis_ttl
@@ -382,22 +374,6 @@ class DualCache(BaseCache):
                     await self.in_memory_cache.async_set_cache(key, value, **self._backfill_kwargs(kwargs))
         return merged
 
-    async def declare_batch_get(self, keys: Sequence[str], batch: RedisBatch) -> DeclaredBatchRead:
-        pending: Final = await self._prepare_batch_get(
-            list(keys),
-            local_only=False,
-            throttle_redis=False,
-        )
-        return DeclaredBatchRead(
-            keys=tuple(keys),
-            pending=pending,
-            result=batch.mget(pending.redis_keys) if pending.redis_keys else None,
-        )
-
-    async def async_resolve_batch_get(self, declared: DeclaredBatchRead) -> list[object | None]:
-        redis_result: Final = None if declared.result is None else await declared.result
-        return await self._apply_batch_get(declared.pending, redis_result)
-
     async def async_batch_get_cache(
         self,
         keys: list,
@@ -523,7 +499,7 @@ class DualCache(BaseCache):
         batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
         return None if batch is None else await self._set_on_batch(batch, key, value, ttl)
 
-    async def async_delete_cache_pre_call(self, key: str) -> BatchResult[None] | None:
+    async def async_delete_cache_pre_call(self, key: str) -> Awaitable[None] | None:
         """Memory now, the Redis DEL on the request's pipeline; None when no pipeline is open, so the caller
         takes its direct path."""
         batch: Final = None if self.redis_cache is None else active_request_redis_batch(self.redis_cache)
@@ -646,7 +622,7 @@ class DualCache(BaseCache):
         increment_list: list["RedisPipelineIncrementOperation"],
         local_only: bool = False,
         parent_otel_span: Span | None = None,
-        **kwargs,
+        **kwargs: object,  # kwargs-ok: accepted and unused, as the cache interface's other calls take them
     ) -> list[float] | None:
         result: list[float] | None = None
         try:
@@ -699,7 +675,7 @@ class DualCache(BaseCache):
         if self.redis_cache is not None:
             self.redis_cache.flush_cache()
 
-    def delete_cache(self, key):
+    def delete_cache(self, key: str) -> None:
         """
         Delete a key from the cache
         """

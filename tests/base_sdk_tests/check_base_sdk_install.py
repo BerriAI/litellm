@@ -8,11 +8,20 @@ the very class of undeclared-dependency bug this guards against.
 
 import argparse
 import importlib.util
+from importlib.machinery import EXTENSION_SUFFIXES
+from pathlib import Path
+import re
 import sys
 import traceback
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError, packages_distributions, requires
+from itertools import chain
+from typing import Final
 
 EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring", "mcp", "mcp_types", "httpx2", "httpcore2")
+SDK_DISTRIBUTIONS: Final = frozenset({"litellm", "litellm-core"})
+REQUIREMENT_NAME: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+EXTRA_MARKER: Final = re.compile(r";.*\bextra\s*==")
 
 
 def _require(condition: bool, message: str) -> None:
@@ -20,13 +29,43 @@ def _require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _base_requirements(distribution: str) -> frozenset[str]:
+    try:
+        declared: Final = requires(distribution) or ()
+    except PackageNotFoundError:
+        return frozenset()
+    return frozenset(
+        _canonical(match.group(0))
+        for requirement in declared
+        if not EXTRA_MARKER.search(requirement) and (match := REQUIREMENT_NAME.match(requirement))
+    )
+
+
+def _base_closure(pending: frozenset[str], reached: frozenset[str] = frozenset()) -> frozenset[str]:
+    if not pending:
+        return reached
+    expanded: Final = reached | pending
+    return _base_closure(frozenset(chain.from_iterable(_base_requirements(name) for name in pending)) - expanded, expanded)
+
+
 def check_environment_is_base_only() -> str:
-    present = tuple(name for name in EXTRAS_ONLY_MODULES if importlib.util.find_spec(name) is not None)
+    from_base: Final = _base_closure(SDK_DISTRIBUTIONS)
+    owners: Final = packages_distributions()
+    installed: Final = tuple(name for name in EXTRAS_ONLY_MODULES if importlib.util.find_spec(name) is not None)
+    inherited: Final = tuple(
+        name for name in installed if from_base & {_canonical(owner) for owner in owners.get(name) or (name,)}
+    )
+    present: Final = tuple(name for name in installed if name not in inherited)
     _require(
         not present,
         f"{', '.join(present)} installed, so this environment is not base-only and the run proves nothing",
     )
-    return f"no extras-only packages present ({', '.join(EXTRAS_ONLY_MODULES)})"
+    from_dependencies: Final = f"; {', '.join(inherited)} come from base dependencies" if inherited else ""
+    return f"no extras-only packages present ({', '.join(EXTRAS_ONLY_MODULES)}){from_dependencies}"
 
 
 def check_import() -> str:
@@ -52,6 +91,18 @@ def check_import() -> str:
     return f"imported {distribution} {sdk_version}"
 
 
+def check_native_extension() -> str:
+    import litellm
+    from litellm.rust_bridge import _native
+
+    native_path: Final = Path(_native.__file__).resolve()
+    package_path: Final = Path(litellm.__file__).resolve().parent
+    _require(native_path.parent == package_path / "rust_bridge", "native extension is outside the SDK package")
+    _require(any(str(native_path).endswith(suffix) for suffix in EXTENSION_SUFFIXES), "native module is not compiled")
+    _require(_native.trace_encode_error("ping") == b"\x12\x04ping", "native OTLP error encoding failed")
+    return f"loaded and exercised {native_path}"
+
+
 def check_completion() -> str:
     import litellm
 
@@ -65,9 +116,32 @@ def check_completion() -> str:
     return "mock completion round-trips"
 
 
+def check_completion_with_function_tool() -> str:
+    import litellm
+
+    response: Final = litellm.completion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "ping"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "noop",
+                    "description": "No operation",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        mock_response="pong",
+    )
+    content: Final = response.choices[0].message.content
+    _require(content == "pong", f"mock completion with a function tool returned {content!r}")
+    return "mock completion with a function tool round-trips"
+
+
 def check_mcp_install_guidance() -> str:
     try:
-        import litellm.experimental_mcp_client
+        import litellm.mcp_client
     except ImportError as error:
         _require("pip install 'litellm[mcp]'" in str(error), f"missing MCP installation guidance: {error}")
         _require(isinstance(error.__cause__, ModuleNotFoundError), "original missing-dependency cause was lost")
@@ -114,8 +188,8 @@ def check_token_counter() -> str:
 
 def check_tokenizer_dependencies() -> str:
     import litellm
-    from litellm.rust_bridge import tokenizer
     from litellm.litellm_core_utils.tokenizer import HuggingFace, HuggingFaceTokenizer, Tokenizer
+    from litellm.rust_bridge import tokenizer
     from litellm.utils import claude_json_str
 
     _require(isinstance(litellm.encoding, Tokenizer), "runtime alias rejects the default encoding")
@@ -170,8 +244,10 @@ def check_bedrock_credential_resolution() -> str:
 CHECKS: tuple[tuple[str, Callable[[], str]], ...] = (
     ("environment is base-only", check_environment_is_base_only),
     ("import litellm", check_import),
+    ("native extension", check_native_extension),
     ("optional MCP installation guidance", check_mcp_install_guidance),
     ("chat completion", check_completion),
+    ("chat completion with a function tool", check_completion_with_function_tool),
     ("embedding", check_embedding),
     ("bundled model metadata", check_bundled_model_metadata),
     ("token counter", check_token_counter),
@@ -189,8 +265,11 @@ def _run(check: Callable[[], str]) -> tuple[bool, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("legacy", "core", "dependencies"), default="legacy")
+    parser.add_argument("--profile", choices=("legacy", "core", "dependencies", "native"), default="legacy")
     profile = parser.parse_args().profile
+    if profile == "native":
+        print(check_native_extension())
+        return 0
     for module in ("boto3", "botocore", "tokenizers", "huggingface_hub"):
         present = importlib.util.find_spec(module) is not None
         _require(present == (profile != "core"), f"{profile}: unexpected presence of {module}: {present}")

@@ -1,31 +1,52 @@
-import asyncio, importlib, os
+import asyncio
+import contextlib
+import gzip
+import importlib
+import inspect
 import json
-from typing import Final
-from unittest.mock import AsyncMock, Mock, patch
+import os
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from types import ModuleType
+from typing import Final, Literal, Protocol
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
-from openai import AsyncOpenAI, OpenAI
+import respx
+from openai import AsyncOpenAI, AzureOpenAI, OpenAI
+from openai._legacy_response import LegacyAPIResponse
+from openai._types import Response as SDKResponse
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 import litellm
+from litellm import create_thread, get_thread
+from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.llms.openai.openai import (
     AssistantEventHandler,
     AsyncAssistantEventHandler,
     AsyncCursorPage,
     MessageData,
+    OpenAIBatchesAPI,
     OpenAIChatCompletion,
+    OpenAIConfig,
     OpenAIMessage as Message,
     Run,
     SyncCursorPage,
     Thread,
 )
-from litellm.types.utils import ImageResponse, ModelResponse
-from litellm import create_thread, get_thread
+from litellm.types.utils import (
+    ImageResponse,
+    ModelResponse,
+    PromptTokensDetails,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.rust_bridge.host.model_cost import publish
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from litellm.proxy.utils import model_dump_with_preserved_fields
 
 
 @pytest.mark.parametrize(
@@ -77,19 +98,48 @@ def test_get_stream_options_passes_caller_stream_options_through_on_any_host(api
     }
 
 
+@pytest.fixture(params=("httpx", "sdk"))
+def http_backend(request: pytest.FixtureRequest) -> ModuleType:
+    return importlib.import_module("httpx" if request.param == "httpx" else SDKResponse.__module__)
+
+
+@pytest.fixture(params=("openai", "perplexity", "cerebras", "nvidia_nim"))
+def sdk_provider(request: pytest.FixtureRequest) -> str:
+    return str(request.param)
+
+
+class _Request(Protocol):
+    @property
+    def content(self) -> bytes: ...
+
+    @property
+    def extensions(self) -> Mapping[str, object]: ...
+
+    @property
+    def url(self) -> object: ...
+
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+
+
 @pytest.mark.asyncio
-async def test_acompletion_returns_json_reply_over_injected_transport():
+async def test_acompletion_returns_json_reply_over_injected_transport(
+    http_backend: ModuleType, sdk_provider: str, monkeypatch: pytest.MonkeyPatch
+):
     outbound: Final = asyncio.Queue()
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
+        assert str(request.url) == f"https://{sdk_provider}.example/v1/chat/completions"
+        assert request.headers["authorization"] == f"Bearer {sdk_provider}-key"
+        assert request.extensions["timeout"] == {"connect": 7, "read": 7, "write": 7, "pool": 7}
         outbound.put_nowait(json.loads(request.content))
-        return httpx.Response(
+        return http_backend.Response(
             200,
             json={
                 "id": "chatcmpl-smoke",
                 "object": "chat.completion",
                 "created": 0,
-                "model": "gpt-5.6",
+                "model": "sdk-compat",
                 "choices": [
                     {
                         "index": 0,
@@ -101,6 +151,60 @@ async def test_acompletion_returns_json_reply_over_injected_transport():
             },
         )
 
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
+        response: Final = await asyncio.wait_for(
+            litellm.acompletion(
+                model=f"{sdk_provider}/sdk-compat",
+                api_key=f"{sdk_provider}-key",
+                api_base=f"https://{sdk_provider}.example/v1",
+                messages=[{"role": "user", "content": "smoke-json-request"}],
+                timeout=7,
+                num_retries=0,
+                max_retries=0,
+            ),
+            timeout=10,
+        )
+        request: Final = await asyncio.wait_for(outbound.get(), timeout=10)
+        assert request["model"] == "sdk-compat"
+        assert request["messages"] == [{"role": "user", "content": "smoke-json-request"}]
+        assert not request.get("stream")
+        assert outbound.empty()
+        assert response.choices[0].message.content == "smoke-json-reply"
+        assert response.choices[0].finish_reason == "stop"
+        assert response.usage.total_tokens == 15
+        assert not http_client.is_closed
+
+
+@pytest.mark.asyncio
+async def test_acompletion_returns_prompt_cache_details_over_injected_transport():
+    outbound: Final = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-cache",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "cached reply"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 4,
+                    "total_tokens": 16,
+                    "prompt_tokens_details": {"cached_tokens": 7},
+                },
+            },
+        )
+
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
         client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
         response: Final = await asyncio.wait_for(
@@ -108,24 +212,823 @@ async def test_acompletion_returns_json_reply_over_injected_transport():
                 model="openai/gpt-5.6",
                 api_key="transport-only",
                 client=client,
-                messages=[{"role": "user", "content": "smoke-json-request"}],
+                messages=[{"role": "user", "content": "cached prompt"}],
                 num_retries=0,
                 max_retries=0,
             ),
             timeout=10,
         )
-        request: Final = await asyncio.wait_for(outbound.get(), timeout=10)
-        assert request["model"] == "gpt-5.6"
-        assert request["messages"] == [{"role": "user", "content": "smoke-json-request"}]
-        assert not request.get("stream")
-        assert outbound.empty()
-        assert response.choices[0].message.content == "smoke-json-reply"
-        assert response.choices[0].finish_reason == "stop"
-        assert response.usage.total_tokens == 15
+
+    request_body: Final = await asyncio.wait_for(outbound.get(), timeout=10)
+    assert request_body == {
+        "messages": [{"role": "user", "content": "cached prompt"}],
+        "model": "gpt-5.6",
+    }
+    prompt_tokens_details: Final = response.usage.prompt_tokens_details
+    assert isinstance(prompt_tokens_details, PromptTokensDetails)
+    assert prompt_tokens_details.cached_tokens == 7
+
+
+_SDK_READS_OPENAI_ADMIN_KEY: Final = "admin_api_key" in inspect.signature(AsyncOpenAI.__init__).parameters
+
+
+@pytest.mark.skipif(not _SDK_READS_OPENAI_ADMIN_KEY, reason="openai<3 has no OPENAI_ADMIN_KEY fallback to leak")
+@pytest.mark.asyncio
+async def test_acompletion_never_sends_the_openai_admin_key_for_a_deployment_without_a_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_ADMIN_KEY", "sk-admin-only")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    outbound: Final = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(request.headers.get("authorization"))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-no-admin-key",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.4-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
+        with contextlib.suppress(litellm.AuthenticationError, litellm.InternalServerError):
+            await asyncio.wait_for(
+                litellm.acompletion(
+                    model="openai/gpt-5.4-mini",
+                    api_key="",
+                    messages=[{"role": "user", "content": "who signs this request"}],
+                    num_retries=0,
+                    max_retries=0,
+                ),
+                timeout=10,
+            )
+
+    sent: Final = tuple(outbound.get_nowait() for _ in range(outbound.qsize()))
+    assert all(authorization is None for authorization in sent), sent
+
+
+
+class _SearchingChatGate(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.runs = 0
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        return True, {"tool_calls": [{"id": "call-1"}]}
+
+
+class _FailingFollowUpChatLoop(_SearchingChatGate):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+        self.logging_objs: list[object] = []
+
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> object:
+        self.runs += 1
+        self.logging_objs.append(logging_obj)
+        raise self.error
+
+
+class _RaisingAgenticGate(CustomLogger):
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        raise ValueError("gate bug")
+
+
+class _AnsweringChatLoop(_SearchingChatGate):
+    async def async_run_chat_completion_agentic_loop(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> object:
+        self.runs += 1
+        return litellm.ModelResponse(
+            choices=[
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "after the search"}}
+            ]
+        )
+
+
+def _respond_with_a_search_tool_call(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "chatcmpl-search",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "gpt-5.6",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "litellm_web_search", "arguments": '{"query": "weather"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        },
+    )
+
+
+async def _acompletion_through(http_client: httpx.AsyncClient) -> object:
+    return await asyncio.wait_for(
+        litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_key="transport-only",
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            messages=[{"role": "user", "content": "search the web for the weather"}],
+            num_retries=0,
+            max_retries=0,
+        ),
+        timeout=10,
+    )
 
 
 @pytest.mark.asyncio
-async def test_acompletion_streams_text_deltas_over_injected_transport():
+async def test_acompletion_surfaces_a_failed_agentic_follow_up_instead_of_the_first_turn(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    follow_up_error: Final = litellm.RateLimitError(
+        message="follow-up rate limited", llm_provider="openai", model="gpt-5.6"
+    )
+    loop: Final = _FailingFollowUpChatLoop(follow_up_error)
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        with pytest.raises(litellm.RateLimitError) as raised:
+            await _acompletion_through(http_client)
+
+    assert raised.value.message == follow_up_error.message
+    assert loop.runs == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_agentic_follow_up_bills_the_first_call_on_the_failure_log(monkeypatch: pytest.MonkeyPatch):
+    loop: Final = _FailingFollowUpChatLoop(
+        litellm.RateLimitError(message="follow-up rate limited", llm_provider="openai", model="gpt-5.6")
+    )
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        with pytest.raises(litellm.RateLimitError):
+            await _acompletion_through(http_client)
+
+    (logging_obj,) = loop.logging_objs
+    price: Final = litellm.model_cost["gpt-5.6"]
+    assert logging_obj.model_call_details["combined_usage_object"].total_tokens == 8
+    assert logging_obj.model_call_details["response_cost"] == pytest.approx(
+        5 * price["input_cost_per_token"] + 3 * price["output_cost_per_token"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_does_not_resend_the_first_call_when_the_agentic_follow_up_answers_422(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    follow_up_error: Final = litellm.UnprocessableEntityError(
+        message="follow-up rejected",
+        model="gpt-5.6",
+        llm_provider="openai",
+        response=httpx.Response(422, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+    )
+    loop: Final = _FailingFollowUpChatLoop(follow_up_error)
+    monkeypatch.setattr(litellm, "callbacks", [loop])
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        with pytest.raises(litellm.UnprocessableEntityError) as raised:
+            await _acompletion_through(http_client)
+
+    assert raised.value.message == follow_up_error.message
+    assert loop.runs == 1
+
+
+def _rejecting_the_user_param(outbound: asyncio.Queue[dict[str, object]]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        outbound.put_nowait(body)
+        if "user" in body:
+            rejection: Final = json.dumps({"detail": [{"loc": ["body", "user"], "msg": "extra fields not permitted"}]})
+            return httpx.Response(422, json={"error": {"message": rejection}})
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-resent",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+            },
+        )
+
+    return httpx.MockTransport(respond)
+
+
+async def _acompletion_with_a_user_param(http_client: httpx.AsyncClient) -> object:
+    return await asyncio.wait_for(
+        litellm.acompletion(
+            model="openai/gpt-5.6",
+            api_key="transport-only",
+            client=AsyncOpenAI(api_key="transport-only", http_client=http_client),
+            messages=[{"role": "user", "content": "hi"}],
+            user="end-user-1",
+            num_retries=0,
+            max_retries=0,
+        ),
+        timeout=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_resends_without_the_param_a_422_rejects_when_drop_params_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "drop_params", True)
+    outbound: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+
+    async with httpx.AsyncClient(transport=_rejecting_the_user_param(outbound)) as http_client:
+        response: Final = await _acompletion_with_a_user_param(http_client)
+
+    assert response.choices[0].message.content == "done"
+    assert outbound.get_nowait()["user"] == "end-user-1"
+    assert "user" not in outbound.get_nowait()
+    assert outbound.empty()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_raises_a_422_without_resending_when_drop_params_is_off(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    outbound: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+
+    async with httpx.AsyncClient(transport=_rejecting_the_user_param(outbound)) as http_client:
+        with pytest.raises(litellm.BadRequestError, match="extra fields not permitted"):
+            await _acompletion_with_a_user_param(http_client)
+
+    assert outbound.get_nowait()["user"] == "end-user-1"
+    assert outbound.empty()
+
+
+@pytest.mark.asyncio
+async def test_acompletion_skips_a_failing_agentic_gate_and_runs_the_next_hook(monkeypatch: pytest.MonkeyPatch):
+    loop: Final = _AnsweringChatLoop()
+    monkeypatch.setattr(litellm, "callbacks", [_RaisingAgenticGate(), loop])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_respond_with_a_search_tool_call)) as http_client:
+        response = await _acompletion_through(http_client)
+
+    assert loop.runs == 1
+    assert response.choices[0].message.content == "after the search"
+
+
+class _SearchAgainLoop(CustomLogger):
+    def __init__(self, client: AsyncOpenAI) -> None:
+        super().__init__()
+        self._client = client
+
+    async def async_should_run_chat_completion_agentic_loop(
+        self,
+        response: object,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        searches: Final = [
+            {"id": call.id, "name": call.function.name}
+            for call in response.choices[0].message.tool_calls or []
+            if call.function.name == "litellm_web_search"
+        ]
+        return bool(searches), {"tool_calls": searches}
+
+    async def async_build_chat_completion_agentic_loop_plan(
+        self,
+        tools: Mapping[str, object],
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        response: object,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        stream: bool,
+        kwargs: Mapping[str, object],
+    ) -> AgenticLoopPlan:
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[*messages, {"role": "user", "content": "here are the search results"}],
+                kwargs={"client": self._client},
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_acompletion_ends_the_turn_at_max_agentic_loops_without_the_internal_search_call(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    upstream_calls: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+
+    def always_search(request: httpx.Request) -> httpx.Response:
+        upstream_calls.put_nowait(request)
+        return _respond_with_a_search_tool_call(request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(always_search)) as http_client:
+        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        monkeypatch.setattr(litellm, "callbacks", [_SearchAgainLoop(client)])
+        response: Final = await asyncio.wait_for(
+            litellm.acompletion(
+                model="openai/gpt-5.6",
+                api_key="transport-only",
+                client=client,
+                messages=[{"role": "user", "content": "search the web for the weather"}],
+                max_agentic_loops=1,
+                num_retries=0,
+                max_retries=0,
+            ),
+            timeout=10,
+        )
+
+    assert upstream_calls.qsize() == 2
+    assert not response.choices[0].message.tool_calls
+
+
+_REASONING_TOOL_CALL_REPLY: Final = {
+    "id": "chatcmpl-fake-stream",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "o4-mini",
+    "choices": [
+        {
+            "index": 0,
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                    },
+                    {
+                        "id": "call_time",
+                        "type": "function",
+                        "function": {"name": "get_time", "arguments": '{"city": "Paris"}'},
+                    },
+                ],
+            },
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 85,
+        "completion_tokens": 1955,
+        "total_tokens": 2040,
+        "prompt_tokens_details": {"cached_tokens": 64},
+        "completion_tokens_details": {"reasoning_tokens": 1920},
+    },
+}
+
+
+def test_azure_o_series_fake_stream_keeps_every_tool_call_and_token_detail():
+    request_bodies: Final[list[dict[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        request_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json=_REASONING_TOOL_CALL_REPLY)
+
+    client: Final = AzureOpenAI(
+        api_key="transport-only",
+        api_version="2025-03-01-preview",
+        azure_endpoint="https://fake-stream.openai.azure.com",
+        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
+    )
+    chunks: Final = list(
+        litellm.completion(
+            model="azure/o_series/reasoning-deployment",
+            api_key="transport-only",
+            api_version="2025-03-01-preview",
+            api_base="https://fake-stream.openai.azure.com",
+            client=client,
+            messages=[{"role": "user", "content": "weather and time in Paris?"}],
+            stream=True,
+            stream_options={"include_usage": True},
+            num_retries=0,
+        )
+    )
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+
+    assert [body.get("stream") for body in request_bodies] == [None]
+    assert rebuilt is not None
+    assert rebuilt.choices[0].finish_reason == "tool_calls"
+    assert [call.function.name for call in rebuilt.choices[0].message.tool_calls] == ["get_weather", "get_time"]
+    assert rebuilt.usage.prompt_tokens_details.cached_tokens == 64
+    assert rebuilt.usage.completion_tokens_details.reasoning_tokens == 1920
+
+
+@respx.mock
+def test_completion_defaults_missing_message_role_and_preserves_omitted_fields() -> None:
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-missing-role",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.4",
+                "choices": [{"index": 0, "message": {"content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="openai/gpt-5.4",
+        api_base="https://api.openai.com/v1",
+        api_key="sk-test",
+        messages=[{"role": "user", "content": "Hi"}],
+        num_retries=0,
+    )
+
+    assert route.called
+    assert response.choices[0].message.role == "assistant"
+    assert model_dump_with_preserved_fields(response, exclude_unset=True) == {
+        "id": "chatcmpl-missing-role",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "hi", "role": "assistant"},
+                "provider_specific_fields": {},
+            }
+        ],
+        "created": 1,
+        "model": "gpt-5.4",
+        "object": "chat.completion",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected_error"),
+    (
+        (400, litellm.BadRequestError),
+        (429, litellm.RateLimitError),
+        (503, litellm.ServiceUnavailableError),
+        (None, litellm.Timeout),
+    ),
+)
+async def test_acompletion_preserves_public_errors_for_both_http_clients(
+    http_backend: ModuleType,
+    sdk_provider: str,
+    status: int | None,
+    expected_error: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
+        if status is None:
+            raise http_backend.ReadTimeout("upstream timeout", request=request)
+        return http_backend.Response(status, json={"error": {"message": "upstream failure", "type": "api_error"}})
+
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
+        with pytest.raises(expected_error, match="timed out" if status is None else "upstream failure"):
+            await litellm.acompletion(
+                model=f"{sdk_provider}/sdk-compat",
+                api_key=f"{sdk_provider}-key",
+                api_base=f"https://{sdk_provider}.example/v1",
+                messages=[{"role": "user", "content": "request"}],
+                num_retries=0,
+                max_retries=0,
+            )
+        assert not http_client.is_closed
+
+
+_UPSTREAM_ERROR_BODY: Final = (
+    '{"error":{"message":"upstream rejected the request","type":"invalid_request_error",'
+    '"param":"response_format.type","code":"invalid_value"}}'
+)
+_UPSTREAM_BASE: Final = "https://upstream.example/v1"
+_UPSTREAM_TRANSPORT: Final = httpx.MockTransport(
+    lambda _request: httpx.Response(
+        400,
+        content=_UPSTREAM_ERROR_BODY,
+        headers={"x-request-id": "req_upstream_400", "x-upstream-trace": "trace-7", "content-type": "application/json"},
+    )
+)
+_MESSAGES: Final = [{"role": "user", "content": "hi"}]
+
+
+def _rejecting_client() -> OpenAI:
+    return OpenAI(
+        api_key="transport-only",
+        base_url=_UPSTREAM_BASE,
+        max_retries=0,
+        http_client=httpx.Client(transport=_UPSTREAM_TRANSPORT),
+    )
+
+
+def _rejecting_async_client() -> AsyncOpenAI:
+    return AsyncOpenAI(
+        api_key="transport-only",
+        base_url=_UPSTREAM_BASE,
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=_UPSTREAM_TRANSPORT),
+    )
+
+
+def _upstream(provider: str, model: str) -> dict[str, object]:
+    return {"model": f"{provider}/{model}", "api_base": _UPSTREAM_BASE, "api_key": "transport-only", "num_retries": 0}
+
+
+async def _completion(provider: str) -> None:
+    litellm.completion(messages=_MESSAGES, client=_rejecting_client(), **_upstream(provider, "gpt-5.6"))
+
+
+async def _completion_stream(provider: str) -> None:
+    stream: Final = litellm.completion(
+        messages=_MESSAGES, client=_rejecting_client(), stream=True, **_upstream(provider, "gpt-5.6")
+    )
+    list(stream)
+
+
+async def _acompletion(provider: str) -> None:
+    await litellm.acompletion(messages=_MESSAGES, client=_rejecting_async_client(), **_upstream(provider, "gpt-5.6"))
+
+
+async def _acompletion_stream(provider: str) -> None:
+    stream: Final = await litellm.acompletion(
+        messages=_MESSAGES, client=_rejecting_async_client(), stream=True, **_upstream(provider, "gpt-5.6")
+    )
+    async for _ in stream:
+        pass
+
+
+async def _embedding(provider: str) -> None:
+    litellm.embedding(input=["hi"], client=_rejecting_client(), **_upstream(provider, "text-embedding-3-large"))
+
+
+async def _aembedding(provider: str) -> None:
+    await litellm.aembedding(
+        input=["hi"], client=_rejecting_async_client(), **_upstream(provider, "text-embedding-3-large")
+    )
+
+
+async def _image_generation(provider: str) -> None:
+    litellm.image_generation(prompt="a cat", client=_rejecting_client(), **_upstream(provider, "gpt-image-2"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
+@pytest.mark.parametrize(
+    "route",
+    (_completion, _completion_stream, _acompletion, _acompletion_stream, _embedding, _aembedding, _image_generation),
+    ids=lambda route: route.__name__.lstrip("_"),
+)
+async def test_mapped_error_carries_the_upstream_error_response(
+    provider: str, route: Callable[[str], Awaitable[None]]
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await route(provider)
+
+    assert raised.value.response.text == _UPSTREAM_ERROR_BODY
+    assert raised.value.response.json() == json.loads(_UPSTREAM_ERROR_BODY)
+    assert raised.value.response.headers["x-request-id"] == "req_upstream_400"
+    assert raised.value.response.headers["x-upstream-trace"] == "trace-7"
+
+
+_UPSTREAM_SERVER_ERROR_BODY: Final = (
+    '{"error":{"message":"The server had an error while processing your request.","type":"server_error",'
+    '"param":null,"code":null}}'
+)
+_CHUNKED_UPSTREAM_HEADERS: Final = {
+    "content-type": "application/json",
+    "transfer-encoding": "chunked",
+    "x-request-id": "req_upstream_5xx",
+}
+
+
+def _chunked_upstream_client(status_code: int, content_encoding: Literal["gzip"] | None) -> httpx.AsyncClient:
+    body: Final = _UPSTREAM_SERVER_ERROR_BODY.encode()
+    encoding_headers: Final = {"content-encoding": content_encoding} if content_encoding else {}
+    return httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                status_code,
+                headers={**_CHUNKED_UPSTREAM_HEADERS, **encoding_headers},
+                stream=httpx.ByteStream(gzip.compress(body) if content_encoding else body),
+            )
+        )
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize(
+    ("status_code", "mapped_error"),
+    (
+        (429, litellm.RateLimitError),
+        (500, litellm.InternalServerError),
+        (502, litellm.BadGatewayError),
+        (503, litellm.ServiceUnavailableError),
+    ),
+)
+@pytest.mark.parametrize("content_encoding", (None, "gzip"))
+async def test_retryable_error_keeps_the_decoded_upstream_body_and_its_headers(
+    provider: str,
+    stream: bool,
+    status_code: int,
+    mapped_error: type[Exception],
+    content_encoding: Literal["gzip"] | None,
+) -> None:
+    client: Final = AsyncOpenAI(
+        api_key="transport-only",
+        base_url=_UPSTREAM_BASE,
+        max_retries=0,
+        http_client=_chunked_upstream_client(status_code, content_encoding),
+    )
+
+    with pytest.raises(mapped_error) as raised:
+        await litellm.acompletion(messages=_MESSAGES, client=client, stream=stream, **_upstream(provider, "gpt-5.6"))
+
+    error_response: Final = getattr(raised.value, "response")
+    assert error_response.status_code == status_code
+    assert error_response.text == _UPSTREAM_SERVER_ERROR_BODY
+    assert error_response.json() == json.loads(_UPSTREAM_SERVER_ERROR_BODY)
+    assert dict(error_response.headers) == {
+        **_CHUNKED_UPSTREAM_HEADERS,
+        **({"content-encoding": content_encoding} if content_encoding else {}),
+    }
+
+
+_REFUSAL_BODY: Final = '{"error":{"message":"upstream refused","type":"upstream_refusal","param":null,"code":null}}'
+_GATEWAY_TIMEOUT_BODY: Final = (
+    '{"error":{"message":"litellm.Timeout: APITimeoutError - Request timed out.","type":"invalid_request_error",'
+    '"param":null,"code":"408"}}'
+)
+_PROVIDER_KEY: Final = "sk-provider-secret"
+_QUERY_SECRET: Final = "query-secret"
+
+
+@pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
+@pytest.mark.parametrize(
+    ("status_code", "mapped_error", "body"),
+    (
+        (400, litellm.BadRequestError, _REFUSAL_BODY),
+        (403, litellm.APIError, _REFUSAL_BODY),
+        (408, litellm.Timeout, _REFUSAL_BODY),
+        (408, litellm.Timeout, _GATEWAY_TIMEOUT_BODY),
+        (409, litellm.APIError, _REFUSAL_BODY),
+        (413, litellm.APIError, _REFUSAL_BODY),
+        (429, litellm.RateLimitError, _REFUSAL_BODY),
+        (500, litellm.InternalServerError, _REFUSAL_BODY),
+        (504, litellm.Timeout, _REFUSAL_BODY),
+    ),
+)
+def test_mapped_error_keeps_the_upstream_body_without_the_provider_credentials(
+    provider: str, status_code: int, mapped_error: type[Exception], body: str
+) -> None:
+    client: Final = OpenAI(
+        api_key=_PROVIDER_KEY,
+        base_url=_UPSTREAM_BASE,
+        default_query={"key": _QUERY_SECRET},
+        max_retries=0,
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _request: httpx.Response(
+                    status_code, content=body, headers={"content-type": "application/json"}
+                )
+            )
+        ),
+    )
+
+    with pytest.raises(mapped_error) as raised:
+        litellm.completion(
+            model=f"{provider}/gpt-5.6",
+            messages=_MESSAGES,
+            client=client,
+            api_base=_UPSTREAM_BASE,
+            api_key=_PROVIDER_KEY,
+            num_retries=0,
+        )
+
+    error_response: Final = getattr(raised.value, "response")
+    assert error_response.status_code == status_code
+    assert error_response.text == body
+    assert error_response.json() == json.loads(body)
+    assert str(error_response.request.url) == f"{_UPSTREAM_BASE}/chat/completions"
+    for exposed in (error_response.request, getattr(raised.value, "request")):
+        assert _QUERY_SECRET not in str(exposed.url)
+        assert _PROVIDER_KEY not in str(exposed.headers)
+        assert exposed.content == b""
+
+
+def _time_out(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("no reply", request=request)
+
+
+async def _sync_completion_timing_out(provider: str) -> None:
+    litellm.completion(
+        model=f"{provider}/gpt-5.6",
+        messages=_MESSAGES,
+        client=OpenAI(
+            api_key=_PROVIDER_KEY,
+            base_url=_UPSTREAM_BASE,
+            max_retries=0,
+            http_client=httpx.Client(transport=httpx.MockTransport(_time_out)),
+        ),
+        api_base=_UPSTREAM_BASE,
+        api_key=_PROVIDER_KEY,
+        num_retries=0,
+    )
+
+
+async def _async_stream_timing_out(provider: str) -> None:
+    stream: Final = await litellm.acompletion(
+        model=f"{provider}/gpt-5.6",
+        messages=_MESSAGES,
+        stream=True,
+        client=AsyncOpenAI(
+            api_key=_PROVIDER_KEY,
+            base_url=_UPSTREAM_BASE,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(_time_out)),
+        ),
+        api_base=_UPSTREAM_BASE,
+        api_key=_PROVIDER_KEY,
+        num_retries=0,
+    )
+    async for _ in stream:
+        pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ("openai", "litellm_proxy"))
+@pytest.mark.parametrize("call", (_sync_completion_timing_out, _async_stream_timing_out))
+async def test_timeout_before_any_reply_has_no_upstream_response(
+    provider: str, call: Callable[[str], Awaitable[None]]
+) -> None:
+    with pytest.raises(litellm.Timeout) as raised:
+        await call(provider)
+
+    assert getattr(raised.value, "response", None) is None
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streams_text_deltas_over_injected_transport(
+    http_backend: ModuleType, sdk_provider: str, monkeypatch: pytest.MonkeyPatch
+):
     outbound: Final = asyncio.Queue()
 
     def chunk(delta: dict, finish: str | None) -> bytes:
@@ -133,18 +1036,18 @@ async def test_acompletion_streams_text_deltas_over_injected_transport():
             "id": "chatcmpl-smoke",
             "object": "chat.completion.chunk",
             "created": 0,
-            "model": "gpt-5.6",
+            "model": "sdk-compat",
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
         }
         return f"data: {json.dumps(body)}\n\n".encode()
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
         outbound.put_nowait(json.loads(request.content))
         usage: Final = {
             "id": "chatcmpl-smoke",
             "object": "chat.completion.chunk",
             "created": 0,
-            "model": "gpt-5.6",
+            "model": "sdk-compat",
             "choices": [],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         }
@@ -156,14 +1059,14 @@ async def test_acompletion_streams_text_deltas_over_injected_transport():
                 b"data: [DONE]\n\n",
             )
         )
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
+        return http_backend.Response(200, headers={"content-type": "text/event-stream"}, content=content)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
-        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
+        monkeypatch.setattr(litellm, "aclient_session", http_client)
         stream: Final = await litellm.acompletion(
-            model="openai/gpt-5.6",
-            api_key="transport-only",
-            client=client,
+            model=f"{sdk_provider}/sdk-compat",
+            api_key=f"{sdk_provider}-key",
+            api_base=f"https://{sdk_provider}.example/v1",
             messages=[{"role": "user", "content": "smoke-stream-request"}],
             stream=True,
             num_retries=0,
@@ -190,7 +1093,7 @@ async def test_acompletion_streams_text_deltas_over_injected_transport():
 
 
 @pytest.mark.asyncio
-async def test_acompletion_streams_tool_call_arguments_over_injected_transport():
+async def test_acompletion_streams_tool_call_arguments_over_injected_transport(http_backend: ModuleType):
     outbound: Final = asyncio.Queue()
     tools: Final = [
         {
@@ -217,7 +1120,8 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport()
         }
         return f"data: {json.dumps(body)}\n\n".encode()
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
+        assert request.extensions["timeout"] == {"connect": 1, "read": None, "write": 2, "pool": 3}
         outbound.put_nowait(json.loads(request.content))
         content: Final = b"".join(
             (
@@ -239,9 +1143,9 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport()
                 b"data: [DONE]\n\n",
             )
         )
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
+        return http_backend.Response(200, headers={"content-type": "text/event-stream"}, content=content)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
         client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
         messages: Final = [{"role": "user", "content": "weather in Paris"}]
         stream: Final = await litellm.acompletion(
@@ -251,6 +1155,7 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport()
             messages=messages,
             tools=tools,
             stream=True,
+            timeout=http_backend.Timeout(connect=1, read=None, write=2, pool=3),
             num_retries=0,
             max_retries=0,
         )
@@ -271,6 +1176,506 @@ async def test_acompletion_streams_tool_call_arguments_over_injected_transport()
         assert tool_call.function.name == "get_weather"
         assert json.loads(tool_call.function.arguments) == {"city": "Paris"}
         assert rebuilt.choices[0].finish_reason == "tool_calls"
+
+
+def _openai_sse_chunk(chunk_id: str, model: str, choices: list[JsonValue]) -> bytes:
+    body: Final[dict[str, JsonValue]] = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": choices,
+    }
+    return f"data: {json.dumps(body)}\n\n".encode()
+
+
+def _openai_sse_usage_chunk(chunk_id: str, model: str, *, prompt_tokens: int, completion_tokens: int) -> bytes:
+    body: Final[dict[str, JsonValue]] = {
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        },
+    }
+    return f"data: {json.dumps(body)}\n\n".encode()
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("model", ["o1", "o3-mini"])
+def test_o1_parallel_tool_calls_are_dropped_for_unsupported_models(respx_mock: respx.MockRouter, model: str) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-o-series",
+                "object": "chat.completion",
+                "created": 0,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "done"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "foo"}],
+        parallel_tool_calls=True,
+        drop_params=True,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert request_body == {"model": model, "messages": [{"role": "user", "content": "foo"}]}
+    assert response.choices[0].message.content == "done"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_prediction_parameter_participates_in_completion_cache_key(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        request_body: Final = json.loads(request.content)
+        prediction_content: Final = request_body["prediction"]["content"]
+        response_id: Final = (
+            "chatcmpl-prediction-one" if prediction_content == "prediction one" else "chatcmpl-prediction-two"
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": response_id,
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": prediction_content},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=respond)
+    messages: Final = [{"role": "user", "content": "replace the username"}]
+    first_prediction: Final = {"type": "content", "content": "prediction one"}
+    second_prediction: Final = {"type": "content", "content": "prediction two"}
+
+    first: Final = litellm.completion(
+        model="gpt-4o",
+        messages=messages,
+        prediction=first_prediction,
+        caching=True,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    cached: Final = litellm.completion(
+        model="gpt-4o",
+        messages=messages,
+        prediction=first_prediction,
+        caching=True,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    distinct: Final = litellm.completion(
+        model="gpt-4o",
+        messages=messages,
+        prediction=second_prediction,
+        caching=True,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    request_bodies: Final = tuple(json.loads(call.request.content) for call in route.calls)
+
+    assert first.id == cached.id == "chatcmpl-prediction-one"
+    assert distinct.id == "chatcmpl-prediction-two"
+    assert route.call_count == 2
+    assert request_bodies == (
+        {"model": "gpt-4o", "messages": messages, "prediction": first_prediction},
+        {"model": "gpt-4o", "messages": messages, "prediction": second_prediction},
+    )
+
+
+class _OpenAIFunction(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    description: str | None = None
+    name: str
+    parameters: dict[str, JsonValue] | None = None
+
+
+class _OpenAITool(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["function"]
+    function: _OpenAIFunction
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_openai_tool_calling_sends_schema_and_parses_function_call(respx_mock: respx.MockRouter) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_price",
+                "description": "Get the current stock price for a given ticker symbol.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"ticker": {"type": "string", "description": "The stock ticker symbol."}},
+                    "required": ["ticker"],
+                },
+            },
+        }
+    ]
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-tool-call",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4.1",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-tsla",
+                                    "type": "function",
+                                    "function": {"name": "get_stock_price", "arguments": '{"ticker":"TSLA"}'},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 3, "total_tokens": 11},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="openai/gpt-4.1",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "What is TSLA stock price at today?"}]}],
+        temperature=0.5,
+        max_tokens=1600,
+        tools=[_OpenAITool.model_validate(tool) for tool in tools],
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+    tool_call: Final = response.choices[0].message.tool_calls[0]
+
+    assert request_body == {
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "What is TSLA stock price at today?"}]}],
+        "temperature": 0.5,
+        "max_tokens": 1600,
+        "tools": tools,
+    }
+    assert (tool_call.id, tool_call.function.name, tool_call.function.arguments) == (
+        "call-tsla",
+        "get_stock_price",
+        '{"ticker":"TSLA"}',
+    )
+    assert response.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    stream_body: Final = b"".join(
+        (
+            _openai_sse_chunk(
+                "chatcmpl-bridge",
+                "gpt-3.5-turbo",
+                [{"index": 0, "delta": {"role": "assistant", "content": "A starship "}, "finish_reason": None}],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-bridge",
+                "gpt-3.5-turbo",
+                [{"index": 0, "delta": {"content": "crossed the sky."}, "finish_reason": None}],
+            ),
+            _openai_sse_chunk("chatcmpl-bridge", "gpt-3.5-turbo", [{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+            _openai_sse_usage_chunk("chatcmpl-bridge", "gpt-3.5-turbo", prompt_tokens=12, completion_tokens=6),
+            b"data: [DONE]\n\n",
+        )
+    )
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-3.5-turbo",
+                "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "sk-openai-test"},
+            }
+        ]
+    )
+
+    stream: Final = await router.agenerate_content_stream(
+        model="openai/gpt-3.5-turbo",
+        contents=[{"parts": [{"text": "Write a long story about space exploration"}], "role": "user"}],
+        generationConfig={"maxOutputTokens": 500},
+    )
+    chunks: Final = tuple([json.loads(chunk.removeprefix(b"data: ")) async for chunk in stream])
+
+    assert json.loads(route.calls[0].request.content) == {
+        "messages": [{"role": "user", "content": "Write a long story about space exploration"}],
+        "model": "gpt-3.5-turbo",
+        "max_tokens": 500,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    assert chunks == (
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "A starship "}], "role": "model"},
+                    "finishReason": None,
+                    "index": 0,
+                    "safetyRatings": [],
+                }
+            ]
+        },
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "crossed the sky."}], "role": "model"},
+                    "finishReason": None,
+                    "index": 0,
+                    "safetyRatings": [],
+                }
+            ]
+        },
+        {
+            "candidates": [
+                {"content": {"parts": [], "role": "model"}, "finishReason": "STOP", "index": 0, "safetyRatings": []}
+            ],
+            "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 6, "totalTokenCount": 18},
+        },
+    )
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_streaming_content_with_n_greater_than_one_preserves_choice_indices(
+    respx_mock: respx.MockRouter,
+) -> None:
+    stream_body: Final = b"".join(
+        (
+            _openai_sse_chunk(
+                "chatcmpl-n-content",
+                "gpt-4o",
+                [{"index": 0, "delta": {"role": "assistant", "content": "Hello"}, "finish_reason": None}],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-content",
+                "gpt-4o",
+                [{"index": 1, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}],
+            ),
+            _openai_sse_chunk("chatcmpl-n-content", "gpt-4o", [{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+            _openai_sse_chunk("chatcmpl-n-content", "gpt-4o", [{"index": 1, "delta": {}, "finish_reason": "stop"}]),
+            b"data: [DONE]\n\n",
+        )
+    )
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+    response: Final = litellm.completion(
+        model="openai/gpt-4o",
+        messages=[{"role": "user", "content": "Say hello in one word"}],
+        stream=True,
+        n=2,
+        max_tokens=10,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    chunks: Final = tuple(response)
+    request_body: Final = json.loads(route.calls[0].request.content)
+    indices: Final = tuple(chunk.choices[0].index for chunk in chunks if chunk.choices)
+    content_by_index: Final = {
+        index: "".join(
+            chunk.choices[0].delta.content or ""
+            for chunk in chunks
+            if chunk.choices and chunk.choices[0].index == index
+        )
+        for index in (0, 1)
+    }
+
+    assert route.call_count == 1
+    assert request_body == {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "Say hello in one word"}],
+        "stream": True,
+        "n": 2,
+        "max_tokens": 10,
+        "stream_options": {"include_usage": True},
+    }
+    assert frozenset(indices) == frozenset({0, 1})
+    assert content_by_index == {0: "Hello", 1: "Hi"}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_streaming_tool_calls_with_n_greater_than_one_preserves_choice_indices(
+    respx_mock: respx.MockRouter,
+) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location", "unit"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    stream_body: Final = b"".join(
+        (
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-0",
+                                    "type": "function",
+                                    "function": {"name": "get_current_weather", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [
+                    {
+                        "index": 1,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {"name": "get_current_weather", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [{"index": 1, "delta": {}, "finish_reason": "tool_calls"}],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [
+                    {
+                        "index": 2,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-2",
+                                    "type": "function",
+                                    "function": {"name": "get_current_weather", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            ),
+            _openai_sse_chunk(
+                "chatcmpl-n-tools",
+                "gpt-4o",
+                [{"index": 2, "delta": {}, "finish_reason": "tool_calls"}],
+            ),
+            b"data: [DONE]\n\n",
+        )
+    )
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+    response: Final = litellm.completion(
+        model="openai/gpt-4o",
+        messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+        tools=tools,
+        stream=True,
+        n=3,
+        api_key="sk-openai-test",
+        num_retries=0,
+        max_retries=0,
+    )
+    chunks: Final = tuple(response)
+    request_body: Final = json.loads(route.calls[0].request.content)
+    indices: Final = tuple(chunk.choices[0].index for chunk in chunks if chunk.choices)
+
+    assert route.call_count == 1
+    assert request_body == {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "What is the weather in San Francisco?"}],
+        "tools": tools,
+        "stream": True,
+        "n": 3,
+        "stream_options": {"include_usage": True},
+    }
+    assert frozenset(indices) == frozenset({0, 1, 2})
 
 
 _PROVIDER_HEADERS: Final = {"x-request-id": "req_openai", "x-ratelimit-remaining-requests": "41"}
@@ -425,7 +1830,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -916,7 +2321,7 @@ async def test_openai_prediction_param_mock():
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -935,7 +2340,7 @@ async def test_openai_prediction_param_mock():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the prediction parameter
         assert "prediction" in request_body
@@ -947,10 +2352,12 @@ async def test_openai_prediction_param_mock():
 def test_openai_max_retries_0(mock_get_openai_client):
     import litellm
 
-    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.headers = {}
-    mock_get_openai_client.return_value.chat.completions.with_raw_response.create.return_value.parse.return_value = (
-        ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
-    )
+    raw_response: Final = MagicMock(spec=LegacyAPIResponse)
+    raw_response.headers = {}
+    raw_response.parse.return_value = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Hello"}}])
+    client_stub: Final = MagicMock()
+    client_stub.post.return_value = raw_response
+    mock_get_openai_client.return_value = client_stub
     litellm.set_verbose = True
     response = litellm.completion(
         model="gpt-4o-mini",
@@ -1059,7 +2466,7 @@ async def test_openai_safety_identifier_parameter():
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -1072,7 +2479,7 @@ async def test_openai_safety_identifier_parameter():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the safety_identifier parameter
         assert "safety_identifier" in request_body
@@ -1088,7 +2495,7 @@ def test_openai_safety_identifier_parameter_sync():
     client = OpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             litellm.completion(
@@ -1101,7 +2508,7 @@ def test_openai_safety_identifier_parameter_sync():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the safety_identifier parameter
         assert "safety_identifier" in request_body
@@ -1118,7 +2525,7 @@ async def test_openai_service_tier_parameter():
     client = AsyncOpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             await litellm.acompletion(
@@ -1131,7 +2538,7 @@ async def test_openai_service_tier_parameter():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
@@ -1149,7 +2556,7 @@ def test_openai_service_tier_parameter_sync():
     client = OpenAI(api_key="fake-api-key")
 
     with patch.object(
-        client.chat.completions.with_raw_response, "create"
+        client, "post"
     ) as mock_client:
         try:
             litellm.completion(
@@ -1162,7 +2569,7 @@ def test_openai_service_tier_parameter_sync():
             print(f"Error: {e}")
 
         mock_client.assert_called_once()
-        request_body = mock_client.call_args.kwargs
+        request_body = mock_client.call_args.kwargs["body"]
 
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
@@ -1194,3 +2601,140 @@ def test_responses_gpt54_with_xhigh_reasoning():
         assert request_body["model"] == "openai/gpt-5.4"
 
         assert request_body["reasoning"] == {"effort": "xhigh"}
+
+
+_CHAT_RESPONSE_JSON: Final = {
+    "id": "chatcmpl-wire",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5.4",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+_WIRE_REQUEST: Final = {
+    "model": "gpt-5.4",
+    "messages": [
+        {"role": "system", "content": "sys"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is in the image"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/a.png", "detail": "low"}},
+            ],
+        },
+    ],
+    "tools": [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}],
+    "tool_choice": "auto",
+    "response_format": {"type": "json_schema", "json_schema": {"name": "r", "schema": {"type": "object"}}},
+    "max_completion_tokens": 7,
+    "reasoning_effort": "none",
+    "n": 2,
+    "seed": 3,
+}
+
+
+@pytest.mark.parametrize("is_async", (False, True))
+@respx.mock
+async def test_chat_completion_sends_the_caller_params_extra_body_and_extra_headers_unchanged(
+    is_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_RESPONSE_JSON)
+    )
+    kwargs: Final = {
+        **_WIRE_REQUEST,
+        "model": "openai/gpt-5.4",
+        "api_base": "https://api.openai.com/v1",
+        "api_key": "sk-test",
+        "num_retries": 0,
+        "extra_body": {"vendor_flag": True},
+        "extra_headers": {"x-caller": "unit"},
+    }
+
+    if is_async:
+        await litellm.acompletion(**kwargs)
+    else:
+        litellm.completion(**kwargs)
+
+    sent: Final = route.calls.last.request
+    assert json.loads(sent.content) == {**_WIRE_REQUEST, "vendor_flag": True}
+    assert sent.headers["x-caller"] == "unit"
+    assert sent.headers["authorization"] == "Bearer sk-test"
+
+
+def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "developer", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "api_base", "declared", "expected_roles"),
+    [
+        ("openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
+        ("azure_ai", "https://example.services.ai.azure.com/models", None, ["system", "user", "assistant", "system", "user"]),
+        ("azure_ai", "https://example.services.ai.azure.com/models", False, ["system", "user", "assistant", "user"]),
+    ],
+)
+def test_openai_config_hoists_a_later_developer_message_only_for_a_model_off_openai_that_rejects_it(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+    custom_llm_provider: str,
+    api_base: str,
+    declared: bool | None,
+    expected_roles: list[str],
+) -> None:
+    if declared is not None:
+        declare_mid_conversation_system(f"{custom_llm_provider}/system-first-model", declared)
+    messages: Final = OpenAIConfig().translate_developer_role_to_system_role(
+        messages=_developer_message_after_a_user_turn(),
+        model="system-first-model",
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        model_info=None,
+    )
+    assert [message["role"] for message in messages] == expected_roles
+
+
+@pytest.mark.asyncio
+async def test_sync_batch_list_given_an_async_client_returns_a_page_the_caller_can_await(
+    http_backend: ModuleType,
+):
+    def respond(request: _Request) -> httpx.Response | SDKResponse:
+        assert str(request.url).startswith("http://vllm-router.test/v1/batches")
+        return http_backend.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [
+                    {
+                        "id": "batch_5f8dac",
+                        "status": "pending",
+                        "input_file_id": "file-b73f4c",
+                        "created_at": 1793239207,
+                        "endpoint": "/v1/chat/completions",
+                        "completion_window": "24h",
+                    }
+                ],
+                "first_id": "batch_5f8dac",
+                "last_id": "batch_5f8dac",
+                "has_more": False,
+            },
+        )
+
+    async with http_backend.AsyncClient(transport=http_backend.MockTransport(respond)) as http_client:
+        page: Final = OpenAIBatchesAPI().list_batches(
+            _is_async=False,
+            api_key="sk-test",
+            api_base="http://vllm-router.test/v1",
+            timeout=5.0,
+            max_retries=0,
+            organization=None,
+            client=AsyncOpenAI(api_key="sk-test", base_url="http://vllm-router.test/v1", http_client=http_client),
+        )
+
+        assert [(batch.id, batch.status) for batch in (await page).data] == [("batch_5f8dac", "pending")]

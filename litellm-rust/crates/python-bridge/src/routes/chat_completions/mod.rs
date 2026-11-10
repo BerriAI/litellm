@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use host::ChatCompletionsPythonHost;
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, ScopedCache};
+use litellm_cache_response::CachePolicy;
 use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_host::{call::HostedMachine, protocol::Protocol};
 use litellm_inference_chat::{ChatCompletionsRoute, route::ChatCompletions};
@@ -22,8 +22,8 @@ fn run_chat_completions(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let host = InferenceHost::new(
-        call.resolved()?.unbind(),
-        "litellm.rust_bridge.chat_completions.route_host",
+        call.view()?,
+        "litellm.rust_bridge.host.routes.chat_completions",
     );
     run_inference::<ChatCompletionsRoute, _>(
         py,
@@ -55,10 +55,6 @@ impl InferenceRoute for ChatCompletionsRoute {
         secrets: Arc<dyn SecretSource>,
     ) -> Self {
         Self::new(http, auth, secrets)
-    }
-
-    fn with_cache(self, cache: ScopedCache) -> Self {
-        self.with_cache(cache)
     }
 
     fn machine(

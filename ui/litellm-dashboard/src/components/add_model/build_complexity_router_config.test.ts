@@ -141,6 +141,9 @@ describe("buildComplexityRouterConfig", () => {
     { model: "   " },
     { provider: "laya" as const, model: "unsupported" },
     { provider: "bespoke" as const, model: "unsupported" },
+    { provider: "databricks" as const, model: "" },
+    { provider: "databricks" as const, model: "serving-endpoints/openjev" },
+    { provider: "databricks" as const, model: ".." },
     { timeout_ms: 0 },
     { timeout_ms: 1.5 },
     { timeout_ms: Number.NaN },
@@ -159,6 +162,8 @@ describe("buildComplexityRouterConfig", () => {
     ["bespoke", "nimble-latest"],
     ["bespoke", "nimble"],
     ["bespoke", "bespokelabs/Bespoke-Nimble-9B"],
+    ["databricks", "databricks-openjev-qwen35-4b"],
+    ["databricks", "ai_decide"],
     ["jev", "custom-jev-model"],
     [undefined, "custom-jev-model"],
   ] as const)("accepts %s model %s before saving or testing", (provider, model) => {
@@ -177,6 +182,8 @@ describe("buildComplexityRouterConfig", () => {
     ["laya", "english", true],
     ["bespoke", "nimble-latest", false],
     ["bespoke", "nimble-latest", true],
+    ["databricks", "databricks-openjev-qwen35-4b", false],
+    ["databricks", "databricks-openjev-qwen35-4b", true],
   ] as const)("serializes %s/%s with shared context and no LLM config, custom tiers: %s", (provider, model, custom) => {
     const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
@@ -1308,6 +1315,17 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     expect(payload.fallback_tier).toBe("CASUAL");
   });
 
+  it("keeps clamp and explicit output limits on custom tiers", () => {
+    const payload = build({
+      maxTokensFromTierModel: "clamp",
+      tierModelParams: { sec: { "o1-preview": { max_completion_tokens: 700 } } },
+    });
+    expect(payload.max_tokens_from_tier_model).toBe("clamp");
+    expect(payload.tier_model_configs?.SECURITY_REVIEW).toEqual([
+      { model_name: "o1-preview", litellm_params: { max_completion_tokens: 700 } },
+    ]);
+  });
+
   it("forces the LLM classifier even when the form still holds heuristic, which the backend rejects", () => {
     expect(build({ classifierType: "heuristic" }).classifier_type).toBe("llm");
   });
@@ -1588,6 +1606,15 @@ describe("classifier vision wire payload", () => {
 });
 
 describe("advanced complexity router fields", () => {
+  it.each([undefined, true, false, "clamp"] as const)("serializes output token policy %s", (mode) => {
+    const payload = buildComplexityRouterConfig({ ...baseParams, maxTokensFromTierModel: mode });
+    if (mode === false || mode === "clamp") {
+      expect(payload.max_tokens_from_tier_model).toBe(mode);
+    } else {
+      expect(payload).not.toHaveProperty("max_tokens_from_tier_model");
+    }
+  });
+
   it("normalizes lists, reminder markers, and explicit false values", () => {
     const payload = buildComplexityRouterConfig({
       ...baseParams,

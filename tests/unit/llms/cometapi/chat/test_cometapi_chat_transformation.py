@@ -4,10 +4,14 @@ Unit tests for CometAPI Chat Configuration
 Tests the CometAPIChatConfig class methods using mocks
 """
 
+import json
+from typing import Final
 
+import httpx
 import pytest
+import respx
 
-
+import litellm
 from litellm.llms.cometapi.chat.transformation import (
     CometAPIChatCompletionStreamingHandler,
     CometAPIConfig,
@@ -44,6 +48,7 @@ class TestCometAPIChatCompletionStreamingHandler:
         assert result.usage.completion_tokens == chunk["usage"]["completion_tokens"]
         assert result.usage.total_tokens == chunk["usage"]["total_tokens"]
         assert len(result.choices) == 1
+        assert result.choices[0]["delta"]["content"] == "test content"
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 
     def test_chunk_parser_error_response(self):
@@ -173,6 +178,42 @@ class TestCometAPIConfig:
         assert isinstance(error, CometAPIException)
         assert error.message == "Test error"
         assert error.status_code == 400
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_uses_custom_api_base(respx_mock: respx.MockRouter) -> None:
+    api_base: Final = "https://cometapi.example/custom/v1"
+    route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-cometapi",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "OK"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="cometapi/gpt-5.6",
+        messages=[{"role": "user", "content": "Say OK"}],
+        api_key="cometapi-test-key",
+        api_base=api_base,
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert str(route.calls.last.request.url) == f"{api_base}/chat/completions"
+    assert request_body["messages"] == [{"role": "user", "content": "Say OK"}]
+    assert response.choices[0].message.content == "OK"
 
 
 # Integration test example (requires real API key)

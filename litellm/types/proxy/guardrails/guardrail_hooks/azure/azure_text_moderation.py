@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import Field
 from typing_extensions import Required, TypedDict
@@ -37,7 +37,7 @@ class AzureTextModerationGuardrailResponseCategoriesAnalysis(TypedDict):
 class AzureTextModerationGuardrailResponse(TypedDict):
     """Response from the Azure Text Moderation guardrail"""
 
-    blocklistsMatch: list[dict[str, Any]]
+    blocklistsMatch: list[dict[str, object]]
     categoriesAnalysis: list[AzureTextModerationGuardrailResponseCategoriesAnalysis]
 
 

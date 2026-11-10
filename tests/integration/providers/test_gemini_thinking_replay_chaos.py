@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -234,6 +233,18 @@ def _assert_answered_with_its_own_marker(served: _Served) -> None:
     assert set(_MARKER.findall(served.text)) == {served.call.marker}, served.text
 
 
+def _spend_id(served: _Served) -> str:
+    if served.call.endpoint == "responses" and served.call.stream:
+        payloads: Final = (
+            _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+            for line in served.text.splitlines()
+            if line.startswith("data: {")
+        )
+        (completed,) = tuple(event for event in payloads if event.get("type") == "response.completed")
+        return str(_JSON_OBJECT.validate_python(completed["response"])["id"])
+    return _response_id(served.call.marker)
+
+
 async def test_concurrent_thinking_replays_across_endpoints_reach_gemini_signature_free(gateway: Gateway) -> None:
     calls: Final = _calls(30, ("chat", "messages", "responses"), lambda index: index % 2 == 0)
     with wire_server(_echo) as wire, gateway.scenario() as scenario:
@@ -245,7 +256,7 @@ async def test_concurrent_thinking_replays_across_endpoints_reach_gemini_signatu
         _assert_no_bleed(wire.drain(), frozenset(call.marker for call in calls))
         landed: Final = _spend_request_ids(model, 30)
         assert landed >= {
-            _response_id(call.marker) for call in calls if not (call.endpoint == "messages" and call.stream)
+            _spend_id(item) for item in served if not (item.call.endpoint == "messages" and item.call.stream)
         }
 
 
@@ -327,15 +338,15 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_replaying_thinking_si
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                _assert_answered_with_its_own_marker(item)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    _assert_answered_with_its_own_marker(item)
             follow_up: Final = _Call(endpoint="messages", stream=False, marker=uuid.uuid4().hex)
             (answered,) = await _burst(str(candidate.client.base_url), candidate.key, _CONFIG_MODEL, (follow_up,))
             _assert_answered_with_its_own_marker(answered)

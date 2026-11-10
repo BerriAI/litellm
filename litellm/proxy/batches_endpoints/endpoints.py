@@ -9,7 +9,7 @@ import os
 from collections.abc import Mapping, MutableMapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import TypeAdapter
@@ -17,8 +17,11 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes, iter_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
+from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import enforce_team_s3_bucket_allowlist
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
 from litellm.proxy.batches_endpoints.litellm_executed_batches import (
@@ -48,7 +51,6 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     BATCH_CREATE_HIDDEN_PARAM,
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_deployment_model_info,
-    add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
     batch_cost_poller_is_active,
@@ -68,7 +70,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     update_batch_in_database,
     validate_managed_id_requirement,
 )
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import request_tags_from_metadata
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import request_tags_from_request_data
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy, is_known_model
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
@@ -81,19 +83,24 @@ if TYPE_CHECKING:
     from prisma.models import LiteLLM_ManagedObjectTable
 
 router: Final = APIRouter()
-_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+class _UserBatchLister(Protocol):
+    async def list_user_batches(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        limit: int | None = None,
+        after: str | None = None,
+        provider: str | None = None,
+        target_model_names: str | None = None,
+        llm_router: Router | None = None,
+    ) -> Mapping[str, object]: ...
 
 
 def _hidden_param_string(hidden_params: Mapping[str, object], key: str) -> str:
     value: Final = hidden_params.get(key)
     return value if isinstance(value, str) else ""
-
-
-def _request_tags(data: Mapping[str, object]) -> tuple[str, ...] | None:
-    metadata: Final = data.get("litellm_metadata")
-    if metadata is None:
-        return None
-    return request_tags_from_metadata(_METADATA_ADAPTER.validate_python(metadata))
 
 
 def _require_batch_response(response: LLMResponseTypes) -> LiteLLMBatch:
@@ -157,6 +164,14 @@ async def _raise_when_input_file_must_be_managed(model: str, credentials: Mappin
     )
 
 
+def _raise_when_routing_headers_disagree(request: Request, body_model: object) -> None:
+    if (isinstance(body_model, str) and body_model) or request.query_params.get("model"):
+        return
+    if len(frozenset(request.headers.getlist("x-litellm-model"))) < 2:
+        return
+    raise batch_error(400, "Send one x-litellm-model header. This request has several naming different models")
+
+
 def _litellm_metadata_of(data: MutableMapping[str, object]) -> MutableMapping[str, object]:
     """The request's litellm_metadata mapping, created on the request when it carries none.
 
@@ -179,6 +194,8 @@ def _raise_not_found_when_openai_fallback_unservable(
     if requested_provider is not None:
         return
     if data.get("api_key") or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY"):
+        return
+    if resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=data) is not None:
         return
     raise ProxyException(
         message=not_found_message,
@@ -271,6 +288,7 @@ async def create_batch(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        general_settings_view,
         llm_router,
         proxy_config,
         proxy_logging_obj,
@@ -280,6 +298,14 @@ async def create_batch(
     data: dict = {}
     try:
         data = await read_request_body(request=request)  # rebind-ok: pre-existing rebinding on a rename-only line
+        enforce_team_s3_bucket_allowlist(
+            request_body=_REQUEST_BODY_ADAPTER.validate_python(data),
+            general_settings=general_settings_view(),
+            llm_router=llm_router,
+            team_metadata=user_api_key_dict.team_metadata,
+            team_id=user_api_key_dict.team_id,
+        )
+        _raise_when_routing_headers_disagree(request, data.get("model"))
         verbose_proxy_logger.debug(
             "Request received by LiteLLM:\n%s",
             json.dumps(data, indent=4),
@@ -369,6 +395,7 @@ async def create_batch(
             prepare_data_with_credentials(
                 data=_create_batch_data,
                 credentials=credentials,
+                keep_request_buckets=True,
             )
 
             # Create batch using model credentials
@@ -444,7 +471,7 @@ async def create_batch(
                     model=model,
                     provider=executed_provider,
                     user_api_key_dict=user_api_key_dict,
-                    request_tags=_request_tags(_create_batch_data),
+                    request_tags=request_tags_from_request_data(_create_batch_data),
                 )
                 if executed_provider is not None
                 else await _create_provider_batch_for_managed_file(
@@ -473,6 +500,7 @@ async def create_batch(
                 prepare_data_with_credentials(
                     data=_create_batch_data,
                     credentials=credentials,
+                    keep_request_buckets=True,
                 )
 
                 # Create batch using model credentials
@@ -491,6 +519,7 @@ async def create_batch(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                     custom_llm_provider=custom_llm_provider,
+                    keep_request_buckets=True,
                 )
                 _raise_not_found_when_openai_fallback_unservable(
                     requested_provider=requested_provider,
@@ -618,7 +647,7 @@ async def retrieve_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,
@@ -745,13 +774,6 @@ async def retrieve_batch(
                 raise HTTPException(
                     status_code=500,
                     detail={"error": "LLM Router not initialized. Ensure models added to proxy."},
-                )
-
-            if unified_batch_id:
-                add_internal_model_credentials(
-                    data=data,
-                    llm_router=llm_router,
-                    model_id=unified_model_id,
                 )
 
             response = await llm_router.aretrieve_batch(**data)
@@ -922,9 +944,9 @@ async def list_batches(
 
         # Try to use managed objects table for listing batches (returns encoded IDs).
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_obj is not None and hasattr(managed_files_obj, "list_user_batches"):
+        if managed_files_obj is not None and has_attributes(managed_files_obj, _UserBatchLister, "list_user_batches"):
             verbose_proxy_logger.debug("Using managed objects table for batch listing")
-            response = await cast(Any, managed_files_obj).list_user_batches(
+            response = await managed_files_obj.list_user_batches(
                 user_api_key_dict=user_api_key_dict,
                 limit=limit,
                 after=after,
@@ -954,9 +976,9 @@ async def list_batches(
 
             # Encode batch IDs in the list response so clients can use
             # them for retrieve/cancel/file downloads through the proxy.
-            response_data: Final = getattr(response, "data", None)
+            response_data: Final = attribute_or_none(response, "data")
             if response_data:
-                for batch in response_data:
+                for batch in iter_items(response_data):
                     encode_batch_response_ids(batch, model=model_param)
 
             verbose_proxy_logger.debug("Listed batches using model: %s", model_param)
@@ -1127,7 +1149,7 @@ async def cancel_batch(
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
             resolved_unified_model: Final = (
-                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+                llm_router.registry().resolve(unified_model_id, kind="from_id") if llm_router is not None else None
             )
             await authorize_model_for_key(
                 model_id=resolved_unified_model or unified_model_id,

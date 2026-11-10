@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     Mode,
@@ -26,7 +27,7 @@ def _coerce_event_hook(
 
 def _get_optional_value(litellm_params: LitellmParams, optional_params: object | None, attribute_name: str) -> object:
     if optional_params is not None:
-        value: Final = getattr(optional_params, attribute_name, None)
+        value: Final = attribute_or_none(optional_params, attribute_name)
         if value is not None:
             return value
     return getattr(litellm_params, attribute_name, None)

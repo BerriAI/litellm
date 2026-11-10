@@ -1,19 +1,25 @@
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
+from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.llms.anthropic.pass_through.messages import handler as main
-from litellm.rust_bridge.catalog import Route, RouteContext
+from litellm.llms.anthropic.messages.native import handler as main
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.rust_bridge import detectors
+from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
+from litellm.rust_bridge.messages import detectors as route_detectors
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
 )
 from litellm.rust_bridge.public_call import (
+    AsyncFlag,
     NativeCall,
     bind,
+    native_acall_hook,
     native_call,
     native_call_hook,
     optional_sequence,
@@ -21,6 +27,7 @@ from litellm.rust_bridge.public_call import (
     signature,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.router import GenericLiteLLMParams
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
@@ -45,8 +52,26 @@ def _python_amessages() -> PythonAmessages:
 
 _PYTHON_MESSAGES: Final = _python_messages()
 _MESSAGES: Final = signature(_PYTHON_MESSAGES)
+_FLAG: Final = AsyncFlag("is_async", sync=_MESSAGES, is_set=bool)
 _PYTHON_AMESSAGES: Final = _python_amessages()
 _AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
+
+
+def _native_kwargs(fields: Mapping[str, object], kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """The native call takes one timeout, resolved from timeout, request_timeout and stream_timeout as Python's."""
+    _, provider = _resolved_model(str(fields["model"]), optional_str(fields.get("custom_llm_provider")))
+    timeout: Final = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(  # pyright: ignore[reportPrivateUsage]  # the handler's own timeout resolution
+        litellm_params=GenericLiteLLMParams(
+            timeout=kwargs.get("timeout"),
+            request_timeout=kwargs.get("request_timeout"),
+            stream_timeout=kwargs.get("stream_timeout"),
+        ),
+        stream=fields.get("stream") is True,
+        custom_llm_provider=provider or "",
+    )
+    if timeout is None:
+        return kwargs
+    return {**kwargs, "timeout": timeout}
 
 
 def _public_request(
@@ -60,37 +85,103 @@ def _public_request(
     max_tokens: Final = fields.get("max_tokens")
     if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
         return None
-    return native_call(legacy, args, kwargs)
+    return native_call(legacy, args, _native_kwargs(fields, kwargs))
 
 
-def _resolved_provider(request: NativeCall) -> str | None:
+def _resolved_model(model: str, provider: str | None) -> tuple[str, str | None]:
     try:
-        return get_llm_provider(
-            str(request.resolved["model"]), optional_str(request.resolved.get("custom_llm_provider"))
-        )[1]
+        resolved_model, resolved_provider, _, _ = get_llm_provider(model, provider)
     except BadRequestError:
-        return optional_str(request.resolved.get("custom_llm_provider"))
+        return model, provider
+    return resolved_model, resolved_provider
 
 
-def _context(request: NativeCall) -> RouteContext:
+def _resolved(request: NativeCall) -> tuple[str, str | None]:
+    return _resolved_model(str(request.resolved["model"]), optional_str(request.resolved.get("custom_llm_provider")))
+
+
+def _route_target(
+    requested_model: str,
+    model: str,
+    provider: str | None,
+    model_info: object,
+    api_base: str | None,
+    compacting: bool,
+) -> Target:
+    native_config: Final = main._native_messages_config(model, provider, model_info, api_base)  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough lookup
+    if native_config is not None:
+        return Target.MESSAGES
+    if not compacting and main._should_route_to_responses_api(provider, requested_model, model, model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own translation choice
+        return Target.RESPONSES
+    return Target.CHAT_COMPLETIONS
+
+
+def _target(request: NativeCall, model: str, provider: str | None) -> Target:
+    api_base: Final = request.resolved.get("api_base")
+    return _route_target(
+        str(request.resolved["model"]),
+        model,
+        provider,
+        request.resolved.get("model_info"),
+        api_base if isinstance(api_base, str) else None,
+        compacting=request.resolved.get("compaction") is not None,
+    )
+
+
+def messages_target(model: str, custom_llm_provider: str | None, model_info: object, api_base: str | None) -> Target:
+    resolved_model, resolved_provider = _resolved_model(model, custom_llm_provider)
+    return _route_target(model, resolved_model, resolved_provider, model_info, api_base, compacting=False)
+
+
+_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **{feature: detect for feature, detect in detectors.COMMON.items() if feature is not Feature.TIMEOUT_VARIANTS},
+        Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
+        Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
+        Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.MODIFY_PARAMS: detectors.modify_params,
+        Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
+        Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
+        Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
+        Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
+        Feature.TOOL_CUSTOM_FIELD: route_detectors.tool_custom_field,
+    }
+)
+
+_ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
+    {
+        **_FEATURES,
+        Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
+        Feature.FOUNDRY_BETA_ROW: route_detectors.foundry_beta_row,
+        Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
+        Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
+        Feature.STRICT_TOOLS_RETRY: route_detectors.strict_tools_retry,
+    }
+)
+
+
+def _context(request: NativeCall, features: detectors.Detectors) -> RouteContext:
+    requested_model: Final = str(request.resolved["model"])
+    model, provider = _resolved(request)
     return RouteContext(
         Route.MESSAGES,
-        provider=_resolved_provider(request),
-        model=str(request.resolved["model"]),
+        provider=provider,
+        model=requested_model,
+        target=_target(request, model, provider),
+        features=detectors.detected(features, request),
     )
 
 
 _DISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
-    context=_context,
-    bypass=lambda request: request.kwargs.get("is_async") is True,
+    context=lambda request: _context(request, _FEATURES),
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
-    context=_context,
+    context=lambda request: _context(request, _ASYNC_FEATURES),
 )
 
 
@@ -99,9 +190,11 @@ def anthropic_messages_handler(
     **kwargs: object,  # kwargs-ok: preserve the public Anthropic Messages call shape
 ) -> MessagesResult | Coroutine[object, object, MessagesResult]:
     python: Final = _PYTHON_MESSAGES
+    if _FLAG.requested(kwargs):
+        return anthropic_messages(**_FLAG.keywords(args, kwargs))
     return _DISPATCH.run(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_MESSAGES,
         native=native_call_hook,
@@ -112,10 +205,10 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
     python: Final = _PYTHON_AMESSAGES
     return await _ADISPATCH.arun(
         args,
-        kwargs,
+        _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_AMESSAGES,
-        native=native_call_hook,
+        native=native_acall_hook,
     )
 
 

@@ -2,7 +2,6 @@ import json
 import math
 import os
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping
@@ -45,6 +44,7 @@ from integration.authorization._hidden_alias_budget import (
     async_anthropic_client,
     async_openai_client,
     base_url,
+    budget_refusal_error_type,
     error_type,
     fresh_chat,
     fresh_message,
@@ -63,7 +63,7 @@ from integration.authorization._hidden_alias_budget import (
 )
 from pydantic import JsonValue, TypeAdapter
 
-pytestmark: Final = pytest.mark.timeout(240)
+pytestmark: Final = [pytest.mark.timeout(240), pytest.mark.shares_worker_state]
 
 PAID_INPUT_COST_PER_TOKEN: Final = 0.001
 PAID_OUTPUT_COST_PER_TOKEN: Final = 0.002
@@ -192,17 +192,18 @@ def _assert_refused(
     key: str,
     model: str,
     prefix: str,
+    route: str = "chat",
     send: Callable[[Gateway, str, str, str], httpx.Response] = fresh_chat,
 ) -> None:
     marker: Final = f"{prefix}-" + uuid.uuid4().hex
     refused: Final = send(candidate, model, key, marker)
-    assert _refusal(refused) == (BUDGET_EXCEEDED, "budget_exceeded"), refused.text
+    assert _refusal(refused) == (BUDGET_EXCEEDED, budget_refusal_error_type(route)), refused.text
     assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 0
 
 
 def _assert_refused_on_every_route(rig: ChainRig, candidate: Gateway, key: str, model: str) -> None:
     for route, send in ROUTES:
-        _assert_refused(rig, candidate, key, model, f"refused-{route}", send)
+        _assert_refused(rig, candidate, key, model, f"refused-{route}", route, send)
 
 
 def _assert_provider_failure(response: httpx.Response) -> None:
@@ -964,11 +965,11 @@ def test_killing_one_worker_mid_burst_keeps_the_chain_entry_served(rig: ChainRig
                 held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
                 assert sum(held_by.values()) == GATEWAY_BURST, held_by
                 victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                victim: Final = psutil.Process(victim_pid)
-                victim.suspend()
-                victim.send_signal(signal.SIGKILL)
-                release.set()
-                responses: Final = {marker: future.result() for marker, future in pending.items()}
+                with owned.replacing_worker(victim_pid) as kill:
+                    kill.freeze()
+                    kill()
+                    release.set()
+                    responses: Final = {marker: future.result() for marker, future in pending.items()}
             served: Final = frozenset(
                 marker for marker, response in responses.items() if response is not None and response.status_code == 200
             )

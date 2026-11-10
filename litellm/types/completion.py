@@ -229,6 +229,7 @@ class CompletionDispatchContext:
     model: str
     model_response: ModelResponse
     optional_params: dict
+    optional_params_for_model_info: Callable[[Mapping[str, object] | None], dict[str, object]]
     organization: str | None
     provider_config: BaseConfig | None
     request_params: Mapping[str, object]
@@ -237,6 +238,7 @@ class CompletionDispatchContext:
     temperature: float | None
     text_completion: bool
     timeout: float | str | httpx.Timeout | None
+    timeout_for_optional_params: Callable[[Mapping[str, object]], float | httpx.Timeout]
     top_p: float | None
 
 
@@ -244,7 +246,7 @@ _CompletionDispatchContext = CompletionDispatchContext
 
 
 _CompletionDispatchResult = Union[
-    Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
+    Coroutine[object, object, Union["ModelResponse", "CustomStreamWrapper"]],
     "ModelResponse",
     "CustomStreamWrapper",
 ]

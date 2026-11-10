@@ -1,150 +1,100 @@
-import hashlib
-import os
-from collections.abc import Callable
-from dataclasses import dataclass
+import threading
+from collections.abc import Mapping
 from typing import Final
-
-from typing_extensions import assert_never
 
 from litellm.secret_managers.main import str_to_bool
 
-FIPS_MODE_ENV_VAR: Final = "LITELLM_FIPS_MODE"
-SSL_VERIFY_ENV_VAR: Final = "SSL_VERIFY"
-SSL_VERIFY_SETTING: Final = "litellm_settings.ssl_verify"
-REFUSAL_PREFIX: Final = "LiteLLM proxy refused to start"
-
-_TRUE_VALUES: Final = frozenset({"true", "1", "yes", "on"})
-_FALSE_VALUES: Final = frozenset({"false", "0", "no", "off", ""})
-
-
-@dataclass(frozen=True, slots=True)
-class FipsModeOff:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class FipsModeOn:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class MalformedFipsMode:
-    value: str
-
-
-FipsModeSetting = FipsModeOff | FipsModeOn | MalformedFipsMode
-
-
-@dataclass(frozen=True, slots=True)
-class ProviderDoesNotEnforceFips:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class TlsVerificationDisabled:
-    sources: tuple[str, ...]
-
-
-FipsBootRefusal = MalformedFipsMode | ProviderDoesNotEnforceFips | TlsVerificationDisabled
-FipsBootVerdict = FipsModeOff | FipsModeOn | FipsBootRefusal
+FIPS_MODE_SETTING: Final = "fips_mode"
+_SETTING: Final = f"general_settings.{FIPS_MODE_SETTING}"
+_FIPS_MODE_ACTIVE: Final = threading.Event()
 
 
 class FipsModeError(Exception):
     pass
 
 
-def parse_fips_mode(raw: str | None) -> FipsModeSetting:
-    if raw is None:
-        return FipsModeOff()
-    normalized: Final = raw.strip().lower()
-    if normalized in _TRUE_VALUES:
-        return FipsModeOn()
-    if normalized in _FALSE_VALUES:
-        return FipsModeOff()
-    return MalformedFipsMode(value=raw)
-
-
-def is_fips_mode(environ: Callable[[str], str | None] = os.environ.get) -> bool:
-    return isinstance(parse_fips_mode(environ(FIPS_MODE_ENV_VAR)), FipsModeOn)
+def _fips_mode_setting(general_settings: Mapping[str, object]) -> bool | None:
+    """general_settings.fips_mode as a boolean: False when the key is absent, None when it is not a boolean, including
+    a key with no value."""
+    if FIPS_MODE_SETTING not in general_settings:
+        return False
+    value: Final = general_settings[FIPS_MODE_SETTING]
+    if isinstance(value, bool):
+        return value
+    return str_to_bool(value) if isinstance(value, str) else None
 
 
 def openssl_enforces_fips() -> bool:
-    """MD5 is not an approved digest, so an enforcing FIPS provider refuses it even when asked for security use."""
+    """Python's OpenSSL runs with FIPS-only defaults and itself refuses scrypt."""
     try:
-        hashlib.md5(b"", usedforsecurity=True)
+        import _hashlib
+
+        if _hashlib.get_fips_mode() != 1:
+            return False
+    except (ImportError, AttributeError, ValueError):
+        return False
+    try:
+        _hashlib.scrypt(b"", salt=b"\0" * 16, n=2, r=1, p=1, dklen=16)
     except ValueError:
         return True
     return False
 
 
-def fips_boot_verdict(
-    *,
-    raw_fips_mode: str | None,
-    provider_enforces_fips: Callable[[], bool],
-    ssl_verify_environment: str | None,
-    ssl_verify_setting: object,
-) -> FipsBootVerdict:
-    setting: Final = parse_fips_mode(raw_fips_mode)
-    match setting:
-        case FipsModeOff() | MalformedFipsMode():
-            return setting
-        case FipsModeOn():
-            pass
-        case _:
-            assert_never(setting)
-    disabled: Final = tuple(
-        source
-        for source, off in (
-            (SSL_VERIFY_ENV_VAR, _is_off(ssl_verify_environment)),
-            (SSL_VERIFY_SETTING, _is_off(ssl_verify_setting)),
+def cryptography_enforces_fips() -> bool:
+    """The cryptography library's own OpenSSL runs with FIPS-only defaults and its FIPS provider can hash SHA-256."""
+    try:
+        from cryptography.exceptions import InternalError, UnsupportedAlgorithm
+        from cryptography.hazmat.bindings._rust import openssl as rust_openssl
+        from cryptography.hazmat.primitives import hashes
+    except ImportError:
+        return False
+    try:
+        if not rust_openssl.is_fips_enabled():
+            return False
+        hashes.Hash(hashes.SHA256()).finalize()
+    except (AttributeError, InternalError, UnsupportedAlgorithm):
+        return False
+    return True
+
+
+def fips_mode_refusal(general_settings: Mapping[str, object]) -> str | None:
+    """Why the proxy must not start: general_settings.fips_mode is not a boolean, or is on but Python's or the
+    cryptography library's OpenSSL does not enforce FIPS. None when it may start."""
+    setting: Final = _fips_mode_setting(general_settings)
+    if setting is None:
+        value: Final = general_settings.get(FIPS_MODE_SETTING)
+        if value is None:
+            return (
+                f"{_SETTING} has no value: it is empty, or an os.environ/ reference to a variable that is not set. "
+                "Set it to true or false, or remove it."
+            )
+        return f"{_SETTING}={value!r} is not a boolean. Set it to true or false, or remove it."
+    if not setting:
+        return None
+    if not openssl_enforces_fips():
+        return (
+            f"{_SETTING} is on but OpenSSL does not enforce FIPS. Run the proxy on an OpenSSL with its FIPS "
+            f"provider active and default_properties = fips=yes, or turn {_SETTING} off."
         )
-        if off
-    )
-    if disabled:
-        return TlsVerificationDisabled(sources=disabled)
-    if not provider_enforces_fips():
-        return ProviderDoesNotEnforceFips()
-    return setting
+    if not cryptography_enforces_fips():
+        return (
+            f"{_SETTING} is on but the cryptography library's OpenSSL has no working FIPS provider. Build it "
+            "against the system OpenSSL (pip install --no-binary cryptography cryptography), or turn "
+            f"{_SETTING} off."
+        )
+    return None
 
 
-def enforce_fips_boot_verdict(verdict: FipsBootVerdict, announce: Callable[[str], object]) -> None:
-    match verdict:
-        case FipsModeOff() | FipsModeOn():
-            return
-        case MalformedFipsMode() | ProviderDoesNotEnforceFips() | TlsVerificationDisabled():
-            message: Final = render_refusal(verdict)
-            announce(f"\n{message}\n\n")
-            raise FipsModeError(message)
-        case _:
-            assert_never(verdict)
+def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
+    refusal: Final = fips_mode_refusal(general_settings)
+    if refusal is not None:
+        raise FipsModeError(refusal)
+    if _fips_mode_setting(general_settings):
+        _FIPS_MODE_ACTIVE.set()
+    else:
+        _FIPS_MODE_ACTIVE.clear()
 
 
-def render_refusal(refusal: FipsBootRefusal) -> str:
-    match refusal:
-        case MalformedFipsMode():
-            return (
-                f"{REFUSAL_PREFIX}: {FIPS_MODE_ENV_VAR}={refusal.value} is not a boolean.\n"
-                f"Set {FIPS_MODE_ENV_VAR} to true or false, or unset it."
-            )
-        case ProviderDoesNotEnforceFips():
-            return (
-                f"{REFUSAL_PREFIX}: {FIPS_MODE_ENV_VAR} is on but this Python does not enforce FIPS.\n"
-                "Its OpenSSL still allows non-approved algorithms (MD5 succeeded), so passwords and keys would be\n"
-                "protected with algorithms the FIPS 140-3 policy forbids. Run the proxy from a FIPS image whose\n"
-                f"OpenSSL FIPS provider is enabled, or unset {FIPS_MODE_ENV_VAR} on a non-FIPS runtime."
-            )
-        case TlsVerificationDisabled():
-            return (
-                f"{REFUSAL_PREFIX}: {FIPS_MODE_ENV_VAR} is on but TLS certificate verification is disabled by "
-                f"{' and '.join(refusal.sources)}.\nFIPS deployments must verify upstream certificates, so remove the "
-                "override or point ssl_verify at a CA bundle instead."
-            )
-    return assert_never(refusal)
-
-
-def _is_off(value: object) -> bool:
-    if isinstance(value, bool):
-        return value is False
-    if isinstance(value, str):
-        return str_to_bool(value) is False
-    return False
+def fips_mode_active() -> bool:
+    """Whether general_settings.fips_mode was on when enforce_fips_mode last accepted it."""
+    return _FIPS_MODE_ACTIVE.is_set()

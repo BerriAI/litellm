@@ -30,6 +30,36 @@ describe("BulkCreateUsersButton", () => {
     expect(screen.getByText("+ Bulk Invite Users")).toBeInTheDocument();
   });
 
+  it("downloads a CSV template with the columns the upload accepts", async () => {
+    const createObjectURL = vi.fn((_blob: Blob) => "blob:template");
+    const revokeObjectURL = vi.fn();
+    const { createObjectURL: originalCreate, revokeObjectURL: originalRevoke } = URL;
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+
+    const user = await openUploadStep();
+    await user.click(screen.getByRole("button", { name: /download csv template/i }));
+
+    expect(anchorClick).toHaveBeenCalledOnce();
+    const anchor = anchorClick.mock.contexts[0] as HTMLAnchorElement;
+    expect(anchor.download).toBe("bulk_users_template.csv");
+    expect(anchor.href).toBe("blob:template");
+
+    const csv = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.readAsText(createObjectURL.mock.calls[0][0]);
+    });
+    const [headerRow] = csv.split(/\r?\n/);
+    expect(headerRow).toBe("user_email,user_role,teams,max_budget,budget_duration,models");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:template");
+
+    anchorClick.mockRestore();
+    URL.createObjectURL = originalCreate;
+    URL.revokeObjectURL = originalRevoke;
+  });
+
   it("parses a CSV chosen through the file input", async () => {
     await openUploadStep();
 

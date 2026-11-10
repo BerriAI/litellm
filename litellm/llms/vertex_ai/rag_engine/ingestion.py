@@ -94,7 +94,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             )
 
         # Import settings
-        self.wait_for_import = self.vector_store_config.get("wait_for_import", True)
+        self.wait_for_import: object = self.vector_store_config.get("wait_for_import", True)
         self.import_timeout = _get_int(self.vector_store_config.get("import_timeout"), 600)
 
         # Validate required config

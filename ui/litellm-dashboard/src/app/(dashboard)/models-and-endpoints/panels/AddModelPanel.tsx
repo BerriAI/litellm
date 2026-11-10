@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import AddModelForm from "@/components/add_model/AddModelForm";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
@@ -13,10 +14,14 @@ import {
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { buildDecisionCatalog } from "@/lib/decisionModels";
 
 const INITIAL_VALUES: MountedFormValues = { litellm_credential_name: null };
+
+const PREFILL_URL_PARAMS = { provider: parseAsString, litellm_model: parseAsString };
 
 export default function AddModelPanel() {
   const { accessToken } = useAuthorized();
@@ -27,11 +32,37 @@ export default function AddModelPanel() {
   const { data: credentialsResponse } = useCredentials();
   const { data: teams } = useTeams();
   const [selectedProvider, setSelectedProvider] = useState<string | null>(Providers.Anthropic);
+  const [{ provider: prefillProviderSlug, litellm_model: prefillModel }, setPrefillParams] =
+    useQueryStates(PREFILL_URL_PARAMS);
+  const { data: providerMetadata } = useProviderFields();
+  const prefillProvider = useMemo(
+    () =>
+      prefillProviderSlug === null
+        ? null
+        : providerMetadata?.find((info) => info.litellm_provider === prefillProviderSlug)?.provider ?? null,
+    [prefillProviderSlug, providerMetadata],
+  );
+  const prefillApplied = useRef(false);
+
+  useEffect(() => {
+    if (prefillApplied.current || prefillProvider === null) {
+      return;
+    }
+    prefillApplied.current = true;
+    setSelectedProvider(prefillProvider);
+    form.setValue("custom_llm_provider", prefillProvider);
+    if (prefillModel === null) {
+      return;
+    }
+    form.setValue("model", [prefillModel]);
+  }, [form, prefillModel, prefillProvider]);
+
   const pickedProvider = useWatch({ control: form.control, name: "custom_llm_provider" });
   const providerModels = useMemo(
     () => (typeof pickedProvider === "string" ? getProviderModels(pickedProvider, modelCostMapData) : []),
     [pickedProvider, modelCostMapData],
   );
+  const decisionCatalog = useMemo(() => buildDecisionCatalog(modelCostMapData), [modelCostMapData]);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["models", "list"] });
@@ -46,7 +77,12 @@ export default function AddModelPanel() {
     await handleAddModelSubmit(
       mountedValues(),
       accessToken,
-      { resetFields: () => form.reset(INITIAL_VALUES) },
+      {
+        resetFields: () => {
+          form.reset(INITIAL_VALUES);
+          void setPrefillParams({ provider: null, litellm_model: null });
+        },
+      },
       refresh,
     );
     return true;
@@ -66,6 +102,7 @@ export default function AddModelPanel() {
       setShowAdvancedSettings={setShowAdvancedSettings}
       teams={teams ?? null}
       credentials={credentialsResponse?.credentials || []}
+      decisionCatalog={decisionCatalog}
     />
   );
 }

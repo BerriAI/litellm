@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.agents.transformation import GeminiAgentsConfig
 from litellm.llms.gemini.common_utils import GeminiError
 from litellm.types.agents import (
+    AgentCreateRequest,
     AgentCreateResponse,
     AgentDeleteResult,
     AgentListResponse,
@@ -104,7 +105,7 @@ class TestCreateAgent:
 
         result = handler.create_agent(
             agents_api_config=config,
-            name="agent-x",
+            create_request=AgentCreateRequest(id="agent-x"),
             litellm_params=litellm_params,
             logging_obj=logging_obj,
             extra_headers={"X-Test": "1"},
@@ -117,8 +118,7 @@ class TestCreateAgent:
         client.post.assert_called_once()
         kwargs = client.post.call_args.kwargs
         assert kwargs["url"].endswith("/v1beta/agents")
-        assert kwargs["json"]["name"] == "agent-x"
-        assert kwargs["json"]["foo"] == "bar"
+        assert kwargs["json"] == {"id": "agent-x", "foo": "bar"}
         assert kwargs["headers"]["X-Test"] == "1"
         logging_obj.pre_call.assert_called_once()
         logging_obj.post_call.assert_called_once()
@@ -130,7 +130,7 @@ class TestCreateAgent:
 
         result = handler.create_agent(
             agents_api_config=config,
-            name="agent-x",
+            create_request=AgentCreateRequest(id="agent-x"),
             litellm_params=litellm_params,
             logging_obj=_make_logging_obj(),
             client=client,
@@ -152,7 +152,7 @@ class TestCreateAgent:
         with pytest.raises(GeminiError):
             handler.create_agent(
                 agents_api_config=config,
-                name="agent-x",
+                create_request=AgentCreateRequest(id="agent-x"),
                 litellm_params=litellm_params,
                 logging_obj=_make_logging_obj(),
                 client=client,
@@ -169,7 +169,7 @@ class TestCreateAgent:
 
         result = await handler.async_create_agent(
             agents_api_config=config,
-            name="agent-y",
+            create_request=AgentCreateRequest(id="agent-y"),
             litellm_params=litellm_params,
             logging_obj=_make_logging_obj(),
             extra_body={"baz": "qux"},
@@ -193,7 +193,7 @@ class TestCreateAgent:
         with pytest.raises(GeminiError):
             await handler.async_create_agent(
                 agents_api_config=config,
-                name="agent-y",
+                create_request=AgentCreateRequest(id="agent-y"),
                 litellm_params=litellm_params,
                 logging_obj=_make_logging_obj(),
                 client=client,

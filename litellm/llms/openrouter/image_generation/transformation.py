@@ -35,6 +35,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
@@ -269,10 +271,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         Default: https://openrouter.ai/api/v1/chat/completions
         """
         if api_base:
-            if not api_base.endswith("/chat/completions"):
-                api_base = api_base.rstrip("/")
-                return f"{api_base}/chat/completions"
-            return api_base
+            return ensure_api_route(api_base, "chat/completions")
 
         return "https://openrouter.ai/api/v1/chat/completions"
 
@@ -361,7 +360,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             ImageResponse: Populated image response
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise OpenRouterException(
                 message=f"Error parsing OpenRouter response: {e}",

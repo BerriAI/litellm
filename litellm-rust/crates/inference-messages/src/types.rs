@@ -2,11 +2,12 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
+use litellm_llms::{ErrorDetail, base_llm::messages::context::MessagesModelCapabilities};
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
 };
+use litellm_router_types::LitellmParams;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -17,6 +18,7 @@ pub struct MessagesCall {
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
+    pub litellm_params: LitellmParams,
     pub extra_headers: Option<Map<String, Value>>,
     pub provider_specific_header: Option<ProviderSpecificHeaders>,
     pub timeout: Option<Duration>,
@@ -27,12 +29,29 @@ pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error>
     serde_json::from_value(Value::Object(body)).map_err(invalid_request)
 }
 
+/// The caller's litellm params, projected by a host from the keys [`LitellmParams::fields`]
+/// names. A key present with a value of the wrong type is a request error, as it is for
+/// Python's `GenericLiteLLMParams(**kwargs)`.
+pub fn litellm_params(fields: Map<String, Value>) -> Result<LitellmParams, Error> {
+    serde_json::from_value(Value::Object(fields))
+        .map_err(|err| Error::invalid_request(ErrorDetail::invalid("litellm params", err)))
+}
+
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}").into())
+    Error::invalid_request(ErrorDetail::invalid("Anthropic messages request", err))
 }
 
 pub type MessagesCallResponse =
-    CallOutput<Box<MessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
+    CallOutput<MessagesBody, super::route::MessagesStreamHead, Bytes, Error>;
+
+// Python's `transform_anthropic_messages_response` returns any JSON object the provider sends
+// with a 200, message or not, so one that is not a message passes through as sent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessagesBody {
+    Message(Box<MessagesResponse>),
+    Unchecked(Map<String, Value>),
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
@@ -50,6 +69,16 @@ pub struct MessagesSettings {
     pub reasoning_auto_summary: bool,
     #[serde(default)]
     pub additional_drop_params: Vec<String>,
+    #[serde(default)]
+    pub request_timeout: Option<f64>,
+}
+
+impl MessagesSettings {
+    pub fn request_timeout(&self) -> Option<Duration> {
+        self.request_timeout
+            .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
+            .filter(|timeout| !timeout.is_zero())
+    }
 }
 
 #[cfg(test)]
@@ -110,22 +139,26 @@ mod tests {
             },
             "drop_params": true,
             "reasoning_auto_summary": true,
-            "additional_drop_params": ["metadata.user_id", "thinking"]
+            "additional_drop_params": ["metadata.user_id", "thinking"],
+            "request_timeout": 1800.0
         }),
         MessagesShaping {
             settings: MessagesSettings {
                 drop_params: true,
                 reasoning_auto_summary: true,
                 additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
+                request_timeout: Some(1800.0),
             },
             capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 thinking_always_on: false,
+                thinking_on_by_default: false,
                 supports_legacy_thinking: false,
                 supports_output_config: true,
                 supports_sampling_params: false,
                 supports_speed: true,
+                supports_mid_conversation_system: false,
                 effort_tiers: SupportedEffortTiers {
                     minimal: false,
                     low: true,

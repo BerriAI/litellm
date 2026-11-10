@@ -21,6 +21,7 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     convert_priority_to_percent,
     resolve_llm_provider_for_rate_limit,
 )
+from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 from litellm.utils import get_utc_datetime
@@ -38,7 +39,7 @@ class DynamicRateLimiterCache:
         self.ttl = 60  # 1 min ttl
         self.time_fn = time_fn
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_get_cache(self, model: str) -> int | None:
         dt: Final = self.time_fn()
         current_minute: Final = dt.strftime("%H-%M")
@@ -49,7 +50,7 @@ class DynamicRateLimiterCache:
             response = len(_response)
         return response
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_set_cache_sadd(self, model: str, value: list):
         """
         Add value to set.
@@ -85,7 +86,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     def update_variables(self, llm_router: Router) -> None:
         self.llm_router = llm_router
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def check_available_usage(
         self, model: str, priority: str | None = None
     ) -> tuple[int | None, int | None, int | None, int | None, int | None]:
@@ -106,7 +107,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
         """
         try:
             # Get model info first for conversion
-            model_group_info: Final[ModelGroupInfo | None] = self.llm_router.get_model_group_info(model_group=model)
+            model_group_info: Final[ModelGroupInfo | None] = self.llm_router.registry().group(model)
 
             weight: float = 1
             if litellm.priority_reservation is None or priority not in litellm.priority_reservation:
@@ -118,7 +119,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             elif priority is not None and litellm.priority_reservation is not None:
                 if os.getenv("LITELLM_LICENSE", None) is None:
                     verbose_proxy_logger.error(
-                        "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/proxy/enterprise."
+                        "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise."
                     )
                 else:
                     value: Final = litellm.priority_reservation[priority]
@@ -128,7 +129,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             (
                 current_model_tpm,
                 current_model_rpm,
-            ) = await self.llm_router.get_model_group_usage(model_group=model)
+            ) = await self.llm_router.health().usage(model)
             total_model_tpm: int | None = None
             total_model_rpm: int | None = None
             if model_group_info is not None:
@@ -183,7 +184,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             )
             return None, None, None, None, None
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -239,7 +240,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 )
         return None
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> LLMResponseTypes | None:
@@ -248,7 +249,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 model_id: Final = response.hidden_params["model_id"]
                 if not isinstance(model_id, str):
                     return response
-                model_info: Final = self.llm_router.get_model_info(id=model_id)
+                model_info: Final = self.llm_router.registry().deployment_dict(model_id)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # deployment_dict returns the untyped model_list row
                 assert model_info is not None, f"Model info for model with id={model_id} is None"
                 key_priority: Final[str | None] = user_api_key_dict.metadata.get("priority", None)
                 (
@@ -257,11 +258,11 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                     model_tpm,
                     model_rpm,
                     active_projects,
-                ) = await self.check_available_usage(model=model_info["model_name"], priority=key_priority)
+                ) = await self.check_available_usage(model=model_info["model_name"], priority=key_priority)  # pyright: ignore[reportUnknownArgumentType]  # model_info is the untyped model_list row
                 set_hidden_param(
                     response,
                     "additional_headers",
-                    {
+                    {  # pyright: ignore[reportUnknownArgumentType]  # model_info is the untyped model_list row
                         "x-litellm-model_group": model_info["model_name"],
                         "x-ratelimit-remaining-litellm-project-tokens": available_tpm,
                         "x-ratelimit-remaining-litellm-project-requests": available_rpm,

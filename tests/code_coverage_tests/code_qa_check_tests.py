@@ -174,7 +174,7 @@ def main():
             f"This can cause import issues and test failures. Files: {problematic_files}"
         )
     else:
-        print("✓ No litellm module deletion patterns found in tests/test_litellm or tests/unit.")
+        print("✓ No litellm module deletion patterns found in tests/unit.")
 
 
 if __name__ == "__main__":
