@@ -331,7 +331,9 @@ async def _update_request_data_with_managed_file_id(
                     file_id,
                     llm_output_file_id,
                     (
-                        llm_router.registry().credentials(upload_routing_model, form="with_provider")
+                        llm_router.registry().credentials(
+                            upload_routing_model, form="with_provider", team_id=user_api_key_dict.team_id
+                        )
                         if llm_router and upload_routing_model
                         else None
                     ),

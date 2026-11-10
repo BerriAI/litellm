@@ -1190,3 +1190,28 @@ async def test_a_managed_file_on_a_team_model_routes_with_the_caller_team_creden
         )
 
     assert (data["file_id"], data.get("api_key")) == (RAW_FILE_ID, api_key)
+
+
+@pytest.mark.parametrize("store_check_status, routed_file_id", [(200, RAW_FILE_ID), (404, "file-team-copy")])
+@pytest.mark.asyncio
+async def test_a_managed_file_on_a_team_model_keeps_the_upload_copy_its_store_holds(
+    monkeypatch: pytest.MonkeyPatch, store_check_status: int, routed_file_id: str
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    managed_file_id: Final = _unified_file_id(target_model_name="team-gpt")
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        store_check: Final = respx_mock.get(
+            f"https://api.openai.com/v1/vector_stores/vs-test/files/{RAW_FILE_ID}"
+        ).mock(return_value=httpx.Response(store_check_status, json=dict(_vector_store_file_row(RAW_FILE_ID))))
+        data, _ = await _update_request_data_with_managed_file_id(
+            data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+            file_id=managed_file_id,
+            request=MagicMock(headers={}, query_params={}),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", team_id="team-a"),
+            managed_files_obj=ManagedFileCopiesStub(copies={"team-a-deployment": "file-team-copy"}),
+            llm_router=_team_a_router(),
+        )
+
+    assert store_check.calls.last.request.headers["Authorization"] == "Bearer team-a-key"
+    assert data["file_id"] == routed_file_id
