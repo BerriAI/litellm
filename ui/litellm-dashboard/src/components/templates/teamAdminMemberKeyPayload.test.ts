@@ -22,6 +22,13 @@ describe("isTeamAdminEditingMemberKey", () => {
     );
   });
 
+  it("is false for a team service account key with no user", () => {
+    expect(isTeamAdminEditingMemberKey({ ...baseArgs, keyUserId: null, teamMembers: members("admin") })).toBe(false);
+    expect(isTeamAdminEditingMemberKey({ ...baseArgs, keyUserId: undefined, teamMembers: members("admin") })).toBe(
+      false,
+    );
+  });
+
   it("is false for a personal key with no team", () => {
     expect(isTeamAdminEditingMemberKey({ ...baseArgs, keyTeamId: null, teamMembers: members("admin") })).toBe(false);
   });

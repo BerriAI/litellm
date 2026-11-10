@@ -13,10 +13,11 @@
  * prefixes are matched first, and only a bare `auto_router/<name>` is the semantic router.
  */
 
-export type AutoRouterKind = "complexity" | "adaptive" | "quality" | "semantic";
+export type AutoRouterKind = "complexity" | "adaptive" | "quality" | "semantic" | "switchyard";
 
 export interface AutoRouterParams {
   model?: string | null;
+  switchyard_router_config?: unknown;
   complexity_router_config?: unknown;
   complexity_router_default_model?: string | null;
   auto_router_config?: unknown;
@@ -42,6 +43,14 @@ const startsWith = (params: AutoRouterParams, prefix: string): boolean => params
 
 /** Ordered; the semantic entry matches anything left and must stay last. */
 export const AUTO_ROUTER_STRATEGIES: readonly AutoRouterStrategy[] = [
+  {
+    kind: "switchyard",
+    label: "Switchyard",
+    configKey: "switchyard_router_config",
+    defaultModelKey: "switchyard_router_config",
+    hasEditor: true,
+    matches: (params) => startsWith(params, "auto_router/switchyard"),
+  },
   {
     kind: "complexity",
     label: "Complexity",

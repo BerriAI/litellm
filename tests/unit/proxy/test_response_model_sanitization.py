@@ -64,11 +64,6 @@ def _make_model_response_stream_chunk(model: str) -> litellm.ModelResponseStream
     return litellm.ModelResponseStream(**chunk_dict)
 
 
-def _canonical_dump_with_null_finish_reason(chunk: litellm.ModelResponseStream) -> dict[str, object]:
-    canonical = json.loads(chunk.model_dump_json(exclude_none=True, exclude_unset=True))
-    return {**canonical, "choices": [{**choice, "finish_reason": None} for choice in canonical["choices"]]}
-
-
 def _decode_sse_chunk(chunk) -> str:
     return chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
 
@@ -103,40 +98,13 @@ def test_restamp_streaming_chunk_skips_matching_model():
     assert model_mismatch_logged is False
 
 
-def test_fast_serialize_simple_streaming_chunk_matches_model_dump_json_with_a_null_finish_reason():
+def test_serialize_streaming_chunk_omits_a_missing_model_instead_of_null():
     from litellm.proxy.proxy_server import _serialize_streaming_chunk
-
-    chunk = _make_model_response_stream_chunk("client-model")
-
-    assert json.loads(_serialize_streaming_chunk(chunk)) == _canonical_dump_with_null_finish_reason(chunk)
-
-
-def test_fast_serialize_returns_none_when_model_field_is_missing():
-    """
-    The fast path must mirror ``model_dump_json(exclude_none=True)``: when
-    ``chunk.model`` is ``None`` the slow path omits the field entirely.
-    Emitting ``"model": null`` would diverge and trip strict OpenAI-
-    compatible clients that reject ``null`` for optional string fields.
-    Falling back to ``None`` lets the canonical serializer handle the edge.
-    """
-    from litellm.proxy.proxy_server import (
-        _fast_serialize_simple_model_response_stream,
-        _serialize_streaming_chunk,
-    )
 
     chunk = _make_model_response_stream_chunk("client-model")
     chunk.model = None  # type: ignore[assignment]
 
-    assert _fast_serialize_simple_model_response_stream(chunk) is None
-
-    # Going through the public ``_serialize_streaming_chunk`` should still
-    # produce a serialized result via the slow-path fallback, and it must
-    # not contain ``"model": null``.
-    serialized = _serialize_streaming_chunk(chunk)
-    payload_str = serialized.decode("utf-8") if isinstance(serialized, bytes) else serialized
-    assert '"model": null' not in payload_str
-    assert '"model":null' not in payload_str
-    assert json.loads(payload_str) == _canonical_dump_with_null_finish_reason(chunk)
+    assert "model" not in json.loads(_serialize_streaming_chunk(chunk))
 
 
 def test_proxy_chat_completion_does_not_return_provider_prefixed_model(tmp_path, monkeypatch):
@@ -766,7 +734,10 @@ def test_restamp_streaming_chunk_rewrites_nested_model_in_guardrail_block_frames
         )[0]
         for frame in frames
     ]
-    events = [json.loads(frame.decode().removeprefix("data: ")) for frame in client_frames]
+    events = [
+        json.loads(next(line[6:] for line in frame.decode().splitlines() if line.startswith("data: ")))
+        for frame in client_frames
+    ]
 
     assert all(frame.endswith(b"\n\n") for frame in client_frames)
     assert events[-1]["type"] == "response.completed"

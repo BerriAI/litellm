@@ -24,7 +24,9 @@ from typing import Final, Protocol, runtime_checkable
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX
 from litellm.proxy._types import LiteLLMRoutes
+from litellm.proxy.auth.route_checks import RouteChecks
 
 
 class BillableCategory(str, Enum):
@@ -100,22 +102,29 @@ _LLM_ROUTE_EXACT: Final[tuple[str, ...]] = (
 # inference calls that write SpendLogs rows, so they bill. Anchored to the
 # routes enum so new providers are picked up without touching this module.
 # /langfuse forwards observability traffic, not inference: it writes no
-# SpendLogs row and must not bill.
-_NON_BILLABLE_PASSTHROUGH_PREFIXES: Final = frozenset({"/langfuse"})
+# SpendLogs row and must not bill. /opensearch bills only index searches, like
+# /v1/vector_stores/{id}/search, and never its document writes or lookups.
+_NON_BILLABLE_PASSTHROUGH_PREFIXES: Final = frozenset({"/langfuse", OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX})
 _PASSTHROUGH_PREFIXES: Final[tuple[str, ...]] = tuple(
     prefix
     for prefix in LiteLLMRoutes.mapped_pass_through_routes.value
     if prefix not in _NON_BILLABLE_PASSTHROUGH_PREFIXES
 )
 
+_OPENSEARCH_INDEX_SEARCH: Final = re.compile(rf"{re.escape(OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX)}/[^/]+/_search")
+
 
 def _classify_llm_route(path: str) -> str | None:
+    if path.startswith(f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/"):
+        return OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX if _OPENSEARCH_INDEX_SEARCH.fullmatch(path) else None
     exact_match: Final = next((route for route in _LLM_ROUTE_EXACT if path == route), None)
     if exact_match is not None:
         return exact_match
     suffix_match = next((suffix for suffix in _LLM_ROUTE_SUFFIXES if path == suffix or path.endswith(suffix)), None)
     if suffix_match is not None:
         return suffix_match
+    if RouteChecks.is_builtin_eu_jev_decision_route(route=path):
+        return path
     # Deep passthrough paths only: the bare prefix itself is not an inference call.
     return next((prefix for prefix in _PASSTHROUGH_PREFIXES if path.startswith(f"{prefix}/")), None)
 

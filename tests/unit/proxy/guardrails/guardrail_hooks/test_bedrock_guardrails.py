@@ -27,8 +27,9 @@ from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
     _redact_pii_matches,
 )
+from litellm.proxy.guardrails.guardrail_initializers import initialize_bedrock
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import BedrockGuardrailOutputScope, Guardrail, GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
     BedrockTextContent,
@@ -1021,6 +1022,64 @@ def _anthropic_tool_result_conversation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [None, "INTERVENTIONS", "FULL"])
+async def test_configured_output_scope_reaches_bedrock_and_preserves_healthy_assessments(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, scope: str | None
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    params: Final = LitellmParams.model_validate(
+        {
+            "guardrail": "bedrock",
+            "mode": "post_call",
+            "guardrailIdentifier": "test-guardrail",
+            "guardrailVersion": "DRAFT",
+            "contextual_grounding_from_messages": True,
+            "aws_access_key_id": "test-access-key",
+            "aws_secret_access_key": "test-secret-key",
+            "aws_region_name": "us-east-1",
+            "aws_bedrock_runtime_endpoint": "https://bedrock.example",
+            **({"outputScope": scope} if scope is not None else {}),
+        }
+    )
+    guardrail: Final = initialize_bedrock(params, Guardrail(guardrail_name="grounding", litellm_params=params))
+    assessment: Final = {
+        "contextualGroundingPolicy": {
+            "filters": [{"type": "GROUNDING", "score": 0.96, "threshold": 0.8, "detected": False, "action": "NONE"}]
+        }
+    }
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"action": "NONE", "assessments": [assessment] if body.get("outputScope") == "FULL" else []},
+        )
+
+    route: Final = respx_mock.post("https://bedrock.example/guardrail/test-guardrail/version/DRAFT/apply").mock(
+        side_effect=provider
+    )
+    request_data: Final = {
+        "messages": [
+            {"role": "system", "content": "The tower is 330 metres tall."},
+            {"role": "user", "content": "How tall is the tower?"},
+        ]
+    }
+    result: Final = await guardrail.apply_guardrail(
+        inputs={"texts": ["The tower is 330 metres tall."]}, request_data=request_data, input_type="response"
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    if scope is None:
+        assert "outputScope" not in sent
+    else:
+        assert sent["outputScope"] == scope
+    assert sent["source"] == "OUTPUT"
+    assert result["texts"] == ["The tower is 330 metres tall."]
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"][-1]["guardrail_response"]
+    assert recorded["assessments"] == ([assessment] if scope == "FULL" else [])
+
+
+@pytest.mark.asyncio
 async def test_during_call_hook_skips_bedrock_call_for_tool_result_only_turn():
     """A tool_result-only latest user turn must not post an empty content list to Bedrock.
 
@@ -1805,7 +1864,11 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
 
 @pytest.mark.asyncio
 async def test_make_bedrock_api_request_filters_dynamic_evaluation_overrides():
-    guardrail = BedrockGuardrail(guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT")
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        outputScope=BedrockGuardrailOutputScope.INTERVENTIONS,
+    )
     mock_credentials = MagicMock()
     mock_credentials.access_key = "test-access-key"
     mock_credentials.secret_key = "test-secret-key"
