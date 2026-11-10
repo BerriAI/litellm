@@ -184,6 +184,9 @@ class ResponsesSessionHandler:
                 item_cache_control=item_cache_control,
             )
             input_before_blank_tail: Final = without_blank_user_tail(stored_input)
+            inference_continues_the_blank_tail: Final = empty_user_turn_text == "" and len(
+                input_before_blank_tail
+            ) < len(stored_input)
             restored_turn: Final = (
                 restored_empty_user_turn(
                     response_input_param,
@@ -192,7 +195,7 @@ class ResponsesSessionHandler:
                     partial(_stored_turn_fills_empty_user_turns, spend_log),
                     text=empty_user_turn_text,
                 )
-                if empty_user_turn_text is not None and output_messages
+                if empty_user_turn_text is not None and output_messages and not inference_continues_the_blank_tail
                 else ()
             )
             chat_completion_message_history.extend(input_before_blank_tail if restored_turn else stored_input)
