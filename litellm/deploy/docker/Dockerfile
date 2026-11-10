@@ -115,11 +115,11 @@ RUN uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no
 
 RUN uv pip install --python /app/.venv/bin/python --no-deps /wheels/litellm_proxy-*.whl
 
-RUN cp -r litellm/enterprise "$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/litellm/enterprise"
+RUN cp -r litellm/enterprise litellm/runtime "$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/litellm/"
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
-    prisma generate --schema=./schema.prisma
+    prisma generate --schema=litellm/schema.prisma
 
 RUN sed -i 's/\r$//' litellm/deploy/docker/docker-entrypoint.sh && chmod +x litellm/deploy/docker/docker-entrypoint.sh
 
@@ -180,14 +180,12 @@ ENV PATH="/app/.venv/bin:${PATH}" \
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=liteadmin-builder /opt/liteadmin /opt/liteadmin
 COPY --from=builder /app/litellm/deploy/docker/docker-entrypoint.sh /app/docker-entrypoint.sh
-COPY --from=builder /app/schema.prisma /app/schema.prisma
+COPY --from=builder /app/litellm/schema.prisma /app/litellm/schema.prisma
+COPY --from=builder /app/gateway /app/gateway
 COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
 # enterprise/ is imported by source path at runtime (proxy_cli puts the
 # working directory on sys.path; litellm/proxy/hooks resolves
 # litellm.enterprise.enterprise_hooks from it)
-COPY --from=builder /app/gateway /app/gateway
-COPY --from=builder /app/backend /app/backend
-COPY --from=builder /app/migrations /app/migrations
 COPY --from=builder /opt/prisma /opt/prisma
 COPY --from=builder /var/lib/litellm /var/lib/litellm
 COPY litellm/ui/nginx.conf /etc/nginx/nginx.conf
@@ -205,7 +203,7 @@ RUN find /app/.venv -depth -type d -path "*/tornado/test" -exec rm -rf {} + && \
     ls /opt/prisma/binaries/node_modules/@prisma/engines/query-engine-* >/dev/null && \
     python -c "from prisma.client import BINARY_PATHS; paths = list(BINARY_PATHS.query_engine.values()); assert paths and all(p.startswith('/opt/prisma/') for p in paths), paths" && \
     python -c "from litellm.rust_bridge.loader import native_bridge_available; assert native_bridge_available()" && \
-    python -c "import gateway.launch, backend.main"
+    python -c "import gateway.launch, litellm.runtime.backend.main"
 
 USER 65532:65532
 

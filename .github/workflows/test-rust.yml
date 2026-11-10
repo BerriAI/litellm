@@ -6,9 +6,9 @@ on:
       - "litellm/rust/**"
       - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
-      - "scripts/generate_trace_types.py"
-      - "scripts/trace_codegen/**"
-      - "scripts/lens_assets/**"
+      - "litellm/scripts/generate_trace_types.py"
+      - "litellm/scripts/trace_codegen/**"
+      - "litellm/scripts/lens_assets/**"
       - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
@@ -41,9 +41,9 @@ on:
       - "litellm/rust/**"
       - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
-      - "scripts/generate_trace_types.py"
-      - "scripts/trace_codegen/**"
-      - "scripts/lens_assets/**"
+      - "litellm/scripts/generate_trace_types.py"
+      - "litellm/scripts/trace_codegen/**"
+      - "litellm/scripts/lens_assets/**"
       - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
@@ -160,7 +160,7 @@ jobs:
 
       - name: Check generated trace contracts
         working-directory: .
-        run: uv run scripts/generate_trace_types.py --check
+        run: uv run litellm/scripts/generate_trace_types.py --check
 
       - run: cargo nextest run --workspace --locked
 

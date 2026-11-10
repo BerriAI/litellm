@@ -30,9 +30,9 @@ Every LiteLLM container runs the same image. The first word of the container com
 |--------------|-----------------------------------------------------|------|
 | `proxy`      | `litellm ...` (everything in one process, default)  | 4000 |
 | `gateway`    | `python -m gateway.launch ...` (inference routes)   | 4000 |
-| `backend`    | `uvicorn backend.main:app ...` (management routes)  | 4001 |
+| `backend`    | `uvicorn litellm.runtime.backend.main:app ...` (management routes)  | 4001 |
 | `ui`         | nginx serving the static admin UI                   | 3000 |
-| `migrations` | `python migrations/run.py`, `prisma migrate deploy` then exit | |
+| `migrations` | `python -m litellm.runtime.migrations.run`, `prisma migrate deploy` then exit | |
 | `metrics`    | `python -m litellm.proxy.prometheus_metrics_server ...` | `--port` |
 | `collector`  | `python -m litellm.proxy.collector ...`             | |
 

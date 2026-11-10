@@ -128,10 +128,10 @@ def _entrypoint_argv(dockerfile: Path) -> tuple[str, ...]:
             "exec=python",
             "args=-m gateway.launch --workers 1 --host 0.0.0.0 --port 4000 --port 8080",
         ),
-        (("backend",), "exec=uvicorn", "args=backend.main:app --host 0.0.0.0 --port 4001"),
-        (("backend", "--port", "9001"), "exec=uvicorn", "args=backend.main:app --host 0.0.0.0 --port 4001 --port 9001"),
+        (("backend",), "exec=uvicorn", "args=litellm.runtime.backend.main:app --host 0.0.0.0 --port 4001"),
+        (("backend", "--port", "9001"), "exec=uvicorn", "args=litellm.runtime.backend.main:app --host 0.0.0.0 --port 4001 --port 9001"),
         (("ui",), "exec=nginx", "args=-g daemon off;"),
-        (("migrations",), "exec=python", "args=/app/migrations/run.py"),
+        (("migrations",), "exec=python", "args=-m litellm.runtime.migrations.run"),
         (("metrics", "--port", "9090"), "exec=python", "args=-m litellm.proxy.prometheus_metrics_server --port 9090"),
         (("collector",), "exec=python", "args=-m litellm.proxy.collector"),
     ],
@@ -172,7 +172,7 @@ def test_the_dockerfile_leaves_the_command_empty_so_the_env_var_can_pick_the_com
 @pytest.mark.parametrize(
     "component, argv, expected_exec, expected_args",
     [
-        ("backend", (), "exec=uvicorn", "args=backend.main:app --host 0.0.0.0 --port 4001"),
+        ("backend", (), "exec=uvicorn", "args=litellm.runtime.backend.main:app --host 0.0.0.0 --port 4001"),
         (
             "gateway",
             ("--port", "4100"),
@@ -284,7 +284,7 @@ def test_ddtrace_disabled_execs_the_command_directly(tmp_path: Path) -> None:
 
     assert recorded == (
         "exec=uvicorn",
-        "args=backend.main:app --host 0.0.0.0 --port 4001 --workers 2",
+        "args=litellm.runtime.backend.main:app --host 0.0.0.0 --port 4001 --workers 2",
         "DD_TRACE_OPENAI_ENABLED=<unset>",
         f"PYTHONPATH={PYTHONPATH_SENTINEL}",
     )
@@ -362,7 +362,7 @@ def test_a_raw_metrics_reader_keeps_the_workers_samples(argv: tuple[str, ...], t
     [
         ("python", "-m", "gateway.launch"),
         ("litellm", "--config", "/app/config.yaml"),
-        ("uvicorn", "backend.main:app"),
+        ("uvicorn", "litellm.runtime.backend.main:app"),
     ],
 )
 def test_a_raw_writer_starts_with_an_empty_prometheus_multiproc_dir(argv: tuple[str, ...], tmp_path: Path) -> None:

@@ -54,7 +54,7 @@ CI = [".github/workflows/test-unit.yml"]
         ("mcp-dependencies", ["litellm/mcp_client/client.py"], "run"),
         ("mcp-dependencies", ["tests/e2e/mcp/datadog_mcp.py"], "run"),
         ("mcp-dependencies", ["litellm/proxy-extras/pyproject.toml"], "run"),
-        ("mcp-dependencies", ["scripts/check_mcp_sdk_install.py"], "run"),
+        ("mcp-dependencies", ["litellm/scripts/check_mcp_sdk_install.py"], "run"),
         ("mcp-dependencies", [".github/workflows/test-mcp-dependency-resolution.yml"], "run"),
         ("mcp-dependencies", [".github/scripts/ci/classify_changes.sh"], "run"),
         ("mcp-dependencies", ["litellm/llms/openai/chat/gpt_transformation.py"], "skip"),

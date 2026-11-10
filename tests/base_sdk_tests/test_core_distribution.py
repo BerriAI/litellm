@@ -31,7 +31,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 def test_build_command_selects_requested_distributions(
     tmp_path: Path, sdist_only: bool, package_cli_args: tuple[str, ...], package: str
 ) -> None:
-    from scripts.build_core_distribution import main
+    from litellm.scripts.build_core_distribution import main
 
     output: Final = tmp_path / "dist"
     arguments: Final = ["build_core_distribution.py", *package_cli_args, "--out-dir", str(output)] + (
@@ -39,8 +39,8 @@ def test_build_command_selects_requested_distributions(
     )
     with (
         patch.object(sys, "argv", arguments),
-        patch("scripts.build_core_distribution.stage_core_distribution") as stage,
-        patch("scripts.build_core_distribution.subprocess.run") as run,
+        patch("litellm.scripts.build_core_distribution.stage_core_distribution") as stage,
+        patch("litellm.scripts.build_core_distribution.subprocess.run") as run,
     ):
         main()
         run.assert_called_once()
@@ -67,7 +67,7 @@ def source_repository(tmp_path: Path) -> Path:
 def test_staging_stamps_release_version_without_modifying_sources(
     tmp_path: Path, source_repository: Path, package: str
 ) -> None:
-    from scripts.build_core_distribution import SOURCES, stage_core_distribution
+    from litellm.scripts.build_core_distribution import SOURCES, stage_core_distribution
 
     source: Final = source_repository
     for name in SOURCES:
@@ -112,7 +112,7 @@ def test_staging_stamps_release_version_without_modifying_sources(
 
 
 def test_gateway_staging_refuses_manifest_without_in_tree_rust_path(tmp_path: Path, source_repository: Path) -> None:
-    from scripts.build_core_distribution import SOURCES, stage_core_distribution
+    from litellm.scripts.build_core_distribution import SOURCES, stage_core_distribution
 
     source: Final = source_repository
     for name in SOURCES:
@@ -215,7 +215,7 @@ def test_core_sdist_rebuilds_without_repository(distributions: tuple[Path, Path]
     with tarfile.open(distributions[1]) as archive:
         archive.extractall(tmp_path, filter="data")
     source: Final = next(tmp_path.glob("litellm_core-*"))
-    assert not (source / "scripts/build_core_distribution.py").exists()
+    assert not (source / "litellm/scripts/build_core_distribution.py").exists()
     assert tomllib.loads((source / "pyproject.toml").read_text())["project"]["name"] == "litellm-core"
     result: Final = subprocess.run(
         ["uv", "build", "--python", sys.executable, "--wheel", "--out-dir", str(tmp_path / "rebuilt")],
@@ -233,7 +233,7 @@ def test_core_sdist_rebuilds_without_repository(distributions: tuple[Path, Path]
 
 
 def test_staging_copies_sources_without_build_artifacts(tmp_path: Path, source_repository: Path) -> None:
-    from scripts.build_core_distribution import SOURCES, stage_core_distribution
+    from litellm.scripts.build_core_distribution import SOURCES, stage_core_distribution
 
     source: Final = source_repository
     for name in SOURCES:
@@ -255,7 +255,7 @@ def test_staging_copies_sources_without_build_artifacts(tmp_path: Path, source_r
 
 
 def test_staging_preserves_gitignore_rules(tmp_path: Path, source_repository: Path) -> None:
-    from scripts.build_core_distribution import SOURCES, stage_core_distribution
+    from litellm.scripts.build_core_distribution import SOURCES, stage_core_distribution
 
     source: Final = source_repository
     for name in SOURCES:
@@ -287,7 +287,7 @@ def test_staging_preserves_gitignore_rules(tmp_path: Path, source_repository: Pa
 
 
 def test_staging_rejects_missing_release_version(tmp_path: Path) -> None:
-    from scripts.build_core_distribution import stage_core_distribution
+    from litellm.scripts.build_core_distribution import stage_core_distribution
 
     manifest: Final = tmp_path / "litellm/packaging/litellm-core/pyproject.toml"
     manifest.parent.mkdir(parents=True)

@@ -10,13 +10,13 @@ on:
       - litellm/deploy/docker/Dockerfile
       - litellm/deploy/docker/Dockerfile.dockerignore
       - litellm/deploy/docker/docker-entrypoint.sh
-      - migrations/run.py
+      - litellm/runtime/migrations/run.py
       - gateway/main.py
       - gateway/launch.py
       - gateway/routes/allowlist.py
       - litellm/cli/**
-      - backend/main.py
-      - backend/routes/allowlist.py
+      - litellm/runtime/backend/main.py
+      - litellm/runtime/backend/routes/allowlist.py
       - litellm/rust/**
       - litellm/proxy/lens/**
       - litellm/proxy/prisma_migration.py

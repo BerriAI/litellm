@@ -160,7 +160,7 @@ def dispatch(scripts: Scripts) -> Responder:
             return Reply(body=_MODEL_DISCOVERY_BODY)
         if request.target.startswith(TAVILY_TARGET):
             return tavily_reply(request)
-        script: Final = scripts.lookup(request.body)
+        script: Final = litellm.scripts.lookup(request.body)
         if script is None:
             return Reply(
                 status=500, body=json.dumps({"error": {"message": f"no script for {request.target}"}}).encode()

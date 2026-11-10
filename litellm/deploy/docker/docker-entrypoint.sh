@@ -8,9 +8,9 @@
 #
 #   proxy       litellm ARGS                     everything in one process (default)
 #   gateway     python -m gateway.launch ARGS    inference routes, 0.0.0.0:4000
-#   backend     uvicorn backend.main:app ARGS    management routes, 0.0.0.0:4001
+#   backend     uvicorn litellm.runtime.backend.main:app ARGS    management routes, 0.0.0.0:4001
 #   ui          nginx serving the admin UI       port 3000
-#   migrations  python migrations/run.py         prisma migrate deploy, then exit
+#   migrations  python litellm/runtime/migrations/run.py         prisma migrate deploy, then exit
 #   metrics     python -m litellm.proxy.prometheus_metrics_server ARGS
 #   collector   python -m litellm.proxy.collector ARGS
 #   --admin-agent  the bundled LiteAdmin Slack agent (litellm-admin-agent --web ARGS)
@@ -88,13 +88,13 @@ os.execvp("litellm", ["litellm", *sys.argv[1:]])' "$@"
         set -- python -m gateway.launch --workers "${NUM_WORKERS:-1}" --host 0.0.0.0 --port 4000 "$@"
         ;;
     backend)
-        set -- uvicorn backend.main:app --host 0.0.0.0 --port 4001 "$@"
+        set -- uvicorn litellm.runtime.backend.main:app --host 0.0.0.0 --port 4001 "$@"
         ;;
     ui)
         exec nginx -g 'daemon off;' "$@"
         ;;
     migrations)
-        set -- python /app/migrations/run.py "$@"
+        set -- python -m litellm.runtime.migrations.run "$@"
         ;;
     metrics)
         set -- python -m litellm.proxy.prometheus_metrics_server "$@"
