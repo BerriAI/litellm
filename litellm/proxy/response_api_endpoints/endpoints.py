@@ -2219,6 +2219,31 @@ async def _key_team_object(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_TeamTab
         return team_from_key
 
 
+async def _bill_rejected_frame(
+    user_api_key_dict: UserAPIKeyAuth,
+    exception: Exception,
+    frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
+) -> None:
+    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's slot release,
+    alerting) belong to the live connection, which stays open. Billing never replaces the guardrail's own error."""
+    for callback in litellm.callbacks:
+        if isinstance(callback, ProxyDBLogger):
+            try:
+                await callback.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict
+                    request_data=frame_data, original_exception=exception, user_api_key_dict=user_api_key_dict
+                )
+            except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
+                verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
+
+
+async def _skip_rejected_frame_billing(
+    _user_api_key_dict: UserAPIKeyAuth,
+    _exception: Exception,
+    _frame_data: dict[str, object],  # mutable-ok: matches the rejected-frame biller's signature
+) -> None:
+    return None
+
+
 def _responses_ws_frame_guard(
     admitted: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
@@ -2226,6 +2251,10 @@ def _responses_ws_frame_guard(
     failed_turns: "_FailedTurns",
     *,
     team_object: Callable[[UserAPIKeyAuth], Awaitable[LiteLLM_TeamTable | None]] = _key_team_object,
+    bill_rejected_frame: Callable[  # mutable-ok: the spend logger stamps the row on the dict
+        [UserAPIKeyAuth, Exception, dict[str, object]],
+        Awaitable[None],
+    ] = _bill_rejected_frame,
 ) -> ResponsesWsFrameGuard:
     """Socket admission skips guardrails (the first frame's ``input`` is not part of the admitted request), so every
     ``response.create`` frame gets the pre_call and during_call guardrail walks the HTTP ``/v1/responses`` path runs on
@@ -2254,11 +2283,12 @@ def _responses_ws_frame_guard(
         data: dict[str, object],  # mutable-ok: billed
         frame: str,
     ) -> ResponsesWsFrameRejection:
-        await _bill_rejected_frame(rejected_frame_auth, exception, _with_frame_request(data, frame, connection_request))
+        await bill_rejected_frame(rejected_frame_auth, exception, _with_frame_request(data, frame, connection_request))
         proxy_exception: Final = proxy_exception_from_route_error(exception)
         return ResponsesWsFrameRejection(proxy_exception.message, proxy_exception.provider_specific_fields)
 
     async def guard(frame: str) -> GuardedResponsesWsFrame:
+        failed_turns.saw_frame()
         frame_obj: Final = _WS_FRAME.validate_json(frame)
         nested: Final = frame_obj.get("response")
         body: Final = _WS_FRAME.validate_python(nested) if isinstance(nested, dict) else frame_obj
@@ -2306,7 +2336,7 @@ def _responses_ws_frame_guard(
                 f"a guardrail rerouted this turn to {guarded_data.get('model')!r}; an open Responses WebSocket"
                 f" is bound to {model!r}, send this turn over HTTP /v1/responses"
             )
-            await _bill_rejected_frame(
+            await bill_rejected_frame(
                 rejected_frame_auth, rerouted, _with_frame_request(frame_data, frame, connection_request)
             )
             raise rerouted
@@ -2527,23 +2557,6 @@ def _is_proxy_owned_metadata_key(name: str) -> bool:
     )
 
 
-async def _bill_rejected_frame(
-    user_api_key_dict: UserAPIKeyAuth,
-    exception: Exception,
-    frame_data: dict[str, object],  # mutable-ok: the spend logger stamps the failure row on the request dict
-) -> None:
-    """Only the spend logger sees a rejected frame; the other failure hooks (the rate limiter's slot release,
-    alerting) belong to the live connection, which stays open. Billing never replaces the guardrail's own error."""
-    for callback in litellm.callbacks:
-        if isinstance(callback, ProxyDBLogger):
-            try:
-                await callback.async_post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict
-                    request_data=frame_data, original_exception=exception, user_api_key_dict=user_api_key_dict
-                )
-            except Exception:  # noqa: BLE001  # billing never replaces the guardrail's own error
-                verbose_proxy_logger.exception("[Non-Blocking] Responses WebSocket: billing a rejected frame failed")
-
-
 def _recorded_pii_tokens(metadata: object) -> Mapping[str, str]:
     """Presidio stores the tokens it masked a frame with in ``metadata.pii_tokens``; the socket unmasks with them."""
     recorded: Final = _WS_FRAME.validate_python(metadata).get("pii_tokens") if isinstance(metadata, dict) else None
@@ -2558,11 +2571,16 @@ class _FailedTurns:
     """Turns that failed or that the deployment refused after their guardrails passed. The socket's close-time
     failure row stores the request of the turn whose failure it bills and bills the refused turns' guardrail records,
     so its failure hooks, model group and call type cover those turns too, and the first refusal is that row's
-    exception when the session limit cancels the relay before it returns one."""
+    exception when the session limit cancels the relay before it returns one. A socket whose relay guarded no frame
+    failed on its first frame, so that row stores the first frame's request."""
 
     first: Exception | None = None
     records: tuple[Mapping[str, object], ...] = ()
     requests: tuple[tuple[Exception, Mapping[str, object]], ...] = ()
+    guarded_a_frame: bool = False
+
+    def saw_frame(self) -> None:
+        self.guarded_a_frame = True
 
     def add(self, records: tuple[Mapping[str, object], ...], refusal: Exception) -> None:
         self.records = (*self.records, *records)
@@ -2602,6 +2620,20 @@ class _FailedTurns:
                 "body": with_connection_end_user(connection_request, request),
             },
         }
+
+
+async def _add_first_frame_request(
+    failed_turns: _FailedTurns, failure: Exception, first_message: str, guard: ResponsesWsFrameGuard
+) -> None:
+    """A socket that fails before its relay guards the first frame failed on that frame's turn, so its failure row
+    stores the turn's request as its guardrails leave it, or without the fields they read when they refuse it."""
+    try:
+        guarded: Final = await guard(first_message)
+    except Exception:  # noqa: BLE001  # the failure row is written whatever the guardrails do with the frame
+        failed_turns.add_request(failure, _forwarded_frame_fields(responses_ws_turn_request_body(first_message)))
+        return
+    failed_turns.add(guarded.guardrail_information, failure)
+    failed_turns.add_request(failure, responses_ws_turn_request_body(guarded.frame))
 
 
 def _recorded_guardrail_information(bucket: object) -> tuple[Mapping[str, object], ...]:
@@ -2722,6 +2754,15 @@ async def _responses_websocket_session(
     )
 
     async def write_failure_row(exception: Exception) -> None:
+        if not failed_turns.guarded_a_frame:
+            first_frame_guard: Final = _responses_ws_frame_guard(
+                data,
+                user_api_key_dict,
+                proxy_logging_obj,
+                _FailedTurns(),
+                bill_rejected_frame=_skip_rejected_frame_billing,
+            )
+            await _add_first_frame_request(failed_turns, exception, first_message, first_frame_guard)
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=exception,
