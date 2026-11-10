@@ -52,6 +52,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     Member,
     ProxyException,
+    ReconcileOutcome,
 )
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.users.service import PrismaOrgRoles
@@ -2137,14 +2138,55 @@ async def test_project_quota_check_reads_the_route_another_worker_just_wrote(
 ) -> None:
     route_in_db: Final = _clip_studio_router("vertex_ai/gemini-3.8-flash")
 
-    async def load_models_from_db(prisma_client: object, proxy_logging_obj: object) -> None:
+    async def load_models_from_db(prisma_client: object, proxy_logging_obj: object) -> ReconcileOutcome:
         monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", route_in_db)
+        return ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "add_deployment", load_models_from_db)
 
     with pytest.raises(ProxyException) as exc_info:
         await write_project(monkeypatch)
+
+    assert exc_info.value.code == "400"
+    assert "clip-studio (model_rpm_limit and model_tpm_limit)" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "write_project",
+    [_create_clip_studio_project, _add_clip_studio_to_project],
+    ids=["create", "update"],
+)
+async def test_project_quota_check_refuses_stale_routes_when_the_model_reload_fails(
+    monkeypatch: pytest.MonkeyPatch, write_project: Callable[[pytest.MonkeyPatch], Awaitable[None]]
+) -> None:
+    async def fail_to_read_models(prisma_client: object, proxy_logging_obj: object) -> ReconcileOutcome:
+        return ReconcileOutcome(still_desired=None, live_after=None)
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "add_deployment", fail_to_read_models)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await write_project(monkeypatch)
+
+    assert exc_info.value.code == "503"
+
+
+@pytest.mark.asyncio
+async def test_project_quota_check_reads_the_first_router_built_from_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def build_first_router(prisma_client: object, proxy_logging_obj: object) -> ReconcileOutcome:
+        monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _clip_studio_router("vertex_ai/gemini-3.8-flash"))
+        return ReconcileOutcome(still_desired=None, live_after=None)
+
+    _enforced_new_project_mocks(
+        monkeypatch, team_models=["clip-studio"], llm_router=None, quota_setting=_CUSTOMER_QUOTA_POLICY
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server.proxy_config, "add_deployment", build_first_router)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_new_project(NewProjectRequest(team_id="test-team", models=["clip-studio"]))
 
     assert exc_info.value.code == "400"
     assert "clip-studio (model_rpm_limit and model_tpm_limit)" in str(exc_info.value.message)

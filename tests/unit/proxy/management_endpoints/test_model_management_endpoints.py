@@ -7717,6 +7717,19 @@ def _use_quota_proxy(monkeypatch: pytest.MonkeyPatch, prisma: MagicMock, router:
     monkeypatch.setattr(proxy_server, "premium_user", True)
 
 
+def _use_db_backed_quota_proxy(monkeypatch: pytest.MonkeyPatch, prisma: MagicMock, router: Router) -> None:
+    from litellm.proxy import proxy_server
+
+    async def reload_finds_the_router_current(prisma_client: object, proxy_logging_obj: object) -> ReconcileOutcome:
+        return ReconcileOutcome(
+            still_desired=frozenset(router.get_model_ids()), live_after=frozenset(router.get_model_ids())
+        )
+
+    _use_quota_proxy(monkeypatch, prisma, router)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", reload_finds_the_router_current)
+
+
 _ADMIN: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
@@ -7780,15 +7793,14 @@ async def test_team_model_add_goes_through_when_its_projects_meet_the_new_route(
 async def test_team_model_update_rejects_moving_its_route_where_its_projects_lack_quota(
     monkeypatch: pytest.MonkeyPatch, endpoint: str
 ) -> None:
-    from litellm.proxy import proxy_server
-
     runway_by_prefix: Final = {"model": "runwayml/gen4_turbo"}
     prisma: Final = _media_team_db("jev-latest", {})
     prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
         return_value=_team_model_row("jev-latest", runway_by_prefix)
     )
-    _use_quota_proxy(monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, runway_by_prefix))
-    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    _use_db_backed_quota_proxy(
+        monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, runway_by_prefix)
+    )
     moved_to_vertex: Final = updateLiteLLMParams(model="vertex_ai/gemini-3.8-flash", vertex_project="qa-project")
 
     write: Final = (
@@ -7850,12 +7862,9 @@ async def test_team_model_patch_rechecks_projects_listing_any_name_it_serves(
     team_params: Mapping[str, object],
     moved_to: updateLiteLLMParams,
 ) -> None:
-    from litellm.proxy import proxy_server
-
     prisma: Final = _media_team_db(project_model, {})
     prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row(public_name, team_params))
-    _use_quota_proxy(monkeypatch, prisma, _team_route_router(public_name, team_params))
-    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    _use_db_backed_quota_proxy(monkeypatch, prisma, _team_route_router(public_name, team_params))
 
     with pytest.raises(ProxyException) as error:
         await patch_model(
@@ -7929,13 +7938,13 @@ def test_model_update_under_the_boolean_setting_never_rejects_as_on_main(
 async def test_team_model_patch_rejects_a_removal_that_moves_its_route_where_its_projects_lack_quota(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm.proxy import proxy_server
     from litellm.types.proxy.management_endpoints.model_management_endpoints import PatchModelRequest
 
     prisma: Final = _media_team_db("jev-latest", {})
     prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=_team_model_row("jev-latest", _TEAM_RUNWAY))
-    _use_quota_proxy(monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, _TEAM_RUNWAY))
-    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    _use_db_backed_quota_proxy(
+        monkeypatch, prisma, _quota_router("jev-latest", {"model": "openai/jev-latest"}, _TEAM_RUNWAY)
+    )
 
     with pytest.raises(ProxyException) as error:
         await patch_model(

@@ -12,18 +12,21 @@ own, so a miss on an auto router reconciles every row instead of just its own,
 or the first routed request on this replica would pick a tier it has not loaded.
 A check that judges a model by the provider it routes to, rather than by whether it
 exists, reconciles the whole router first, since a sibling's edit leaves the name
-loaded here with its old route.
+loaded here with its old route, and answers 503 when that reconcile fails rather than judge by the old route.
 """
 
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from fastapi import status
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
 if TYPE_CHECKING:
@@ -229,15 +232,37 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
         return True
 
 
-async def model_router_reconciled_with_db() -> "Router | None":
+@dataclass(frozen=True, slots=True)
+class ModelRoutesUnconfirmed:
+    pass
+
+
+async def _reconcile_model_router_with_db() -> "Router | None | ModelRoutesUnconfirmed":
     from litellm.proxy import proxy_server
 
     prisma_client: Final = proxy_server.prisma_client
-    if prisma_client is not None and _db_backed_registries_enabled("models"):
-        await proxy_server.proxy_config.add_deployment(
-            prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
-        )
+    if prisma_client is None or not _db_backed_registries_enabled("models"):
+        return proxy_server.llm_router
+    router_before: Final = proxy_server.llm_router
+    outcome: Final = await proxy_server.proxy_config.add_deployment(
+        prisma_client=prisma_client, proxy_logging_obj=proxy_server.proxy_logging_obj
+    )
+    if router_before is not None and outcome.still_desired is None:
+        return ModelRoutesUnconfirmed()
     return proxy_server.llm_router
+
+
+async def model_router_reconciled_with_db() -> "Router | None":
+    match await _reconcile_model_router_with_db():
+        case ModelRoutesUnconfirmed():
+            raise ProxyException(
+                message="Could not reload the model routes from the database to check project model quotas. Retry.",
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=None,
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        case router:
+            return router
 
 
 def _model_is_loaded(model_name_or_id: str) -> bool:
