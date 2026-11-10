@@ -244,6 +244,28 @@ async def test_a_worker_that_writes_after_another_worker_claimed_the_reply_keeps
         assert not await allows(worker, INTRUDER, "msg_raced")
 
 
+@pytest.mark.asyncio
+async def test_every_redis_command_for_a_thread_binding_is_traced_under_the_message_thread_owners_family(
+    router_redis: tuple[RedisCache, asyncio.Queue[tuple[tuple[object, ...], str | None, str | None]]],
+) -> None:
+    redis_cache, commands = router_redis
+    creating_worker: Final = MessageThreadOwnership(
+        message_thread_owner_cache=InternalUsageCache(DualCache(redis_cache=redis_cache))
+    )
+    continuing_worker: Final = MessageThreadOwnership(
+        message_thread_owner_cache=InternalUsageCache(DualCache(redis_cache=redis_cache))
+    )
+    await creating_worker.async_post_call_success_hook(
+        data={"thread": CREATE}, user_api_key_dict=OWNER, response=anthropic_message("msg_traced")
+    )
+
+    assert await allows(continuing_worker, OWNER, "msg_traced")
+    sent: Final = tuple(commands.get_nowait() for _ in range(commands.qsize()))
+    thread_commands: Final = tuple((str(args[0]), target) for args, target, _ in sent if args[0] != "CLIENT")
+    assert {command for command, _ in thread_commands} == {"GET", "SET"}
+    assert {target for _, target in thread_commands} == {"message_thread_owners"}
+
+
 @pytest.mark.parametrize("call_type", ("acompletion", "aresponses"))
 @pytest.mark.asyncio
 async def test_a_thread_continue_on_another_route_stays_with_the_key_that_created_the_thread(

@@ -7,6 +7,7 @@ import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
@@ -283,12 +284,14 @@ class MessageThreadOwnership(CustomLogger):
             if not scanner.finished and (message_id := scanner.scan(chunk)) is not None:
                 await self._record_owner(message_id, user_api_key_dict, _sent_anthropic_beta(request_data))
 
+    @with_service_target("message_thread_owners")
     async def _binding(self, message_id: str, user_api_key_dict: "UserAPIKeyAuth") -> _ThreadBinding | None:
         cached: Final[object] = await self._owners.async_get_cache(
             key=_owner_key(message_id), litellm_parent_otel_span=user_api_key_dict.parent_otel_span
         )
         return _as_binding(cached)
 
+    @with_service_target("message_thread_owners")
     async def _record_owner(
         self, message_id: str, user_api_key_dict: "UserAPIKeyAuth", anthropic_beta: str | None
     ) -> None:
