@@ -1,0 +1,14 @@
+suite: removed lens values
+templates:
+  - NOTES.txt
+tests:
+  - it: warns that lens values are ignored
+    set:
+      lensWorker.enabled: true
+    asserts:
+      - matchRegexRaw:
+          pattern: lens and lensWorker values are ignored
+  - it: stays quiet without lens values
+    asserts:
+      - notMatchRegexRaw:
+          pattern: lensWorker

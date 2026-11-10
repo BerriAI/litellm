@@ -1587,14 +1587,6 @@ async def test_read_request_body_unexpected_error():
     assert result == {}
 
 
-async def _never_receive() -> Message:
-    raise AssertionError("the OTLP route check never reads the body")
-
-
-async def _never_send(message: Message) -> None:
-    raise AssertionError("the OTLP route check never sends")
-
-
 @pytest.mark.asyncio
 async def test_form_data_metadata_with_lone_surrogate_escape_is_rejected_like_a_json_body():
     """``json.loads`` accepts ``"\\ud800"`` and yields a lone surrogate that no

@@ -506,7 +506,6 @@ jobs:
               tests/unit/secret_managers
               tests/unit/skills/test_skills_main.py
               tests/unit/telemetry tests/unit/proxy/telemetry
-              tests/unit/tracing
             python-version: "3.12"
             workers: 4
             reruns: 0
