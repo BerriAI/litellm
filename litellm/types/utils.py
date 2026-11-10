@@ -5402,7 +5402,8 @@ class BaseUrlRoutingHint(TypedDict, total=False):
 class CacheControlsHint(TypedDict, total=False):
     cache: ReadOnly[OnErrorOmit[Mapping[str, object] | None]]
     caching: ReadOnly[OnErrorOmit[JsonValue]]
+    ttl: ReadOnly[OnErrorOmit[JsonValue]]
 
 
 class DeploymentHeadersHint(TypedDict, total=False):
-    extra_headers: ReadOnly[OnErrorOmit[Mapping[str, str] | None]]
+    extra_headers: ReadOnly[OnErrorOmit[Mapping[str, object] | None]]
