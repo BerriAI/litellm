@@ -27,6 +27,7 @@ from typing import (
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -283,6 +284,37 @@ def record_response(logger: Logging, status: int, headers: Sequence[tuple[str, s
     details: Final = logger.model_call_details  # the call's own logger: recording on it is the point
     details["httpx_response"] = response
     details["response_headers"] = dict(response.headers)
+
+
+class _ThinkingSignatureRetry(TypedDict):
+    kind: ReadOnly[Literal["thinking_signature"]]
+
+
+class _StrictToolsRetry(TypedDict):
+    kind: ReadOnly[Literal["strict_tools"]]
+    dropped: ReadOnly[int]
+
+
+_RETRY_REASONS: Final = TypeAdapter(tuple[_ThinkingSignatureRetry | _StrictToolsRetry, ...])
+
+
+async def retried_request(
+    logger: Logging,
+    logged_body: dict[str, object],  # mutable-ok: the retry rewrites the body pre_call logged, as Python's loop does
+    body: Mapping[str, object],
+    reasons: Sequence[Mapping[str, object]],
+) -> None:
+    from litellm.llms.anthropic.common_utils import warn_claude_strict_tools_dropped
+
+    if logger.baseline_cache_context is not None:
+        await logger.invalidate_baseline_cache_estimate("retried_request")
+    for reason in _RETRY_REASONS.validate_python(reasons):
+        if reason["kind"] == "strict_tools":
+            warn_claude_strict_tools_dropped(reason["dropped"])
+    for name in logged_body.keys() - body.keys():
+        del logged_body[name]  # rebind-ok: the logged body is the one logging already holds
+    logged_body.update({name: value for name, value in body.items() if logged_body.get(name) != value})
+    logger.model_call_details.update(logged_body)
 
 
 def record_api_window(logger: Logging, start: float, end: float) -> None:

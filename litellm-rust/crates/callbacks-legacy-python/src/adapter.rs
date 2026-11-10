@@ -6,7 +6,7 @@ use crate::LoggingOperation;
 use litellm_host_python::PythonOwned;
 
 use litellm_host::{
-    interceptors::{RawResponse, RequestContext, WireRequest},
+    interceptors::{RawResponse, RequestContext, RetriedRequest, RetryReason, WireRequest},
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
 use litellm_host_python::{Error as HostError, HookStep, from_py, to_py};
@@ -59,6 +59,15 @@ pub struct LegacyLogging {
     cache_key: Option<String>,
     /// When the provider request went out, until its window is recorded (Messages only).
     api_started: Option<f64>,
+}
+
+fn retry_reason(reason: &RetryReason) -> Value {
+    match reason {
+        RetryReason::ThinkingSignature => serde_json::json!({"kind": "thinking_signature"}),
+        RetryReason::StrictTools { dropped } => {
+            serde_json::json!({"kind": "strict_tools", "dropped": dropped})
+        }
+    }
 }
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
@@ -664,6 +673,40 @@ impl LegacyLogging {
         Ok(HookStep::Ready(()))
     }
 
+    pub(crate) fn request_retried(
+        &mut self,
+        py: Python<'_>,
+        retry: &RetriedRequest,
+    ) -> PyResult<HookStep<Self, ()>> {
+        let Some(request) = &self.request else {
+            return Ok(HookStep::Ready(()));
+        };
+        let reasons: Vec<Value> = retry.reasons.iter().map(retry_reason).collect();
+        let retried = Logging::RetriedRequest.call(
+            py,
+            (
+                self.logger()?.object(py),
+                request.body.bind(py),
+                to_py(py, &retry.body)?,
+                to_py(py, &reasons)?,
+            ),
+        )?;
+        let now = epoch_seconds();
+        if self.api_started.is_some() {
+            self.close_api_window(py, now)?;
+            self.api_started = Some(now);
+        }
+        Ok(HookStep::Await(retried.unbind(), Self::resume_retried))
+    }
+
+    fn resume_retried(
+        &mut self,
+        _py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<HookStep<Self, ()>> {
+        result.map(|_| HookStep::Ready(()))
+    }
+
     pub(crate) fn succeeded(
         &mut self,
         py: Python<'_>,
@@ -1129,7 +1172,9 @@ mod payload_tests {
     use std::ffi::CStr;
 
     use litellm_host::hooks::CallHooks;
-    use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
+    use litellm_host::interceptors::{
+        RawResponse, RequestContext, RetriedRequest, RetryReason, WireRequest,
+    };
     use litellm_host::lifecycle::ExecutionEvent;
     use litellm_host_python::{HookStep, PythonCallEvent, PythonOwned, to_py};
     use litellm_secret_value::SecretValue;
@@ -1294,6 +1339,61 @@ assert ('custom_llm_provider' in logger.update['litellm_params']) is in_params, 
 
     fn document(source: &str) -> Value {
         json!({"type": "document_url", "document_url": source})
+    }
+
+    #[test]
+    fn a_retried_request_hands_the_logged_body_the_retried_body_and_the_reasons_to_logging() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                ..legacy_call(py, &locals, false)
+            };
+            let context = RequestContext {
+                model: "model".into(),
+                custom_llm_provider: "provider".into(),
+                optional_params: json!({}),
+                secret_fields: Vec::new(),
+                api_key: None,
+            };
+            let wire = WireRequest {
+                url: "https://provider.invalid/v1/messages".into(),
+                headers: Vec::new(),
+                body: json!({"messages": [{"role": "user", "content": "hi"}], "thinking": {"type": "enabled"}}),
+            };
+            logging
+                .before_provider_request(py, Box::new(wire.clone()), &context)
+                .unwrap();
+            let retried = RetriedRequest {
+                reasons: vec![
+                    RetryReason::ThinkingSignature,
+                    RetryReason::StrictTools { dropped: 2 },
+                ],
+                body: json!({"messages": [{"role": "user", "content": "hi"}]}),
+            };
+
+            let step = logging
+                .on_event(
+                    py,
+                    PythonCallEvent::Execution(ExecutionEvent::ProviderRequestRetried {
+                        retry: retried,
+                    }),
+                )
+                .unwrap();
+
+            assert!(matches!(step, HookStep::Await(_, _)));
+            run(
+                py,
+                &locals,
+                c"
+[(logged, body, reasons)] = [value for name, value in logger.calls if name == 'retried_request']
+assert logged is logger.pre['complete_input_dict'], logged
+assert body == {'messages': [{'role': 'user', 'content': 'hi'}]}, body
+assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dropped': 2}], reasons
+",
+            );
+        });
     }
 
     fn before_provider_request(script: &CStr, body: Value) -> WireRequest {

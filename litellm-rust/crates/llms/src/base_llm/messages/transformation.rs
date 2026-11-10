@@ -1,3 +1,4 @@
+use litellm_host::interceptors::RetriedRequest;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
@@ -90,6 +91,16 @@ pub trait BaseMessagesConfig: Sync {
     /// Python's configs `pop("model")` when the model is addressed by the URL.
     fn wire_body(&self, body: Value) -> Value {
         body
+    }
+
+    fn retry_after_http_error(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+        _context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        None
     }
 }
 

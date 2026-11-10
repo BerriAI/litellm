@@ -31,7 +31,7 @@ use serde_json::{Map, Value};
 use super::{
     Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
-    constants::MESSAGES_TIMEOUT_SECS,
+    constants::{MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_TIMEOUT_SECS},
     route::Messages,
     types::invalid_request,
 };
@@ -44,6 +44,7 @@ struct ProviderCall {
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
     stream: bool,
+    transform_context: MessagesTransformContext,
 }
 
 impl ProviderCall {
@@ -217,6 +218,7 @@ async fn provider_call(
         signer: authenticated.signer,
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         stream,
+        transform_context,
     })
 }
 
@@ -300,32 +302,17 @@ async fn call_provider(
     request: ProviderCall,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
+    let timeout = request
+        .timeout
+        .unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
+    let response = send_recovering(http, &request, timeout, context).await?;
     let ProviderCall {
         identity,
-        wire,
         provider,
-        signer,
-        timeout,
         stream,
+        ..
     } = request;
     let provider_name = provider.as_str();
-    log_request_body(provider_name, stream, &wire.body);
-    let timeout = timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS));
-    let response = send(
-        http,
-        Authenticated {
-            headers: wire.headers,
-            signer,
-        },
-        &wire.url,
-        &wire.body,
-        timeout,
-        stream,
-    )
-    .await?;
-    if !response.status().is_success() {
-        return Err(provider_error(response, timeout).await);
-    }
     let config = provider.config();
     if stream {
         return Ok(streaming_response(
@@ -351,6 +338,55 @@ async fn call_provider(
         return Err(litellm_http::Error::upstream(status, text).into());
     }
     decode_response(config, &identity.model, &text).map(MessagesCallResponse::Complete)
+}
+
+async fn send_recovering(
+    http: &litellm_http::Client,
+    request: &ProviderCall,
+    timeout: Duration,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<reqwest::Response, Error> {
+    let config = request.provider.config();
+    let mut body = std::borrow::Cow::Borrowed(&request.wire.body);
+    let mut attempt = 1;
+    loop {
+        log_request_body(request.provider.as_str(), request.stream, &body);
+        let response = send(
+            http,
+            Authenticated {
+                headers: request.wire.headers.clone(),
+                signer: request.signer.clone(),
+            },
+            &request.wire.url,
+            &body,
+            timeout,
+            request.stream,
+        )
+        .await?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        let failure = provider_failure(response, timeout).await?;
+        let retried = if attempt == MESSAGES_HTTP_ERROR_ATTEMPTS {
+            None
+        } else {
+            config.retry_after_http_error(
+                failure.status,
+                &failure.text,
+                &body,
+                &request.transform_context,
+            )
+        };
+        let Some(retried) = retried else {
+            return Err(failure.into());
+        };
+        attempt += 1;
+        tracing::debug!(
+            "Anthropic /v1/messages: retrying after a recoverable HTTP error (attempt {attempt}/{MESSAGES_HTTP_ERROR_ATTEMPTS})."
+        );
+        body = std::borrow::Cow::Owned(retried.body.clone());
+        context.provider_request_retried(retried).await?;
+    }
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
@@ -402,18 +438,38 @@ fn timed_chunks(
     )
 }
 
+struct ProviderFailure {
+    status: u16,
+    text: String,
+    headers: Vec<(String, String)>,
+}
+
+impl From<ProviderFailure> for Error {
+    fn from(failure: ProviderFailure) -> Self {
+        litellm_http::Error::upstream_with_headers(failure.status, failure.text, failure.headers)
+            .into()
+    }
+}
+
 /// The provider's error, its body read under `timeout`: a stream has no overall deadline once
 /// its head arrives, so an error body that stalls would otherwise hold the call forever.
-async fn provider_error(response: reqwest::Response, timeout: Duration) -> Error {
+async fn provider_failure(
+    response: reqwest::Response,
+    timeout: Duration,
+) -> Result<ProviderFailure, Error> {
     let status = response.status().as_u16();
     let headers = litellm_http::request::header_pairs(response.headers());
     match tokio::time::timeout(timeout, response.text()).await {
         Ok(Ok(text)) => {
             log_error_body(status, &text);
-            litellm_http::Error::upstream_with_headers(status, text, headers).into()
+            Ok(ProviderFailure {
+                status,
+                text,
+                headers,
+            })
         }
-        Ok(Err(error)) => litellm_http::Error::from(error).into(),
-        Err(elapsed) => litellm_http::Error::read_timeout(elapsed).into(),
+        Ok(Err(error)) => Err(litellm_http::Error::from(error).into()),
+        Err(elapsed) => Err(litellm_http::Error::read_timeout(elapsed).into()),
     }
 }
 

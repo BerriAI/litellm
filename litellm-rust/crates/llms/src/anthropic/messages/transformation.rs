@@ -1,4 +1,5 @@
 use litellm_auth::CredentialPlacement;
+use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use litellm_llms_types::{
     formats::messages::{
         ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message,
@@ -16,10 +17,13 @@ use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling,
+        anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
+        get_auth_header, has_advisor_tool, has_anthropic_credential,
+        is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
+        is_tool_search_used, merge_beta_headers, optionally_handle_anthropic_oauth,
+        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
+        strip_thinking_blocks_from_anthropic_messages_request,
     },
     base_llm::{
         auth::AuthScheme,
@@ -116,6 +120,65 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
             provider_feature_betas(request, BetaProvider::Anthropic),
         )
     }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+}
+
+pub fn should_retry_anthropic_messages_on_http_error(
+    status: u16,
+    error_text: &str,
+    request_body: &Value,
+    _context: &MessagesTransformContext,
+) -> bool {
+    if status != 400 {
+        return false;
+    }
+    let caller_asked_for_this_error =
+        anthropic_request_errors_on_thinking_binding_mismatch(request_body)
+            && is_anthropic_thinking_binding_mismatch_error(error_text);
+    !caller_asked_for_this_error && is_anthropic_invalid_thinking_block_error(error_text)
+}
+
+pub fn transform_anthropic_messages_request_on_http_error(
+    status: u16,
+    error_text: &str,
+    request_body: Value,
+) -> RetriedRequest {
+    if status == 400 && is_anthropic_invalid_thinking_block_error(error_text) {
+        return RetriedRequest {
+            reasons: vec![RetryReason::ThinkingSignature],
+            body: strip_thinking_blocks_from_anthropic_messages_request(request_body),
+        };
+    }
+    RetriedRequest {
+        reasons: Vec::new(),
+        body: request_body,
+    }
+}
+
+pub fn retry_anthropic_messages_after_http_error(
+    status: u16,
+    error_text: &str,
+    request_body: &Value,
+    context: &MessagesTransformContext,
+) -> Option<RetriedRequest> {
+    should_retry_anthropic_messages_on_http_error(status, error_text, request_body, context).then(
+        || {
+            transform_anthropic_messages_request_on_http_error(
+                status,
+                error_text,
+                request_body.clone(),
+            )
+        },
+    )
 }
 
 pub(crate) fn transform_messages_request(
@@ -1351,5 +1414,52 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+
+    #[test]
+    fn the_http_error_retry_matches_the_cases_shared_with_python() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/anthropic_messages_http_error_retry.json"
+        )))
+        .unwrap();
+        let table = &fixture["http_error_retry"];
+        let cases = table["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        let mismatched: Vec<&str> = cases
+            .iter()
+            .filter(|case| {
+                let mut body = table["request"].clone();
+                body["thinking"] = case["thinking"].clone();
+                let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
+                let error_text = case["error_text"].as_str().unwrap();
+                let retried = should_retry_anthropic_messages_on_http_error(
+                    status,
+                    error_text,
+                    &body,
+                    &MessagesTransformContext::default(),
+                );
+                let stripped = case["stripped"].as_bool().unwrap();
+                let transformed = transform_anthropic_messages_request_on_http_error(
+                    status,
+                    error_text,
+                    body.clone(),
+                );
+                let expected = if stripped {
+                    RetriedRequest {
+                        reasons: vec![RetryReason::ThinkingSignature],
+                        body: table["stripped_request"].clone(),
+                    }
+                } else {
+                    RetriedRequest {
+                        reasons: Vec::new(),
+                        body,
+                    }
+                };
+                retried != case["retried"].as_bool().unwrap() || transformed != expected
+            })
+            .map(|case| case["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(mismatched, Vec::<&str>::new());
     }
 }

@@ -69,6 +69,10 @@ FAKES = {
     'record_response': lambda logger, status, headers, body: logger.model_call_details.update(
         response_headers=dict(headers)
     ),
+    'retried_request': lambda logger, logged_body, body, reasons: (
+        logger.record('retried_request', (logged_body, body, reasons)),
+        'awaitable',
+    )[1],
     'record_api_window': lambda logger, start, end: logger.model_call_details.update(
         llm_api_duration_ms=(end - start) * 1000
     ),

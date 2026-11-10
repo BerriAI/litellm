@@ -1,4 +1,6 @@
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
 use litellm_auth::CredentialPlacement;
+use litellm_host::interceptors::RetriedRequest;
 use litellm_secret_value::SecretValue;
 
 use litellm_core_utils::settings::resolve_non_empty;
@@ -42,6 +44,16 @@ pub const DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG: DeepSeekAnthropicMessagesConfig =
     DeepSeekAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,
