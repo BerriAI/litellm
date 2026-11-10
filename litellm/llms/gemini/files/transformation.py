@@ -4,6 +4,7 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 
+import re
 import time
 from collections.abc import Mapping
 from datetime import datetime
@@ -55,9 +56,17 @@ class _GeminiCreateFileResponse(TypedDict):
     file: ReadOnly[_GeminiFileMetadata]
 
 
+_RFC3339_PARTS: Final = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?([+-]\d{2}:\d{2})")
+
+
 def _gemini_timestamp(rfc3339: str) -> int:
-    """Gemini stamps files with up to nine fractional digits, which strptime's %f rejects."""
-    return int(datetime.fromisoformat(rfc3339).timestamp())
+    """Gemini stamps files with up to nine fractional digits and a Z suffix; Python 3.10's
+    fromisoformat takes neither, so trim the fraction to microseconds and spell out UTC."""
+    parts: Final = _RFC3339_PARTS.fullmatch(rfc3339.replace("Z", "+00:00"))
+    if parts is None:
+        raise ValueError(f"Unrecognized Gemini timestamp: {rfc3339}")
+    seconds, fraction, offset = parts.groups()
+    return int(datetime.fromisoformat(f"{seconds}{(fraction or '')[:7]}{offset}").timestamp())
 
 
 def gemini_file_name(file_id: str) -> str:
