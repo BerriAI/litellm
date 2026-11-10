@@ -6881,7 +6881,6 @@ class TestTierModelAffinity:
             {"model-a": False, "model-b": True},
         )
         metadata: Final = {"session_id": "replay-session"}
-        cache_key: Final = router._get_session_affinity_cache_key("replay-session", {"metadata": metadata})
         continuation: Final[list[dict[str, object]]] = [
             {"role": "user", "content": "compact"},
             {
@@ -6892,7 +6891,6 @@ class TestTierModelAffinity:
             {"role": "tool", "tool_call_id": "call_1", "content": [IMG_PART] if gate == "image" else "done"},
         ]
         assert (await self._route(router, metadata, "model-a")).model == "model-a"
-        held_pin: Final = await cache.async_get_cache(cache_key)
 
         replayed: Final = await self._route(router, metadata, "model-b", messages=continuation)
         assert replayed.model == "model-b"
@@ -6902,8 +6900,8 @@ class TestTierModelAffinity:
             if gate == "health"
             else ("modality_pin_override" if session_affinity else "user_turn_continuation")
         )
-        assert await cache.async_get_cache(cache_key) == held_pin
-        assert held_pin is not None and (held_pin["model"], held_pin["tier"]) == ("model-a", "SIMPLE")
+        cache_key: Final = router._get_session_affinity_cache_key("replay-session", {"metadata": metadata})
+        assert await cache.async_get_cache(cache_key) == {"model": "model-a", "tier": "SIMPLE"}
 
         next_ask: Final = await self._route(router, metadata, "model-b")
         assert next_ask.model == "model-a"
@@ -7663,7 +7661,7 @@ class TestChildSessionTierPins:
     async def _route(
         self, router: Router, surface: str, session_id: str | None, prompt: str | None,
         expected_tier: str, expected_cause: str, caller: str = "caller-a", child: bool = True,
-        expected_deployment: str | None = None, continued_ask: str = "Hello!",
+        expected_deployment: str | None = None,
     ) -> str:
         from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 
@@ -7682,7 +7680,7 @@ class TestChildSessionTierPins:
             {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "read_file", "input": {}}]}
             if surface == "messages" else TestClassificationMode.TOOL_CALL_1
         )
-        turns: Final = [turn] if prompt is not None else [{"role": "user", "content": continued_ask}, tool_call, turn]
+        turns: Final = [turn] if prompt is not None else [TestClassificationMode.SIMPLE_ASK, tool_call, turn]
         if surface == "responses":
             data["input"] = turns
         selected: Final = await router.async_get_available_deployment(
@@ -7738,11 +7736,10 @@ class TestChildSessionTierPins:
                 await self._route(
                     router, surface, session, prompt, tier, cause, caller, child,
                     expected_deployment=parent if tier == "REASONING" and caller == "caller-a" else None,
-                    continued_ask="reason carefully" if session == "parent-session" else "Hello!",
                 )
             assert await self._route(
                 router, surface, "parent-session", None, "REASONING", "user_turn_continuation",
-                child=False, expected_deployment=parent, continued_ask="reason carefully",
+                child=False, expected_deployment=parent,
             ) == parent
         finally:
             router.discard()
@@ -7831,8 +7828,8 @@ class TestClaudeCodeTierPins:
         return [{"role": "user", "content": prompt}]
 
     @classmethod
-    def _continuation(cls, ask: str = "Hello!") -> list[dict[str, object]]:
-        return [*cls._ask(ask), cls.TOOL_USE, {"role": "user", "content": [cls.TOOL_RESULT]}]
+    def _continuation(cls) -> list[dict[str, object]]:
+        return [*cls._ask("Hello!"), cls.TOOL_USE, {"role": "user", "content": [cls.TOOL_RESULT]}]
 
     @classmethod
     def _side_request(cls, side_ask: str) -> list[dict[str, object]]:
@@ -7882,10 +7879,10 @@ class TestClaudeCodeTierPins:
                 (self._ask("reason carefully"), None, ("REASONING", "literal_keyword_match")),
                 (self._ask("Hello!"), self.AGENT_A, ("SIMPLE", "heuristic_scorer")),
                 (self._continuation(), self.AGENT_A, ("SIMPLE", "user_turn_continuation")),
-                (self._continuation("reason carefully"), None, ("REASONING", "user_turn_continuation")),
+                (self._continuation(), None, ("REASONING", "user_turn_continuation")),
                 (self._ask("reason carefully"), self.AGENT_B, ("REASONING", "literal_keyword_match")),
                 (self._continuation(), self.AGENT_A, ("SIMPLE", "user_turn_continuation")),
-                (self._continuation("reason carefully"), self.AGENT_B, ("REASONING", "user_turn_continuation")),
+                (self._continuation(), self.AGENT_B, ("REASONING", "user_turn_continuation")),
             ):
                 assert await self._route(router, messages, agent_id) == expected
         finally:
@@ -7908,7 +7905,7 @@ class TestClaudeCodeTierPins:
             for messages, request_class, expected in (
                 (self._ask("reason carefully"), own_class, ("REASONING", "literal_keyword_match")),
                 (self._side_request(side_ask), side_class, ("SIMPLE", "housekeeping")),
-                (self._continuation("reason carefully"), own_class, ("REASONING", "user_turn_continuation")),
+                (self._continuation(), own_class, ("REASONING", "user_turn_continuation")),
             ):
                 assert await self._route(router, messages, agent_id, request_class) == expected
         finally:
@@ -7925,7 +7922,7 @@ class TestClaudeCodeTierPins:
                     "auxiliary",
                     ("SIMPLE", "housekeeping"),
                 ),
-                (self._continuation("reason carefully"), "subagent", ("REASONING", "user_turn_continuation")),
+                (self._continuation(), "subagent", ("REASONING", "user_turn_continuation")),
             ):
                 assert await self._route(router, messages, self.AGENT_A, request_class) == expected
         finally:
@@ -8287,21 +8284,22 @@ class TestClassificationMode:
         assert suppressed._uses_deployment_pin is False
 
 
-class TestUserTurnPinBelongsToItsAsk:
-    """A user_turn pin holds one ask's decision, so a later ask's continuations never replay it."""
+class TestUserTurnNewAskOwnsThePin:
+    """In user_turn mode a new ask that cannot be pinned clears the previous ask's pin, so this ask's
+    continuations never replay a decision made for a different ask."""
 
-    HELLO = {"role": "user", "content": "Hello"}
-    HELLO_REPLY = {"role": "assistant", "content": "Hello! How can I help?"}
-    FIX = {"role": "user", "content": "Find and fix the concurrency bug in the queue worker."}
-    TOOL_CALL = {
+    HELLO: Final[dict[str, object]] = {"role": "user", "content": "Hello"}
+    HELLO_REPLY: Final[dict[str, object]] = {"role": "assistant", "content": "Hello! How can I help?"}
+    FIX: Final[dict[str, object]] = {"role": "user", "content": "Find and fix the concurrency bug in the queue worker."}
+    TOOL_CALL: Final[dict[str, object]] = {
         "role": "assistant",
         "content": None,
         "tool_calls": [{"id": "t1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
     }
-    TOOL_RESULT = {"role": "tool", "tool_call_id": "t1", "content": "File contents returned."}
+    TOOL_RESULT: Final[dict[str, object]] = {"role": "tool", "tool_call_id": "t1", "content": "File contents returned."}
 
     @staticmethod
-    def _worker(*classifier_replies: object) -> tuple[ComplexityRouter, MagicMock]:
+    def _llm_classified_router(*classifier_replies: object) -> tuple[ComplexityRouter, MagicMock]:
         router_instance: Final = MagicMock()
         router_instance.health.return_value.store = DualCache()
         router_instance.acompletion = AsyncMock(side_effect=list(classifier_replies))
@@ -8329,10 +8327,25 @@ class TestUserTurnPinBelongsToItsAsk:
         return router, router_instance
 
     @staticmethod
-    async def _route(router: ComplexityRouter, messages: list[dict] | None, **request: object) -> tuple[str, str]:
+    def _cooling_cheapest_tier_router() -> ComplexityRouter:
+        return TestTierHealthFailover._router(
+            MagicMock(),
+            {
+                "tiers": {"SIMPLE": "dead", "MEDIUM": "mid", "COMPLEX": "big", "REASONING": "top"},
+                "classification_mode": "user_turn",
+                "default_model": "mid",
+            },
+            {"dead": ["id-dead"], "mid": ["id-mid"], "big": ["id-big"], "top": ["id-top"]},
+            cooling=("id-dead",),
+        )
+
+    @staticmethod
+    async def _route(
+        router: ComplexityRouter, messages: list[dict[str, object]] | None, **request: object
+    ) -> tuple[str, str]:
         result: Final = await router.async_pre_routing_hook(
             model="test-model",
-            request_kwargs={"metadata": {"session_id": "stale-pin"}, **request},
+            request_kwargs={"metadata": {"session_id": "new-ask-owns-pin"}, **request},
             messages=messages,
             input=request.get("input"),
         )
@@ -8341,10 +8354,8 @@ class TestUserTurnPinBelongsToItsAsk:
 
     @pytest.mark.asyncio
     async def test_a_failed_ask_does_not_replay_the_previous_asks_pin(self):
-        router, router_instance = self._worker(
-            _llm_response('{"tier": "SIMPLE"}'),
-            TimeoutError("classifier timed out"),
-            _llm_response('{"tier": "REASONING"}'),
+        router, router_instance = self._llm_classified_router(
+            _llm_response('{"tier": "SIMPLE"}'), TimeoutError("classifier timed out"), _llm_response('{"tier": "REASONING"}')
         )
         fix_ask: Final = [self.HELLO, self.HELLO_REPLY, self.FIX]
 
@@ -8367,63 +8378,8 @@ class TestUserTurnPinBelongsToItsAsk:
         assert router_instance.acompletion.await_count == 3
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "first_ask,second_ask,first_ask_continues",
-        [
-            (HELLO, FIX, False),
-            (HELLO, HELLO, False),
-            ({"role": "user", "content": "LITELLM ESCALATE hello"}, FIX, True),
-        ],
-        ids=["new-ask", "repeated-ask-text", "escalated-continuation-repins"],
-    )
-    async def test_a_worker_without_shared_state_rejects_the_previous_asks_pin(
-        self, first_ask: dict, second_ask: dict, first_ask_continues: bool
-    ):
-        worker_a, _ = self._worker(TimeoutError("classifier timed out"))
-        worker_b, worker_b_instance = self._worker(
-            _llm_response('{"tier": "SIMPLE"}'), _llm_response('{"tier": "REASONING"}')
-        )
-        second_turn: Final = [first_ask, self.HELLO_REPLY, second_ask]
-
-        await self._route(worker_b, [first_ask])
-        if first_ask_continues:
-            assert (await self._route(worker_b, [first_ask, self.TOOL_CALL, self.TOOL_RESULT]))[1] == (
-                "session_affinity_escalation"
-            )
-        assert await self._route(worker_a, second_turn) == ("gpt-4o", "default_model_fallback")
-        continued: Final = await self._route(worker_b, [*second_turn, self.TOOL_CALL, self.TOOL_RESULT])
-
-        assert continued == ("o1-preview", "llm_classifier")
-        assert worker_b_instance.acompletion.await_count == 2
-
-    @pytest.mark.asyncio
-    async def test_a_continuation_under_a_changed_system_prompt_still_replays_its_asks_pin(self):
-        router, router_instance = self._worker(_llm_response('{"tier": "REASONING"}'))
-
-        assert await self._route(router, [{"role": "system", "content": "now: 10:00"}, self.FIX]) == (
-            "o1-preview",
-            "llm_classifier",
-        )
-        continued: Final = await self._route(
-            router, [{"role": "system", "content": "now: 10:01"}, self.FIX, self.TOOL_CALL, self.TOOL_RESULT]
-        )
-
-        assert continued == ("o1-preview", "user_turn_continuation")
-        assert router_instance.acompletion.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_a_continuation_with_trimmed_history_still_replays_its_asks_pin(self):
-        router, router_instance = self._worker(_llm_response('{"tier": "REASONING"}'))
-
-        assert await self._route(router, [self.HELLO, self.HELLO_REPLY, self.FIX]) == ("o1-preview", "llm_classifier")
-        trimmed: Final = await self._route(router, [self.HELLO_REPLY, self.FIX, self.TOOL_CALL, self.TOOL_RESULT])
-
-        assert trimmed == ("o1-preview", "user_turn_continuation")
-        assert router_instance.acompletion.await_count == 1
-
-    @pytest.mark.asyncio
     async def test_a_server_side_history_continuation_does_not_replay_the_previous_asks_pin(self):
-        router, router_instance = self._worker(
+        router, router_instance = self._llm_classified_router(
             _llm_response('{"tier": "SIMPLE"}'), TimeoutError("classifier timed out")
         )
         tool_output: Final = [{"type": "function_call_output", "call_id": "t1", "output": "File contents returned."}]
@@ -8439,15 +8395,35 @@ class TestUserTurnPinBelongsToItsAsk:
         assert router_instance.acompletion.await_count == 2
 
     @pytest.mark.asyncio
-    async def test_a_housekeeping_call_mid_ask_keeps_the_asks_pin(self):
-        router, router_instance = self._worker(_llm_response('{"tier": "REASONING"}'))
+    async def test_a_new_ask_that_fails_over_clears_the_previous_asks_pin(self):
+        router: Final = self._cooling_cheapest_tier_router()
+        reasoning_ask: Final = TestClassificationMode.REASONING_ASK
+        simple_ask: Final = [reasoning_ask, self.HELLO_REPLY, self.HELLO]
 
-        assert await self._route(router, [self.FIX]) == ("o1-preview", "llm_classifier")
-        assert await self._route(router, [{"role": "user", "content": TITLE_ASK}]) == ("gpt-4o-mini", "housekeeping")
-        continued: Final = await self._route(router, [self.FIX, self.TOOL_CALL, self.TOOL_RESULT])
+        assert await self._route(router, [reasoning_ask]) == ("top", "reasoning_override")
+        assert await self._route(router, simple_ask) == ("mid", "health_default_fallback")
+        continued: Final = await self._route(router, [*simple_ask, self.TOOL_CALL, self.TOOL_RESULT])
 
-        assert continued == ("o1-preview", "user_turn_continuation")
-        assert router_instance.acompletion.await_count == 1
+        assert continued == ("mid", "health_default_fallback")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cheapest_tier_cooling", [False, True], ids=["healthy", "failed-over"])
+    async def test_a_housekeeping_call_mid_ask_keeps_the_asks_pin(self, cheapest_tier_cooling: bool):
+        router: Final = (
+            self._cooling_cheapest_tier_router()
+            if cheapest_tier_cooling
+            else self._llm_classified_router(_llm_response('{"tier": "REASONING"}'))[0]
+        )
+        reasoning_ask: Final = TestClassificationMode.REASONING_ASK
+        pinned_model: Final = "top" if cheapest_tier_cooling else "o1-preview"
+
+        assert (await self._route(router, [reasoning_ask]))[0] == pinned_model
+        assert await self._route(router, [{"role": "user", "content": TITLE_ASK}]) == (
+            ("mid", "health_default_fallback") if cheapest_tier_cooling else ("gpt-4o-mini", "housekeeping")
+        )
+        continued: Final = await self._route(router, [reasoning_ask, self.TOOL_CALL, self.TOOL_RESULT])
+
+        assert continued == (pinned_model, "user_turn_continuation")
 
 
 class TestRoutingPlugins:

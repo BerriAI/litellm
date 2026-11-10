@@ -760,30 +760,6 @@ def _last_human_ask_index(
     )
 
 
-def _ask_fingerprint(
-    messages: Sequence[Mapping[str, object]] | None,
-    marker_pairs: tuple[tuple[str, str], ...],
-) -> str | None:
-    """Identity of the human ask a request belongs to, or None when the request carries no ask.
-
-    Anchored on the ask's text and the message just before it rather than its index, so clients that
-    trim old history keep the same identity across one ask's tool loop, while a repeated ask such as
-    "continue" still differs from the earlier one. System messages are skipped since they can change.
-    """
-    ask_index: Final = _last_human_ask_index(messages, marker_pairs) if messages else None
-    if messages is None or ask_index is None:
-        return None
-    preceding: Final = next(
-        (messages[index] for index in range(ask_index - 1, -1, -1) if messages[index].get("role") != "system"),
-        None,
-    )
-    anchor: Final = (
-        _human_text(messages[ask_index].get("content"), marker_pairs),
-        None if preceding is None else (str(preceding.get("role")), _message_text(preceding.get("content"))),
-    )
-    return hashlib.sha256(json.dumps(anchor).encode()).hexdigest()
-
-
 def _is_reminder_only_turn(message: Mapping[str, object], marker_pairs: tuple[tuple[str, str], ...]) -> bool:
     if message.get("role") != "user":
         return False
@@ -1425,24 +1401,11 @@ class _ContextWindowPlacement(NamedTuple):
 class _SessionAffinityPin(NamedTuple):
     model: str
     tier: ComplexityTier | str | None
-    ask: str | None = None
-
-
-class _StoredPinAsk(BaseModel, frozen=True):
-    ask: str | None = None
-
-
-def _stored_pin_ask(value: object) -> str | None:
-    try:
-        return _StoredPinAsk.model_validate(value).ask
-    except ValidationError:
-        return None
 
 
 def _parse_session_affinity_pin(value: object, active_tiers: tuple[str, ...]) -> _SessionAffinityPin | None:
     if isinstance(value, str):
         return _SessionAffinityPin(model=value, tier=None)
-    ask: Final = _stored_pin_ask(value)
     parts: Final[tuple[object, object] | None] = (
         (value.get("model"), value.get("tier"))
         if isinstance(value, Mapping)
@@ -1456,17 +1419,15 @@ def _parse_session_affinity_pin(value: object, active_tiers: tuple[str, ...]) ->
     if not isinstance(model, str):
         return None
     if tier_value is None:
-        return _SessionAffinityPin(model=model, tier=None, ask=ask)
+        return _SessionAffinityPin(model=model, tier=None)
     if not isinstance(tier_value, str) or tier_value not in active_tiers:
         return None
-    return _SessionAffinityPin(model=model, tier=_built_in_tier_or_none(tier_value) or tier_value, ask=ask)
+    return _SessionAffinityPin(model=model, tier=_built_in_tier_or_none(tier_value) or tier_value)
 
 
-def _session_affinity_cache_value(
-    model: str | None, tier: ComplexityTier | str | None, ask: str | None
-) -> Mapping[str, str | None]:
+def _session_affinity_cache_value(model: str | None, tier: ComplexityTier | str | None) -> Mapping[str, str | None]:
     tier_value: Final = _tier_name(tier) if tier is not None else None
-    return {"model": model, "tier": tier_value, **({"ask": ask} if ask is not None else {})}
+    return {"model": model, "tier": tier_value}
 
 
 @dataclass(frozen=True, slots=True)
@@ -4608,23 +4569,14 @@ class ComplexityRouter(CustomLogger):
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
         codex_compaction: Final = self._is_codex_compaction_lifecycle(request_kwargs, resolved_messages, marker_pairs)
-        pin_replay_allowed: Final = (
-            bool(self.config.session_affinity)
-            or not _newest_turn_is_human_ask(resolved_messages, marker_pairs)
-            or codex_compaction
-        )
-        ask_scoped_pin: Final = cache_key is not None and not self.config.session_affinity and not codex_compaction
-        current_ask: Final = _ask_fingerprint(resolved_messages, marker_pairs) if ask_scoped_pin else None
+        new_ask: Final = _newest_turn_is_human_ask(resolved_messages, marker_pairs) and not codex_compaction
+        pin_replay_allowed: Final = bool(self.config.session_affinity) or not new_ask
 
         if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await read_affinity_pin(
                 self.ctx.health().store, cache_key, self.config.session_affinity_ttl_seconds
             )
-            stored_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
-            pin_from_another_ask: Final = (
-                stored_pin is not None and None not in (stored_pin.ask, current_ask) and stored_pin.ask != current_ask
-            )
-            pinned_pin: Final = None if pin_from_another_ask else stored_pin
+            pinned_pin: Final = _parse_session_affinity_pin(pinned_value, self.config.tier_names())
             if pinned_pin is not None:
                 user_message: Final = (
                     _newest_turn_ask(resolved_messages, marker_pairs)
@@ -4723,7 +4675,7 @@ class ComplexityRouter(CustomLogger):
                     if escalated:
                         await self.ctx.health().store.async_set_cache(
                             key=cache_key,
-                            value=_session_affinity_cache_value(session_model, resolved_pin_tier, pinned_pin.ask),
+                            value=_session_affinity_cache_value(session_model, resolved_pin_tier),
                             ttl=self.config.session_affinity_ttl_seconds,
                         )
                     if self.config.adaptive:
@@ -4823,19 +4775,24 @@ class ComplexityRouter(CustomLogger):
             and _decision_is_pinnable(response.routing_decision)
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )
+        # A new user_turn ask owns the pin: when it cannot be pinned it clears the previous ask's pin. Read
+        # housekeeping before the gates, which rewrite the cause of a failed-over title call.
         clears_previous_ask_pin: Final = (
-            ask_scoped_pin
-            and response is not None
-            and (response.routing_decision is None or response.routing_decision.get("cause") != "housekeeping")
+            new_ask
+            and not self.config.session_affinity
+            and routed_response is not None
+            and (
+                routed_response.routing_decision is None
+                or routed_response.routing_decision.get("cause") != "housekeeping"
+            )
         )
         pin_write: Final = (
             _session_affinity_cache_value(
                 response.model,
                 response.routing_decision.get("tier") if response.routing_decision is not None else None,
-                current_ask,
             )
             if pinnable and response is not None
-            else _session_affinity_cache_value(None, None, None)
+            else _session_affinity_cache_value(None, None)
             if clears_previous_ask_pin
             else None
         )
