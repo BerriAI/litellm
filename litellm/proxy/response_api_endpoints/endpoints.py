@@ -61,6 +61,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket,
 )
 from litellm.proxy.common_request_processing import (
+    RESPONSES_SSE_FRAMING,
     ProxyBaseLLMRequestProcessing,
     cost_headers,
     create_response,
@@ -397,6 +398,9 @@ async def responses_api(
         # instead of a polling ID that immediately fails in the background task.
         processor = ProxyBaseLLMRequestProcessing(data=data)
         try:
+            # A background request runs after its polling id is returned, so a total_timeout it
+            # cannot apply is refused (or a header one dropped) before the id is handed out.
+            _ = processor.total_timeout_for(request, "aresponses", is_streaming_request=None)
             data, _logging_obj = await processor.common_processing_pre_call_logic(
                 request=request,
                 general_settings=general_settings,
@@ -483,6 +487,7 @@ async def responses_api(
                 if requests_background(_PROXY_SERVER_REQUEST_ADAPTER.validate_python(data))
                 else native_data_generator
             ),
+            sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -541,7 +546,6 @@ async def responses_api(
             async def _blocked_stream() -> AsyncGenerator[str, None]:
                 for chunk in block_chunks:
                     yield chunk.decode()
-                yield "data: [DONE]\n\n"
 
             return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
         return build_blocked_response(e)
@@ -908,6 +912,7 @@ async def get_response(
                 response_id,
                 read_settles_billing,
             ),
+            sse_framing=RESPONSES_SSE_FRAMING,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,
@@ -2162,7 +2167,7 @@ _WS_FRAME: Final = TypeAdapter(dict[str, object])
 _GUARDRAIL_INFORMATION: Final = TypeAdapter(list[dict[str, object]])
 _PII_TOKENS: Final = TypeAdapter(dict[str, str])
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
-_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools")
+_GUARDED_FRAME_FIELDS: Final = ("input", "instructions", "tools", "tool_choice", "extra_body")
 _CLIENT_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _CLIENT_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config", "policies")
 _METADATA_GUARDRAIL_SELECTORS: Final = ("guardrails", "guardrail_config")

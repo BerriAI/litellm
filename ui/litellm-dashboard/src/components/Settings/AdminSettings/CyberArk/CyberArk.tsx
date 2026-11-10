@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import CyberArkEmptyPlaceholder from "./CyberArkEmptyPlaceholder";
 import EditCyberArkModal from "./EditCyberArkModal";
 import { FIELD_LABELS, SENSITIVE_FIELDS } from "./constants";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 function detectAuthMethod(values: Record<string, unknown>, t: TFunction): string {
   if (values.cyberark_api_key) return t("adminPanel.cyberArk.authMethods.apiKey");
@@ -145,7 +146,7 @@ export default function CyberArk() {
             <KeyRound className="size-6 text-muted-foreground" />
             <div>
               <CardTitle>
-                <h3>CyberArk Conjur</h3>
+                <h3>{productNames.cyberArkConjur}</h3>
               </CardTitle>
               <CardDescription>{t("adminPanel.cyberArk.description")}</CardDescription>
             </div>

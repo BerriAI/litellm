@@ -2,7 +2,7 @@ import type { components } from "@/lib/http/schema";
 
 export interface Tag {
   name: string;
-  description?: string;
+  description?: string | null;
   models: string[]; // model IDs
   model_info?: { [key: string]: string }; // maps model_id to model_name
   created_at: string;
@@ -10,12 +10,12 @@ export interface Tag {
   created_by?: string;
   updated_by?: string;
   litellm_budget_table?: {
-    max_budget?: number;
+    max_budget?: number | null;
     soft_budget?: number;
-    tpm_limit?: number;
-    rpm_limit?: number;
+    tpm_limit?: number | null;
+    rpm_limit?: number | null;
     max_parallel_requests?: number;
-    budget_duration?: string;
+    budget_duration?: string | null;
     model_max_budget?: any;
   };
 }

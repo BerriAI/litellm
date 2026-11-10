@@ -11,6 +11,7 @@ import { PasswordInput } from "@/components/shared/PasswordInput";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { requiredUnlessSiblingSet, tagsControl, textControl } from "./mcpFieldRules";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface IdJagFormFieldsProps {
   isEditing?: boolean;
@@ -174,7 +175,13 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
         }
         name={["credentials", "client_assertion_signing_alg"]}
       >
-        {(control) => <Input {...textControl(control)} placeholder="RS256" className={fieldClassName} />}
+        {(control) => (
+          <Input
+            {...textControl(control)}
+            placeholder={codeSamples.mcpServers.idJagSigningAlgorithm}
+            className={fieldClassName}
+          />
+        )}
       </MountedFormField>
       <MountedFormField
         label={

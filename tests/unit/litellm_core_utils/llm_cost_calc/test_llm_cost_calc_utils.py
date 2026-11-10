@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_billed_token_rates,
+    get_regional_uplift_multiplier,
     get_token_type_cost_breakdown,
 )
 from litellm.llms.gemini.image_generation.cost_calculator import (
@@ -33,6 +34,7 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CompletionTokensDetailsWrapper,
+    DataResidency,
     ImageObject,
     ImageResponse,
     ImageUsage,
@@ -2579,6 +2581,51 @@ def test_data_residency_applies_uplift(data_residency, model, _local_model_cost_
     assert regional[1] == pytest.approx(base[1] * 1.10, rel=1e-9)
 
 
+def test_fedramp_data_residency_applies_configured_uplift() -> None:
+    usage: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    model_info: Final[ModelInfo] = {
+        "key": "fedramp-fixture",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 2e-6,
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "supported_openai_params": None,
+        "regional_processing_uplift_multiplier_us": 1.5,
+        "fedramp_uplift_multiplier": 1.1,
+    }
+
+    base: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        model_info=model_info,
+    )
+    fedramp: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=DataResidency.FEDRAMP.value,
+        model_info=model_info,
+    )
+
+    us: Final = generic_cost_per_token(
+        model="fedramp-fixture",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=DataResidency.US.value,
+        model_info=model_info,
+    )
+
+    assert sum(base) > 0
+    assert fedramp[0] == pytest.approx(base[0] * 1.1)
+    assert fedramp[1] == pytest.approx(base[1] * 1.1)
+    assert us[0] == pytest.approx(base[0] * 1.5)
+    assert us[1] == pytest.approx(base[1] * 1.5)
+
+
 @pytest.mark.parametrize("model", ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-pro", "gpt-4o", "gpt-4.1"])
 def test_data_residency_no_uplift_for_pre_march_2026_models(model, _local_model_cost_map):
     """Models released before 2026-03-05 must not have the regional uplift."""
@@ -2717,6 +2764,61 @@ def test_vertex_uplift_invalid_multiplier_defaults_to_one():
     assert (
         get_vertex_regional_endpoint_uplift({"regional_endpoint_uplift_multiplier": "not-a-number"}, "us-east5") == 1.0
     )
+
+
+@pytest.mark.parametrize(
+    "model_info, data_residency",
+    [
+        ({"fedramp_uplift_multiplier": "not-a-number"}, "fedramp"),
+        ({}, "fedramp"),
+        ({"fedramp_uplift_multiplier": 1.1}, "us"),
+        ({"fedramp_uplift_multiplier": 1.1}, None),
+    ],
+)
+def test_fedramp_uplift_defaults_to_one(model_info: ModelInfo, data_residency: str | None):
+    """A malformed or missing FedRAMP multiplier, or a non-FedRAMP host, bills base pricing and never raises."""
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_fedramp_uplift_multiplier
+
+    assert get_fedramp_uplift_multiplier(model_info, data_residency) == 1.0
+
+
+@pytest.mark.parametrize(
+    "model_info, data_residency",
+    [({f"regional_processing_uplift_multiplier_{r.value}": "1.25"}, r.value.upper()) for r in DataResidency],
+)
+def test_regional_uplift_reads_the_multiplier_named_by_each_residency(model_info: ModelInfo, data_residency: str):
+    assert get_regional_uplift_multiplier(model_info, data_residency) == 1.25
+
+
+@pytest.mark.parametrize(
+    "model_info",
+    [{"regional_processing_uplift_multiplier_us": value} for value in (1.25, "1.25", b"1.25", bytearray(b"1.25"))],
+)
+def test_regional_uplift_accepts_every_value_float_converts(model_info: ModelInfo):
+    assert get_regional_uplift_multiplier(model_info, "us") == 1.25
+
+
+class _IndexOnly:
+    def __index__(self) -> int:
+        return 2
+
+
+@pytest.mark.parametrize("model_info", [{"regional_processing_uplift_multiplier_us": _IndexOnly()}])
+def test_regional_uplift_accepts_an_index_only_value(model_info: ModelInfo):
+    assert get_regional_uplift_multiplier(model_info, "us") == 2.0
+
+
+@pytest.mark.parametrize(
+    "model_info, data_residency",
+    [
+        ({"regional_processing_uplift_multiplier_eu": "not-a-number"}, "eu"),
+        ({"regional_processing_uplift_multiplier_eu": [1.25]}, "eu"),
+        ({"regional_processing_uplift_multiplier_apac": 1.25}, "apac"),
+        ({"regional_processing_uplift_multiplier_eu": 1.25}, None),
+    ],
+)
+def test_regional_uplift_defaults_to_one(model_info: ModelInfo, data_residency: str | None):
+    assert get_regional_uplift_multiplier(model_info, data_residency) == 1.0
 
 
 def test_service_tier_suffixes_constant_in_sync_with_enum():
@@ -4061,6 +4163,23 @@ def test_get_batch_cost_rates_parses_string_rates():
     assert (rates.input, rates.output, rates.cache_read) == (2e-6, 6e-6, 2e-7)
 
 
+def test_get_batch_cost_rates_reads_the_batch_cached_image_rate_for_the_crossed_tier():
+    from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
+
+    rates = get_batch_cost_rates(
+        _batch_rates_model_info(
+            input_cost_per_token_batches=2.5e-6,
+            cache_read_input_image_token_cost=2e-6,
+            cache_read_input_image_token_cost_batches=1e-6,
+            cache_read_input_image_token_cost_above_272k_tokens_batches=1.5e-6,
+        ),
+        Usage(prompt_tokens=300_000, completion_tokens=1, total_tokens=300_001),
+        "openai",
+    )
+
+    assert rates.cache_read_image == 1.5e-6
+
+
 def test_get_batch_cost_rates_falls_back_to_the_flat_rates_when_tier_rates_are_unparsable():
     from litellm.litellm_core_utils.llm_cost_calc.utils import get_batch_cost_rates
 
@@ -4246,6 +4365,37 @@ def test_azure_gpt_6_foundry_price_sheet(_local_model_cost_map, model_base):
         assert azure_ai_info[field] == base
         assert azure_us_info[field] == pytest.approx(1.1 * base)
         assert azure_eu_info[field] == pytest.approx(1.2 * base)
+
+
+@pytest.mark.parametrize("model", ["azure/gpt-6-luna", "azure/gpt-6-luna-2026-09-22"])
+@pytest.mark.parametrize(
+    ("prompt_tokens", "input_rate", "cache_read_rate", "output_rate"),
+    [
+        (100_000, 5e-08, 5e-09, 2.5e-07),
+        (300_000, 1e-07, 1e-08, 3.75e-07),
+    ],
+)
+def test_generic_cost_per_token_azure_gpt_6_luna_flex_tiers(
+    _local_model_cost_map, model, prompt_tokens, input_rate, cache_read_rate, output_rate
+):
+    """azure/gpt-6-luna bills Azure's Flex Global rates, half of Standard, with the long context step past 272K."""
+    cached_tokens = 20_000
+    completion_tokens = 1_000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="azure",
+        service_tier="flex",
+    )
+    expected_prompt = (prompt_tokens - cached_tokens) * input_rate + cached_tokens * cache_read_rate
+    assert prompt_cost == pytest.approx(expected_prompt)
+    assert completion_cost == pytest.approx(completion_tokens * output_rate)
 
 
 @pytest.mark.parametrize("region_prefix", ["azure/", "azure/us/", "azure/eu/"])
