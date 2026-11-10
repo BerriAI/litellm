@@ -1074,6 +1074,28 @@ def respx_interceptable_httpx_client(monkeypatch):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_bedrock_output_written_to_a_request_bucket_is_read_from_that_bucket(respx_interceptable_httpx_client):
+    route: Final = respx.get(
+        "https://s3.us-west-2.amazonaws.com/team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+    ).mock(return_value=httpx.Response(200, content=b'{"recordId": "1"}\n'))
+
+    file_content: Final = await bu.fetch_batch_managed_file_content(
+        "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out",
+        custom_llm_provider="bedrock",  # pyright: ignore[reportArgumentType]  # the cost job passes bedrock at runtime
+        litellm_params={
+            "s3_bucket_name": "model-bucket",
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "secret",
+            "aws_region_name": "us-west-2",
+        },
+    )
+
+    assert route.call_count == 1
+    assert file_content == b'{"recordId": "1"}\n'
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_output_file_content_vertex_managed_uri_accepted_by_real_validation(respx_interceptable_httpx_client):
     managed_output_uri = (
         "gs://litellm-bucket/litellm-vertex-files/publishers/google/models/"

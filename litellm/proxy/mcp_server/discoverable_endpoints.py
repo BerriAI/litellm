@@ -105,9 +105,11 @@ from litellm.proxy.mcp_server.oauth_utils import (
     get_cimd_client_id,
     get_cimd_document_url,
     get_request_base_url,
+    grant_covers_scopes,
     needs_cimd_discovery,
     oauth_client_registration_matches,
     resolve_upstream_resource,
+    server_scope_names,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
 )
@@ -2537,6 +2539,9 @@ async def _vendor_credential_state(
         get_user_oauth_credential,
         oauth_grant_state,
     )
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import at module load
+        global_mcp_server_manager,
+    )
     from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # circular import at module load
 
     if prisma_client is None:
@@ -2548,7 +2553,12 @@ async def _vendor_credential_state(
     if oauth_grant_state(credential) == "absent":
         return "absent"
     granted_scopes: Final = credential.get("scopes") if credential else None
-    return "present" if set(requested_scopes).issubset(granted_scopes or ()) else "absent"
+    covered: Final = grant_covers_scopes(
+        tuple(granted_scopes or ()),
+        requested_scopes,
+        lambda: server_scope_names(global_mcp_server_manager.get_mcp_server_by_id(server_id)),
+    )
+    return "present" if covered else "absent"
 
 
 @router.get("/authorize/flow")
