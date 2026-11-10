@@ -322,6 +322,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "allowed_vector_store_indexes",
     "enforced_file_expires_after",
     "enforced_batch_output_expires_after",
+    "allowed_s3_buckets",
     "require_trace_id",
     "allowed_passthrough_routes",
     "denied_passthrough_routes",
@@ -384,7 +385,9 @@ class TestTeamMetadataEdits:
         verdict: Final = _metadata_verdict(_STORED_METADATA, {**_STORED_METADATA, key: "set-by-team-admin"})
         assert verdict == TeamAdminMetadataKeyProxyControlled(key=key)
 
-    @pytest.mark.parametrize("key", ["opted_out_global_guardrails", "callback_settings", "priority", "guardrails"])
+    @pytest.mark.parametrize(
+        "key", ["opted_out_global_guardrails", "callback_settings", "priority", "guardrails", "allowed_s3_buckets"]
+    )
     def test_changing_or_removing_a_stored_proxy_controlled_key_names_it(self, key: str):
         stored: Final = {**_STORED_METADATA, key: ["stored"]}
         changed: Final = _metadata_verdict(stored, {**stored, key: ["changed"]})

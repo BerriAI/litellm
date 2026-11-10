@@ -71,7 +71,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_present_non_string,
     is_unhashable_value_behind,
 )
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    is_anthropic_tool_search_use,
+    message_field,
+    parts_of,
+)
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     anthropic_server_tool_calls,
@@ -126,7 +130,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIStatus,
     ToolChoice,
     ToolMessageContentPart,
-    ValidChatCompletionMessageContentTypes,
     ValidChatCompletionMessageContentTypesLiteral,
 )
 from litellm.types.responses.main import (
@@ -138,6 +141,7 @@ from litellm.types.responses.main import (
     OutputImageGenerationCall,
     OutputText,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -186,10 +190,18 @@ from .tool_search import (
     is_anthropic_tool_search_chat_tool,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
+    request_runs_tool_search,
+    route_runs_tool_search,
     tool_search_call_ids,
     tool_search_routing,
     without_tool_search_calls,
     without_tool_search_uses,
+)
+from .tool_search_results import (
+    converted_with_tool_searches_replayed,
+    holds_tool_search_items,
+    tool_search_results_by_call_id,
+    with_tool_search_outputs,
 )
 
 NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
@@ -279,6 +291,20 @@ TOOL_CALLS_CACHE: Final = InMemoryCache()
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+
+
+_CONTENT_TYPE_ADAPTER: Final[TypeAdapter[ValidChatCompletionMessageContentTypesLiteral]] = TypeAdapter(
+    ValidChatCompletionMessageContentTypesLiteral
+)
+
+
+def _valid_content_type(content_type: str) -> ValidChatCompletionMessageContentTypesLiteral | None:
+    try:
+        return _CONTENT_TYPE_ADAPTER.validate_python(content_type)
+    except ValidationError:
+        return None
+
+
 _AUDIO_PART_ADAPTER: Final = TypeAdapter(ChatCompletionAudioObject)
 _IMAGE_URL_ADAPTER: Final = TypeAdapter(ChatCompletionImageUrlObject)
 _FILE_PART_ADAPTER: Final = TypeAdapter(_ResponsesFilePart)
@@ -595,14 +621,56 @@ def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) 
     )
 
 
-def _without_stored_tool_search_uses(message: SessionMessage, search_call_ids: frozenset[str]) -> SessionMessage | None:
+def _server_tool_search_ids(message: object) -> frozenset[str]:
+    return frozenset(
+        tool_id
+        for call in anthropic_server_tool_call_params(message)
+        if is_anthropic_tool_search_use(tool_id := call["id"] or "", call["function"].get("name") or "")
+    )
+
+
+def _holds_stored_tool_search(message: object) -> bool:
+    return holds_tool_search_use(message) or bool(_server_tool_search_ids(message))
+
+
+def _provider_fields_without_tool_searches(message: object, search_ids: frozenset[str]) -> Mapping[object, object]:
+    fields: Final = validated_object_mapping(message_field(message, "provider_specific_fields")) or {}
+    return {
+        **fields,
+        "server_tool_calls": [
+            call for call in anthropic_server_tool_call_params(message) if (call["id"] or "") not in search_ids
+        ],
+        "tool_results": [
+            result
+            for result in parts_of(fields.get("tool_results"))
+            if message_field(result, "tool_use_id") not in search_ids
+        ],
+    }
+
+
+def _without_server_tool_searches(message: SessionMessage) -> SessionMessage:
+    search_ids: Final = _server_tool_search_ids(message)
+    if not search_ids:
+        return message
+    fields: Final = _provider_fields_without_tool_searches(message, search_ids)
     if isinstance(message, Message):
-        return without_tool_search_uses(message)
-    if answers_tool_search(message, search_call_ids):
-        return None
-    if isinstance(message, Mapping) and holds_tool_search_use(message):
-        return _replayed_assistant_without_tool_search_uses(message)
+        return message.model_copy(update={"provider_specific_fields": fields})
+    if isinstance(message, Mapping):
+        return cast(  # cast-ok: the stored assistant message minus its search keeps every other field as stored
+            SessionMessage, {**message, "provider_specific_fields": fields}
+        )
     return message
+
+
+def _without_stored_tool_search_uses(message: SessionMessage, search_call_ids: frozenset[str]) -> SessionMessage | None:
+    kept: Final = _without_server_tool_searches(message)
+    if isinstance(kept, Message):
+        return without_tool_search_uses(kept)
+    if answers_tool_search(kept, search_call_ids):
+        return None
+    if isinstance(kept, Mapping) and holds_tool_search_use(kept):
+        return _replayed_assistant_without_tool_search_uses(kept)
+    return kept
 
 
 def _instruction_messages(messages: Sequence[SessionMessage]) -> tuple[SessionMessage, ...]:
@@ -1094,16 +1162,11 @@ class LiteLLMCompletionResponsesConfig:
     def _without_unsupported_tool_search(
         tools: ResponseTools, model: str, custom_llm_provider: str | None
     ) -> ResponseTools:
-        from litellm.utils import supports_tool_search
-
         if not has_server_tool_search(tools):
             return tools
         if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools or ()):
             return [tool for tool in tools or () if not is_server_tool_search_tool(tool)]
-        route_runs_tool_search: Final = supports_tool_search(
-            model=model, custom_llm_provider=custom_llm_provider
-        ) and provider_builds_anthropic_request(model, custom_llm_provider)
-        if route_runs_tool_search:
+        if route_runs_tool_search(model, custom_llm_provider):
             return tools
         verbose_logger.warning(
             "Dropping Responses API tool of type 'tool_search': model '%s' (provider '%s') cannot run tool search "
@@ -1281,6 +1344,8 @@ class LiteLLMCompletionResponsesConfig:
             tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
             native_compaction=native_compaction,
             only_since_compaction=not native_compaction,
+            replay_tool_search=holds_tool_search_items(request_input)
+            and request_runs_tool_search(request_tools or (), model, custom_llm_provider),
             caller_input=numbered_input,
         )
         malformed_field_error: Final = (
@@ -1366,6 +1431,7 @@ class LiteLLMCompletionResponsesConfig:
         tool_call_provider_fields: bool = False,
         native_compaction: bool = False,
         only_since_compaction: bool = False,
+        replay_tool_search: bool = False,
         caller_input: str | ResponseInputParam | None = None,
     ) -> list[
         AllMessageValues
@@ -1403,6 +1469,11 @@ class LiteLLMCompletionResponsesConfig:
         messages, the way Anthropic ignores content before a compaction block.
         Guardrail scans leave it off because they write rewrites back by input
         item position.
+
+        ``replay_tool_search`` belongs to callers building history for a target
+        that builds an Anthropic request: a Claude ``tool_search_call`` and its
+        ``tool_search_output`` then go back as the search Claude ran. Everyone
+        else drops both items.
         """
         messages: list[
             AllMessageValues
@@ -1429,7 +1500,11 @@ class LiteLLMCompletionResponsesConfig:
             native_compaction=native_compaction,
         )
         try:
-            converted: Final = convert_input(sent_input)
+            converted: Final = (
+                converted_with_tool_searches_replayed(sent_input, convert_input)
+                if replay_tool_search
+                else convert_input(sent_input)
+            )
         except TypeError as error:
             call_id_error: Final = _unhashable_tool_output_call_id_error(
                 dumped_input if caller_input is None else caller_input,
@@ -1515,7 +1590,7 @@ class LiteLLMCompletionResponsesConfig:
         )
         replayed_messages: Final = (
             LiteLLMCompletionResponsesConfig._without_tool_search_uses_off_anthropic(stored_messages, route)
-            if any(holds_tool_search_use(message) for message in stored_messages)
+            if any(_holds_stored_tool_search(message) for message in stored_messages)
             else stored_messages
         )
         session_messages: Final = (
@@ -2831,8 +2906,8 @@ class LiteLLMCompletionResponsesConfig:
         if content_type.startswith("input_"):
             stripped: Final = content_type[len("input_") :]
             # Validate stripped type is valid, otherwise default to "text"
-            if stripped in ValidChatCompletionMessageContentTypes:
-                return stripped
+            if valid_stripped := _valid_content_type(stripped):
+                return valid_stripped
             # Handle input_audio -> input_audio (it's already valid)
             if stripped == "audio":
                 return "input_audio"
@@ -2843,10 +2918,7 @@ class LiteLLMCompletionResponsesConfig:
             return "text"
 
         # Return as-is if it's a valid type, otherwise default to "text"
-        if content_type in ValidChatCompletionMessageContentTypes:
-            return content_type
-
-        return "text"
+        return _valid_content_type(content_type) or "text"
 
     @staticmethod
     def transform_instructions_to_system_message(
@@ -3120,7 +3192,13 @@ class LiteLLMCompletionResponsesConfig:
     def transform_chat_completion_tools_to_responses_tools(
         chat_completion_response: ModelResponse,
         responses_api_request: ResponsesAPIOptionalRequestParams | None = None,
-    ) -> list[ResponseFunctionToolCall | ResponseFunctionWebSearch | CustomToolCallOutputItem | OutputToolSearchCall]:
+    ) -> list[
+        ResponseFunctionToolCall
+        | ResponseFunctionWebSearch
+        | CustomToolCallOutputItem
+        | OutputToolSearchCall
+        | OutputToolSearchOutput
+    ]:
         """
         Transform a Chat Completion tools into a Responses API tools.
 
@@ -3128,7 +3206,8 @@ class LiteLLMCompletionResponsesConfig:
         with ``type="custom_tool_call"``. For regular function tools, returns
         ``ResponseFunctionToolCall`` with ``type="function_call"``. A provider-side
         tool search call made for a request's ``tool_search`` tool returns
-        ``OutputToolSearchCall`` with ``type="tool_search_call"``.
+        ``OutputToolSearchCall`` with ``type="tool_search_call"``, followed by
+        an ``OutputToolSearchOutput`` listing the tools it loaded.
         """
         all_chat_completion_tools: Final[list[ChatCompletionMessageToolCall]] = []
         for choice in chat_completion_response.choices:
@@ -3217,7 +3296,15 @@ class LiteLLMCompletionResponsesConfig:
                         )
 
                     responses_tools.append(output_tool_call)
-        return responses_tools
+        return list(
+            with_tool_search_outputs(
+                responses_tools,
+                tool_search_results_by_call_id(
+                    choice.message.provider_specific_fields for choice in chat_completion_response.choices
+                ),
+                request_tools,
+            )
+        )
 
     @staticmethod
     def _server_tool_call_item(
@@ -3522,6 +3609,7 @@ class LiteLLMCompletionResponsesConfig:
         | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
         | OutputToolSearchCall
+        | OutputToolSearchOutput
         | ResponseCompactionItem
     ]:
         responses_output: list[
@@ -3533,6 +3621,7 @@ class LiteLLMCompletionResponsesConfig:
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
             | ResponseCompactionItem
         ] = []
 

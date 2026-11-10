@@ -8247,6 +8247,11 @@ async def test_batch_increment_refunds_pipelined_groups_declared_after_the_one_t
             {},
             "model_per_organization",
         ),
+        (
+            {"end_user_id": "customer", "end_user_model_rpm_limit": {"test-model": 1}},
+            {},
+            "model_per_end_user",
+        ),
     ],
 )
 @pytest.mark.parametrize("request_kind", ["count", "generation"])
@@ -8695,8 +8700,9 @@ async def test_model_group_alias_shares_deployment_default_rpm_bucket_with_its_t
         ),
         ({"org_id": "o", "organization_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_organization"),
         ({"project_id": "p", "project_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_project"),
+        ({"end_user_id": "customer", "end_user_model_rpm_limit": {"target": 1}}, "model_per_end_user"),
     ],
-    ids=["key_metadata", "team_metadata", "organization_metadata", "project_metadata"],
+    ids=["key_metadata", "team_metadata", "organization_metadata", "project_metadata", "end_user_budget"],
 )
 async def test_model_group_alias_shares_metadata_model_rpm_bucket_with_its_target(
     limits: dict[str, object], counter_scope: str, first_name: str, second_name: str
@@ -9911,3 +9917,27 @@ def test_media_models_resolve_to_each_deployment_base_model():
     assert _resolve_media_models(None, "whisper", None) == ("whisper",)
     assert _resolve_media_models(router, "whisper", None) == ("azure/whisper-1",)
     assert _resolve_media_models(router, "unknown", None) == ("unknown",)
+
+
+@pytest.mark.asyncio
+async def test_end_user_model_rpm_limit_is_shared_across_keys_and_isolated_per_customer() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    acme_via_key_one: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-acme-1"), end_user_id="acme", end_user_model_rpm_limit={"target": 1}
+    )
+    acme_via_key_two: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-acme-2"), end_user_id="acme", end_user_model_rpm_limit={"target": 1}
+    )
+    globex: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-globex"), end_user_id="globex", end_user_model_rpm_limit={"target": 1}
+    )
+
+    await _rpm_request(handler, cache, acme_via_key_one, "target")
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, acme_via_key_two, "target")
+    assert exc.value.status_code == 429
+    assert "model_per_end_user: acme:target" in str(exc.value.detail), exc.value.detail
+
+    await _rpm_request(handler, cache, globex, "target")
+    await _rpm_request(handler, cache, acme_via_key_one, "other-model")

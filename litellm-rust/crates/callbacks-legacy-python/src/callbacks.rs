@@ -26,7 +26,7 @@ pub trait LegacyCallbacks {
     fn pre_call(
         &self,
         py: Python<'_>,
-        input: &str,
+        input: &Bound<'_, PyAny>,
         api_key: Option<&str>,
         body: &Bound<'_, PyDict>,
         headers: &Bound<'_, PyDict>,
@@ -157,7 +157,7 @@ impl LegacyCallbacks for PythonLogger {
     fn pre_call(
         &self,
         py: Python<'_>,
-        input: &str,
+        input: &Bound<'_, PyAny>,
         api_key: Option<&str>,
         body: &Bound<'_, PyDict>,
         headers: &Bound<'_, PyDict>,

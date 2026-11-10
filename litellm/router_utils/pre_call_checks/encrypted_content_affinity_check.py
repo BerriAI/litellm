@@ -41,7 +41,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache, lru_cache, partial
 from time import monotonic
-from typing import TYPE_CHECKING, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -49,6 +49,7 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider, get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import has_sensitive_keyword
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
@@ -60,6 +61,7 @@ from litellm.litellm_core_utils.routing_common_utils import as_excluded_deployme
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
+from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.secret_managers.main import secret_manager_would_be_consulted
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import Deployment, GenericLiteLLMParams, ModelInfo
@@ -70,6 +72,7 @@ if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 _HEADERS_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
 _SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
@@ -245,7 +248,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return None if deployment_id is None else str(deployment_id)
 
     @staticmethod
-    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
+    def _find_deployment_by_model_id(
+        healthy_deployments: list[dict[str, object]], model_id: str
+    ) -> dict[str, object] | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
@@ -546,6 +551,27 @@ class EncryptedContentAffinityCheck(CustomLogger):
     # Request routing  (pre-call filter)
     # ------------------------------------------------------------------
 
+    async def _tag_routable(
+        self, model: str, pinned: Sequence[_DeploymentT], request_kwargs: Mapping[str, object]
+    ) -> tuple[_DeploymentT, ...]:
+        """The deployments in ``pinned`` the router's tag filter keeps for this request, none when it rejects
+        them all, so an explicit routing tag outranks the pin."""
+        if self.ctx is None:
+            return tuple(pinned)
+        try:
+            kept: Final = await get_deployments_for_tag(
+                ctx=self.ctx,
+                model=model,
+                healthy_deployments=pinned,  # pyright: ignore[reportArgumentType]  # deployment dicts
+                request_kwargs=request_kwargs,  # pyright: ignore[reportArgumentType]  # the request kwargs
+                metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs),
+                request_deployments=self.ctx.registry().deployments(model) or pinned,  # pyright: ignore[reportArgumentType]  # deployment dicts
+            )
+        except ValueError:
+            return ()
+        kept_identities: Final = frozenset(map(id, kept))
+        return tuple(deployment for deployment in pinned if id(deployment) in kept_identities)
+
     async def async_filter_deployments(
         self,
         model: str,
@@ -629,7 +655,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             healthy_deployments=untried_candidates,
             model_id=model_id,
         )
-        if deployment is not None:
+        if deployment is not None and await self._tag_routable(model, (deployment,), typed_request_kwargs):
             verbose_router_logger.debug(
                 "EncryptedContentAffinityCheck: pinning -> deployment=%s",
                 model_id,
@@ -650,19 +676,22 @@ class EncryptedContentAffinityCheck(CustomLogger):
             healthy_deployments=untried_candidates,
             model_id=model_id,
         )
-        if boundary_matches:
+        routable_peers: Final = (
+            await self._tag_routable(model, boundary_matches, typed_request_kwargs) if boundary_matches else ()
+        )
+        if routable_peers:
             verbose_router_logger.debug(
-                "EncryptedContentAffinityCheck: model_id=%s not in healthy_deployments; "
+                "EncryptedContentAffinityCheck: model_id=%s cannot serve this turn; "
                 "pinning to %d deployment(s) on same encryption boundary",
                 model_id,
-                len(boundary_matches),
+                len(routable_peers),
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
                 self.ctx,
                 request_input,
                 anthropic_messages,
-                boundary_matches,
+                routable_peers,
                 unmarked_origin=model_id,
                 clock=self._clock,
             )
@@ -681,4 +710,4 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
         ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
         strip_encrypted_reasoning_from_messages(anthropic_messages)
-        return candidates
+        return untried_candidates if excluded_ids or retry_skipped_ids else candidates
