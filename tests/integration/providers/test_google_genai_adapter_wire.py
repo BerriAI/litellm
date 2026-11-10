@@ -750,10 +750,6 @@ def test_generate_content_adapts_anthropic_tool_loop_history_and_inline_image(ga
 
 
 def test_generate_content_adapter_keeps_camel_case_inline_data(gateway: Gateway) -> None:
-    pytest.skip(
-        "BUG: a camelCase inlineData part (the google-genai SDK wire spelling) is silently dropped on the completion-adapter path, the image never reaches the provider"
-    )
-
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
