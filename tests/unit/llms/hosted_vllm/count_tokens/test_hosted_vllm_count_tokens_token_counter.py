@@ -186,3 +186,55 @@ def test_should_use_token_counting_api_only_for_hosted_vllm() -> None:
     assert counter.should_use_token_counting_api("hosted_vllm")
     assert not counter.should_use_token_counting_api("vllm")
     assert not counter.should_use_token_counting_api("openai")
+
+
+def test_chat_request_for_tokenize_does_not_mutate_the_caller_messages() -> None:
+    """The transform pops reasoning fields in place; counting must not change the request."""
+    openai_messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "hello",
+            "reasoning_content": {"not": "a string"},
+            "thinking_blocks": [{"type": "thinking", "thinking": "hm", "signature": "s"}],
+        },
+    ]
+    before: Final = json.dumps(openai_messages, sort_keys=True)
+
+    chat_request_for_tokenize("qwen", openai_messages, None, system=None)
+
+    assert json.dumps(openai_messages, sort_keys=True) == before
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_builds_the_body_off_the_event_loop() -> None:
+    """The sync transform can fetch user-supplied file URLs; it must not run on the loop thread."""
+    import threading
+
+    loop_thread: Final = threading.current_thread()
+    seen: Final[list[threading.Thread]] = []
+
+    def recording_builder(*args: object, **kwargs: object) -> dict[str, object]:
+        seen.append(threading.current_thread())
+        return {"model": "qwen", "messages": [], "add_generation_prompt": True}
+
+    client: Final = _client_returning({"count": 7, "max_model_len": 1000})
+    with (
+        patch("litellm.llms.hosted_vllm.count_tokens.token_counter.get_async_httpx_client", return_value=client),
+        patch(
+            "litellm.llms.hosted_vllm.count_tokens.token_counter.chat_request_for_tokenize",
+            side_effect=recording_builder,
+        ),
+    ):
+        result: Final = await HostedVLLMTokenCounter().count_tokens(
+            model_to_use="qwen",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment=dict(_DEPLOYMENT),
+            request_model="claude-opus-5",
+            tools=None,
+            system=None,
+        )
+
+    assert result is not None and result.total_tokens == 7
+    assert seen and seen[0] is not loop_thread

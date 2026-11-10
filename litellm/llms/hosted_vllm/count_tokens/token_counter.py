@@ -8,8 +8,10 @@ on long agentic conversations.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from types import MappingProxyType
 from typing import Final, cast
 
@@ -137,7 +139,13 @@ def chat_request_for_tokenize(
     )
     chat_request: Final = _FIELDS.validate_python(
         HostedVLLMChatConfig().transform_request(  # pyright: ignore[reportUnknownMemberType]  # upstream transform's signature is partially untyped
-            model=model, messages=list(chat_messages), optional_params={}, litellm_params={}, headers={}
+            # deepcopy: the transform mutates message dicts in place; counting must not
+            # change the caller's request (the local-tokenizer fallback counts it next).
+            model=model,
+            messages=deepcopy(list(chat_messages)),
+            optional_params={},
+            litellm_params={},
+            headers={},
         )
     )
     body: Final[dict[str, object]] = {  # mutable-ok: JSON request body, sent once
@@ -180,8 +188,10 @@ class HostedVLLMTokenCounter(BaseTokenCounter):
         api_key: Final = params.get("api_key")
         headers: Final = {"Authorization": f"Bearer {api_key}"} if isinstance(api_key, str) and api_key else {}
         try:
-            body: Final = chat_request_for_tokenize(
-                model_to_use, messages, tools, system, request_model=request_model or None
+            # The sync message transform can fetch user-supplied file URLs
+            # (_handle_pdf_url); a worker thread keeps that off the event loop.
+            body: Final = await asyncio.to_thread(
+                chat_request_for_tokenize, model_to_use, messages, tools, system, request_model=request_model or None
             )
             client: Final = get_async_httpx_client(llm_provider=LlmProviders.HOSTED_VLLM)
             response: Final[httpx.Response] = await client.post(  # pyright: ignore[reportUnknownMemberType]  # upstream client helper is partially untyped
