@@ -4547,28 +4547,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             targets.append(("end_user", user_api_key_end_user_id))
         if user_api_key_organization_id:
             targets.append(("organization", user_api_key_organization_id))
+        model_scope_owners: Final = (
+            ("model_per_key", user_api_key),
+            ("model_per_team", user_api_key_team_id),
+            ("model_per_end_user", f"{user_api_key_end_user_id}" if user_api_key_end_user_id else None),
+            ("model_per_organization", user_api_key_organization_id),
+            ("model_per_project", user_api_key_project_id),
+        )
         if model_group:
             for group in dict.fromkeys(model_groups or (model_group,)):
-                if user_api_key:
-                    targets.append(("model_per_key", f"{user_api_key}:{group}"))
-                if user_api_key_team_id:
-                    targets.append(("model_per_team", f"{user_api_key_team_id}:{group}"))
-                if user_api_key_end_user_id:
-                    targets.append(("model_per_end_user", f"{user_api_key_end_user_id}:{group}"))
-                if user_api_key_organization_id:
-                    targets.append(
-                        (
-                            "model_per_organization",
-                            f"{user_api_key_organization_id}:{group}",
-                        )
-                    )
-                if user_api_key_project_id:
-                    targets.append(
-                        (
-                            "model_per_project",
-                            f"{user_api_key_project_id}:{group}",
-                        )
-                    )
+                targets.extend((scope, f"{owner}:{group}") for scope, owner in model_scope_owners if owner)
         if agent_id:
             targets.append(("agent", agent_id))
             if session_id:
