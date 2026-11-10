@@ -2639,7 +2639,7 @@ async def test_affinity_strips_and_dispatches_when_origin_already_failed_this_re
         request_kwargs={"litellm_metadata": {}, "input": reasoning_input, **failed_in_request, **continuing},
     )
 
-    assert result is group
+    assert [deployment["model_info"]["id"] for deployment in result] == ["region-b"]
     assert reasoning_input[0] == {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
 
 
@@ -2692,6 +2692,32 @@ async def test_affinity_keeps_reasoning_when_every_deployment_already_refused_th
 
     assert [deployment["model_info"]["id"] for deployment in result] == ["region-a"]
     assert reasoning_input[0] == original_reasoning
+
+
+@pytest.mark.asyncio
+async def test_retry_leaves_the_pinned_origin_after_a_server_error():
+    def deployment(region: str, mock_response: object) -> dict[str, object]:
+        base: Final = _region_deployment(region)
+        return {**base, "litellm_params": {**base["litellm_params"], "mock_response": mock_response}}
+
+    router: Final = litellm.Router(
+        model_list=[
+            deployment("region-a", Exception("upstream 500")),
+            deployment("region-b", "ok"),
+            deployment("region-c", "ok"),
+        ],
+        disable_cooldowns=True,
+        num_retries=3,
+        retry_after=0,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+    )
+    try:
+        response: Final = await router.aresponses(
+            model="gpt-5.4", input=_reasoning_input_minted_by("region-a"), litellm_metadata={}
+        )
+        assert response._hidden_params["model_id"] in {"region-b", "region-c"}
+    finally:
+        router.discard()
 
 
 def _default_endpoint_deployment(model_id: str, litellm_params: Mapping[str, object]) -> dict[str, object]:
@@ -3355,9 +3381,7 @@ async def test_declared_boundary_keeps_reasoning_across_endpoints_with_different
     [(None, None), ("org-1", "org-2"), ("org-1", None), (None, "org-1")],
     ids=["undeclared", "different-boundaries", "only-origin-declared", "only-peer-declared"],
 )
-async def test_reasoning_is_stripped_unless_both_deployments_declare_the_same_boundary(
-    origin_boundary, peer_boundary
-):
+async def test_reasoning_is_stripped_unless_both_deployments_declare_the_same_boundary(origin_boundary, peer_boundary):
     assert await _forwarded_reasoning_after_model_switch(origin_boundary, peer_boundary) == ("region-2", None)
 
 
