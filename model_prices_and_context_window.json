@@ -87346,13 +87346,13 @@
         "supports_vision": true
     },
     "wandb/deepseek-ai/DeepSeek-V4.1-Flash-1017": {
-        "cache_read_input_token_cost": 2e-09,
-        "input_cost_per_token": 1.3e-07,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
         "litellm_provider": "wandb",
         "max_input_tokens": 1049000,
         "max_output_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 6.5e-07,
+        "output_cost_per_token": 1.2e-06,
         "source": "https://www.coreweave.com/products/coreweave-forge/serverless-inference",
         "supports_prompt_caching": true,
         "supports_reasoning": true,
