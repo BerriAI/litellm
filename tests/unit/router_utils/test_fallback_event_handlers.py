@@ -2580,7 +2580,7 @@ async def test_run_async_fallback_reserves_a_repeated_target_once() -> None:
         num_retries=0,
         fallback_rate_limit_check=admit,
     )
-    with pytest.raises(Exception):  # noqa: B017  # the provider failure of the last attempt, any shape
+    with pytest.raises(Exception, match="model group 'primary' failed"):
         await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
     assert checked == ["fallback"]
 
@@ -2608,6 +2608,6 @@ async def test_run_async_fallback_never_re_reserves_the_requested_model_group() 
         num_retries=0,
         fallback_rate_limit_check=admit,
     )
-    with pytest.raises(Exception):  # noqa: B017  # the provider failure of the last attempt, any shape
+    with pytest.raises(Exception, match="model group 'primary' failed"):
         await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
     assert checked == ["fallback"]
