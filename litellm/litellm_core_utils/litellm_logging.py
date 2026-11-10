@@ -1231,10 +1231,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self.user = user
         self.litellm_params = {
             key: value
-            for key, value in {
-                **self.litellm_params,
-                **scrub_sensitive_keys_in_metadata(litellm_params),
-            }.items()
+            for key, value in _LITELLM_PARAMS.validate_python(
+                {
+                    **self.litellm_params,
+                    **scrub_sensitive_keys_in_metadata(litellm_params),
+                }
+            ).items()
             if key != "litellm_logging_obj"
         }
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
