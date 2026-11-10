@@ -1,23 +1,8 @@
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
-import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import AdvancedDatePicker from "./advanced_date_picker";
-
-// Polyfill requestIdleCallback for test environment
-beforeAll(() => {
-  if (typeof window !== "undefined" && !window.requestIdleCallback) {
-    window.requestIdleCallback = (callback: any) => {
-      const start = Date.now();
-      return setTimeout(() => {
-        callback({
-          didTimeout: false,
-          timeRemaining: () => Math.max(0, 50 - (Date.now() - start)),
-        });
-      }, 1) as any;
-    };
-  }
-});
 
 describe("AdvancedDatePicker", () => {
   const mockOnValueChange = vi.fn();
@@ -193,6 +178,28 @@ describe("AdvancedDatePicker", () => {
     });
   });
 
+  it("does not overwrite a newer range after Apply", async () => {
+    const { container, rerender } = render(
+      <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />,
+    );
+
+    openDropdown(container);
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    const newerValue = {
+      from: new Date(2025, 1, 1),
+      to: new Date(2025, 1, 3, 23, 59, 59, 999),
+    };
+    rerender(<AdvancedDatePicker value={newerValue} onValueChange={mockOnValueChange} presetShortLabel={null} />);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 150)));
+
+    expect(mockOnValueChange).toHaveBeenCalledTimes(1);
+    expect(mockOnValueChange).toHaveBeenCalledWith(
+      { from: new Date(2025, 0, 1), to: new Date(2025, 0, 31, 23, 59, 59, 999) },
+      null,
+    );
+  });
+
   it("passes the clicked preset label when applying", async () => {
     const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
 
@@ -201,9 +208,7 @@ describe("AdvancedDatePicker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "today");
-    await waitFor(() => {
-      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "today");
-    });
+    expect(mockOnValueChange).toHaveBeenCalledTimes(1);
   });
 
   it("passes a null preset label when typed dates match today", async () => {
@@ -216,9 +221,7 @@ describe("AdvancedDatePicker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), null);
-    await waitFor(() => {
-      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), null);
-    });
+    expect(mockOnValueChange).toHaveBeenCalledTimes(1);
   });
 
   it("resets the preset label when the parent switches to a custom range", async () => {
@@ -231,9 +234,7 @@ describe("AdvancedDatePicker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "today");
-    await waitFor(() => {
-      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "today");
-    });
+    expect(mockOnValueChange).toHaveBeenCalledTimes(1);
 
     mockOnValueChange.mockClear();
     const customValue = {
@@ -246,9 +247,7 @@ describe("AdvancedDatePicker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), null);
-    await waitFor(() => {
-      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), null);
-    });
+    expect(mockOnValueChange).toHaveBeenCalledTimes(1);
   });
 
   it("preserves the parent preset label when applying an unchanged range", async () => {
@@ -264,9 +263,7 @@ describe("AdvancedDatePicker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 
     expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "30d");
-    await waitFor(() => {
-      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "30d");
-    });
+    expect(mockOnValueChange).toHaveBeenCalledTimes(1);
   });
 
   it("should select relative time option", () => {
@@ -365,7 +362,7 @@ describe("AdvancedDatePicker", () => {
       to: new Date(2025, 1, 5, 23, 59, 59, 999),
     };
     expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expectedRange, null);
-    await waitFor(() => expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expectedRange, null));
+    expect(mockOnValueChange).toHaveBeenCalledTimes(1);
     expect(screen.queryByLabelText("Start date")).not.toBeInTheDocument();
   });
 
@@ -380,6 +377,6 @@ describe("AdvancedDatePicker", () => {
 
     await user.click(screen.getByRole("button", { name: "Apply" }));
     expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "7d");
-    await waitFor(() => expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "7d"));
+    expect(mockOnValueChange).toHaveBeenCalledTimes(1);
   });
 });
