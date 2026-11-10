@@ -2702,12 +2702,22 @@ class TestResponsesWSFirstFrameModelAuth:
 
         import litellm
         from litellm.exceptions import RateLimitError
+        from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
         from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
         from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_frame_guard
         from litellm.responses.streaming_iterator import drain_logging_tasks
 
+        socket_logging_obj = Logging(
+            model="gpt-4o-mini",
+            messages=[],
+            stream=True,
+            call_type="_aresponses_websocket",
+            start_time=datetime.now(),
+            litellm_call_id="socket-call",
+            function_id="socket-call",
+        )
         blocked = ValueError("blocked")
         refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
 
@@ -2726,14 +2736,14 @@ class TestResponsesWSFirstFrameModelAuth:
         socket_bucket = {"tags": ["ws-tag"], "standard_logging_guardrail_information": [{"guardrail_cost": 9.0}]}
         refused_turns = []
         guard = _responses_ws_frame_guard(
-            {"model": "gpt-4o-mini", "litellm_metadata": socket_bucket},
+            {"model": "gpt-4o-mini", "litellm_metadata": socket_bucket, "litellm_logging_obj": socket_logging_obj},
             UserAPIKeyAuth(
                 api_key="sk-socket",
                 request_route="/v1/responses",
                 budget_reservation={"reserved_cost": 0.5, "entries": []},
             ),
             proxy_logging_obj,
-            refused_turns.append,
+            lambda records, refusal: refused_turns.append((records, refusal)),
         )
         socket_bucket["model_group"] = "mini-group"
         frame = json.dumps({"type": "response.create", "input": "my email is a@b.co", "metadata": {"trace": "t1"}})
@@ -2762,8 +2772,9 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
         rate_limiter.async_post_call_failure_hook.assert_not_awaited()
         release.assert_not_awaited()
-        assert refused_turns == ([refusal] if outcome == "refused" else [])
+        assert refused_turns == ([(({"guardrail_cost": 0.5},), refusal)] if outcome == "refused" else [])
         assert write["completion_response"] is (refusal if outcome == "refused" else blocked)
+        assert row["session_id"] == socket_logging_obj.litellm_trace_id
         assert sent_at <= write["start_time"] <= answered_at
         assert row["call_type"] == "_aresponses_websocket"
         assert row["model_group"] == "mini-group"
@@ -2778,7 +2789,16 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "client_metadata", [{"tags": ["forged-tag"], "model_group": "forged-group"}, "not an object"]
+        "client_metadata",
+        [
+            {
+                "tags": ["forged-tag"],
+                "model_group": "forged-group",
+                "attempted_fallbacks": 7,
+                "original_model_group": "forged-original-group",
+            },
+            "not an object",
+        ],
     )
     async def test_frame_guard_bills_a_refused_turn_without_the_logging_state_its_frame_forges(
         self, client_metadata: object
@@ -2827,7 +2847,10 @@ class TestResponsesWSFirstFrameModelAuth:
             row = _spend_log_row(spend_writer.update_database.await_args.kwargs)
 
         stored_request = json.loads(row["proxy_server_request"])
+        row_metadata = json.loads(row["metadata"])
         assert row["model_group"] == "mini-group"
+        assert row_metadata.get("attempted_fallbacks") != 7
+        assert row_metadata.get("original_model_group") != "forged-original-group"
         assert json.loads(row["request_tags"]) == ["ws-tag"]
         assert row["cache_hit"] == "False"
         assert row["custom_llm_provider"] != "forged-provider"
@@ -3915,8 +3938,11 @@ class TestResponsesWSFirstFrameModelAuth:
             writes = [write.kwargs for write in spend_writer.update_database.await_args_list]
 
         proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
-        closed_with = proxy_logging_obj.post_call_failure_hook.await_args.kwargs["original_exception"]
-        assert closed_with is (crash if ending == "crash" else refusal)
+        closed = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+        assert closed["original_exception"] is (crash if ending == "crash" else refusal)
+        assert closed["request_data"]["litellm_metadata"].get("standard_logging_guardrail_information") == (
+            None if ending == "crash" else [{"guardrail_cost": 0.2}, {"guardrail_cost": 0.4}]
+        )
         assert release.await_count == 1
         assert release.await_args.kwargs["budget_reservation"] == budget_reservation
         assert [row["request_id"] for row in rows_while_open] == [
