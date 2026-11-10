@@ -46,7 +46,9 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
     USER_ROWS_LOCK_SQL,
 )
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.spend_counters import user_counter
 from litellm.repositories.table_repositories import (
     OrganizationMembershipRepository,
     TeamMembershipRepository,
@@ -585,6 +587,9 @@ async def _after_users_deleted(
     )
     await evict_and_broadcast(cache_keys=deletion.jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
     await evict_and_broadcast(cache_keys=sorted(user_ids), user_api_key_cache=user_api_key_cache)
+    from litellm.proxy.proxy_server import spend_counter_store
+
+    await drop_committed_spend(spend_counter_store, tuple(user_counter(user_id) for user_id in sorted(user_ids)))
     for removal in deletion.removals.values():
         _emit_team_members_metric(removal.team)
 

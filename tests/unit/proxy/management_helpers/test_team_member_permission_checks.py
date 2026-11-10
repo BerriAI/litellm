@@ -271,6 +271,7 @@ class TestEnforceMemberCanAssignAccessGroups:
         team = MagicMock()
         team.team_id = team_id
         team.team_member_permissions = team_member_permissions
+        team.access_group_ids = ["ag-1"]
         return team
 
     def test_no_access_group_ids_is_noop(self, monkeypatch):

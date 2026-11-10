@@ -2,7 +2,8 @@
 
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { Plus } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -24,6 +25,7 @@ import CredentialsTable from "./CredentialsTable";
 import { buildCredential, type CredentialSubmission } from "./credential_form_helpers";
 
 export default function CredentialsPanel() {
+  const { t } = useTranslation();
   const term = useTerminology();
   const { accessToken, userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see credentials, do not modify.
@@ -48,7 +50,7 @@ export default function CredentialsPanel() {
         ...newCredential,
         ...(valuesToDelete.length > 0 ? { credential_values_to_delete: valuesToDelete } : {}),
       });
-      toast.success("Credential updated successfully");
+      toast.success(t("modelAdd.credentialsPanel.updated"));
       setIsUpdateModalOpen(false);
       await refetchCredentials();
     } catch (error) {
@@ -63,7 +65,7 @@ export default function CredentialsPanel() {
     try {
       const newCredential = buildCredential(submission, submission.credential_values);
       await credentialCreateCall(accessToken, newCredential);
-      toast.success("Credential added successfully");
+      toast.success(t("modelAdd.credentialsPanel.added"));
       setIsAddModalOpen(false);
       await refetchCredentials();
     } catch (error) {
@@ -78,10 +80,10 @@ export default function CredentialsPanel() {
     setIsCredentialDeleting(true);
     try {
       await credentialDeleteCall(accessToken, credentialToDelete.credential_name);
-      toast.success("Credential deleted successfully");
+      toast.success(t("modelAdd.credentialsPanel.deleted"));
       await refetchCredentials();
     } catch (error) {
-      toast.error("Failed to delete credential");
+      toast.error(t("modelAdd.credentialsPanel.deleteFailed"));
     } finally {
       setCredentialToDelete(null);
       setIsDeleteModalOpen(false);
@@ -89,15 +91,15 @@ export default function CredentialsPanel() {
     }
   };
 
-  const openEditModal = (credential: CredentialItem) => {
+  const openEditModal = useCallback((credential: CredentialItem) => {
     setSelectedCredential(credential);
     setIsUpdateModalOpen(true);
-  };
+  }, []);
 
-  const openDeleteModal = (credential: CredentialItem) => {
+  const openDeleteModal = useCallback((credential: CredentialItem) => {
     setCredentialToDelete(credential);
     setIsDeleteModalOpen(true);
-  };
+  }, []);
 
   const closeDeleteModal = () => {
     setCredentialToDelete(null);
@@ -107,13 +109,11 @@ export default function CredentialsPanel() {
   return (
     <div className="mx-auto flex w-full flex-auto flex-col gap-4 overflow-y-auto p-2">
       <div className="flex items-center justify-between gap-4">
-        <p className="text-sm text-muted-foreground">
-          {term("Configured credentials for different AI providers. Add and manage your API credentials.")}
-        </p>
+        <p className="text-sm text-muted-foreground">{term(t("modelAdd.credentialsPanel.description"))}</p>
         {canModifyCredentials && (
           <Button onClick={() => setIsAddModalOpen(true)}>
             <Plus className="size-4" />
-            Add Credential
+            {t("modelAdd.credentialsPanel.addCredential")}
           </Button>
         )}
       </div>
@@ -148,12 +148,15 @@ export default function CredentialsPanel() {
         isOpen={isDeleteModalOpen}
         onCancel={closeDeleteModal}
         onOk={handleDeleteCredential}
-        title="Delete Credential?"
-        message="Are you sure you want to delete this credential? This action cannot be undone and may break existing integrations."
-        resourceInformationTitle="Credential Information"
+        title={t("modelAdd.credentialsPanel.deleteTitle")}
+        message={t("modelAdd.credentialsPanel.deleteMessage")}
+        resourceInformationTitle={t("modelAdd.credentialsPanel.deleteInformationTitle")}
         resourceInformation={[
-          { label: "Credential Name", value: credentialToDelete?.credential_name },
-          { label: "Provider", value: credentialToDelete?.credential_info?.custom_llm_provider || "-" },
+          { label: t("modelAdd.credentialsPanel.credentialName"), value: credentialToDelete?.credential_name },
+          {
+            label: t("modelAdd.credentialsPanel.provider"),
+            value: credentialToDelete?.credential_info?.custom_llm_provider || "-",
+          },
         ]}
         confirmLoading={isCredentialDeleting}
         requiredConfirmation={credentialToDelete?.credential_name}

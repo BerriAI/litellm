@@ -20,6 +20,7 @@ from integration.cost_calculation.cost_tracking_case import (
     RecountExpected,
     RecountRates,
     SseResponse,
+    UnsizedFlacUpload,
     WavUpload,
 )
 from pydantic import JsonValue
@@ -7952,6 +7953,7 @@ GPT_5_6_STREAM_USAGE_IN_EMPTY_CHOICES_CHUNK: Final = CostTrackingTestCase(
         frames=(
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}],"usage":null}',
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{"content":"scripted answer"},"finish_reason":null}],"usage":null}',
+            'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":null}',
             'data: {"id":"chatcmpl-$REQUEST_ID","object":"chat.completion.chunk","created":1789788263,"model":"gpt-5.6","choices":[],"usage":{"prompt_tokens":1840,"completion_tokens":412,"total_tokens":2252}}',
             "data: [DONE]",
         ),
@@ -8099,6 +8101,18 @@ WHISPER_NEXT_TRANSCRIPTIONS_PER_SECOND: Final = CostTrackingTestCase(
     request={"language": "en", "response_format": "json"},
     response=JsonResponse(content_type="application/json", body={"text": "hello"}),
     expected=ExactExpected(spend=0.00035, input_cost=0.00035, output_cost=0, prompt_tokens=0, completion_tokens=0),
+)
+
+
+WHISPER_NEXT_TRANSCRIPTIONS_UNSIZED_FLAC_NO_USAGE: Final = CostTrackingTestCase(
+    name="whisper-next-transcriptions-unsized-flac-no-usage",
+    covers="quota_management.spend_tracking.cost_matrix.logs_cost",
+    model="whisper-next",
+    endpoint="/v1/audio/transcriptions",
+    upload=UnsizedFlacUpload(kind="unsized_flac"),
+    request={"response_format": "json"},
+    response=JsonResponse(content_type="application/json", body={"text": "hello"}),
+    expected=ExactExpected(spend=0, input_cost=0, output_cost=0, prompt_tokens=0, completion_tokens=0),
 )
 
 
@@ -12205,6 +12219,7 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_UPSTREAM_500_ZERO_SPEND,
     GPT_5_6_UPSTREAM_429_ZERO_SPEND,
     WHISPER_NEXT_TRANSCRIPTIONS_PER_SECOND,
+    WHISPER_NEXT_TRANSCRIPTIONS_UNSIZED_FLAC_NO_USAGE,
     WHISPER_VERBOSE_NEXT_TRANSCRIPTIONS_DURATION,
     GPT_4O_TRANSCRIBE_NEXT_TRANSCRIPTIONS_TOKENS,
     TTS_NEXT_SPEECH_PER_CHARACTER,

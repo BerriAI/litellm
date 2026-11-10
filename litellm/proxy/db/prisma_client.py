@@ -12,7 +12,7 @@ import subprocess
 import time
 import urllib
 import urllib.parse
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar
 
@@ -36,7 +36,10 @@ from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma import models as prisma_models
     from prisma.types import HttpConfig
+
+    from litellm.repositories.prisma_protocols import TableActions
 
 _ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = "20261015120000_add_environment_variables_revision_trigger"
 
@@ -395,11 +398,25 @@ class PrismaWrapper:
         self._retirement_tasks = self._retirement_tasks.difference((retirement_task,))
 
     async def connect(self, timeout: int | timedelta | None = None) -> None:
-        if timeout is None:
-            await self._original_prisma.connect()
-        else:
-            await self._original_prisma.connect(timeout)
+        await self._connect_prisma(self._original_prisma, timeout)
         self._active_drain_tracker = self._instrument_prisma_client(self._original_prisma)
+
+    @staticmethod
+    async def _connect_prisma(prisma_client: "Prisma", timeout: int | timedelta | None = None) -> None:
+        new_connection: Final = prisma_client.is_connected() is False
+        if new_connection:
+            from litellm.proxy.db.prisma_engine import initialize_query_engine
+
+            initialize_query_engine(prisma_client)
+        try:
+            if timeout is None:
+                await prisma_client.connect()
+            else:
+                await prisma_client.connect(timeout)
+        except (Exception, asyncio.CancelledError):
+            if new_connection:
+                await prisma_client.disconnect()
+            raise
 
     @staticmethod
     async def _kill_engine_process(pid: int) -> None:
@@ -685,7 +702,7 @@ class PrismaWrapper:
         else:
             self._original_prisma = Prisma()
 
-        await self._original_prisma.connect()
+        await self._connect_prisma(self._original_prisma)
         self._active_drain_tracker = self._instrument_prisma_client(self._original_prisma)
         self._engine_generation += 1
 
@@ -716,7 +733,7 @@ class PrismaWrapper:
         if old_drain_tracker is None:
             old_drain_tracker = self._instrument_prisma_client(old_prisma)
         try:
-            await replacement_prisma.connect()
+            await self._connect_prisma(replacement_prisma)
         except (Exception, asyncio.CancelledError):
             self._schedule_engine_retirement(self._get_engine_pid(replacement_prisma), None)
             raise
@@ -903,6 +920,21 @@ class PrismaWrapper:
         def is_connected(self) -> bool: ...
 
         async def disconnect(self, timeout: float | timedelta | None = None) -> None: ...
+
+        async def execute_raw(self, query: str, *args: object) -> int: ...
+
+        async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+        @property
+        def litellm_deprecatedverificationtoken(
+            self,
+        ) -> TableActions[prisma_models.LiteLLM_DeprecatedVerificationToken]: ...
+
+        @property
+        def litellm_mcpservertable(self) -> TableActions[prisma_models.LiteLLM_MCPServerTable]: ...
+
+        @property
+        def litellm_shadowevaljob(self) -> TableActions[prisma_models.LiteLLM_ShadowEvalJob]: ...
 
     def __getattr__(self, name: str):
         """

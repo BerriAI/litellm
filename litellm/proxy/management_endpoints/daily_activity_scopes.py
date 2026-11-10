@@ -31,6 +31,7 @@ class EntityQuery:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool
+    team_ids: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +92,7 @@ def _build_scope(
             model=query.model,
             timezone_offset_minutes=query.timezone_offset_minutes,
             include_current_utc_day=query.include_current_utc_day,
+            team_ids=query.team_ids,
         ),
         entity_metadata=entity_metadata,
     )
@@ -321,9 +323,11 @@ def _customer_query(
     api_key: str | None = None,
     exclude_end_user_ids: str | None = None,
     timezone: int | None = None,
+    team_ids: str | None = None,
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(end_user_ids),
+        team_ids=_query_ids(team_ids),
         exclude_entity_ids=_query_excluded_ids(exclude_end_user_ids),
         api_key=api_key,
         start_date=start_date,
@@ -363,7 +367,7 @@ USER_RESOLVER = EntityScopeResolver(
     tags=("Budget & Spend Tracking", "Internal User management"),
     query=_user_query,
     resolve=_resolve_user,
-    include_entity_breakdown=False,
+    include_entity_breakdown=True,
     include_guardrail_breakdown=True,
     operation_names=MappingProxyType(
         {

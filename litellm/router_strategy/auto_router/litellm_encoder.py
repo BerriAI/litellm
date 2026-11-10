@@ -30,7 +30,7 @@ class CustomDenseEncoder(DenseEncoder):
     litellm_router_instance: ClassVar = RenamedRouterAttribute()  # deprecated: the router attribute before ``ctx``
 
     @renamed_router_param("litellm_router_instance")
-    def __init__(self, ctx: Optional["RoutingContext"] = None, **kwargs):
+    def __init__(self, ctx: Optional["RoutingContext"] = None, **kwargs) -> None:
         if "ctx" in kwargs:
             ctx = kwargs.pop("ctx")
 
@@ -55,7 +55,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         model_name: str,
         score_threshold: float | None = None,
         max_input_chars: int = 0,
-    ):
+    ) -> None:
         """Initialize the LiteLLMEncoder.
 
         :param ctx: The routing context of the owning router.
