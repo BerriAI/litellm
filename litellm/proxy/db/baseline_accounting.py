@@ -46,6 +46,7 @@ class DailyBaselineTarget(LiteLLMBaseModel):
 
     entity: DailySpendEntity
     entity_id: str | None
+    parent_id: str | None = None
 
 
 class DailyBaselineAttribution(LiteLLMBaseModel):
@@ -72,6 +73,7 @@ class DailyBaselineAttribution(LiteLLMBaseModel):
                 "endpoint": self.endpoint,
                 "mcp_namespaced_tool_name": self.mcp_namespaced_tool_name,
                 table.entity_id_column: target.entity_id,
+                **({} if table.parent_id_column is None else {table.parent_id_column: target.parent_id}),
                 "request_id": request_id,
                 "autorouter_savings_spend": savings_delta,
             }

@@ -7489,6 +7489,30 @@ def _team_user_spend_sql(*, team_count: int, restrict_to_user: bool) -> str:
     """
 
 
+def _team_user_daily_spend_sql(*, restrict_to_user: bool) -> str:
+    user_clause: Final = " AND d.user_id = $4" if restrict_to_user else ""
+    return f"""
+        SELECT
+            d.team_id,
+            d.user_id,
+            u.user_email,
+            u.user_alias,
+            SUM(d.spend)::float AS spend,
+            SUM(d.prompt_tokens)::bigint AS prompt_tokens,
+            SUM(d.completion_tokens)::bigint AS completion_tokens,
+            SUM(d.prompt_tokens + d.completion_tokens)::bigint AS total_tokens,
+            SUM(d.api_requests)::bigint AS api_requests,
+            SUM(d.successful_requests)::bigint AS successful_requests,
+            SUM(d.failed_requests)::bigint AS failed_requests
+        FROM "LiteLLM_DailyTeamUserSpend" d
+        LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = d.user_id
+        WHERE d.date >= $1 AND d.date <= $2
+            AND d.team_id = ANY($3::text[]){user_clause}
+        GROUP BY d.team_id, d.user_id, u.user_email, u.user_alias
+        ORDER BY spend DESC, d.team_id, d.user_id
+    """
+
+
 class _TeamUserSpendDbRow(TypedDict):
     team_id: ReadOnly[str]
     user_id: ReadOnly[str | None]
@@ -7518,13 +7542,16 @@ async def get_team_spend_by_user(
     end_date: str | None = None,
 ) -> TeamUserSpendResponse:
     """
-    Spend per user within the given teams, attributed per request from spend logs.
+    Spend per user within the given teams, read from the daily team-user rollup the spend ledger
+    writes, so it matches the team totals for any date range regardless of spend log retention.
+    With `use_spend_logs_ledger: false` that rollup is not written, so spend logs are aggregated instead.
 
     Proxy admins may query any team. Team admins and members holding the
     `/team/daily/activity` permission see every user of the requested teams;
     other members only see their own row.
     """
     from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # legacy proxy configuration is narrowed below
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -7555,14 +7582,29 @@ async def get_team_spend_by_user(
 
     own_user_only: Final = scope.api_key_filter is not None
     user_param: Final = (user_api_key_dict.user_id or "",) if own_user_only else ()
-    async with db_span("team_user_spend", "LiteLLM_SpendLogs"):
+    settings: Final = cast(Mapping[str, object], general_settings)  # cast-ok: proxy settings use string keys
+    from_daily_rollup: Final = settings.get("use_spend_logs_ledger", True) is not False
+    table, sql, team_params = (
+        (
+            "LiteLLM_DailyTeamUserSpend",
+            _team_user_daily_spend_sql(restrict_to_user=own_user_only),
+            (list(scoped_team_ids),),
+        )
+        if from_daily_rollup
+        else (
+            "LiteLLM_SpendLogs",
+            _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+            scoped_team_ids,
+        )
+    )
+    async with db_span("team_user_spend", table):
         rows: Final = _TEAM_USER_SPEND_ROWS.validate_python(
             await query_raw_within_statement_timeout(
                 prisma_client,
-                _team_user_spend_sql(team_count=len(scoped_team_ids), restrict_to_user=own_user_only),
+                sql,
                 start_date,
                 end_date,
-                *scoped_team_ids,
+                *team_params,
                 *user_param,
                 what="Spend per user",
             )

@@ -91,7 +91,10 @@ async def record(db: Prisma) -> AsyncIterator[Callable[..., BaselineAccountingRe
             ),
             daily=DailyBaselineAttribution(
                 date="2026-09-15", api_key=run, model="claude-opus-5", custom_llm_provider="anthropic",
-                targets=tuple(DailyBaselineTarget(entity=entity, entity_id=run) for entity in ("user", "team", "org", "end_user", "agent", "tag")),
+                targets=(
+                    *(DailyBaselineTarget(entity=entity, entity_id=run) for entity in ("user", "team", "org", "end_user", "agent", "tag")),
+                    DailyBaselineTarget(entity="team_user", entity_id=user_id, parent_id=run),
+                ),
             ),
         )
 
@@ -100,6 +103,7 @@ async def record(db: Prisma) -> AsyncIterator[Callable[..., BaselineAccountingRe
     scope: Final = "autorouter-baseline:v3:" + run * 2
     await db.execute_raw('DELETE FROM "LiteLLM_DailyTagSpend" WHERE api_key=$1', key)
     await db.execute_raw('DELETE FROM "LiteLLM_DailyTeamSpend" WHERE api_key=$1', key)
+    await db.execute_raw('DELETE FROM "LiteLLM_DailyTeamUserSpend" WHERE api_key=$1', key)
     await db.execute_raw('DELETE FROM "LiteLLM_DailyOrganizationSpend" WHERE api_key=$1', key)
     await db.execute_raw('DELETE FROM "LiteLLM_DailyEndUserSpend" WHERE api_key=$1', key)
     await db.execute_raw('DELETE FROM "LiteLLM_DailyAgentSpend" WHERE api_key=$1', key)
@@ -181,7 +185,9 @@ async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma,
     assert days[0]["saved_spend"] == days[0]["savings_estimated_turns"] == 0
     for field in ("saved_spend", "savings_estimated_turns", "savings_estimated_actual_spend", "savings_estimated_saved_spend"):
         assert days[1][field] == after[field]
-    for table in ("DailyUserSpend", "DailyTeamSpend", "DailyOrganizationSpend", "DailyEndUserSpend", "DailyAgentSpend", "DailyTagSpend"):
+    team_users: Final = await db.query_raw('SELECT team_id, user_id FROM "LiteLLM_DailyTeamUserSpend" WHERE api_key=$1', late.api_key)
+    assert team_users == [{"team_id": late.api_key, "user_id": "late-user"}]
+    for table in ("DailyUserSpend", "DailyTeamSpend", "DailyTeamUserSpend", "DailyOrganizationSpend", "DailyEndUserSpend", "DailyAgentSpend", "DailyTagSpend"):
         rows: Final = await db.query_raw(f'SELECT spend,api_requests,autorouter_savings_spend FROM "LiteLLM_{table}" WHERE api_key=$1', late.api_key)
         assert rows[0]["spend"] == rows[0]["api_requests"] == 0
         assert rows[0]["autorouter_savings_spend"] == pytest.approx(after["saved_spend"])

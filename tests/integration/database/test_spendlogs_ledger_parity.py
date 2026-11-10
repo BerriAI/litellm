@@ -1135,6 +1135,54 @@ async def test_spend_logs_cleanup_does_not_remove_pending_accounting(parity_data
         await client.db.disconnect()
 
 
+
+@pytest.mark.asyncio
+async def test_spend_per_user_within_team_still_adds_up_after_spend_logs_are_deleted(parity_database, monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
+
+    with psycopg.connect(parity_database, autocommit=True) as connection:
+        connection.execute("INSERT INTO \"LiteLLM_UserTable\" (user_id) VALUES ('other-user')")
+        connection.execute("INSERT INTO \"LiteLLM_TeamMembership\" (team_id, user_id) VALUES ('team', 'other-user')")
+    async with _ledger_client(parity_database, monkeypatch):
+        writer = DBSpendUpdateWriter()
+        for call_id, user in (("first", "user"), ("second", "user"), ("third", "other-user")):
+            assert await writer.update_database(
+                token="2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683",
+                user_id=user,
+                end_user_id=None,
+                team_id="team",
+                org_id=None,
+                kwargs={
+                    "model": "ledger-test",
+                    "call_type": "aembedding",
+                    "litellm_call_id": call_id,
+                    "litellm_params": {"metadata": {"status": "success", "user_api_key_user_id": user}},
+                },
+                completion_response=None,
+                start_time=_NOW,
+                end_time=_NOW,
+                response_cost=0.25,
+            )
+            await drain_logging_tasks()
+        await _flush(writer, proxy_server.prisma_client)
+        with psycopg.connect(parity_database, autocommit=True) as connection:
+            connection.execute('DELETE FROM "LiteLLM_SpendLogs"')
+            team_spend = connection.execute(
+                'SELECT SUM(spend) FROM "LiteLLM_DailyTeamSpend" WHERE team_id=$$team$$'
+            ).fetchone()
+        response = await get_team_spend_by_user(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            team_ids="team",
+            start_date="2026-11-02",
+            end_date="2026-11-02",
+        )
+    assert {(row.user_id, row.spend, row.api_requests) for row in response.results} == {
+        ("user", 0.5, 2),
+        ("other-user", 0.25, 1),
+    }
+    assert team_spend == (sum(row.spend for row in response.results),)
+
 @pytest.mark.parametrize("mode", ["local", "url", "disabled"])
 @pytest.mark.parametrize("receipt_state", ["pending", "parked", "applied", "retained"])
 @pytest.mark.asyncio

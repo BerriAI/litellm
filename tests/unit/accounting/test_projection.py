@@ -381,6 +381,45 @@ def test_daily_organization_uses_frozen_charged_identity(organization_id: str | 
         assert dict(daily[0].increments)["spend"] == 0.25
 
 
+@pytest.mark.parametrize("user", ["user", None])
+def test_team_user_daily_row_carries_the_team_rows_counters_under_both_identities(user: str | None) -> None:
+    row: Final[Mapping[str, object]] = {
+        "startTime": _NOW,
+        "api_key": "",
+        "user": user,
+        "team_id": "team",
+        "model": "projection-test",
+        "model_group": "group",
+        "custom_llm_provider": "openai",
+        "spend": 0.25,
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "metadata": "{}",
+    }
+    projected: Final = project(row)
+    team: Final = next(item for item in projected if item.table == "LiteLLM_DailyTeamSpend")
+    team_user: Final = tuple(item for item in projected if item.table == "LiteLLM_DailyTeamUserSpend")
+    assert len(team_user) == 1
+    assert dict(team_user[0].key) == {**dict(team.key), "user_id": user or ""}
+    assert team_user[0].increments == team.increments
+
+
+@pytest.mark.parametrize("team_id", [None, ""])
+def test_request_without_a_team_has_no_team_user_daily_row(team_id: str | None) -> None:
+    row: Final[Mapping[str, object]] = {
+        "startTime": _NOW,
+        "api_key": "key",
+        "user": "user",
+        "team_id": team_id,
+        "model": "projection-test",
+        "model_group": "group",
+        "custom_llm_provider": "openai",
+        "spend": 0.25,
+        "metadata": "{}",
+    }
+    assert not any(item.table == "LiteLLM_DailyTeamUserSpend" for item in project(row))
+
+
 @pytest.mark.parametrize("start", [_NOW, "2026-11-02T12:00:00+00:00", "2026-11-02 12:00:00+00:00"])
 def test_every_daily_row_uses_the_calendar_date_of_the_request(start: object) -> None:
     row: Final[Mapping[str, object]] = {
