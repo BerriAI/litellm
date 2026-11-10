@@ -61,6 +61,40 @@ from litellm.types.utils import ChatCompletionToolCallChunk, Choices, Message, M
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
+@pytest.mark.parametrize(
+    "vector_store_params",
+    (
+        {},
+        {"vector_store_ids": []},
+        {"vector_store_ids": ["vs_test"]},
+        {"vector_store_id": "vs_test"},
+        {"vector_store_ids": ["vs_test"], "vector_store_id": "vs_other"},
+        {"vector_store_ids": None, "vector_store_id": None},
+    ),
+)
+def test_chat_request_omits_internal_vector_store_params(vector_store_params: Mapping[str, object]) -> None:
+    model: Final = "claude-sonnet-5-5"
+    body: Final = AnthropicConfig().transform_request(
+        model=model,
+        messages=[
+            {"role": "system", "content": "Use the supplied context"},
+            {"role": "user", "content": "Context: the answer is 42"},
+        ],
+        optional_params={"max_tokens": 64, "stream": True, "stop_sequences": ["END"], **vector_store_params},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body == {
+        "model": model,
+        "system": [{"type": "text", "text": "Use the supplied context"}],
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Context: the answer is 42"}]}],
+        "max_tokens": 64,
+        "stream": True,
+        "stop_sequences": ["END"],
+    }
+
+
 def test_response_format_transformation_unit_test():
     config = AnthropicConfig()
 
