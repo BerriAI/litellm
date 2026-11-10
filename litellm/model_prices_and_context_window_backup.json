@@ -78828,6 +78828,7 @@
         "prompt_cache_min_tokens": 4096.0,
         "rpm": 2000.0,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -78888,6 +78889,7 @@
         "prompt_cache_min_tokens": 6144.0,
         "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -78947,6 +78949,7 @@
         "prompt_cache_min_tokens": 6144.0,
         "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
