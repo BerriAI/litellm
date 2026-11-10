@@ -11,7 +11,6 @@ PROMPT_DETAILS: Final = [{"modality": "TEXT", "tokenCount": 30}, {"modality": "I
 @pytest.mark.parametrize(
     ("candidates_details", "expected_output_details"),
     [
-        ({}, {"image_tokens": 1716, "text_tokens": 0}),
         (
             {"candidatesTokensDetails": [{"modality": "IMAGE", "tokenCount": 1120}]},
             {"image_tokens": 1120, "text_tokens": 596},
@@ -96,21 +95,20 @@ def test_transform_gemini_image_usage_does_not_double_count_inclusive_thoughts()
     assert usage.output_tokens_details == usage.completion_tokens_details
 
 
-def test_transform_gemini_image_usage_fallback_excludes_thoughts_from_image_tokens() -> None:
+@pytest.mark.parametrize("thoughts", [0, 40])
+def test_transform_gemini_image_usage_preserves_unspecified_output_modality(thoughts: int) -> None:
     usage: Final = transform_gemini_image_usage(
         {
             "promptTokenCount": 12,
             "candidatesTokenCount": 1300,
-            "thoughtsTokenCount": 40,
-            "totalTokenCount": 1352,
+            "thoughtsTokenCount": thoughts,
+            "totalTokenCount": 1312 + thoughts,
         }
     )
 
-    assert usage.output_tokens == 1340
+    assert usage.output_tokens == 1300 + thoughts
     assert usage.completion_tokens_details == {
-        "text_tokens": 0,
-        "image_tokens": 1300,
-        "reasoning_tokens": 40,
+        "reasoning_tokens": thoughts,
     }
     assert usage.output_tokens_details == usage.completion_tokens_details
 

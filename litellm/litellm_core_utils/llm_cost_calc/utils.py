@@ -2155,28 +2155,22 @@ def calculate_image_response_cost_from_usage(
         else completion_tokens_details_attr
     )
 
-    if output_tokens_details is None:
-        completion_tokens_details = CompletionTokensDetailsWrapper(
-            text_tokens=0,
-            image_tokens=completion_tokens,
-            reasoning_tokens=0,
-            audio_tokens=0,
-        )
-    else:
-        text_tokens = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
-        image_tokens: Final = _get_token_detail_value(output_tokens_details, "image_tokens") or 0
-        audio_tokens: Final = _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
-        reasoning_tokens: Final = _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
-        known_output_tokens: Final = text_tokens + image_tokens + audio_tokens + reasoning_tokens
-        if completion_tokens > known_output_tokens:
-            text_tokens += completion_tokens - known_output_tokens
-
-        completion_tokens_details = CompletionTokensDetailsWrapper(
-            text_tokens=text_tokens,
-            image_tokens=image_tokens,
-            reasoning_tokens=reasoning_tokens,
-            audio_tokens=audio_tokens,
-        )
+    text_tokens: Final = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
+    image_tokens: Final = _get_token_detail_value(output_tokens_details, "image_tokens") or 0
+    audio_tokens: Final = _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
+    reasoning_tokens: Final = _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
+    has_output_modalities: Final = any(
+        _get_token_detail_value(output_tokens_details, modality) is not None
+        for modality in ("text_tokens", "image_tokens", "audio_tokens")
+    )
+    unitemized_tokens: Final = max(completion_tokens - text_tokens - image_tokens - audio_tokens - reasoning_tokens, 0)
+    unitemized_image_tokens: Final = unitemized_tokens if not has_output_modalities and image_response.data else 0
+    completion_tokens_details: Final = CompletionTokensDetailsWrapper(
+        text_tokens=text_tokens + unitemized_tokens - unitemized_image_tokens,
+        image_tokens=image_tokens + unitemized_image_tokens,
+        reasoning_tokens=reasoning_tokens,
+        audio_tokens=audio_tokens,
+    )
 
     normalized_usage: Final = Usage(
         prompt_tokens=prompt_tokens,

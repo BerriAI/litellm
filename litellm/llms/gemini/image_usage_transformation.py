@@ -55,16 +55,12 @@ def _output_modality_token_details(
     candidate_tokens: int,
     reasoning_tokens: int,
     candidate_tokens_are_inclusive: bool,
-    candidate_token_details: tuple[Mapping[str, object], ...],
     modality_tokens: ImageUsageInputTokensDetails,
 ) -> ImageUsageInputTokensDetails:
     non_reasoning_candidate_tokens: Final = max(
         candidate_tokens - (reasoning_tokens if candidate_tokens_are_inclusive else 0),
         0,
     )
-    if not candidate_token_details:
-        return ImageUsageInputTokensDetails(image_tokens=non_reasoning_candidate_tokens, text_tokens=0)
-
     known_modality_tokens: Final = modality_tokens.text_tokens + modality_tokens.image_tokens
     text_tokens: Final = (
         max(
@@ -101,17 +97,23 @@ def transform_gemini_image_usage(usage_metadata: Mapping[str, object]) -> ImageU
         usage_metadata, "candidatesTokensDetails", "candidates_tokens_details"
     )
     modality_tokens: Final = _sum_modality_token_details(candidate_token_details)
-    output_modality_tokens: Final = _output_modality_token_details(
-        candidate_tokens,
-        reasoning_tokens,
-        candidate_tokens_are_inclusive,
-        candidate_token_details,
-        modality_tokens,
+    output_modality_tokens: Final = (
+        _output_modality_token_details(
+            candidate_tokens,
+            reasoning_tokens,
+            candidate_tokens_are_inclusive,
+            modality_tokens,
+        )
+        if candidate_token_details
+        else None
     )
 
     output_tokens_details: Final[dict[str, int]] = {
-        "image_tokens": output_modality_tokens.image_tokens,
-        "text_tokens": output_modality_tokens.text_tokens,
+        **(
+            {"image_tokens": output_modality_tokens.image_tokens, "text_tokens": output_modality_tokens.text_tokens}
+            if output_modality_tokens is not None
+            else {}
+        ),
         **({"reasoning_tokens": reasoning_tokens} if "thoughtsTokenCount" in usage_metadata else {}),
     }
 

@@ -37,7 +37,7 @@ _EXPECTED_PRIORITY_SPEND: Final = (
 )
 
 
-def _image_reply(traffic_type: str | None, text_only: bool) -> Callable[[Request], Reply]:
+def _image_reply(traffic_type: str | None, text_only: bool, breakdown: bool) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         assert (request.method, request.target) == (
             "POST",
@@ -51,10 +51,16 @@ def _image_reply(traffic_type: str | None, text_only: bool) -> Callable[[Request
             "totalTokenCount": _PROMPT_TOKENS
             + (25 if text_only else _TEXT_OUTPUT_TOKENS + _IMAGE_OUTPUT_TOKENS + _THOUGHTS_TOKENS),
             "promptTokensDetails": [{"modality": "TEXT", "tokenCount": _PROMPT_TOKENS}],
-            "candidatesTokensDetails": [
-                {"modality": "TEXT", "tokenCount": 25 if text_only else _TEXT_OUTPUT_TOKENS},
-                *([] if text_only else [{"modality": "IMAGE", "tokenCount": _IMAGE_OUTPUT_TOKENS}]),
-            ],
+            **(
+                {
+                    "candidatesTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 25 if text_only else _TEXT_OUTPUT_TOKENS},
+                        *([] if text_only else [{"modality": "IMAGE", "tokenCount": _IMAGE_OUTPUT_TOKENS}]),
+                    ]
+                }
+                if breakdown
+                else {}
+            ),
             **({"trafficType": traffic_type} if traffic_type is not None else {}),
         }
         return Reply(
@@ -112,20 +118,33 @@ def _spend_for_key(key: str) -> float:
 
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
-    ("traffic_type", "text_only", "expected_spend"),
+    ("traffic_type", "text_only", "breakdown", "expected_spend"),
     [
-        pytest.param(None, False, _EXPECTED_STANDARD_SPEND, id="standard"),
-        pytest.param("ON_DEMAND_PRIORITY", False, _EXPECTED_PRIORITY_SPEND, id="on-demand-priority"),
-        pytest.param(None, True, _PROMPT_TOKENS * _INPUT_RATE + 25 * _TEXT_OUTPUT_RATE, id="text-only"),
+        pytest.param(None, False, True, _EXPECTED_STANDARD_SPEND, id="standard"),
+        pytest.param("ON_DEMAND_PRIORITY", False, True, _EXPECTED_PRIORITY_SPEND, id="on-demand-priority"),
+        pytest.param(None, True, True, _PROMPT_TOKENS * _INPUT_RATE + 25 * _TEXT_OUTPUT_RATE, id="text-only"),
+        pytest.param(
+            None, True, False, _PROMPT_TOKENS * _INPUT_RATE + 25 * _TEXT_OUTPUT_RATE, id="text-only-no-breakdown"
+        ),
+        pytest.param(
+            None,
+            False,
+            False,
+            _PROMPT_TOKENS * _INPUT_RATE
+            + _THOUGHTS_TOKENS * _TEXT_OUTPUT_RATE
+            + (_TEXT_OUTPUT_TOKENS + _IMAGE_OUTPUT_TOKENS) * _IMAGE_OUTPUT_RATE,
+            id="image-no-breakdown",
+        ),
     ],
 )
 def test_vertex_gemini_image_spend_prices_text_thinking_and_served_tier(
     gateway: Gateway,
     traffic_type: str | None,
     text_only: bool,
+    breakdown: bool,
     expected_spend: float,
 ) -> None:
-    with wire_server(_image_reply(traffic_type, text_only)) as wire, gateway.scenario() as scenario:
+    with wire_server(_image_reply(traffic_type, text_only, breakdown)) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire)
         key: Final = scenario.key(models=[model])
         response: Final = gateway.request(
