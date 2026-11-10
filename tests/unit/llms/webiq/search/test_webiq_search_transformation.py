@@ -231,12 +231,13 @@ async def test_http_endpoint_rejected_before_sending_credentials(
     monkeypatch.setenv("WEBIQ_API_KEY", "server-key")
     with respx.mock(assert_all_called=False) as transport:
         transport.post("http://api.microsoft.ai/v3/search/web").respond(json={"webResults": []})
-        with pytest.raises(openai.APIError, match="HTTPS"):
-            if use_async:
+        if use_async:
+            with pytest.raises(openai.APIError, match="HTTPS"):
                 await litellm.asearch(
                     query="query", search_provider="webiq", api_base="http://api.microsoft.ai/v3", api_key=api_key
                 )
-            else:
+        else:
+            with pytest.raises(openai.APIError, match="HTTPS"):
                 litellm.search(
                     query="query", search_provider="webiq", api_base="http://api.microsoft.ai/v3", api_key=api_key
                 )
