@@ -238,6 +238,10 @@ class SignsRequestsWithAWS:
     pass
 
 
+def _or_env(value: str | None, env_var: str) -> str | None:
+    return value if value is not None else os.getenv(env_var)
+
+
 class BaseAWSLLM(SignsRequestsWithAWS):
     # Process-wide IAM credential cache (shared across instances — Bedrock passthrough is per-request).
     # Storage is in-process memory only: no Redis backend unless attached elsewhere. Entry TTL: static
@@ -352,6 +356,19 @@ class BaseAWSLLM(SignsRequestsWithAWS):
     def _is_auth_with_aws_profile(aws_profile_name: str | None) -> bool:
         return aws_profile_name is not None
 
+    @classmethod
+    def identity_choosing_params(cls, params: AwsAuthParams) -> tuple[str, ...]:
+        token: Final = _or_env(params.aws_web_identity_token, "AWS_WEB_IDENTITY_TOKEN")
+        role: Final = _or_env(params.aws_role_name, "AWS_ROLE_NAME")
+        session: Final = _or_env(params.aws_session_name, "AWS_SESSION_NAME")
+        if cls._is_auth_with_web_identity_token(token, role, session):
+            return ("aws_web_identity_token", "aws_role_name")
+        if cls._is_auth_with_aws_role(role):
+            return ("aws_role_name",)
+        if cls._is_auth_with_aws_profile(_or_env(params.aws_profile_name, "AWS_PROFILE_NAME")):
+            return ("aws_profile_name",)
+        return ()
+
     @staticmethod
     def _is_auth_with_aws_session_token_tuple(
         aws_access_key_id: str | None,
@@ -404,7 +421,7 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             aws_sts_endpoint,
             aws_external_id,
         ) = tuple(
-            value if value is not None else os.getenv(env_var)
+            _or_env(value, env_var)
             for value, env_var in (
                 (aws_access_key_id, "AWS_ACCESS_KEY_ID"),
                 (aws_secret_access_key, "AWS_SECRET_ACCESS_KEY"),
