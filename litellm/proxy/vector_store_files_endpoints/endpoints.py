@@ -318,8 +318,12 @@ async def _update_request_data_with_managed_file_id(
                 )
                 else None
             )
+            upload_target_model: Final = target_model_names[0] if target_model_names else None
             upload_routing_model: Final = upload_deployment_id or (
-                target_model_names[0] if target_model_names else None
+                upload_target_model
+                if upload_target_model is not None
+                and await caller_may_use_model(upload_target_model, llm_router, user_api_key_dict)
+                else None
             )
             team_copy: Final = (
                 None

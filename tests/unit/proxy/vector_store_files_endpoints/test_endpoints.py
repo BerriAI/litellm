@@ -1172,10 +1172,14 @@ async def test_a_team_model_routing_hint_from_another_team_is_rejected(team_id: 
         )
 
 
-@pytest.mark.parametrize("team_id, api_key", [("team-a", "team-a-key"), ("team-b", None)])
+@pytest.mark.parametrize(
+    "team_id, key_models, api_key",
+    [("team-a", [], "team-a-key"), ("team-b", [], None), ("team-a", ["other-model"], None)],
+    ids=["caller-team", "other-team", "key-not-granted-the-model"],
+)
 @pytest.mark.asyncio
 async def test_a_managed_file_on_a_team_model_routes_with_the_caller_team_credentials(
-    team_id: str, api_key: str | None
+    team_id: str, key_models: list[str], api_key: str | None
 ):
     managed_file_id: Final = _unified_file_id(target_model_name="team-gpt")
 
@@ -1184,7 +1188,7 @@ async def test_a_managed_file_on_a_team_model_routes_with_the_caller_team_creden
             data={"vector_store_id": "vs-test", "file_id": managed_file_id},
             file_id=managed_file_id,
             request=MagicMock(headers={}, query_params={}),
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", team_id=team_id),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", team_id=team_id, models=key_models),
             managed_files_obj=ManagedResourceAccessCheckerStub(file_access="allow"),
             llm_router=_team_a_router(),
         )
