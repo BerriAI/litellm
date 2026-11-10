@@ -25,6 +25,15 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 _PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
+def _mapping(source: object) -> Mapping[str, object]:
+    return _PARAMS.validate_python(source) if isinstance(source, Mapping) else {}
+
+
+def _caller_labels(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    extra_body_labels: Final = _mapping(optional_params.get("extra_body")).get("labels")
+    return {**_mapping(optional_params.get("labels")), **_mapping(extra_body_labels)}
+
+
 class VertexAIError(Exception):
     def __init__(self, status_code, message):
         self.status_code = status_code
@@ -166,10 +175,11 @@ class VertexAIPartnerModels(VertexBase):
             )
 
             label_fields: Final = vertex_request_label_fields() if partner == VertexPartnerProvider.mistralai else ()
+            params: Final = _PARAMS.validate_python(optional_params)
             labels_header: Final = (
                 vertex_partner_labels_header(
                     label_fields,
-                    _PARAMS.validate_python(optional_params).get("labels"),
+                    _caller_labels(params),
                     _PARAMS.validate_python(headers or {}),
                     _PARAMS.validate_python(litellm_params),
                 )
@@ -178,6 +188,11 @@ class VertexAIPartnerModels(VertexBase):
             )
             if label_fields and "labels" in optional_params:
                 del optional_params["labels"]  # rebind-ok: labels travel in the X-Vertex-AI-Labels header, not the body
+            extra_body: Final = _mapping(params.get("extra_body"))
+            if label_fields and "labels" in extra_body:
+                optional_params["extra_body"] = {  # rebind-ok: a copy, so a shared deployment extra_body stays intact
+                    key: value for key, value in extra_body.items() if key != "labels"
+                }
             vertex_labels_headers: Final = {} if labels_header is None else {VERTEX_LABELS_HEADER: labels_header}
 
             if "codestral" in model or "mistral" in model:

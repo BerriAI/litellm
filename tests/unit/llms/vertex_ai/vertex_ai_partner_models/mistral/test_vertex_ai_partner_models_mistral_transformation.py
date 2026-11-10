@@ -2,6 +2,7 @@ import base64
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -110,11 +111,11 @@ MISTRAL_CALLS: Final = pytest.mark.parametrize(
 def _sent_mistral_request(
     send: Callable[[httpx.MockTransport, pytest.MonkeyPatch], None], monkeypatch: pytest.MonkeyPatch
 ) -> httpx.Request:
-    monkeypatch.setattr(
-        litellm.main.vertex_partner_models_chat_completion, "_ensure_access_token", lambda **_: ("token", "proj")
-    )
     sent: Final[list[httpx.Request]] = []
-    send(_transport(sent), monkeypatch)
+    with patch.object(
+        litellm.main.vertex_partner_models_chat_completion, "_ensure_access_token", return_value=("token", "proj")
+    ):
+        send(_transport(sent), monkeypatch)
     assert [request.url.path.rsplit(":", 1)[-1] for request in sent] == ["rawPredict"]
     return sent[0]
 
@@ -142,3 +143,32 @@ def test_mistral_labels_header_carries_identity_only_while_the_setting_is_on(
         "application/json",
         "Bearer token",
     )
+
+
+def test_mistral_extra_body_labels_join_the_labels_header_instead_of_the_body(monkeypatch: pytest.MonkeyPatch):
+    def send(transport: httpx.MockTransport, _: pytest.MonkeyPatch) -> None:
+        litellm.completion(
+            model="vertex_ai/mistral-large-2411",
+            messages=[{"role": "user", "content": "hi"}],
+            vertex_location="us-central1",
+            metadata=dict(PROXY_METADATA),
+            labels={"app": "bot"},
+            extra_body={"labels": {"app": "agent", "env": "prod"}, "safe_prompt": True},
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", LABEL_FIELDS)
+    sent: Final = _sent_mistral_request(send, monkeypatch)
+
+    assert list(SENT_LABELS.validate_json(base64.b64decode(sent.headers["x-vertex-ai-labels"])).items()) == [
+        *IDENTITY.items(),
+        ("app", "agent"),
+        ("env", "prod"),
+        ("cost-center", "cc-1"),
+    ]
+    assert SENT_BODY.validate_json(sent.content) == {
+        "model": "mistral-large-2411",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": False,
+        "safe_prompt": True,
+    }
