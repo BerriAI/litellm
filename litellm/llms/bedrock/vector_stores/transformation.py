@@ -10,7 +10,8 @@ import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -74,6 +75,11 @@ _BEDROCK_IMAGE_FORMATS: Final[Mapping[VectorStoreSearchImageMediaType, BedrockKB
 _BASE64_DATA_URI: Final = re.compile(r"data:(?P<media_type>[^;,]*)[^,]*;base64,(?P<data>.*)", re.DOTALL)
 _SOURCE_FILE_MIME_TYPE_KEY: Final = "x-amz-bedrock-kb-source-file-mime-type"
 _UNKNOWN_MEDIA_TYPE: Final = "application/octet-stream"
+_RETRIEVAL_QUERY_KEYS: Final = ("retrievalQuery", "retrieval_query")
+_RETRIEVAL_QUERY_UNSUPPORTED: Final = (
+    "bedrock vector stores do not take retrievalQuery. Send query, or query_image to search by image. To drop it, "
+    "set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+)
 
 
 class _QueryImageParams(TypedDict, total=False):
@@ -109,7 +115,7 @@ def _image_content(byte_content: str, metadata: Mapping[str, object]) -> VectorS
 
 
 def _result_content(
-    content: BedrockKBContent | None, metadata: Mapping[str, object]
+    content: BedrockKBContent | None, metadata: Mapping[str, object], include_images: bool
 ) -> VectorStoreResultContent | None:
     if content is None:
         return None
@@ -117,7 +123,7 @@ def _result_content(
     if text is not None:
         return VectorStoreResultContent(text=text, type="text")
     byte_content: Final = content.get("byteContent")
-    if content.get("type") != "IMAGE" or not byte_content:
+    if not include_images or content.get("type") != "IMAGE" or not byte_content:
         return None
     return _image_content(byte_content, metadata)
 
@@ -302,14 +308,14 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = join_api_base(api_base, f"{encoded_vector_store_id}/retrieve")
 
-        caller_sources: Final = self._caller_sources(extra_body=extra_body, litellm_params=litellm_params)
-        caller_retrieval_query: Final = self._caller_value(caller_sources, ("retrievalQuery", "retrieval_query"))
+        caller_params: Final = decoded_json_object(litellm_params)
+        caller_sources: Final = self._caller_sources(extra_body=extra_body, litellm_params=caller_params)
+        if self._caller_value(caller_sources, _RETRIEVAL_QUERY_KEYS) is not None and not drops_unsupported_params(
+            caller_params.get("drop_params")
+        ):
+            raise BadRequestError(message=_RETRIEVAL_QUERY_UNSUPPORTED, model="", llm_provider="bedrock")
         request_body: Final[dict[str, object]] = {
-            "retrievalQuery": (
-                _retrieval_query(query, vector_store_search_optional_params)
-                if caller_retrieval_query is None
-                else caller_retrieval_query
-            ),
+            "retrievalQuery": _retrieval_query(query, vector_store_search_optional_params),
         }
 
         retrieval_config: Final[object] = (
@@ -428,10 +434,11 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
     ) -> VectorStoreSearchResponse:
         try:
             response_data: Final = BedrockKBResponse(**response.json())
+            include_images: Final = litellm_logging_obj.model_call_details.get("query_image") is not None
             results: Final[list[VectorStoreSearchResult]] = []
             for item in response_data.get("retrievalResults", []) or []:
                 metadata = item.get("metadata", {}) or {}
-                result_content = _result_content(item.get("content"), metadata)
+                result_content = _result_content(item.get("content"), metadata, include_images)
                 if result_content is None:
                     continue
 

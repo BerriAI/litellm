@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, TypeVar
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -51,12 +51,10 @@ def _iterable_items(items: Sequence[_ItemT] | None) -> Sequence[_ItemT]:
     return items
 
 
-def _text_documents(search_response: VectorStoreSearchResponse) -> Iterator[tuple[_StoreResultView, str]]:
-    results: Final[Sequence[_StoreResultView]] = _iterable_items(search_response.get("data", []))
-    for result in results:
-        for content in _iterable_items(result.get("content", [])):
-            if content.get("type") == "text" and (content_text := content.get("text")):
-                yield result, content_text
+def _sized_items(items: Sequence[_ItemT] | None) -> Sequence[_ItemT]:
+    if items is None:
+        raise TypeError("object of type 'NoneType' has no len()")
+    return items
 
 
 class RAGQuery:
@@ -144,17 +142,24 @@ class RAGQuery:
         search_response: VectorStoreSearchResponse,
     ) -> list[str | dict[str, object]]:
         """Extract text documents from vector store search response."""
-        return [text for _, text in _text_documents(search_response)]
+        documents: Final[list[str | dict[str, object]]] = []
+        results: Final[Sequence[_StoreResultView]] = _iterable_items(search_response.get("data", []))
+        for result in results:
+            for content in _iterable_items(result.get("content", [])):
+                if content.get("type") == "text" and (content_text := content.get("text")):
+                    documents.append(content_text)
+        return documents
 
     @staticmethod
     def get_top_chunks_from_rerank(
         search_response: VectorStoreSearchResponse, rerank_response: Any
     ) -> list[_StoreResultView]:
         """Get the original search results corresponding to the top reranked results."""
-        document_results: Final = tuple(result for result, _ in _text_documents(search_response))
+        top_chunks: Final[list[_StoreResultView]] = []
+        original_results: Final = search_response.get("data", [])
         reranked: Final[_RerankResultsView] = {"results": rerank_response.get("results", [])}
-        return [
-            document_results[index]
-            for result in reranked["results"]
-            if (index := result.get("index")) is not None and index < len(document_results)
-        ]
+        for result in reranked["results"]:
+            index = result.get("index")
+            if index is not None and index < len(sized_results := _sized_items(original_results)):
+                top_chunks.append(sized_results[index])
+        return top_chunks

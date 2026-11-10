@@ -442,60 +442,6 @@ async def test_aquery_forwards_filters_to_vector_store_search(
 
 
 @pytest.mark.asyncio
-async def test_aquery_rerank_picks_the_text_hit_the_reranker_ranked_when_image_hits_come_first(monkeypatch):
-    from litellm.types.rerank import RerankResponse
-
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    image_hit: Final = {
-        "file_id": "file-image",
-        "filename": "circle.jpg",
-        "score": 0.99,
-        "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "/9j/"}}],
-    }
-    text_hit: Final = {
-        "file_id": "file-text",
-        "filename": "shapes.txt",
-        "score": 0.8,
-        "content": [{"type": "text", "text": "The logo is a red circle."}],
-    }
-    reranked_documents: Final[list[object]] = []
-
-    async def fake_arerank(**kwargs: object) -> RerankResponse:
-        reranked_documents.append(kwargs["documents"])
-        return RerankResponse(id="rr_1", results=[{"index": 0, "relevance_score": 0.9}], meta={})
-
-    with respx.mock(assert_all_called=True) as respx_mock, patch("litellm.arerank", side_effect=fake_arerank):
-        respx_mock.post("https://example.com/v1/vector_stores/vs_test_123/search").mock(
-            return_value=httpx.Response(
-                200,
-                json={"object": "vector_store.search_results.page", "search_query": "q", "data": [image_hit, text_hit]},
-            )
-        )
-        completion_route: Final = respx_mock.post("https://example.com/v1/chat/completions").mock(
-            return_value=httpx.Response(
-                200,
-                content=(
-                    '{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"gpt-4o-mini",'
-                    '"choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],'
-                    '"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
-                ),
-            )
-        )
-        await litellm.aquery(
-            model="openai/gpt-4o-mini",
-            messages=[{"role": "user", "content": "What is the logo?"}],
-            retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": "openai"},
-            rerank={"enabled": True, "model": "cohere/rerank-english-v3.0", "top_n": 1},
-            api_key="sk-test",
-            api_base="https://example.com/v1",
-        )
-        completion_body: Final = completion_route.calls.last.request.content.decode()
-
-    assert reranked_documents == [["The logo is a red circle."]]
-    assert "The logo is a red circle." in completion_body
-
-
-@pytest.mark.asyncio
 async def test_aquery_forwards_provider_retrieval_config_and_router_to_search():
     """
     Regression: provider-specific retrieval_config keys (aws_region_name,

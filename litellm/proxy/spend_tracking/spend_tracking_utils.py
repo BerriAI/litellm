@@ -2126,11 +2126,7 @@ def _get_vector_store_request_for_spend_logs_payload(
 
 
 def _redacted_vector_store_content(content: VectorStoreResultContent) -> VectorStoreResultContent:
-    without_text: Final[VectorStoreResultContent] = (
-        {**content, "text": REDACTED_BY_LITELM_STRING} if "text" in content else content
-    )
-    source: Final = content.get("source")
-    return without_text if source is None else {**without_text, "source": {**source, "data": REDACTED_BY_LITELM_STRING}}
+    return {**content, "text": REDACTED_BY_LITELM_STRING} if "text" in content else content
 
 
 def _redacted_vector_store_result(result: VectorStoreSearchResult) -> VectorStoreSearchResult:

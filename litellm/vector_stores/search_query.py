@@ -7,6 +7,7 @@ from pydantic_core import ErrorDetails
 from typing_extensions import assert_never
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.types.vector_stores import VectorStoreSearchQueryImage
 
 _QUERY_IMAGE: Final = TypeAdapter(VectorStoreSearchQueryImage)
@@ -49,10 +50,13 @@ SearchQuery: TypeAlias = TextSearchQuery[_Query] | ImageSearchQuery
 SearchQueryError: TypeAlias = QueryAndImageBothSent | NoQuerySent | InvalidQueryImage | QueryImageUnsupported
 
 
-def _has_text(query: str | Sequence[str]) -> bool:
+def _has_text(query: object) -> bool:
     if isinstance(query, str):
         return bool(query.strip())
-    return any(item.strip() for item in query)
+    items: Final = as_object_list(query)
+    if items is None:
+        return True
+    return any(not isinstance(item, str) or item.strip() for item in items)
 
 
 def _problem(detail: ErrorDetails) -> str:

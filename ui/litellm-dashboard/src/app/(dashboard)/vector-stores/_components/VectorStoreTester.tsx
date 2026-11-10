@@ -9,26 +9,10 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
-interface VectorStoreTextContent {
+interface VectorStoreContent {
   text: string;
   type: string;
 }
-
-interface VectorStoreImageContent {
-  type: "image";
-  source: {
-    type: "base64";
-    media_type: string;
-    data: string;
-  };
-}
-
-type VectorStoreContent = VectorStoreTextContent | VectorStoreImageContent;
-
-const isImageContent = (content: VectorStoreContent): content is VectorStoreImageContent => "source" in content;
-
-const contentPreview = (content: VectorStoreContent): string =>
-  isImageContent(content) ? content.source.media_type : content.text.substring(0, 100);
 
 interface VectorStoreResult {
   score: number;
@@ -194,7 +178,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                                     {/* Show preview of content when collapsed */}
                                     {!isExpanded && result.content && result.content[0] && (
                                       <span className="ml-2 max-w-md truncate text-xs text-muted-foreground">
-                                        - {contentPreview(result.content[0])}...
+                                        - {result.content[0].text.substring(0, 100)}...
                                       </span>
                                     )}
                                   </div>
@@ -214,15 +198,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                                             {t("vectorStores.tester.content", { type: content.type })}
                                           </div>
                                           <div className="max-h-40 overflow-y-auto rounded-sm border bg-muted/50 p-3 text-sm text-foreground">
-                                            {isImageContent(content) ? (
-                                              <img
-                                                src={`data:${content.source.media_type};base64,${content.source.data}`}
-                                                alt={result.filename || content.source.media_type}
-                                                className="max-h-36 rounded-sm"
-                                              />
-                                            ) : (
-                                              content.text
-                                            )}
+                                            {content.text}
                                           </div>
                                         </div>
                                       ))}
