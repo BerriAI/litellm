@@ -136,6 +136,7 @@ from litellm.utils import (
     get_potential_model_names,
     get_secret,
     lookup_model_info_for_registration,
+    model_cost_registration_key,
     model_info_with_pricing_overrides,
 )
 
@@ -563,9 +564,19 @@ def _entry_backend_keys(entry: Mapping[str, object]) -> frozenset[str]:
     return frozenset() if backend is None else frozenset(_backend_cost_map_keys(*backend))
 
 
+def _entry_row_keys(entry: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(model_cost_registration_key(key) for key in _entry_backend_keys(entry))
+
+
 def _shared_capabilities_set_true(entry: Mapping[str, object]) -> frozenset[str]:
     model_info: Final = _entry_section(entry, "model_info")
     return frozenset(field for field in SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS if model_info.get(field) is True)
+
+
+def _distinct_withdrawals(entries: Iterable[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {(_entry_backend_keys(entry), _shared_capabilities_set_true(entry)): entry for entry in entries}.values()
+    )
 
 
 def _catalog_sets_true(catalog: Mapping[str, Mapping[str, object]], catalog_keys: tuple[str, ...], field: str) -> bool:
@@ -579,28 +590,44 @@ def withdraw_shared_capabilities(
     replacement: Mapping[str, object] | None,
     served: Iterable[Mapping[str, object]],
 ) -> None:
-    """For each ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag ``removed`` set ``True``, set ``removed``'s backend
-    model key(s) to whether ``replacement``, a ``served`` deployment of that backend model, or the catalog still
-    sets it ``True``."""
+    """For each ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag ``removed`` set ``True``, set the shared
+    ``litellm.model_cost`` row(s) ``removed`` registers onto to whether ``replacement``, a ``served`` deployment
+    registering onto one of them, or the catalog still sets it ``True``."""
     backend: Final = _entry_backend(removed)
-    backend_keys: Final = _entry_backend_keys(removed)
+    set_true: Final = _shared_capabilities_set_true(removed)
+    if backend is None or not set_true:
+        return
+    row_keys: Final = _entry_row_keys(removed)
     kept: Final = (
         _shared_capabilities_set_true(replacement)
-        if replacement is not None and _entry_backend_keys(replacement) == backend_keys
+        if replacement is not None and _entry_row_keys(replacement) == row_keys
         else frozenset[str]()
     )
-    withdrawn: Final = _shared_capabilities_set_true(removed) - kept
-    if backend is None or not withdrawn:
+    withdrawn: Final = set_true - kept
+    if not withdrawn:
         return
-    siblings: Final = tuple(entry for entry in served if not _entry_backend_keys(entry).isdisjoint(backend_keys))
+    candidates: Final = tuple(
+        entry for entry in served if not withdrawn.isdisjoint(_shared_capabilities_set_true(entry))
+    )
+    rows_by_backend: Final = {
+        keys: frozenset(model_cost_registration_key(key) for key in keys)
+        for keys in frozenset(_entry_backend_keys(entry) for entry in candidates)
+    }
+    siblings_set_true: Final = frozenset(
+        itertools.chain.from_iterable(
+            _shared_capabilities_set_true(entry) & withdrawn
+            for entry in candidates
+            if not rows_by_backend[_entry_backend_keys(entry)].isdisjoint(row_keys)
+        )
+    )
     catalog: Final = catalog_with_runtime_registrations()
     catalog_keys: Final = _catalog_backend_keys(*backend, _backend_cost_map_keys(*backend))
     restored: Final = {
-        field: any(field in _shared_capabilities_set_true(entry) for entry in siblings)
-        or _catalog_sets_true(catalog, catalog_keys, field)
-        for field in withdrawn
+        field: field in siblings_set_true or _catalog_sets_true(catalog, catalog_keys, field) for field in withdrawn
     }
-    host.invoke("register_model")(model_cost={key: restored for key in backend_keys}, persist_across_reloads=False)
+    host.invoke("register_model")(
+        model_cost={key: restored for key in _entry_backend_keys(removed)}, persist_across_reloads=False
+    )
 
 
 # -- the registry --------------------------------------------------------------------------------
@@ -908,7 +935,7 @@ class HostRegistry(HostModelInfo):
             self._replace_model_list(previous)
             raise
         served: Final = self._served_by_live_routers()
-        for entry in previous:
+        for entry in _distinct_withdrawals(previous):
             withdraw_shared_capabilities(self._host, entry, None, served)
 
     def _replace_model_list(self, model_list: Sequence[object]) -> None:
@@ -1548,9 +1575,19 @@ class HostRegistry(HostModelInfo):
         self._registry_version += 1
         self._on_change()
 
-    def _served_by_live_routers(self) -> tuple[UntypedEntry, ...]:
+    def _served_by_other_routers(self) -> tuple[UntypedEntry, ...]:
         others: Final = (tuple(registry._core_model_list) for registry in live_registries() if registry is not self)
-        return (*self._core_model_list, *itertools.chain.from_iterable(others))
+        return tuple(itertools.chain.from_iterable(others))
+
+    def _served_by_live_routers(self) -> tuple[UntypedEntry, ...]:
+        return (*self._core_model_list, *self._served_by_other_routers())
+
+    def retire_shared_capabilities(self) -> None:
+        """Take back the ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flags this router's deployments put on shared
+        ``litellm.model_cost`` rows that no other live router's deployment still sets (``retire``)."""
+        others: Final = self._served_by_other_routers()
+        for entry in _distinct_withdrawals(self._core_model_list):
+            withdraw_shared_capabilities(self._host, entry, None, others)
 
     def _core_delete_deployment(self, id: str) -> UntypedEntry | None:
         """Remove one deployment and return its stored entry (``_delete_deployment``)."""

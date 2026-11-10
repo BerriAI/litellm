@@ -4159,6 +4159,12 @@ def model_cost_registration_row(key: str, provider: object) -> Mapping[str, obje
     return _builtin_cost_map().get(base.key) or base.entry
 
 
+def model_cost_registration_key(key: str) -> str:
+    """The ``litellm.model_cost`` row a ``register_model`` write of ``key`` lands on (``typesafe/typesafe/jev-1.13.0``
+    lands on ``typesafe/jev-1.13.0``)."""
+    return _registration_base(key, {}, custom_llm_provider=None, warning_display_name=None).key
+
+
 def _registration_base(
     key: str, value: Mapping[str, object], custom_llm_provider: str | None, warning_display_name: str | None
 ) -> _RegistrationWrite:

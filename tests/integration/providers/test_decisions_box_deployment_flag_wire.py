@@ -384,6 +384,29 @@ def test_a_later_same_model_deployment_flag_never_takes_catalog_box_questions_fr
         assert _JSON_OBJECT.validate_json(call.body) == member.upstream_body(_QUESTIONS)
 
 
+def test_an_unflagged_deployment_stops_sending_box_questions_once_its_last_true_sibling_is_deleted(
+    gateway: Gateway,
+) -> None:
+    member: Final = _perplexity()
+    with wire_server(member.reply) as wire, gateway.scenario() as scenario:
+        unflagged: Final = member.deployment(scenario, wire.url, None)
+        with gateway.scenario() as sibling:
+            member.deployment(sibling, wire.url, {"supports_box_questions": True})
+            borrowed: Final = _decide(gateway, unflagged, (_BOX_QUESTION,))
+            assert borrowed.status_code == 200, borrowed.text
+            assert borrowed.json()["answers"] == [_BOX_ANSWER], borrowed.text
+        refused: Final = eventually(
+            lambda: tuple(_decide(gateway, unflagged, (_BOX_QUESTION,)) for _ in range(8)),
+            lambda responses: all(response.status_code == 400 for response in responses),
+            seconds=3 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+        )
+        for response in refused:
+            _assert_refused_box(response)
+        received: Final = wire.drain()
+        assert received, "the borrowed box question never reached the upstream"
+        assert all(_JSON_OBJECT.validate_json(call.body) == member.upstream_body((_BOX_QUESTION,)) for call in received)
+
+
 @pytest.mark.parametrize("value", ("true", 1), ids=("string", "int"))
 def test_a_non_boolean_deployment_flag_keeps_the_catalog_box_questions_of_its_backend(
     gateway: Gateway, value: JsonValue

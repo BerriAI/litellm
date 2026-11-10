@@ -680,10 +680,15 @@ def test_a_sibling_box_questions_flag_reaches_the_shared_key_only_as_true(
         _restore_model_cost_entries(model_keys)
 
 
-def _box_flag_deployment(backend_model: str, model_id: str, flag: bool | None) -> DeploymentTypedDict:
+def _box_flag_deployment(
+    backend_model: str, model_id: str, flag: bool | None, custom_llm_provider: str | None = None
+) -> DeploymentTypedDict:
     return {
         "model_name": "box-withdraw",
-        "litellm_params": {"model": backend_model},
+        "litellm_params": {
+            "model": backend_model,
+            **({} if custom_llm_provider is None else {"custom_llm_provider": custom_llm_provider}),
+        },
         "model_info": {"id": model_id, **({} if flag is None else {"supports_box_questions": flag})},
     }
 
@@ -708,7 +713,13 @@ def _live_box_router(backend_model: str, deployments: tuple[tuple[str, bool | No
         (False, True, "update", True),
         (True, False, "update", True),
     ),
-    ids=("update-to-false-clears", "delete-clears", "replace-clears", "another-true-sibling-keeps", "catalog-true-keeps"),
+    ids=(
+        "update-to-false-clears",
+        "delete-clears",
+        "replace-clears",
+        "another-true-sibling-keeps",
+        "catalog-true-keeps",
+    ),
 )
 def test_a_withdrawn_box_questions_true_leaves_the_shared_key_once_no_sibling_sets_it(
     catalog_box: bool, true_sibling_stays: bool, change: str, shared_flag: bool
@@ -769,6 +780,58 @@ def test_a_box_questions_true_another_live_router_serves_stays_on_the_shared_key
             assert litellm.supports_box_questions(model=backend_model) is True
 
             _ = other_router.apply(ChangeSet(delete=["other-router-id"]))
+            assert litellm.supports_box_questions(model=backend_model) is False
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+@pytest.mark.parametrize("deleted_first", ("ui-true-id", "config-true-id"))
+def test_a_box_questions_true_stays_while_a_sibling_spelled_with_its_provider_still_sets_it(deleted_first: str) -> None:
+    backend_model: Final = next(
+        key
+        for key, entry in GetModelCostMap.loaded_model_cost_map().items()
+        if entry.get("litellm_provider") == "typesafe" and entry.get("supports_box_questions") is not True
+    )
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "config-true-id", "ui-true-id", backend_model)
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None), ("config-true-id", True))) as router:
+            _ = router.apply(
+                ChangeSet(
+                    upsert=[
+                        Deployment(
+                            **_box_flag_deployment(backend_model, "ui-true-id", True, custom_llm_provider="typesafe")
+                        )
+                    ]
+                )
+            )
+
+            _ = router.apply(ChangeSet(delete=[deleted_first]))
+            assert litellm.supports_box_questions(model=backend_model) is True
+
+            _ = router.apply(ChangeSet(delete=[({"ui-true-id", "config-true-id"} - {deleted_first}).pop()]))
+            assert litellm.supports_box_questions(model=backend_model) is False
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
+def test_a_retired_router_takes_back_a_box_questions_true_no_live_router_still_sets() -> None:
+    backend_model: Final = "perplexity/box-withdraw-on-retire"
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "first-true-id", "second-true-id", backend_model)
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None),)):
+            first: Final = Router(model_list=[_box_flag_deployment(backend_model, "first-true-id", True)])
+            second: Final = Router(model_list=[_box_flag_deployment(backend_model, "second-true-id", True)])
+
+            first.retire()
+            assert litellm.supports_box_questions(model=backend_model) is True
+
+            second.retire()
             assert litellm.supports_box_questions(model=backend_model) is False
     finally:
         _restore_model_cost_entries(model_keys)
