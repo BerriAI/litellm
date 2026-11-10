@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
+from litellm.proxy.auth.access_group_rules import AccessGroupRule, _validate_rules
 from litellm.proxy.mcp_server.stdio_gate import MCP_STDIO_DISABLED_MESSAGE, is_mcp_stdio_enabled
 from litellm.types.agents import (
     AgentCaller as AgentCaller,  # noqa: PLC0414  # public re-export
@@ -2100,6 +2101,11 @@ class BlockModelRequest(LiteLLMPydanticObjectBase):
     model_id: str  # required
 
 
+CALLBACK_VAR_NAMES: Final = frozenset(
+    {*StandardCallbackDynamicParams.__annotations__, CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR}
+)
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Literal["success", "failure", "success_and_failure"] | None = "success_and_failure"
@@ -2109,14 +2115,9 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_callback_vars(cls, values):
         callback_vars: Final = values.get("callback_vars", {})
-        valid_keys: Final = {
-            *StandardCallbackDynamicParams.__annotations__,
-            CAPTURE_MESSAGE_CONTENT_VAR,
-            EXCLUDED_SERVICES_VAR,
-        }
         for key, value in callback_vars.items():
-            if key not in valid_keys:
-                raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
+            if key not in CALLBACK_VAR_NAMES:
+                raise ValueError(f"Invalid callback variable: {key}. Must be one of {set(CALLBACK_VAR_NAMES)}")
             if key in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR) and not isinstance(value, str):
                 raise ValueError(f"{key} must be a string, got {type(value).__name__}")
             callback_vars[key] = str(value)
@@ -2506,6 +2507,13 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
     """
+
+    access_group_rules: tuple[AccessGroupRule, ...] | None = None
+
+    @field_validator("access_group_rules", mode="before")
+    @classmethod
+    def validate_access_group_rules(cls, value: object) -> tuple[AccessGroupRule, ...] | None:
+        return _validate_rules(value) if value is not None else None
 
     use_spend_logs_ledger: bool = Field(
         True,

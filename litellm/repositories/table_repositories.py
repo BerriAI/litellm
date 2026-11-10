@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
@@ -299,6 +300,10 @@ class ModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ModelTab
 
 class AccessGroupRepository(PrismaTableRepository["prisma_models.LiteLLM_AccessGroupTable"]):
     table_name = "litellm_accessgrouptable"
+
+    async def find_by_name(self, name: str) -> LiteLLM_AccessGroupTable | None:
+        row: Final = await self.table.find_unique(where={"access_group_name": name})
+        return LiteLLM_AccessGroupTable.model_validate(row, from_attributes=True) if row is not None else None
 
 
 class SSOConfigRepository(PrismaTableRepository["prisma_models.LiteLLM_SSOConfig"]):
