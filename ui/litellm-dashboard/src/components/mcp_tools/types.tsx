@@ -43,6 +43,7 @@ export const AUTH_TYPE = {
   OAUTH2_TOKEN_EXCHANGE: "oauth2_token_exchange",
   OAUTH2_ID_JAG: "oauth2_id_jag",
   AWS_SIGV4: "aws_sigv4",
+  SECRET_HEADERS: "secret_headers",
   TRUE_PASSTHROUGH: "true_passthrough",
   OAUTH_DELEGATE: "oauth_delegate",
 };

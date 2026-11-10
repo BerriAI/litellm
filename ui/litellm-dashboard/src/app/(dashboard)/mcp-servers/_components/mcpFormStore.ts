@@ -69,6 +69,7 @@ export interface McpEnvVarRow {
 
 export interface McpListValues {
   static_headers: McpStaticHeaderRow[];
+  secret_headers: McpStaticHeaderRow[];
   env_vars: McpEnvVarRow[];
 }
 
