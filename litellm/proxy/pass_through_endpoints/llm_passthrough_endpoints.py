@@ -18,7 +18,6 @@ import sys
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
 
@@ -2586,7 +2585,11 @@ VertexLabelPlacement: TypeAlias = Literal["header", "body", "caller_body"]
 
 
 def _vertex_publisher(segments: tuple[str, ...]) -> str | None:
-    return next((value for name, value in pairwise(segments) if name == "publishers"), None)
+    match segments[-4:]:
+        case ("publishers", publisher, "models", _):
+            return publisher
+        case _:
+            return None
 
 
 def _vertex_label_placement(http_method: str, endpoint: str) -> VertexLabelPlacement | None:
@@ -3099,7 +3102,7 @@ async def _base_vertex_proxy_route(
         custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
         upstream_request_filter=partial(
-            _with_vertex_request_labels, _vertex_label_placement(request.method, encoded_endpoint)
+            _with_vertex_request_labels, _vertex_label_placement(request.method, updated_url.path)
         ),
     )  # dynamically construct pass-through endpoint based on incoming path
 

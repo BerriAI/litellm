@@ -515,6 +515,14 @@ def _labels_header(labels: Mapping[str, str]) -> str:
             },
             id="forwarded-header-on-caller-credentials",
         ),
+        pytest.param(
+            "v1/projects/publishers/locations/global/publishers/anthropic/models/claude-haiku-4-5:rawPredict",
+            {
+                "Authorization": f"Bearer {_VERTEX_CALLER_GOOGLE_TOKEN}",
+                "X-Vertex-AI-Labels": _labels_header(_VERTEX_FORGED_LABELS),
+            },
+            id="project-id-named-publishers",
+        ),
     ],
 )
 def test_vertex_claude_pass_through_replaces_a_forged_labels_header(
