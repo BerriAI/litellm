@@ -831,6 +831,24 @@ _PROBE_PARAMS_ADAPTER: Final = TypeAdapter(dict[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
+def _same_health_check_model(deployment_model: str | None, probe_params: Mapping[str, object]) -> bool:
+    model: Final = probe_params.get("model")
+    if model == deployment_model:
+        return True
+    if not isinstance(model, str) or deployment_model is None:
+        return False
+    provider_param: Final = probe_params.get("custom_llm_provider")
+    provider: Final = provider_param if isinstance(provider_param, str) else None
+    try:
+        deployment_name, deployment_provider, _, _ = litellm.get_llm_provider(
+            model=deployment_model, custom_llm_provider=provider
+        )
+        probe_name, probe_provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=provider)
+    except litellm.exceptions.BadRequestError:
+        return False
+    return (deployment_name, deployment_provider) == (probe_name, probe_provider)
+
+
 def update_litellm_params_for_health_check(
     model_info: dict, litellm_params: dict, deployment_model: str | None = None
 ) -> dict:
@@ -900,7 +918,7 @@ def update_litellm_params_for_health_check(
     )
     probe_logging_model_info: Final = (
         logging_model_info
-        if litellm_params["model"] == base_model_owner
+        if _same_health_check_model(base_model_owner, _PROBE_PARAMS_ADAPTER.validate_python(litellm_params))
         else {key: value for key, value in logging_model_info.items() if key == "id"}
     )
 
