@@ -187,7 +187,7 @@ class PassthroughEndpointRouter:
         deployments: Final = llm_router.registry().deployments() or ()
         return next(
             (
-                replace(credentials, model_name=deployment.get("model_name"))
+                replace(credentials, model_name=deployment["model_name"])
                 for deployment in deployments
                 if (include_team_deployments or not _is_team_deployment(deployment))
                 and (
