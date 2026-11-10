@@ -1,8 +1,11 @@
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
-from typing import Final
+from typing import Final, Literal, Protocol, TypeAlias
 
 from pydantic import Field
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -26,6 +29,10 @@ LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: Final = "litellm_pass_thro
 LITELLM_PASS_THROUGH_ENDPOINT_MARKER: Final = "__litellm_pass_through_endpoint__"
 
 SETTLES_BACKGROUND_RESPONSE_KWARG: Final = "settles_background_response"
+
+WebsocketUpstreamFrameKind: TypeAlias = Literal[
+    "starts_turn", "ends_turn", "opens_session", "updates_session", "bills_usage", "refuses_turn", "relayed"
+]
 
 
 class BackgroundResponseSettlement(str, Enum):
@@ -62,7 +69,7 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
     """
     The body of the request
     """
-    response_body: dict | None  # only tracked for non-streaming responses
+    response_body: dict | Sequence[Mapping[str, object]] | None  # only tracked for non-streaming responses
     """
     The body of the response
     """
@@ -73,6 +80,21 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
 
     Optional field, we use this for cost tracking only if it's set.
     """
+
+    end_time: ReadOnly[datetime]
+
+
+@dataclass(frozen=True, slots=True)
+class WebSocketSessionUsage:
+    model: str
+    custom_llm_provider: str
+    response_cost: float | None
+
+
+class WebSocketSessionMeter(Protocol):
+    def measure(self, client_text: str) -> int: ...
+
+    def price(self, total: int) -> WebSocketSessionUsage: ...
 
 
 class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):

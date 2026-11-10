@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_CACHED_TOKEN: Final = TypeAdapter(object)
 
 
 class MCPOAuth2TokenCache(InMemoryCache):
@@ -259,8 +260,8 @@ class MCPPerUserTokenCache:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
             key: Final = self._cache_key(user_id, server_id)
-            encrypted: Final = await user_api_key_cache.async_get_cache(key)
-            if encrypted is None:
+            encrypted: Final = _CACHED_TOKEN.validate_python(await user_api_key_cache.async_get_cache(key))
+            if not isinstance(encrypted, str):
                 return None
             return self._codec().decode(encrypted)
         except Exception as exc:

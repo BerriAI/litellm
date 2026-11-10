@@ -16,6 +16,8 @@ from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest, litellm
+
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 import httpx
 from fastapi import Request, status
 from prisma import Prisma
@@ -46,7 +48,7 @@ from litellm.proxy.auth.auth_checks import (
     _team_soft_budget_check,
     common_checks,
 )
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 from litellm.proxy.utils import CallInfo
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
 
@@ -2342,10 +2344,8 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis
         for index in range(600)
     )
     for hashed_token in hashed_tokens:
-        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
-    seeded: Final = tuple(
-        token for token in hashed_tokens if cache.in_memory_cache_for(token).get_cache(token) is not None
-    )
+        cache.set_local(hashed_token, {"token": hashed_token}, None)
+    seeded: Final = tuple(token for token in hashed_tokens if cache.get_local(token) is not None)
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -2355,9 +2355,7 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis
             delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
         )
         await asyncio.sleep(0.05)
-        still_cached: Final = tuple(
-            token for token in seeded if cache.in_memory_cache_for(token).get_cache(token) is not None
-        )
+        still_cached: Final = tuple(token for token in seeded if cache.get_local(token) is not None)
         client.release.set()
         await eviction
         await _drain_publishes()
@@ -2404,11 +2402,9 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
         hashlib.sha256(f"token-{index}".encode()).hexdigest()
         for index in range(600)
     )
-    redis = _AuthRedisCache({token: {"token": token} for token in hashed_tokens})
-    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
-    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    cache, redis = shared_cache(FakeAuthCache(redis={token: {"token": token} for token in hashed_tokens}))
     for hashed_token in hashed_tokens:
-        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+        cache.set_local(hashed_token, {"token": hashed_token}, None)
 
     with patch(
         "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -2424,4 +2420,52 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
         await _drain_publishes()
 
     assert refilled == []
-    assert redis.entries == {}
+    assert redis.redis == {}
+
+
+class _SignallingPublishRedisClient(_SlowPublishRedisClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent = asyncio.Event()
+
+    async def _send(self, messages: Sequence[str]) -> None:
+        await super()._send(messages)
+        self.sent.set()
+
+
+class _DeleteAfterBroadcastRedisCache(_AuthRedisCache):
+    def __init__(self, broadcast_sent: asyncio.Event) -> None:
+        super().__init__({})
+        self._broadcast_sent = broadcast_sent
+        self.finished = False
+
+    async def delete_cache_keys(self, keys: Sequence[str]) -> None:
+        await self._broadcast_sent.wait()
+        self.finished = True
+
+
+@pytest.mark.asyncio
+async def test_bulk_eviction_broadcasts_while_the_usage_cache_redis_is_wedged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
+    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
+    client: Final = _SignallingPublishRedisClient()
+    usage_redis: Final = _DeleteAfterBroadcastRedisCache(broadcast_sent=client.sent)
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.internal_usage_cache = InternalUsageCache(
+        dual_cache=DualCache(redis_cache=usage_redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    )
+    hashed_tokens: Final = ("token-a", "token-b")
+
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_PubSubRedisCache(client),
+    ):
+        await delete_cache_key_objects(
+            hashed_tokens=hashed_tokens, user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=proxy_logging_obj
+        )
+        await _drain_publishes()
+
+    assert usage_redis.finished
+    assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)

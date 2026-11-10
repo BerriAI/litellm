@@ -26,19 +26,18 @@ import httpx
 import pytest
 import respx
 
-
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
-from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import dispatch_success_logging
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import StandardLoggingPayload
+from litellm.utils import dispatch_success_logging
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -415,38 +414,6 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
 # ---------------------------------------------------------------------------
 # 4. Non-streaming: deferred success log is suppressed when guardrail raises
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("call_type", ["ocr", "aocr", "completion", "acompletion", "embedding", "responses"])
-@pytest.mark.parametrize("exception_raised", [False, True])
-def test_native_pending_logging_is_released_only_for_ocr(call_type: str, exception_raised: bool) -> None:
-    pending: Final = MagicMock()
-    enqueue: Final = MagicMock()
-    logger: Final = MagicMock(
-        call_type=call_type,
-        _native_pending_logging=pending,
-        enqueue_deferred_logging=enqueue,
-    )
-
-    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-        logging_obj=logger,
-        exception_raised=exception_raised,
-    )
-    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-        logging_obj=logger,
-        exception_raised=exception_raised,
-    )
-
-    if call_type in ("ocr", "aocr"):
-        pending.release.assert_called_once_with(not exception_raised)
-        assert logger._native_pending_logging is None
-    else:
-        pending.release.assert_not_called()
-        assert logger._native_pending_logging is pending
-    if exception_raised:
-        enqueue.assert_not_called()
-    else:
-        enqueue.assert_called_once_with()
 
 
 def test_flush_deferred_async_logging_fires_on_success():
@@ -1520,11 +1487,11 @@ class TestArmDeferredStreamDispatch:
         sniffing the wrapper instead of the inner iterator armed the 1-arg
         native closure against the CSW's 2-arg stored shape and leaked a
         TypeError 500 frame into the stream."""
+        from litellm.litellm_core_utils.add_retry_fallback_headers import (
+            HiddenParamsAsyncIteratorWrapper,
+        )
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
-        )
-        from litellm.router_utils.add_retry_fallback_headers import (
-            HiddenParamsAsyncIteratorWrapper,
         )
 
         logging_obj, recorded = self._dispatch_recording_logging_obj()

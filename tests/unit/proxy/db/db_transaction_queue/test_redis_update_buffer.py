@@ -1,10 +1,12 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import DailyTagSpendTransaction
@@ -380,6 +382,104 @@ async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_fail
 
 
 @pytest.mark.asyncio
+async def test_a_single_parked_batch_with_a_nan_spend_drains_as_zero(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    mock_redis_cache.async_lpop = AsyncMock(
+        return_value=json.dumps({"key_list_transactions": {"nan-key": float("nan"), "ok-key": 0.5}}, allow_nan=True)
+    )
+
+    drained: Final = await redis_update_buffer.get_all_update_transactions_from_redis_buffer()
+
+    assert drained is not None
+    assert drained["key_list_transactions"] == {"nan-key": 0.0, "ok-key": 0.5}
+
+
+PARKED_DAILY_KEY: Final = "user-1_2025-01-15_api-key-123_gpt-4o_openai_/chat/completions"
+
+
+def _parked_daily_batch(spend: float) -> str:
+    return json.dumps(
+        {
+            PARKED_DAILY_KEY: {
+                "spend": spend,
+                "prompt_tokens": 12,
+                "completion_tokens": 7,
+                "api_requests": 1,
+                "successful_requests": 1,
+                "failed_requests": 0,
+            }
+        },
+        allow_nan=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_nan_spend_parked_by_an_older_version_drains_from_the_pipeline_as_zero(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    entity_batch: Final = json.dumps({"key_list_transactions": {"hashed-key": float("nan")}}, allow_nan=True)
+    window_batches: Final = tuple(
+        json.dumps(
+            [
+                {
+                    "entity_type": "key",
+                    "entity_id": "hashed-key",
+                    "window_duration": "30d",
+                    "window_start": "2026-08-01T00:00:00.000000",
+                    "spend": spend,
+                    "started_at": None,
+                }
+            ],
+            allow_nan=True,
+        )
+        for spend in (float("nan"), 3.0)
+    )
+    mock_redis_cache.async_lpop_pipeline = AsyncMock(
+        return_value=[
+            [entity_batch],
+            [_parked_daily_batch(float("nan")), _parked_daily_batch(0.0042)],
+            None,
+            None,
+            None,
+            None,
+            list(window_batches),
+        ]
+    )
+
+    (
+        db_spend,
+        daily_user,
+        *_rest,
+        window_spend,
+    ) = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+    assert db_spend is not None
+    assert db_spend["key_list_transactions"] == {"hashed-key": 0}
+    assert daily_user is not None
+    assert daily_user[PARKED_DAILY_KEY]["spend"] == 0.0042
+    assert daily_user[PARKED_DAILY_KEY]["api_requests"] == 2
+    assert window_spend is not None
+    assert [transaction["spend"] for transaction in window_spend] == [3.0]
+
+
+@pytest.mark.asyncio
+async def test_a_nan_spend_parked_by_an_older_version_drains_from_a_daily_key_as_zero(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock, caplog: pytest.LogCaptureFixture
+):
+    mock_redis_cache.async_lpop = AsyncMock(
+        return_value=[_parked_daily_batch(float("inf")), _parked_daily_batch(0.0042)]
+    )
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        daily_tag: Final = await redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+
+    assert daily_tag is not None
+    assert daily_tag[PARKED_DAILY_KEY]["spend"] == 0.0042
+    assert [record.getMessage() for record in caplog.records if "Infinity" in record.getMessage()] != []
+
+
+@pytest.mark.asyncio
 async def test_get_all_transactions_from_redis_buffer_pipeline_no_redis():
     """When redis_cache is None, should return all Nones"""
     buffer = RedisUpdateBuffer(redis_cache=None)
@@ -724,6 +824,10 @@ class _ListRedis:
     def __init__(self) -> None:
         self.rows: list[str] = []
 
+    async def async_rpush(self, key: str, values: list[str]) -> int:
+        self.rows.extend(values)
+        return len(self.rows)
+
     async def async_rpush_and_trim(self, key: str, values: list[str], max_len: int) -> int:
         self.rows.extend(values)
         pushed_len = len(self.rows)
@@ -750,6 +854,32 @@ async def test_store_spend_logs_in_redis_drops_oldest_rows_past_the_cap():
     parked = await buffer.get_spend_logs_from_redis_buffer(limit=10)
     assert [row["request_id"] for row in parked] == ["mid", "new"]
     assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spend", [float("nan"), float("inf")])
+async def test_a_non_finite_daily_spend_buffered_in_redis_drains_as_zero(spend: float):
+    buffer: Final = RedisUpdateBuffer(redis_cache=_ListRedis())
+    queue: Final = DailySpendUpdateQueue()
+    await queue.add_update(json.loads(_parked_daily_batch(spend)))
+    await queue.add_update(json.loads(_parked_daily_batch(0.0042)))
+
+    await buffer.store_in_memory_daily_tag_spend_updates_in_redis(queue)
+    drained: Final = await buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer()
+
+    assert drained is not None
+    assert drained[PARKED_DAILY_KEY]["spend"] == 0.0
+    assert drained[PARKED_DAILY_KEY]["api_requests"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_spend_log_row_parked_with_a_nan_spend_is_read_back_with_zero_spend():
+    buffer: Final = RedisUpdateBuffer(redis_cache=_ListRedis())
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+
+    assert await buffer.store_spend_logs_in_redis([{"request_id": "nan-row", "spend": float("nan")}]) is True
+
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ({"request_id": "nan-row", "spend": 0.0},)
 
 
 @pytest.mark.asyncio

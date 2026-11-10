@@ -24,7 +24,7 @@ from litellm.llms.tencent.messages.transformation import TencentAnthropicMessage
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
     VertexAIPartnerModelsAnthropicMessagesConfig,
 )
-from litellm.types.llms.anthropic import AnthropicFinishReason
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicFinishReason
 from litellm.types.router import GenericLiteLLMParams
 from tests.unit.llms.anthropic.test_anthropic_wif import (
     ScriptedPoster,
@@ -321,6 +321,66 @@ def _derived_beta_header(config: AnthropicMessagesConfig) -> dict:
     )
 
 
+_COMPACT_EDIT_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value
+_CLEARING_EDIT_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+
+
+@pytest.mark.parametrize(
+    ("context_management", "betas"),
+    (
+        pytest.param({"edits": [{"type": "compact_20260112"}]}, {_COMPACT_EDIT_BETA}, id="compact"),
+        pytest.param({"edits": [{"type": "clear_tool_uses_20250919"}]}, {_CLEARING_EDIT_BETA}, id="clearing"),
+        pytest.param(
+            {"edits": [{"type": "compact_20260112"}, {"type": "clear_thinking_20251015"}]},
+            {_COMPACT_EDIT_BETA, _CLEARING_EDIT_BETA},
+            id="both",
+        ),
+        pytest.param(
+            [{"type": "compaction", "compact_threshold": 150000}], {_COMPACT_EDIT_BETA}, id="openai_list_form"
+        ),
+    ),
+)
+def test_context_management_edits_add_the_beta_each_edit_needs(
+    context_management: JsonValue, betas: set[str], local_beta_headers_config: None
+) -> None:
+    headers: Final = AnthropicMessagesConfig()._update_headers_with_anthropic_beta(
+        headers={}, optional_params={"context_management": context_management}, messages=[]
+    )
+
+    assert set(headers["anthropic-beta"].split(",")) == betas
+
+
+_UNMAPPABLE_LIST_FORM: Final = [{"type": "clear_tool_uses_20250919"}]
+
+
+@pytest.mark.parametrize("config_class", [AnthropicMessagesConfig, VertexAIPartnerModelsAnthropicMessagesConfig])
+@pytest.mark.parametrize(
+    ("context_management", "drop_params", "forwarded"),
+    (
+        pytest.param(_UNMAPPABLE_LIST_FORM, True, None, id="unmappable_dropped_under_drop_params"),
+        pytest.param(_UNMAPPABLE_LIST_FORM, False, _UNMAPPABLE_LIST_FORM, id="unmappable_kept_for_the_provider_400"),
+        pytest.param(
+            [{"type": "compaction"}],
+            True,
+            {"edits": [{"type": "compact_20260112"}]},
+            id="mappable_still_mapped_under_drop_params",
+        ),
+    ),
+)
+def test_context_management_the_list_form_cannot_map_is_dropped_only_under_drop_params(
+    config_class: type[AnthropicMessagesConfig], context_management: JsonValue, drop_params: bool, forwarded: JsonValue
+) -> None:
+    request: Final = config_class().transform_anthropic_messages_request(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 50, "context_management": context_management},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+
+    assert request.get("context_management") == forwarded
+
+
 @pytest.mark.parametrize("config", _classifier_configs(), ids=type)
 def test_routes_whose_platform_runs_the_classifier_keep_safeguards_and_the_beta(
     config: AnthropicMessagesConfig, local_beta_headers_config: None
@@ -503,6 +563,36 @@ def test_drop_params_forwards_a_non_object_message_item_as_sent_on_the_native_re
     assert request["messages"][2]["content"][0]["content"] == [{"type": "text", "text": "sunny"}]
 
 
+def test_native_response_keeps_input_transformations() -> None:
+    input_transformations: Final[list[JsonValue]] = [{"type": "thinking_block_binding", "count": 2}]
+    upstream: Final[dict[str, JsonValue]] = {
+        "id": "msg_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 19, "output_tokens": 42},
+        "input_transformations": input_transformations,
+    }
+    logging_obj: Final = Logging(
+        model="claude-sonnet-4-6",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+
+    response: Final = AnthropicMessagesConfig().transform_anthropic_messages_response(
+        model="claude-sonnet-4-6", raw_response=httpx.Response(200, json=upstream), logging_obj=logging_obj
+    )
+
+    assert response["input_transformations"] == input_transformations
+
+
 BINDING_AND_DISPLAY_BETAS: Final = "thinking-binding-controls-2026-08-01,thinking-display-updates-2026-08-18"
 
 
@@ -631,3 +721,17 @@ def test_a_first_party_messages_request_never_fetches_the_remote_beta_headers_co
 
     assert request["messages"][1] == {"role": "system", "content": "be terse"}
     assert not remote_config.called
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("claude-sonnet-5", {"type": "disabled"}),
+        ("claude-haiku-4-5", None),
+        ("claude-sonnet-5-5", None),
+    ],
+)
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+    params: Final[dict[str, object]] = {"reasoning_effort": "none", "output_config": {"effort": "high"}}
+    AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic")
+    assert params == ({"thinking": expected} if expected is not None else {})
