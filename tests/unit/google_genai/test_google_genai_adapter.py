@@ -483,9 +483,11 @@ def _call_tags(messages: list[dict[str, object]]) -> dict[str, str]:
     }
 
 
-def _ids_answered_right_after(messages: list[dict[str, object]], index: int) -> list[str]:
+def _ids_answered_before_the_next_model_turn(messages: list[dict[str, object]], index: int) -> list[str]:
     return [
-        answer["tool_call_id"] for answer in takewhile(lambda message: message["role"] == "tool", messages[index + 1 :])
+        message["tool_call_id"]
+        for message in takewhile(lambda message: message["role"] != "assistant", messages[index + 1 :])
+        if message["role"] == "tool"
     ]
 
 
@@ -539,6 +541,25 @@ def _ids_answered_right_after(messages: list[dict[str, object]], index: int) -> 
             frozenset({"paris", "rome"}),
             id="answers_split_across_user_turns",
         ),
+        pytest.param(
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        _tagged_call("get_weather", "paris"),
+                        _tagged_call("get_weather", "rome"),
+                        _tagged_call("get_weather", "oslo"),
+                    ],
+                },
+                {"role": "user", "parts": [_tagged_response("get_weather", "paris")]},
+                {"role": "user", "parts": []},
+                {"role": "user", "parts": [{"text": "Rome took longer"}]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "rome")]},
+                {"role": "model", "parts": [{"text": "Oslo did not answer"}]},
+            ],
+            frozenset({"paris", "rome"}),
+            id="answers_split_by_empty_and_text_turns",
+        ),
     ],
 )
 def test_a_call_a_later_turn_left_unanswered_gets_one_skipped_result_and_the_others_keep_their_answers(
@@ -555,7 +576,9 @@ def test_a_call_a_later_turn_left_unanswered_gets_one_skipped_result_and_the_oth
         if message.get("tool_calls")
     }
     answers: Final = [message for message in messages if message["role"] == "tool"]
-    assert {index: _ids_answered_right_after(messages, index) for index in call_ids_per_turn} == call_ids_per_turn
+    assert {
+        index: _ids_answered_before_the_next_model_turn(messages, index) for index in call_ids_per_turn
+    } == call_ids_per_turn
     assert {
         tag_by_call_id[answer["tool_call_id"]]: json.loads(answer["content"])["tag"]
         for answer in answers

@@ -375,7 +375,10 @@ def _genai_turn_messages(
 
 
 def _last_answering_turn(turns: Sequence[_GenAITurn], index: int) -> int:
-    return next((later for later in range(index + 1, len(turns)) if not turns[later].responses), len(turns)) - 1
+    next_model_turn: Final = next(
+        (later for later in range(index + 1, len(turns)) if turns[later].role == "model"), len(turns)
+    )
+    return max((later for later in range(index + 1, next_model_turn) if turns[later].responses), default=index)
 
 
 def _genai_contents_messages(contents: Sequence[object]) -> tuple[AllMessageValues, ...]:
