@@ -5370,6 +5370,7 @@
         "supports_tool_choice": true
     },
     "azure/eu/gpt-5-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.375e-07,
         "cache_read_input_token_cost_priority": 2.75e-07,
         "deprecation_date": "2027-02-09",
@@ -5416,6 +5417,7 @@
         "cache_read_input_token_cost_batches": 6.875e-08
     },
     "azure/eu/gpt-5-mini-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.75e-08,
         "cache_read_input_token_cost_priority": 4.95e-08,
         "deprecation_date": "2027-07-13",
@@ -5462,6 +5464,7 @@
         "cache_read_input_token_cost_batches": 1.375e-08
     },
     "azure/eu/gpt-5.1": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.2",
@@ -5511,6 +5514,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.1-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.2-codex",
@@ -5544,6 +5548,7 @@
         "supports_vision": true
     },
     "azure/eu/gpt-5.1-codex-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 2.75e-08,
@@ -5576,6 +5581,7 @@
         "supports_vision": true
     },
     "azure/eu/gpt-5-nano-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5.5e-09,
         "deprecation_date": "2027-02-09",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -5619,6 +5625,7 @@
         "cache_read_input_token_cost_batches": 2.75e-09
     },
     "azure/eu/o1": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/eu/gpt-5.6-sol",
@@ -5638,6 +5645,7 @@
         "supports_vision": true
     },
     "azure/eu/o1-2024-12-17": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/eu/gpt-5.6-sol",
@@ -5657,6 +5665,7 @@
         "supports_vision": true
     },
     "azure/eu/o1-mini-2024-09-12": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 6.05e-07,
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
@@ -5673,6 +5682,7 @@
         "supports_vision": false
     },
     "azure/eu/o3-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 6.05e-07,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -5692,6 +5702,7 @@
         "supports_vision": false
     },
     "azure/eu/o3-mini-2025-01-31": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 6.05e-07,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -5812,6 +5823,7 @@
         "supports_vision": true
     },
     "azure/global/gpt-5.1": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 1.25e-07,
@@ -5860,6 +5872,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/global/gpt-5.1-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 1.25e-07,
@@ -5892,6 +5905,7 @@
         "supports_vision": true
     },
     "azure/global/gpt-5.1-codex-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 2.5e-08,
@@ -7121,6 +7135,7 @@
         "supports_audio_input": true
     },
     "azure/gpt-5.1-2025-11-13": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2027-07-13",
@@ -7170,6 +7185,7 @@
         "cache_read_input_token_cost_batches": 6.25e-08
     },
     "azure/gpt-5.1-codex-2025-11-13": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2027-05-15",
@@ -7206,6 +7222,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.1-codex-mini-2025-11-13": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
         "deprecation_date": "2027-05-15",
@@ -7241,6 +7258,7 @@
         "supports_vision": true
     },
     "azure/gpt-5": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-02-09",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.1",
@@ -7287,6 +7305,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_priority": 2.5e-07,
         "deprecation_date": "2027-02-09",
@@ -7333,6 +7352,7 @@
         "cache_read_input_token_cost_batches": 6.25e-08
     },
     "azure/gpt-5-codex": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2027-03-17",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7366,6 +7386,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.4-mini",
@@ -7412,6 +7433,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-mini-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_priority": 4.5e-08,
         "deprecation_date": "2027-07-13",
@@ -7458,6 +7480,7 @@
         "cache_read_input_token_cost_batches": 1.25e-08
     },
     "azure/gpt-5-nano": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-02-09",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.4-nano",
@@ -7501,6 +7524,7 @@
         "supports_vision": true
     },
     "azure/gpt-5-nano-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5e-09,
         "deprecation_date": "2027-02-09",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7544,6 +7568,7 @@
         "cache_read_input_token_cost_batches": 2.5e-09
     },
     "azure/gpt-5-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-04-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.2-pro",
@@ -7582,6 +7607,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.1": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.2",
@@ -7657,6 +7683,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.1-chat": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-06-29",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7680,6 +7707,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-5.2-chat": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-06-29",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7702,6 +7730,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-5.3-chat": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-06-29",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7724,6 +7753,7 @@
         "supports_tool_choice": true
     },
     "azure/us/gpt-5.1-chat": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.375e-07,
         "deprecation_date": "2026-06-29",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7747,6 +7777,7 @@
         "supports_tool_choice": true
     },
     "azure/us/gpt-5.2-chat": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.925e-07,
         "deprecation_date": "2026-06-29",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7769,6 +7800,7 @@
         "supports_tool_choice": true
     },
     "azure/us/gpt-5.3-chat": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.925e-07,
         "deprecation_date": "2026-06-29",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7791,6 +7823,7 @@
         "supports_tool_choice": true
     },
     "azure/eu/gpt-5.1-chat": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.375e-07,
         "deprecation_date": "2026-06-29",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7814,6 +7847,7 @@
         "supports_tool_choice": true
     },
     "azure/eu/gpt-5.2-chat": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.925e-07,
         "deprecation_date": "2026-06-29",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7836,6 +7870,7 @@
         "supports_tool_choice": true
     },
     "azure/eu/gpt-5.3-chat": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.925e-07,
         "deprecation_date": "2026-06-29",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7858,6 +7893,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-5.1-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.2-codex",
@@ -7891,6 +7927,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.1-codex-max": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2027-05-18",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -7923,6 +7960,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.1-codex-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 2.5e-08,
@@ -7955,6 +7993,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.2": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-06-08",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.4",
@@ -8002,6 +8041,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.2-2025-12-11": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "cache_read_input_token_cost_priority": 3.5e-07,
         "deprecation_date": "2027-06-08",
@@ -8049,6 +8089,7 @@
         "cache_read_input_token_cost_batches": 8.75e-08
     },
     "azure/gpt-5.2-codex": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -8082,6 +8123,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.3-codex": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "cache_read_input_token_cost_priority": 3.5e-07,
         "deprecation_date": "2027-08-24",
@@ -8122,6 +8164,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.2-pro": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 2.1e-05,
         "input_cost_per_token_batches": 1.05e-05,
         "litellm_provider": "azure",
@@ -8160,6 +8203,7 @@
         "supports_web_search": true
     },
     "azure/gpt-5.2-pro-2025-12-11": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 2.1e-05,
         "input_cost_per_token_batches": 1.05e-05,
         "litellm_provider": "azure",
@@ -8198,6 +8242,7 @@
         "supports_web_search": true
     },
     "azure/gpt-5.4": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.5",
@@ -8257,6 +8302,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "azure/us/gpt-5.4": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.5",
@@ -8308,6 +8354,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "azure/eu/gpt-5.4": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-02",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.5",
@@ -8359,6 +8406,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "azure/gpt-5.4-2026-03-05": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens_flex": 2.5e-07,
@@ -8418,6 +8466,7 @@
         "output_cost_per_token_above_272k_tokens_batches": 1.125e-05
     },
     "azure/us/gpt-5.4-2026-03-05": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.75e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5.5e-07,
         "cache_read_input_token_cost_priority": 5.5e-07,
@@ -8469,6 +8518,7 @@
         "output_cost_per_token_above_272k_tokens_batches": 1.2375e-05
     },
     "azure/eu/gpt-5.4-2026-03-05": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.75e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5.5e-07,
         "cache_read_input_token_cost_priority": 5.5e-07,
@@ -8520,6 +8570,7 @@
         "output_cost_per_token_above_272k_tokens_batches": 1.2375e-05
     },
     "azure/gpt-5.4-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.5-pro",
@@ -8571,6 +8622,7 @@
         "supports_web_search": true
     },
     "azure/gpt-5.4-pro-2026-03-05": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 3e-06,
         "cache_read_input_token_cost_above_272k_tokens": 6e-06,
         "deprecation_date": "2027-09-07",
@@ -8622,6 +8674,7 @@
         "output_cost_per_token_above_272k_tokens_batches": 0.000135
     },
     "azure/gpt-5.6": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1e-05,
         "cache_creation_input_token_cost_priority": 1e-05,
@@ -8675,6 +8728,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-sol": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1e-05,
         "cache_creation_input_token_cost_above_272k_tokens_flex": 5e-06,
@@ -8740,6 +8794,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-sol-2026-07-09": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1e-05,
         "cache_creation_input_token_cost_above_272k_tokens_flex": 5e-06,
@@ -8805,6 +8860,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-terra": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
         "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-06,
@@ -8870,6 +8926,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-terra-2026-07-09": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
         "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-06,
@@ -8935,6 +8992,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-luna": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.5e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 5e-07,
         "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-07,
@@ -9000,6 +9058,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.6-luna-2026-07-09": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.5e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 5e-07,
         "cache_creation_input_token_cost_above_272k_tokens_flex": 2.5e-07,
@@ -9915,6 +9974,7 @@
         "supports_web_search": true
     },
     "azure/us/gpt-5.6": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 5.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1.1e-05,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 2.2e-05,
@@ -9968,6 +10028,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-sol": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 5.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1.1e-05,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 2.2e-05,
@@ -10025,6 +10086,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-terra": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 1.1e-05,
@@ -10082,6 +10144,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.6-luna": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.75e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 1.1e-06,
@@ -10324,6 +10387,7 @@
         "supports_web_search": true
     },
     "azure/eu/gpt-5.6": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 5.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1.1e-05,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 2.2e-05,
@@ -10377,6 +10441,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-sol": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 5.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1.1e-05,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 2.2e-05,
@@ -10434,6 +10499,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-terra": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 5.5e-06,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 1.1e-05,
@@ -10491,6 +10557,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.6-luna": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.75e-07,
         "cache_creation_input_token_cost_above_272k_tokens": 5.5e-07,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 1.1e-06,
@@ -10548,6 +10615,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.5": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-10-26",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6",
@@ -10610,6 +10678,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/us/gpt-5.5": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-10-26",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.6",
@@ -10666,6 +10735,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/eu/gpt-5.5": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-10-26",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.6",
@@ -10722,6 +10792,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.5-2026-04-23": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_above_272k_tokens_batches": 5e-07,
@@ -10781,6 +10852,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/gpt-5.5-2026-04-24": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-10-26",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6",
@@ -10843,6 +10915,7 @@
         "output_cost_per_token_above_272k_tokens_batches": 2.25e-05
     },
     "azure/us/gpt-5.5-2026-04-23": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "cache_read_input_token_cost_above_272k_tokens_batches": 5.5e-07,
@@ -10896,6 +10969,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.5-2026-04-24": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-10-26",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.6",
@@ -10952,6 +11026,7 @@
         "output_cost_per_token_above_272k_tokens_batches": 2.475e-05
     },
     "azure/eu/gpt-5.5-2026-04-23": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1.1e-06,
         "cache_read_input_token_cost_above_272k_tokens_batches": 5.5e-07,
@@ -11005,6 +11080,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.5-2026-04-24": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-10-26",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.6",
@@ -11061,6 +11137,7 @@
         "output_cost_per_token_above_272k_tokens_batches": 2.475e-05
     },
     "azure/gpt-5.5-pro": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 3e-06,
         "cache_read_input_token_cost_above_272k_tokens": 6e-06,
         "input_cost_per_token": 3e-05,
@@ -11104,6 +11181,7 @@
         "supports_low_reasoning_effort": false
     },
     "azure/gpt-5.5-pro-2026-04-23": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 3e-06,
         "cache_read_input_token_cost_above_272k_tokens": 6e-06,
         "input_cost_per_token": 3e-05,
@@ -11143,6 +11221,7 @@
         "supports_web_search": true
     },
     "azure/gpt-5.4-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 7.5e-08,
@@ -11198,6 +11277,7 @@
         "alias_of": "azure/gpt-5.4-mini"
     },
     "azure/gpt-5.4-mini-2026-03-17": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
         "cache_read_input_token_cost_priority": 1.5e-07,
@@ -11250,6 +11330,7 @@
         "cache_read_input_token_cost_batches": 3.75e-08
     },
     "azure/gpt-5.4-nano": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 2e-08,
@@ -11299,6 +11380,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure/gpt-5.4-nano-2026-03-17": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_flex": 1e-08,
         "deprecation_date": "2027-09-21",
@@ -11726,6 +11808,7 @@
         "supports_function_calling": true
     },
     "azure/o1": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/gpt-5.6-sol",
         "cache_read_input_token_cost": 7.5e-06,
@@ -11743,6 +11826,7 @@
         "supports_vision": true
     },
     "azure/o1-2024-12-17": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 7.5e-06,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/gpt-5.6-sol",
@@ -11763,6 +11847,7 @@
         "supports_vision": true
     },
     "azure/o1-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
@@ -11780,6 +11865,7 @@
         "supports_vision": false
     },
     "azure/o1-mini-2024-09-12": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 1.1e-06,
         "input_cost_per_token_batches": 5.5e-07,
@@ -11797,6 +11883,7 @@
         "supports_vision": false
     },
     "azure/o3": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/gpt-5.6-sol",
         "cache_read_input_token_cost": 5e-07,
@@ -11835,6 +11922,7 @@
         "supports_vision": true
     },
     "azure/o3-2025-04-16": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/gpt-5.6-sol",
         "cache_read_input_token_cost": 5e-07,
@@ -11873,6 +11961,7 @@
         "supports_vision": true
     },
     "azure/o3-deep-research": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-06,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -11912,6 +12001,7 @@
         "supports_web_search": true
     },
     "azure/o3-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6-terra",
@@ -11932,6 +12022,7 @@
         "supports_vision": false
     },
     "azure/o3-mini-2025-01-31": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5.5e-07,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -11951,6 +12042,7 @@
         "supports_vision": false
     },
     "azure/o3-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6-sol",
@@ -11988,6 +12080,7 @@
         "supports_vision": true
     },
     "azure/o3-pro-2025-06-10": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6-sol",
@@ -12025,6 +12118,7 @@
         "supports_vision": true
     },
     "azure/o4-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/gpt-5.6-terra",
@@ -12064,6 +12158,7 @@
         "supports_vision": true
     },
     "azure/o4-mini-2025-04-16": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.75e-07,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -12466,6 +12561,7 @@
         "supports_tool_choice": true
     },
     "azure/us/gpt-5-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.375e-07,
         "cache_read_input_token_cost_priority": 2.75e-07,
         "deprecation_date": "2027-02-09",
@@ -12512,6 +12608,7 @@
         "cache_read_input_token_cost_batches": 6.875e-08
     },
     "azure/us/gpt-5-mini-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.75e-08,
         "cache_read_input_token_cost_priority": 4.95e-08,
         "deprecation_date": "2027-07-13",
@@ -12558,6 +12655,7 @@
         "cache_read_input_token_cost_batches": 1.375e-08
     },
     "azure/us/gpt-5-nano-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5.5e-09,
         "deprecation_date": "2027-02-09",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -12601,6 +12699,7 @@
         "cache_read_input_token_cost_batches": 2.75e-09
     },
     "azure/us/gpt-5.1": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.2",
@@ -12650,6 +12749,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.1-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.2-codex",
@@ -12683,6 +12783,7 @@
         "supports_vision": true
     },
     "azure/us/gpt-5.1-codex-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-15",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 2.75e-08,
@@ -12715,6 +12816,7 @@
         "supports_vision": true
     },
     "azure/us/o1": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/us/gpt-5.6-sol",
@@ -12734,6 +12836,7 @@
         "supports_vision": true
     },
     "azure/us/o1-2024-12-17": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 8.25e-06,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/us/gpt-5.6-sol",
@@ -12753,6 +12856,7 @@
         "supports_vision": true
     },
     "azure/us/o1-mini-2024-09-12": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 6.05e-07,
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
@@ -12769,6 +12873,7 @@
         "supports_vision": false
     },
     "azure/us/o3": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/us/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
@@ -12807,6 +12912,7 @@
         "supports_vision": true
     },
     "azure/us/o3-2025-04-16": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/us/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
@@ -12845,6 +12951,7 @@
         "supports_vision": true
     },
     "azure/us/o3-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 6.05e-07,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -12864,6 +12971,7 @@
         "supports_vision": false
     },
     "azure/us/o3-mini-2025-01-31": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 6.05e-07,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -12883,6 +12991,7 @@
         "supports_vision": false
     },
     "azure/us/o4-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 3.03e-07,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -12910,6 +13019,7 @@
         "supports_vision": true
     },
     "azure/us/o4-mini-2025-04-16": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 3.03e-07,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
@@ -37021,6 +37131,7 @@
         "successor_model": "gpt-image-2.5-sunburst"
     },
     "gpt-5": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_batches": 6.25e-08,
         "cache_read_input_token_cost_flex": 6.25e-08,
@@ -37082,6 +37193,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "gpt-5-codex": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -37116,6 +37228,7 @@
         "supports_web_search": true
     },
     "gpt-5.1": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_batches": 6.25e-08,
         "cache_read_input_token_cost_flex": 6.25e-08,
@@ -37178,6 +37291,7 @@
         "successor_model": "gpt-6-sol"
     },
     "gpt-5.1-codex-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-08,
         "deprecation_date": "2026-07-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -37211,6 +37325,7 @@
         "supports_vision": true
     },
     "gpt-5.1-codex-max": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -37245,6 +37360,7 @@
         "supports_web_search": true
     },
     "gpt-5.1-codex": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -37279,6 +37395,7 @@
         "supports_web_search": true
     },
     "gpt-5.1-chat-latest": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "deprecation_date": "2026-07-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -37313,6 +37430,7 @@
         "supports_vision": true
     },
     "gpt-5.1-2025-11-13": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_batches": 6.25e-08,
         "cache_read_input_token_cost_flex": 6.25e-08,
@@ -37375,6 +37493,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "gpt-5.2": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "cache_read_input_token_cost_batches": 8.75e-08,
         "cache_read_input_token_cost_flex": 8.75e-08,
@@ -37436,6 +37555,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "gpt-5.2-codex": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-07-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -37470,6 +37590,7 @@
         "supports_web_search": true
     },
     "gpt-5.2-chat-latest": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-08-10",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -37504,6 +37625,7 @@
         "supports_vision": true
     },
     "gpt-5.2-2025-12-11": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "cache_read_input_token_cost_batches": 8.75e-08,
         "cache_read_input_token_cost_flex": 8.75e-08,
@@ -37565,6 +37687,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "gpt-5.2-pro": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 2.1e-05,
         "input_cost_per_token_batches": 1.05e-05,
         "litellm_provider": "openai",
@@ -37614,6 +37737,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "gpt-5.2-pro-2025-12-11": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 2.1e-05,
         "input_cost_per_token_batches": 1.05e-05,
         "litellm_provider": "openai",
@@ -37970,6 +38094,7 @@
         "alias_of": "gpt-6-luna"
     },
     "gpt-5.6": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_12hr": 1e-05,
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 2e-05,
@@ -38059,6 +38184,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.6-sol": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_12hr": 1e-05,
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 2e-05,
@@ -38152,6 +38278,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.6-terra": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_12hr": 5e-06,
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 1e-05,
@@ -38244,6 +38371,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.6-luna": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 2.5e-07,
         "cache_creation_input_token_cost_above_12hr": 5e-07,
         "cache_creation_input_token_cost_above_12hr_above_272k_tokens": 1e-06,
@@ -38336,6 +38464,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "gpt-5.6-cyber": {
+        "supports_sampling_params": false,
         "cache_creation_input_token_cost": 1.5625e-05,
         "cache_creation_input_token_cost_above_12hr": 3.125e-05,
         "cache_creation_input_token_cost_above_272k_tokens": 3.125e-05,
@@ -38574,6 +38703,7 @@
         "supports_web_search": true
     },
     "gpt-5.5": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_batches": 2.5e-07,
@@ -38645,6 +38775,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-5.5-2026-04-23": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_batches": 2.5e-07,
@@ -38716,6 +38847,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-5.5-pro": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 3e-05,
         "input_cost_per_token_above_272k_tokens": 6e-05,
         "input_cost_per_token_flex": 1.5e-05,
@@ -38776,6 +38908,7 @@
         "supports_low_reasoning_effort": false
     },
     "gpt-5.5-pro-2026-04-23": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 3e-05,
         "input_cost_per_token_above_272k_tokens": 6e-05,
         "input_cost_per_token_flex": 1.5e-05,
@@ -38836,6 +38969,7 @@
         "supports_low_reasoning_effort": false
     },
     "gpt-5.4": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "cache_read_input_token_cost_batches": 1.3e-07,
@@ -38902,6 +39036,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-5.4-2026-03-05": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "cache_read_input_token_cost_batches": 1.3e-07,
@@ -38968,6 +39103,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-5.4-pro": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 3e-05,
         "input_cost_per_token_above_272k_tokens": 6e-05,
         "input_cost_per_token_flex": 1.5e-05,
@@ -39029,6 +39165,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-5.4-pro-2026-03-05": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 3e-05,
         "input_cost_per_token_above_272k_tokens": 6e-05,
         "input_cost_per_token_flex": 1.5e-05,
@@ -39090,6 +39227,7 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "gpt-5.4-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
@@ -39156,6 +39294,7 @@
         "alias_of": "gpt-5.4-mini"
     },
     "gpt-5.4-mini-2026-03-17": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 7.5e-08,
         "cache_read_input_token_cost_batches": 3.75e-08,
         "cache_read_input_token_cost_flex": 3.75e-08,
@@ -39219,6 +39358,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "gpt-5.4-nano": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_batches": 1e-08,
         "cache_read_input_token_cost_flex": 1e-08,
@@ -39281,6 +39421,7 @@
         "successor_model": "gpt-6-luna"
     },
     "gpt-5.4-nano-2026-03-17": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2e-08,
         "cache_read_input_token_cost_batches": 1e-08,
         "cache_read_input_token_cost_flex": 1e-08,
@@ -39343,6 +39484,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "gpt-5-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-12-11",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-sol",
@@ -39395,6 +39537,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "gpt-5-pro-2025-10-06": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-12-11",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-sol",
@@ -39447,6 +39590,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "gpt-5-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_batches": 6.25e-08,
         "cache_read_input_token_cost_flex": 6.25e-08,
@@ -39580,6 +39724,7 @@
         "supports_vision": true
     },
     "gpt-5.3-codex": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "cache_read_input_token_cost_priority": 3.5e-07,
         "input_cost_per_token": 1.75e-06,
@@ -39634,6 +39779,7 @@
         "successor_model": "gpt-6-sol"
     },
     "gpt-5.3-chat-latest": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.75e-07,
         "deprecation_date": "2026-08-10",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -39668,6 +39814,7 @@
         "supports_vision": true
     },
     "gpt-5-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -39729,6 +39876,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "gpt-5-mini-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_batches": 1.25e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -39790,6 +39938,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "gpt-5-nano": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5e-09,
         "cache_read_input_token_cost_batches": 2.5e-09,
         "cache_read_input_token_cost_flex": 2.5e-09,
@@ -39848,6 +39997,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "gpt-5-nano-2025-08-07": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5e-09,
         "cache_read_input_token_cost_batches": 2.5e-09,
         "cache_read_input_token_cost_flex": 2.5e-09,
@@ -45855,6 +46005,7 @@
         "supports_vision": false
     },
     "o1": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 7.5e-06,
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -45880,6 +46031,7 @@
         "supports_vision": true
     },
     "o1-2024-12-17": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 7.5e-06,
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -45905,6 +46057,7 @@
         "supports_vision": true
     },
     "o1-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-sol",
@@ -45941,6 +46094,7 @@
         "supports_vision": true
     },
     "o1-pro-2025-03-19": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-sol",
@@ -45977,6 +46131,7 @@
         "supports_vision": true
     },
     "o3": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_flex": 2.5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
@@ -46032,6 +46187,7 @@
         "supports_web_search": true
     },
     "o3-deep-research": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.5e-06,
         "input_cost_per_token": 1e-05,
         "litellm_provider": "openai",
@@ -46066,6 +46222,7 @@
         "successor_model": "gpt-5.6-sol"
     },
     "o3-deep-research-2025-06-26": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-07-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-sol",
@@ -46100,6 +46257,7 @@
         "supports_pdf_input": true
     },
     "o3-2025-04-16": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_flex": 2.5e-07,
         "cache_read_input_token_cost_priority": 8.75e-07,
@@ -46156,6 +46314,7 @@
         "supports_web_search": true
     },
     "o3-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5.5e-07,
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -46179,6 +46338,7 @@
         "supports_vision": false
     },
     "o3-mini-2025-01-31": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5.5e-07,
         "deprecation_date": "2026-10-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -46202,6 +46362,7 @@
         "supports_vision": false
     },
     "o3-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-12-11",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-sol",
@@ -46249,6 +46410,7 @@
         "supports_web_search": true
     },
     "o3-pro-2025-06-10": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-12-11",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-sol",
@@ -46296,6 +46458,7 @@
         "supports_web_search": true
     },
     "o4-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.75e-07,
         "cache_read_input_token_cost_flex": 1.38e-07,
         "cache_read_input_token_cost_priority": 5e-07,
@@ -46332,6 +46495,7 @@
         "supports_web_search": true
     },
     "o4-mini-deep-research": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "openai",
@@ -46366,6 +46530,7 @@
         "successor_model": "gpt-5.6-sol"
     },
     "o4-mini-deep-research-2025-06-26": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-07-23",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
         "successor_model": "gpt-5.6-sol",
@@ -46400,6 +46565,7 @@
         "supports_pdf_input": true
     },
     "o4-mini-2025-04-16": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 2.75e-07,
         "cache_read_input_token_cost_flex": 1.38e-07,
         "cache_read_input_token_cost_priority": 5e-07,
@@ -60110,6 +60276,7 @@
         ]
     },
     "gpt-5-search-api": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
@@ -60138,6 +60305,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "gpt-5-search-api-2025-10-14": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-07,
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "openai",
@@ -71011,6 +71179,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-east-1/index.json"
     },
     "azure/us-gov/gpt-5.1": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.71875e-07,
         "default_reasoning_effort": "none",
         "input_cost_per_token": 1.71875e-06,
@@ -71045,6 +71214,7 @@
         "supports_vision": true
     },
     "azure/us-gov/o3-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 7.57e-07,
         "input_cost_per_token": 1.513e-06,
         "litellm_provider": "azure",
@@ -71702,6 +71872,7 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "gpt-5.5-cyber": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 1.25e-05,
         "litellm_provider": "openai",
@@ -71712,6 +71883,7 @@
         "supports_reasoning": true
     },
     "gpt-5.5-cyber-preview": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 1.25e-06,
         "deprecation_date": "2027-02-01",
         "deprecation_source": "https://developers.openai.com/api/docs/deprecations",
@@ -72177,6 +72349,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-02-09",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.1",
@@ -72199,6 +72372,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-03-17",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.1-codex",
@@ -72210,6 +72384,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.4-mini",
@@ -72232,6 +72407,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5-nano": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-02-09",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.4-nano",
@@ -72251,6 +72427,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-04-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.2-pro",
@@ -72268,6 +72445,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.1-codex-max": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-18",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 1.375e-07,
@@ -72278,6 +72456,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.2": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-06-08",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.4",
@@ -72300,6 +72479,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.2-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.3-codex",
@@ -72311,6 +72491,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.2-pro": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 2.31e-05,
         "input_cost_per_token_batches": 1.155e-05,
         "litellm_provider": "azure",
@@ -72325,6 +72506,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.3-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-08-24",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 1.925e-07,
@@ -72343,6 +72525,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 8.25e-08,
@@ -72364,6 +72547,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-nano": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 2.2e-08,
@@ -72382,6 +72566,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 3.3e-05,
@@ -72546,6 +72731,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "azure/eu/o1-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 6.05e-07,
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
@@ -72556,6 +72742,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o3": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/eu/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
@@ -72575,6 +72762,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o3-2025-04-16": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "successor_model": "azure/eu/gpt-5.6-sol",
         "cache_read_input_token_cost": 5.5e-07,
@@ -72594,6 +72782,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o3-deep-research": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.6-sol",
@@ -72605,6 +72794,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o4-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.6-terra",
@@ -72625,6 +72815,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/o4-mini-2025-04-16": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/eu/gpt-5.6-terra",
@@ -72801,6 +72992,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-02-09",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.1",
@@ -72823,6 +73015,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-03-17",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.1-codex",
@@ -72834,6 +73027,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.4-mini",
@@ -72856,6 +73050,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5-nano": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-02-09",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.4-nano",
@@ -72875,6 +73070,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-04-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.2-pro",
@@ -72892,6 +73088,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.1-codex-max": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-05-18",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 1.375e-07,
@@ -72902,6 +73099,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.2": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-06-08",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.4",
@@ -72924,6 +73122,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.2-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-07-13",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.3-codex",
@@ -72935,6 +73134,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.2-pro": {
+        "supports_sampling_params": false,
         "input_cost_per_token": 2.31e-05,
         "input_cost_per_token_batches": 1.155e-05,
         "litellm_provider": "azure",
@@ -72949,6 +73149,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.3-codex": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-08-24",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 1.925e-07,
@@ -72967,6 +73168,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-mini": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 8.25e-08,
@@ -72988,6 +73190,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-nano": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 2.2e-08,
@@ -73006,6 +73209,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-pro": {
+        "supports_sampling_params": false,
         "deprecation_date": "2027-09-07",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_token": 3.3e-05,
@@ -73026,6 +73230,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/o1-mini": {
+        "supports_sampling_params": false,
         "cache_read_input_token_cost": 6.05e-07,
         "input_cost_per_token": 1.21e-06,
         "input_cost_per_token_batches": 6.05e-07,
@@ -73036,6 +73241,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/o3-deep-research": {
+        "supports_sampling_params": false,
         "deprecation_date": "2026-11-19",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "successor_model": "azure/us/gpt-5.6-sol",
