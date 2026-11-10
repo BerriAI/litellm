@@ -161,6 +161,7 @@ THINKING_REPLAY: Final[tuple[JsonValue, ...]] = (
     {"role": "user", "content": "And Germany?"},
 )
 
+_MODIFY_PARAMS: Final[Mapping[str, object]] = MappingProxyType({"modify_params": True})
 NO_INPUT: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 PNG_PIXEL: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -757,7 +758,50 @@ FALLBACK_CASES: Final = (
             _ok(),
         ),
     ),
-    Case("modify_params", _kw(max_tokens=1), settings=MappingProxyType({"modify_params": True})),
+    Case("modify_params", _kw(max_tokens=1), settings=_MODIFY_PARAMS),
+    Case("modify_params_clamps_max_tokens", _kw(max_tokens=200_000), settings=_MODIFY_PARAMS),
+    Case(
+        "modify_params_clamps_streamed_max_tokens",
+        _kw(stream=True, max_tokens=200_000),
+        upstream=(_stream(TEXT_STREAM),),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_clamps_tool_turns",
+        _kw(messages=list(TOOL_TURNS), tools=[dict(WEATHER_TOOL)], max_tokens=200_000),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_clamps_thinking",
+        _kw(thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=200_000),
+        upstream=(_ok(THINKING_RESPONSE),),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_image_content",
+        _kw(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG_PIXEL}},
+                        {"type": "text", "text": "What is this?"},
+                    ],
+                }
+            ],
+            max_tokens=200_000,
+        ),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_unknown_model",
+        _kw(max_tokens=200_000),
+        model="anthropic/claude-parity-unknown",
+        settings=_MODIFY_PARAMS,
+    ),
+    Case("modify_params_hf_model_name", _kw(max_tokens=200_000, hf_model_name="gpt2"), settings=_MODIFY_PARAMS),
+    Case("modify_params_sync", _kw(max_tokens=200_000), sync=True, settings=_MODIFY_PARAMS),
     Case(
         "stream_cost_injection",
         _kw(stream=True),

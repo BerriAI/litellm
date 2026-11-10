@@ -445,3 +445,29 @@ def test_a_failure_before_any_response_maps_like_the_python_transport_error(
         f"litellm.InternalServerError: AnthropicException - {text}. Handle with `litellm.InternalServerError`."
     )
     assert "This looks like a bug in LiteLLM" not in str(mapped)
+
+
+@pytest.mark.parametrize(
+    ("modify_params", "args", "kwargs", "expected"),
+    [
+        pytest.param(True, (), {"max_tokens": 200_000}, 64_000, id="clamped-to-model-output-limit"),
+        pytest.param(True, (), {"max_tokens": 1}, 1, id="under-the-limit"),
+        pytest.param(False, (), {"max_tokens": 200_000}, 200_000, id="modify-params-off"),
+        pytest.param("true", (), {"max_tokens": 200_000}, 200_000, id="truthy-but-not-true"),
+        pytest.param(True, (200_000,), {"max_tokens": 200_000}, 200_000, id="positional-model-is-not-a-model"),
+    ],
+)
+def test_modify_max_tokens_clamps_the_keyword_view_as_the_client_wrapper_does(
+    monkeypatch: pytest.MonkeyPatch,
+    modify_params: object,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+    expected: int,
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    model: Final = args[0] if args else "anthropic/claude-sonnet-4-5"
+    view: Final = {**kwargs, "messages": [{"role": "user", "content": "hi"}]}
+
+    messages_host.modify_max_tokens(model, args, view)
+
+    assert view["max_tokens"] == expected

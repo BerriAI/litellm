@@ -1,7 +1,9 @@
 mod host;
+mod modify_params;
 
 use host::MessagesPythonHost;
 use litellm_callbacks_legacy_python::LoggingOperation;
+use modify_params::ModifyParams;
 use pyo3::prelude::*;
 
 use super::NativeCall;
@@ -9,7 +11,8 @@ use super::NativeCall;
 fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
     let (arguments, hooks) =
         crate::routes::call_hooks(py, LoggingOperation::Messages, &call, asynchronous)?;
-    crate::routes::run_public_call(
+    let modify_params = ModifyParams::new(&call.args, &call.kwargs)?;
+    crate::routes::run_public_call_after_policy(
         py,
         arguments,
         move |py, arguments, request| {
@@ -46,6 +49,7 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
         },
         MessagesPythonHost::new(call.view()?, asynchronous),
         hooks,
+        modify_params,
         asynchronous,
     )
 }

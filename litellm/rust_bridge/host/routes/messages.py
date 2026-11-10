@@ -34,6 +34,8 @@ from litellm.rust_bridge import failures
 from litellm.rust_bridge.host import callbacks_legacy_python, http_transport
 from litellm.rust_bridge.public_call import known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.utils import CallTypes
+from litellm.utils import clamp_max_tokens
 
 _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(
@@ -88,6 +90,14 @@ def inferred_provider(model: str, api_base: str | None) -> str | None:
     except litellm.BadRequestError:
         return None
     return provider
+
+
+def modify_max_tokens(
+    model: object,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],  # mutable-ok: the call's keyword view, rewritten in place as `@client` does
+) -> None:
+    clamp_max_tokens(model, args, kwargs, CallTypes.anthropic_messages.value)
 
 
 def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
