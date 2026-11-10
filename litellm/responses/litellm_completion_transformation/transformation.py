@@ -1587,48 +1587,45 @@ class LiteLLMCompletionResponsesConfig:
         # If session messages are empty (e.g., no database in test environment),
         # we still need to process the new input messages
         # Store original _messages before combining for safety check
-        original_new_messages: Final = _messages.copy() if _messages else []
+        original_new_messages: Final = _OBJECT_LIST_ADAPTER.validate_python(_messages)
 
         new_messages: Final = (
             with_stored_calls_the_input_answers(_messages[instructions_end:], session_history)
             if input_replaces_history
             else _messages[instructions_end:]
         )
-        mark_rules: Final = _item_mark_rules(
-            model, provider, _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or []), request_kwargs
-        )
+        request_tools: Final = _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or [])
+        mark_rules: Final = _item_mark_rules(model, provider, request_tools, request_kwargs)
         messages_before_restore: Final = _OBJECT_LIST_ADAPTER.validate_python(
             (*leading_system_messages, *replayed_messages, *new_messages)
         )
         restored_turn: Final = (
             ()
             if request_input is None
-            else tuple(
-                map(
-                    mark_rules.checked,
-                    restored_empty_user_turn(
-                        request_input,
-                        messages_before_restore,
-                        keeps_item_marks,
-                        route_fills_empty_user_turns,
-                    ),
-                )
+            else restored_empty_user_turn(
+                request_input,
+                messages_before_restore,
+                keeps_item_marks,
+                route_fills_empty_user_turns,
             )
+        )
+        request_messages: Final = (*new_messages, *restored_turn)
+        marked_request_messages: Final = (
+            _request_messages_for_cache_points(request_messages, mark_rules) if keeps_item_marks else request_messages
         )
         session_messages: Final = (
             _replayed_messages_for_cache_points(
-                replayed_messages, (*_OBJECT_LIST_ADAPTER.validate_python(_messages), *restored_turn), mark_rules
+                replayed_messages, (*_messages[:instructions_end], *marked_request_messages), mark_rules
             )
             if keeps_item_marks
             else replayed_messages
         )
-        combined_messages = [*leading_system_messages, *session_messages, *new_messages, *restored_turn]
+        combined_messages = [*leading_system_messages, *session_messages, *marked_request_messages]
 
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
-        tools: Final = _OBJECT_LIST_ADAPTER.validate_python(litellm_completion_request.get("tools") or [])
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages, tools=tools
+            messages=combined_messages, tools=request_tools
         )
 
         # Safety check: Ensure we don't end up with empty messages
@@ -1657,8 +1654,8 @@ class LiteLLMCompletionResponsesConfig:
                         f"Please ensure function_call_output has a valid call_id from a previous response. "
                         f"Original request: previous_response_id={previous_response_id}"
                     ),
-                    model=litellm_completion_request.get("model", ""),
-                    llm_provider=litellm_completion_request.get("custom_llm_provider", ""),
+                    model=model,
+                    llm_provider=provider or "",
                 )
 
         litellm_completion_request["messages"] = combined_messages

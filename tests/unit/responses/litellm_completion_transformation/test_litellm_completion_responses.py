@@ -6703,6 +6703,47 @@ def test_the_marked_empty_user_turn_a_follow_up_restores_takes_a_slot_from_the_r
     assert messages[-1] == {"role": "user", "content": "", "cache_control": _EPHEMERAL}
 
 
+_MARKED_LOOKUP_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "lookup", "parameters": {"type": "object"}},
+    "cache_control": _EPHEMERAL,
+}
+
+
+def _follow_up_ending_on_a_marked_empty_item(
+    current_items: Sequence[Mapping[str, object]], marked_tools: int
+) -> Sequence[Mapping[str, object]]:
+    return _replayed_messages_from(
+        ({"role": "user", "content": "Remember the number 7."}, {"role": "assistant", "content": "OK."}),
+        current_items[0] if current_items else None,
+        model="us.anthropic.claude-opus-5-5",
+        tools=(_MARKED_LOOKUP_TOOL,) * marked_tools,
+        request_input=cast(
+            ResponseInputParam, [*current_items, {**_NULL_USER_ITEM, "cache_control": _EPHEMERAL}]
+        ),
+        drop_params=True,
+        cache_control=_EPHEMERAL,
+    )
+
+
+def test_the_marked_empty_user_turn_a_follow_up_restores_yields_its_mark_to_a_full_request_under_drop_params():
+    messages: Final = _follow_up_ending_on_a_marked_empty_item((), MAX_CACHE_CONTROL_BLOCKS - 1)
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 0
+    assert messages[-1] == {"role": "user", "content": ""}
+
+
+def test_the_marked_empty_user_turn_a_follow_up_restores_keeps_the_newest_request_mark_under_drop_params():
+    messages: Final = _follow_up_ending_on_a_marked_empty_item(
+        ({"role": "assistant", "content": "Seven.", "cache_control": _EPHEMERAL},), MAX_CACHE_CONTROL_BLOCKS - 2
+    )
+
+    assert messages[-2:] == [
+        {"role": "assistant", "content": "Seven."},
+        {"role": "user", "content": "", "cache_control": _EPHEMERAL},
+    ]
+
+
 def _bridged_request(
     *items: Mapping[str, object],
     model: str = f"bedrock/{_CLAUDE_ON_BEDROCK}",

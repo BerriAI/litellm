@@ -155,7 +155,13 @@ class _ChatRequestTranslator(Protocol):
 
 
 def _needs_chat_translation(message: Mapping[str, object]) -> bool:
-    return message.get("role") == "tool" or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
+    from litellm.litellm_core_utils.prompt_templates.factory import carries_empty_text
+
+    return (
+        message.get("role") == "tool"
+        or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
+        or carries_empty_text(message)
+    )
 
 
 def _is_chat_tool(tool: Mapping[str, object]) -> bool:

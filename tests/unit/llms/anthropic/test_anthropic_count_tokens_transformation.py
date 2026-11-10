@@ -870,6 +870,38 @@ async def test_counter_sends_the_tools_chat_inference_makes_from_tool_search_and
     assert [body.get("tools") for body in bodies] == [inference["tools"]]
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+@pytest.mark.parametrize(
+    "blank",
+    (
+        pytest.param("", id="empty-string"),
+        pytest.param("  ", id="whitespace"),
+        pytest.param([{"type": "text", "text": ""}], id="empty-text-block"),
+    ),
+)
+async def test_counter_sends_a_blank_user_turn_as_the_text_chat_inference_sends(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+    blank: JsonValue,
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": "Remember the number 7."},
+        {"role": "assistant", "content": "OK."},
+        {"role": "user", "content": blank},
+    ]
+    inference: Final = AnthropicConfig().transform_request(
+        model="claude-opus-5-5", messages=deepcopy(messages), optional_params={}, litellm_params={}, headers={}
+    )
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, messages, None, "openai")
+
+    assert result is not None
+    assert result.error is not True
+    assert [body["messages"] for body in bodies] == [inference["messages"]]
+
+
 _ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {
     "type": "object",
     "properties": {"answer": {"type": "string"}},
