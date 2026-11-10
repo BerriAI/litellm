@@ -3445,7 +3445,7 @@ async def test_events_appended_during_failed_flush_survive() -> None:
         await logger.flush_queue()
 
     assert [element.s3_object_key for element in logger.log_queue] == [first.s3_object_key, late.s3_object_key]
-    assert logger.log_queue[0].retrying_since is None
+    assert logger.log_queue[0].retrying_since is not None
 
     logger.async_httpx_client.put.failed_key = None
     await logger.flush_queue()
@@ -3766,7 +3766,7 @@ async def test_terminal_object_is_requeued_when_opted_out() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_objects_are_requeued_when_every_upload_in_the_flush_fails() -> None:
+async def test_terminal_objects_are_dropped_when_every_upload_in_the_flush_fails() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -3783,11 +3783,11 @@ async def test_terminal_objects_are_requeued_when_every_upload_in_the_flush_fail
 
     await logger.flush_queue()
 
-    assert len(logger.log_queue) == 5
+    assert logger.log_queue == []
 
 
 @pytest.mark.asyncio
-async def test_retrying_past_the_opted_in_budget_is_dropped_only_next_to_delivered_siblings() -> None:
+async def test_retrying_past_the_opted_in_budget_is_dropped() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -3815,7 +3815,7 @@ async def test_retrying_past_the_opted_in_budget_is_dropped_only_next_to_deliver
 
 
 @pytest.mark.asyncio
-async def test_retrying_past_the_budget_stays_queued_when_the_whole_flush_fails() -> None:
+async def test_retrying_past_the_budget_is_dropped_when_the_whole_flush_fails() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -3837,7 +3837,43 @@ async def test_retrying_past_the_budget_stays_queued_when_the_whole_flush_fails(
     ):
         await logger.flush_queue()
 
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_single_permanently_rejected_event_is_dropped_after_the_retry_budget() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_retry_age_seconds=60,
+    )
+
+    put = _FailUntilClearedPut(status=403, code="AccessDenied")
+
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = [_element({"id": "only"}, "only")]
+
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("time.monotonic", return_value=_NOW),
+    ):
+        await logger.flush_queue()
+
     assert len(logger.log_queue) == 1
+    assert logger.log_queue[0].retrying_since == _NOW
+    assert len(put.calls) == 3
+
+    with (
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("time.monotonic", return_value=_NOW + 61),
+    ):
+        await logger.flush_queue()
+
+    assert logger.log_queue == []
+    assert len(put.calls) == 6
 
 
 @pytest.mark.asyncio
@@ -4983,7 +5019,7 @@ async def test_retry_age_budget_drops_after_the_clock_set_by_a_partial_failure(c
 
 
 @pytest.mark.asyncio
-async def test_the_retry_clock_starts_at_the_first_partial_failure_not_first_seen() -> None:
+async def test_the_retry_clock_starts_at_the_first_failure_including_a_whole_flush_failure() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -5006,7 +5042,7 @@ async def test_the_retry_clock_starts_at_the_first_partial_failure_not_first_see
         await logger.flush_queue()
 
     assert len(logger.log_queue) == 1
-    assert logger.log_queue[0].retrying_since is None
+    assert logger.log_queue[0].retrying_since == t0
 
     logger.log_queue.append(_element({"id": "good"}, "good"))
     put.failing = False
@@ -5018,8 +5054,7 @@ async def test_the_retry_clock_starts_at_the_first_partial_failure_not_first_see
     ):
         await logger.flush_queue()
 
-    assert [element.s3_object_key for element in logger.log_queue] == ["2025-09-14/test-poison.json"]
-    assert logger.log_queue[0].retrying_since == t0 + 500
+    assert logger.log_queue == []
 
 
 def test_sync_upload_retries_access_denied_403(caplog):
