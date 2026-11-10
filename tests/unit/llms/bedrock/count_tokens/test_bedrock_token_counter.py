@@ -8,7 +8,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
-from litellm.llms.bedrock.count_tokens.mantle_handler import NO_MANTLE_ENDPOINT_MESSAGE
+from litellm.llms.bedrock.count_tokens.mantle_handler import no_mantle_endpoint_message
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CountContextManagement
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
@@ -26,6 +26,7 @@ DEPLOYMENT: Final = {
 MESSAGES: Final = [{"role": "user", "content": "The quick brown fox jumps over the lazy dog."}]
 PRIVATE_RUNTIME_HOST: Final = "vpce-0a1b2c3d.bedrock-runtime.us-east-1.vpce.amazonaws.com"
 PRIVATE_RUNTIME: Final = f"https://{PRIVATE_RUNTIME_HOST}"
+LOOKALIKE_RUNTIME: Final = f"https://{RUNTIME_HOST}.corp.internal"
 PRIVATE_MANTLE: Final = "https://vpce-0e1f2a3b.bedrock-mantle.us-east-1.vpce.api.aws"
 SONNET_4_5: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 SONNET_4_5_RUNTIME_COUNT: Final = f"{PRIVATE_RUNTIME}/model/anthropic.claude-sonnet-4-5-20250929-v1%3A0/count-tokens"
@@ -660,8 +661,9 @@ async def test_pinned_runtime_endpoint_retries_on_the_mantle_host_the_operator_n
         ({"api_base": PRIVATE_RUNTIME}, {}),
         ({"aws_bedrock_runtime_endpoint": PRIVATE_RUNTIME}, {}),
         ({}, {"AWS_BEDROCK_RUNTIME_ENDPOINT": PRIVATE_RUNTIME}),
+        ({"api_base": LOOKALIKE_RUNTIME}, {}),
     ),
-    ids=("api_base", "aws_bedrock_runtime_endpoint", "AWS_BEDROCK_RUNTIME_ENDPOINT"),
+    ids=("api_base", "aws_bedrock_runtime_endpoint", "AWS_BEDROCK_RUNTIME_ENDPOINT", "public_runtime_host_lookalike"),
 )
 async def test_mantle_counting_model_on_a_pinned_runtime_deployment_is_refused_before_any_call(
     monkeypatch: pytest.MonkeyPatch, endpoint: Mapping[str, str], environment: Mapping[str, str]
@@ -694,7 +696,7 @@ async def test_mantle_counting_model_on_a_pinned_runtime_deployment_is_refused_b
         0,
         "bedrock_mantle_api",
     )
-    assert result.error_message == NO_MANTLE_ENDPOINT_MESSAGE
+    assert result.error_message == no_mantle_endpoint_message("us-east-1")
     assert result.no_count_endpoint
     assert bedrock.requests == ()
     assert vault.read.is_set()
@@ -722,3 +724,39 @@ async def test_mantle_deployment_counts_on_its_own_api_base() -> None:
     assert result is not None
     assert (result.error, result.total_tokens, result.tokenizer_type) == (False, 271, "bedrock_mantle_api")
     assert bedrock.posted_urls() == (f"{PRIVATE_MANTLE}/anthropic/v1/messages/count_tokens",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "environment"),
+    (
+        ({"api_base": f"https://{RUNTIME_HOST}"}, {}),
+        ({"aws_bedrock_runtime_endpoint": "https://bedrock-runtime-fips.us-east-1.amazonaws.com/"}, {}),
+        ({}, {"AWS_BEDROCK_RUNTIME_ENDPOINT": f"https://{RUNTIME_HOST}"}),
+    ),
+    ids=("api_base", "aws_bedrock_runtime_endpoint_fips", "AWS_BEDROCK_RUNTIME_ENDPOINT"),
+)
+async def test_pin_to_the_public_runtime_host_still_counts_on_public_mantle(
+    monkeypatch: pytest.MonkeyPatch, endpoint: Mapping[str, str], environment: Mapping[str, str]
+) -> None:
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 193}), mantle=(200, {"input_tokens": 271}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="bedrock_mantle/anthropic.claude-opus-5-5",
+        messages=MESSAGES,
+        contents=None,
+        deployment={
+            "litellm_params": {
+                **DEPLOYMENT["litellm_params"],
+                "model": "bedrock/us.anthropic.claude-opus-5-5",
+                **endpoint,
+            }
+        },
+        request_model="claude-opus-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens, result.tokenizer_type) == (False, 271, "bedrock_mantle_api")
+    assert bedrock.posted_hosts() == (MANTLE_HOST,)

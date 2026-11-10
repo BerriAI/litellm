@@ -16154,7 +16154,7 @@ async def _count_request_tokens(
         configured=deployment_view.get("model_info", {}),
         default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
         deployment_region=partial(_deployment_aws_region, deployment_view),
-        counts_on_own_mantle_host=_counts_on_own_mantle_host(deployment_view),
+        counts_on_own_mantle_host=partial(_counts_on_own_mantle_host, deployment_view),
     )
 
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)

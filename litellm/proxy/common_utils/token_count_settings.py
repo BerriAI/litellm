@@ -188,17 +188,24 @@ def _within_deployment_geography(
     return replace(count_model, region=None)
 
 
+def _not_on_own_mantle_host() -> bool:
+    return False
+
+
 def _shipped_count_model(
-    default: Mapping[str, object], deployment_region: Callable[[], str], counts_on_own_mantle_host: bool
+    default: Mapping[str, object], deployment_region: Callable[[], str], counts_on_own_mantle_host: Callable[[], bool]
 ) -> TokenCountModel | None:
     count_model: Final = _count_model(default, configured=False)
-    if count_model is not None and count_model.litellm_provider == "bedrock_mantle" and counts_on_own_mantle_host:
+    if count_model is not None and count_model.litellm_provider == "bedrock_mantle" and counts_on_own_mantle_host():
         return replace(count_model, region=None)
     return _within_deployment_geography(count_model, deployment_region)
 
 
 def _resolved_count_model(
-    configured: object, default: object, deployment_region: Callable[[], str], counts_on_own_mantle_host: bool
+    configured: object,
+    default: object,
+    deployment_region: Callable[[], str],
+    counts_on_own_mantle_host: Callable[[], bool],
 ) -> TokenCountModel | None:
     configured_mapping: Final = as_str_mapping(configured)
     if configured_mapping is not None:
@@ -223,7 +230,7 @@ def resolve_token_count_settings(
     configured: Mapping[str, object],
     default: Mapping[str, object],
     deployment_region: Callable[[], str],
-    counts_on_own_mantle_host: bool = False,
+    counts_on_own_mantle_host: Callable[[], bool] = _not_on_own_mantle_host,
 ) -> TokenCountSettings:
     return TokenCountSettings(
         framing=_configured_framing(configured, default, "token_count_framing"),

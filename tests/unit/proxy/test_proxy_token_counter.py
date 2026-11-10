@@ -1876,10 +1876,10 @@ async def _count_on_a_pinned_runtime_deployment(
             deployment={
                 "litellm_params": {
                     "model": "bedrock/us.anthropic.claude-opus-5-5",
-                    "api_base": "https://vpce-0a1b2c3d.bedrock-runtime.us-east-1.vpce.amazonaws.com",
+                    "api_base": "https://vpce-0a1b2c3d.bedrock-runtime.us-west-2.vpce.amazonaws.com",
                     "aws_access_key_id": "AKIATESTACCESSKEY",
                     "aws_secret_access_key": "test-secret",
-                    "aws_region_name": "us-east-1",
+                    "aws_region_name": "us-west-2",
                 }
             },
             tools=_COUNT_REQUEST.tools,
@@ -1888,7 +1888,7 @@ async def _count_on_a_pinned_runtime_deployment(
         model_to_use="us.anthropic.claude-opus-5-5",
         request_model=_COUNT_REQUEST.model,
         settings=resolve_token_count_settings(
-            configured=configured, default=default, deployment_region=lambda: "us-east-1"
+            configured=configured, default=default, deployment_region=lambda: "us-west-2"
         ),
         local_estimate_allowed=local_estimate_allowed,
     )
@@ -1927,7 +1927,7 @@ async def test_mantle_token_count_model_on_a_pinned_runtime_deployment_answers_a
         await _count_on_a_pinned_runtime_deployment(peer, configured, default, local_estimate_allowed)
 
     assert raised.value.code == "400"
-    assert "BEDROCK_MANTLE_API_BASE" in raised.value.message
+    assert "BEDROCK_MANTLE_API_BASE to a bedrock-mantle endpoint in us-east-1" in raised.value.message
     assert ("token_count_framing" in raised.value.message) is framing_would_help
     assert "If that region is not enabled" not in raised.value.message
     assert peer.requests == ()
@@ -1946,18 +1946,27 @@ async def test_framing_stands_in_when_a_pinned_runtime_deployment_has_no_mantle_
 
 
 @pytest.mark.parametrize(
-    ("endpoint", "counted_in"),
+    ("endpoint", "environment", "counted_in"),
     [
-        ({"api_base": "https://vpce-0e1f2a3b.bedrock-mantle.us-west-2.vpce.api.aws"}, "us-west-2"),
-        ({}, "us-east-1"),
-        ({"api_base": ""}, "us-east-1"),
+        ({"api_base": "https://vpce-0e1f2a3b.bedrock-mantle.us-west-2.vpce.api.aws"}, {}, "us-west-2"),
+        ({}, {"BEDROCK_MANTLE_API_BASE": "https://vpce-0e1f2a3b.bedrock-mantle.us-west-2.vpce.api.aws"}, "us-west-2"),
+        ({}, {}, "us-east-1"),
+        ({"api_base": ""}, {}, "us-east-1"),
     ],
-    ids=["its_own_mantle_host", "the_public_mantle_host", "a_blank_api_base_as_the_public_mantle_host"],
+    ids=[
+        "its_own_mantle_host",
+        "the_mantle_host_the_operator_named",
+        "the_public_mantle_host",
+        "a_blank_api_base_as_the_public_mantle_host",
+    ],
 )
 @pytest.mark.asyncio
 async def test_mantle_deployment_signs_counts_on_its_own_host_for_its_own_region(
-    monkeypatch: pytest.MonkeyPatch, endpoint: Mapping[str, str], counted_in: str
+    monkeypatch: pytest.MonkeyPatch, endpoint: Mapping[str, str], environment: Mapping[str, str], counted_in: str
 ):
+    monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
     counter: Final = _ScriptedCounter(
         {"bedrock_mantle/anthropic.claude-opus-5-5": _provider_reply("opus", total_tokens=447)}
     )
