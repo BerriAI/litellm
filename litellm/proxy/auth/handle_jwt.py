@@ -23,7 +23,7 @@ import jwt
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from jwt.api_jwk import PyJWK
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -1762,6 +1762,8 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
+        request: Request | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> tuple[str | None, LiteLLM_TeamTable | None]:
         """Find first team with access to the requested model"""
         from litellm.proxy.proxy_server import llm_router
@@ -1812,10 +1814,26 @@ class JWTAuthManager:
                         )
                     ):
                         fallback_team = (team_id, team_object)
+                    check_model = requested_model
+                    if (
+                        isinstance(requested_model, str)
+                        and (requested_model.startswith("claude-router-") or requested_model.lower().endswith("[1m]"))
+                        and llm_router is not None
+                    ):
+                        from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
+
+                        team_resolved = claude_code_requested_group(
+                            requested_model,
+                            llm_router,
+                            team_id,
+                            (team_model_aliases(team_object),),
+                        )
+                        if team_resolved is not None:
+                            check_model = team_resolved
                     if isinstance(team_models, list) and (
-                        not requested_model
+                        not check_model
                         or await can_team_access_model(
-                            model=requested_model,
+                            model=check_model,
                             team_object=team_object,
                             llm_router=llm_router,
                             team_model_aliases=team_model_aliases(team_object),
@@ -1840,6 +1858,12 @@ class JWTAuthManager:
                             "JWT team route check: team_id=%s, route=%s, is_allowed=%s", team_id, route, is_allowed
                         )
                         if is_allowed:
+                            if request_data is not None and check_model != requested_model:
+                                from litellm.proxy.common_utils.http_parsing_utils import rewrite_request_model
+
+                                rewrite_request_model(request_data, request, check_model)
+                                if request is not None:
+                                    request.scope["litellm.claude_model_normalized"] = True
                             return team_id, team_object
             except Exception:
                 continue
@@ -2371,6 +2395,8 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
+        request: Request | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> tuple[str | None, LiteLLM_TeamTable | None, LiteLLM_TeamMembership | None]:
         """
         Resolve a team for a user whose JWT carries no team claims by selecting
@@ -2425,15 +2451,37 @@ class JWTAuthManager:
             ):
                 fallback_team = (candidate_team_id, team_object)
             if requested_model:
+                check_model = requested_model
+                if (
+                    isinstance(requested_model, str)
+                    and (requested_model.startswith("claude-router-") or requested_model.lower().endswith("[1m]"))
+                    and llm_router is not None
+                ):
+                    from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
+
+                    team_resolved = claude_code_requested_group(
+                        requested_model,
+                        llm_router,
+                        candidate_team_id,
+                        (team_model_aliases(team_object),),
+                    )
+                    if team_resolved is not None:
+                        check_model = team_resolved
                 try:
                     await can_team_access_model(
-                        model=requested_model,
+                        model=check_model,
                         team_object=team_object,
                         llm_router=llm_router,
                         team_model_aliases=team_model_aliases(team_object),
                     )
                 except ProxyException:
                     continue
+                if request_data is not None and check_model != requested_model:
+                    from litellm.proxy.common_utils.http_parsing_utils import rewrite_request_model
+
+                    rewrite_request_model(request_data, request, check_model)
+                    if request is not None:
+                        request.scope["litellm.claude_model_normalized"] = True
             if not team_route_allowed:
                 continue
             verbose_proxy_logger.debug(
@@ -2554,6 +2602,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
+        request: Request | None = None,
     ) -> JWTAuthBuilderResult:
         return await JWTAuthManager.authorize_jwt(
             api_key=api_key,
@@ -2567,6 +2616,7 @@ class JWTAuthManager:
             proxy_logging_obj=proxy_logging_obj,
             request_headers=request_headers,
             request_method=request_method,
+            request=request,
             provisioning=_JWTProvisioning(
                 user_id_upsert=jwt_handler.litellm_jwtauth.user_id_upsert,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
@@ -2651,6 +2701,7 @@ class JWTAuthManager:
         proxy_logging_obj: ProxyLogging,
         request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
+        request: Request | None = None,
         provisioning: _JWTProvisioning | None = None,
     ) -> JWTAuthBuilderResult:
         """Resolve and authorize JWT context; only normal admission supplies provisioning."""
@@ -2685,7 +2736,22 @@ class JWTAuthManager:
                 )
         team_id_upsert: Final = provisioning.team_id_upsert if provisioning is not None else False
         model: Final = request_data.get("model")
-        requested_model: Final = model if isinstance(model, str) else None
+        raw_requested_model: Final = model if isinstance(model, str) else None
+        requested_model: str | None = raw_requested_model  # rebind-ok: normalize Claude Code picker IDs
+        if isinstance(requested_model, str) and (
+            requested_model.startswith("claude-router-") or requested_model.lower().endswith("[1m]")
+        ):
+            from litellm.proxy.common_utils.http_parsing_utils import rewrite_request_model
+            from litellm.proxy.common_utils.model_listing_utils import claude_code_requested_group
+            from litellm.proxy.proxy_server import llm_router
+
+            if llm_router is not None:
+                normalized_model: Final[str | None] = claude_code_requested_group(requested_model, llm_router, None)
+                if normalized_model is not None:
+                    rewrite_request_model(request_data, request, normalized_model)
+                    requested_model = normalized_model
+                    if request is not None:
+                        request.scope["litellm.claude_model_normalized"] = True
 
         # Check RBAC
         rbac_role: Final = handler.get_rbac_role(token=jwt_valid_token) if managed is None else None
@@ -2868,6 +2934,8 @@ class JWTAuthManager:
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                request=request,
+                request_data=request_data,
             )
 
         # The RBAC role-claim path (rbac_role == TEAM) sets team_id without
@@ -2995,6 +3063,8 @@ class JWTAuthManager:
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
                 request_method=request_method,
+                request=request,
+                request_data=request_data,
             )
             # The earlier passthrough gate ran when team_id was None; re-check
             # against the DB-resolved team so a fallback-selected team must also

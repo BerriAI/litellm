@@ -2516,6 +2516,7 @@ async def user_api_key_auth_builder(
                             parent_otel_span=parent_otel_span,
                             request_headers=safe_get_request_headers(request),
                             request_method=RouteChecks.get_request_method(request=request),
+                            request=request,
                         )
 
                     is_proxy_admin: Final = result["is_proxy_admin"]
