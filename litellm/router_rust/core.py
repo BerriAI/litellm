@@ -113,7 +113,7 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping
+from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -1591,6 +1591,9 @@ class RustCore(
     @property
     def _shaping(self) -> Shaping:
         return self._endpoints.shaping(self._resolved)
+
+    def _core_deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object:
+        return non_stream_timeout(self._shaping, MappingProxyType({}), litellm_params)
 
     # -- building --------------------------------------------------------------------------------
 

@@ -332,6 +332,22 @@ def test_utils_token_counter_local_mode_never_calls_the_peer_for_a_leading_syste
         assert peer.drain() == ()
 
 
+def test_utils_token_counter_call_endpoint_counts_a_prompt_as_one_user_message(
+    deployment: _Deployment, gateway: Gateway
+) -> None:
+    with _listening(deployment) as peer:
+        response: Final = gateway.request(
+            "POST",
+            "/utils/token_counter",
+            {"model": deployment.model, "prompt": USER_TEXT},
+            params={"call_endpoint": "true"},
+        )
+        payload: Final = _payload(response)
+        assert (payload["total_tokens"], payload["count_source"]) == (_COUNT, "provider"), response.text
+        assert payload["tokenizer_type"] == deployment.provider.tokenizer, response.text
+        assert _bodies(peer, deployment.provider) == ({"model": _MODEL, "messages": [USER]},)
+
+
 def test_responses_input_tokens_lifts_instructions(deployment: _Deployment, gateway: Gateway) -> None:
     with _listening(deployment) as peer:
         response: Final = gateway.request(

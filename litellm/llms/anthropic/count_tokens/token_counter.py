@@ -18,7 +18,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     ChatCountTranslationError,
     anthropic_count_fields,
 )
-from litellm.llms.base_llm.base_utils import BaseTokenCounter
+from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_timeout
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 
 # Global handler instance - reuse across all token counting requests
@@ -134,6 +134,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 optional_params=count_options,
                 context_management=context_management.spec if context_management is not None else None,
                 drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
+                timeout=deployment_timeout(litellm_params),
             )
 
             if result is not None:
