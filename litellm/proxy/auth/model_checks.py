@@ -490,6 +490,13 @@ def _ids_routing_through_catch_all(
     return tuple(dict.fromkeys(listed_ids))
 
 
+def _catch_all_catalog(catalog_ids: Sequence[str], litellm_params: LiteLLM_Params | None) -> Sequence[str]:
+    pinned_provider: Final = litellm_params.custom_llm_provider if litellm_params is not None else None
+    if not pinned_provider:
+        return catalog_ids
+    return get_provider_models(provider=pinned_provider, litellm_params=litellm_params) or ()
+
+
 def _catalog_ids_a_wider_name_matches(
     name_pattern: str,
     deployment_pattern: str,
@@ -550,9 +557,12 @@ def _may_match_directly(own_regex: str, regex: str) -> bool:
     return regex != own_regex and _prefixes_overlap(_literal_start(regex), _literal_start(own_regex))
 
 
+_UNINFERRED_PROVIDER: Final = str(None)
+
+
 def _may_name_a_provider(escaped_provider: str) -> bool:
     provider: Final = re.sub(r"\\(.)", r"\1", escaped_provider)
-    return provider == str(None) or inferred_provider(f"{provider}/{provider}") == provider
+    return provider == _UNINFERRED_PROVIDER or inferred_provider(f"{provider}/{provider}") == provider
 
 
 def _may_match_under_a_provider(own_regex: str, regex: str) -> bool:
@@ -587,8 +597,6 @@ def _rival_patterns(llm_router: Router | None, team_id: str | None) -> RivalPatt
 
     def rivals(name_pattern: str) -> _Rivals | None:
         own_regex: Final = PatternMatchRouter().pattern_to_regex(name_pattern)
-        if own_regex in team_regexes and own_regex in router_regexes:
-            return None
         if own_regex in team_regexes:
             return _Rivals(_compiled(regex for regex in team_regexes if _can_take_ids_of(own_regex, regex)), ())
         if own_regex not in router_regexes:
@@ -700,7 +708,9 @@ def _known_models_from_wildcard(
         else None
     )
     if routes_through_catch_all is not None and not _names_whole_models(wildcard_model):
-        return _ids_routing_through_catch_all(wildcard_model, wildcard_models, routes_through_catch_all)
+        return _ids_routing_through_catch_all(
+            wildcard_model, _catch_all_catalog(wildcard_models, litellm_params), routes_through_catch_all
+        )
     if deployment_pattern_naming_listed_ids is not None:
         return _ids_routing_to_catalog_models(
             name_pattern=wildcard_model,

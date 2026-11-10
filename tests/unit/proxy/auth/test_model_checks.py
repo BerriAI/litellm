@@ -2622,32 +2622,50 @@ def test_suffix_alias_over_a_bare_catch_all_lists_no_id_that_names_another_catal
 
 
 @pytest.mark.parametrize(
-    ("team_alias", "team_alias_model", "stolen_id", "kept_id"),
+    ("global_alias", "team_alias", "team_alias_model", "stolen_id", "named_model", "kept_ids"),
     [
         pytest.param(
+            "team-partial-route/*",
             "team-partial-route/gpt-*",
             "*",
             f"team-partial-route/{_ROUTE_OPENAI_ID}",
-            f"team-partial-route/{_ROUTE_OPENAI_CHAT_ID}",
+            _ROUTE_OPENAI_ID,
+            (f"team-partial-route/{_ROUTE_OPENAI_CHAT_ID}",),
             id="team-alias-matching-the-id",
         ),
         pytest.param(
+            "team-partial-route/*",
             "openai/*",
             "openai/*",
             f"team-partial-route/{_ROUTE_OPENAI_CHAT_ID}",
-            f"team-partial-route/{_ROUTE_OPENAI_ID}",
+            _ROUTE_OPENAI_CHAT_ID,
+            (f"team-partial-route/{_ROUTE_OPENAI_ID}",),
             id="team-alias-matching-the-id-under-its-provider",
+        ),
+        pytest.param(
+            "team-partial-route/gpt-*",
+            "team-partial-route/*",
+            "*",
+            f"team-partial-route/gpt-{_ROUTE_OPENAI_ID}",
+            _ROUTE_OPENAI_ID,
+            (),
+            id="team-alias-broader-than-the-global-alias",
         ),
     ],
 )
 def test_team_key_listing_skips_ids_the_team_wildcard_routes_elsewhere(
-    monkeypatch: pytest.MonkeyPatch, team_alias: str, team_alias_model: str, stolen_id: str, kept_id: str
+    monkeypatch: pytest.MonkeyPatch,
+    global_alias: str,
+    team_alias: str,
+    team_alias_model: str,
+    stolen_id: str,
+    named_model: str,
+    kept_ids: tuple[str, ...],
 ) -> None:
     from litellm import Router
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-partial-route-test")
-    global_alias: Final = "team-partial-route/*"
     router: Final = Router(
         model_list=[
             {"model_name": global_alias, "litellm_params": {"model": "*"}},
@@ -2675,7 +2693,84 @@ def test_team_key_listing_skips_ids_the_team_wildcard_routes_elsewhere(
         listed_for_team: Final = listed_for("team-1")
         stolen_route: Final = router.registry().names(stolen_id, kind="wildcard", team_id="team-1")
 
-    assert stolen_route != {stolen_id.removeprefix("team-partial-route/")}
+    assert named_model not in stolen_route
     assert stolen_id in listed_without_team
     assert stolen_id not in listed_for_team
-    assert kept_id in listed_for_team
+    assert set(kept_ids) <= set(listed_for_team)
+
+
+def test_team_copy_of_a_partial_alias_lists_ids_a_global_sibling_would_take(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-partial-route-test")
+    alias: Final = "team-partial-route/gpt-*"
+    sibling_taken_id: Final = f"team-partial-route/gpt-{_ROUTE_OPENAI_CHAT_ID}"
+    router: Final = Router(
+        model_list=[
+            {"model_name": alias, "litellm_params": {"model": "*"}},
+            {"model_name": "team-partial-route/gpt-partial-*", "litellm_params": {"model": "openai/*"}},
+            {
+                "model_name": "model_name_team-1_partial-route",
+                "litellm_params": {"model": "*"},
+                "model_info": {"id": "team-partial-route", "team_id": "team-1", "team_public_model_name": alias},
+            },
+        ]
+    )
+
+    def listed_for(team_id: str | None) -> list[str]:
+        return get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=[alias],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+            team_id=team_id,
+        )
+
+    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai", _ROUTE_OPENAI_CHAT_ID: "openai"}):
+        listed_without_team: Final = listed_for(None)
+        listed_for_team: Final = listed_for("team-1")
+        team_route: Final = router.registry().names(sibling_taken_id, kind="wildcard", team_id="team-1")
+
+    assert team_route == {_ROUTE_OPENAI_CHAT_ID}
+    assert sibling_taken_id not in listed_without_team
+    assert sibling_taken_id in listed_for_team
+    assert f"team-partial-route/gpt-{_ROUTE_OPENAI_ID}" in listed_for_team
+
+
+def test_partial_alias_over_a_catch_all_pinned_to_a_provider_lists_only_that_providers_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-partial-route-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-partial-route-test")
+    alias: Final = "team-partial-route/gpt-*"
+    anthropic_id: Final = "claude-partial-route-9"
+    router: Final = Router(
+        model_list=[{"model_name": alias, "litellm_params": {"model": "*", "custom_llm_provider": "openai"}}]
+    )
+
+    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai", anthropic_id: "anthropic"}):
+        v1_models: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=[alias],
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        model_info_names: Final = [
+            str(row["model_name"])
+            for row in expand_wildcard_deployments_for_model_info(
+                [dict(deployment) for deployment in router.registry().deployments() or []], router
+            )
+        ]
+
+    assert f"team-partial-route/gpt-{_ROUTE_OPENAI_ID}" in v1_models
+    assert f"team-partial-route/gpt-{_ROUTE_OPENAI_ID}" in model_info_names
+    assert f"team-partial-route/gpt-{anthropic_id}" not in v1_models
+    assert f"team-partial-route/gpt-{anthropic_id}" not in model_info_names
