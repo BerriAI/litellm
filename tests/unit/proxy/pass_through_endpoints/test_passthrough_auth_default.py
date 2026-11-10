@@ -30,7 +30,9 @@ from starlette.requests import Request
 
 
 from litellm.proxy._types import PassThroughGenericEndpoint, ProxyException
+from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import (
+    _plan_settings,
     check_api_key_for_custom_headers_or_pass_through_endpoints,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -86,58 +88,23 @@ async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch: py
     assert response.json()["error"]["type"] == "auth_error"
 
 
-@pytest.mark.asyncio
-async def test_runtime_check_treats_missing_auth_key_as_authenticated():
-    # The runtime dispatch in user_api_key_auth pulls
-    # pass_through_endpoints from general_settings as raw dicts (the
-    # Pydantic default never applies). A dict without an ``auth`` key
-    # must default to "authenticated" — without this, the previous
-    # behaviour (``endpoint.get("auth") is not True`` -> True -> empty
-    # auth) ships an unauthenticated forwarder.
-    request = MagicMock()
-    request.headers = {}
-    raw_endpoint_no_auth_key = {
-        "path": "/forwarder",
-        "target": "https://example.com",
-        # ``auth`` deliberately omitted
-    }
-
-    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
-        request=request,
-        route="/forwarder",
-        pass_through_endpoints=[raw_endpoint_no_auth_key],
-        api_key="sk-9876",
+@pytest.mark.parametrize(
+    ("raw_endpoint", "unauthenticated"),
+    [
+        ({"path": "/forwarder", "target": "https://example.com"}, frozenset()),
+        ({"path": "/public-webhook", "target": "https://example.com", "auth": False}, frozenset({"/public-webhook"})),
+        ({"path": "/forwarder", "target": "https://example.com", "auth": True}, frozenset()),
+    ],
+)
+def test_only_an_explicit_auth_false_makes_a_raw_pass_through_route_unauthenticated(
+    raw_endpoint: dict[str, object], unauthenticated: frozenset[str]
+) -> None:
+    # The runtime dispatch reads pass_through_endpoints from general_settings as raw dicts, where the
+    # Pydantic default never applies, so a dict without ``auth`` must still require a key.
+    settings: Final = _plan_settings(
+        {"pass_through_endpoints": [raw_endpoint]}, JWTHandler(), premium_user=False, custom_auth=False
     )
-
-    # Result is the api_key string (auth is REQUIRED for this endpoint
-    # — flow continues to normal key validation), NOT an empty
-    # ``UserAPIKeyAuth()`` (which was the unauthenticated-forwarder
-    # bug).
-    assert result == "sk-9876"
-
-
-@pytest.mark.asyncio
-async def test_runtime_check_explicit_auth_false_still_skips_validation():
-    # Operators who explicitly set ``auth: False`` get the legacy
-    # behaviour — an empty UserAPIKeyAuth, no key required.
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    request = MagicMock()
-    request.headers = {}
-    raw_endpoint_auth_false = {
-        "path": "/public-webhook",
-        "target": "https://example.com",
-        "auth": False,
-    }
-
-    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
-        request=request,
-        route="/public-webhook",
-        pass_through_endpoints=[raw_endpoint_auth_false],
-        api_key="",
-    )
-
-    assert isinstance(result, UserAPIKeyAuth)
+    assert settings.unauthenticated_pass_through_routes == unauthenticated
 
 
 @pytest.mark.asyncio

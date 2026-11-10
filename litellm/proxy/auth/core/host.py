@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypeAlias
 
@@ -17,7 +16,7 @@ from litellm.proxy.auth.core.answers import (
     TeamMemberModelBudgetScope,
 )
 from litellm.proxy.auth.core.inputs import RequestFacts
-from litellm.proxy.auth.core.outcome import CustomIdentity, Identity, JwtIdentity, KeyIdentity, ModelBudgetExceeded
+from litellm.proxy.auth.core.outcome import CustomAuthResult, Identity, JwtIdentity, KeyIdentity, ModelBudgetExceeded
 
 
 class ModelBudgetHost(Protocol):
@@ -113,14 +112,18 @@ class JwtHost(Protocol):
     async def mapped_key(self, identity: JwtIdentity) -> KeyIdentity | None: ...
 
 
-class OAuth2Host(Protocol):
+class OAuth2IntrospectionHost(Protocol):
     async def introspect(self, token: str) -> Introspection: ...
 
-    def proxy_headers(self) -> Mapping[str, str]: ...
+
+class OAuth2ProxyHost(Protocol):
+    def client_ip(self) -> str | None: ...
+
+    def header(self, name: str) -> str | None: ...
 
 
 class CustomAuthHost(Protocol):
-    async def custom_auth(self, facts: RequestFacts) -> CustomIdentity: ...
+    async def custom_auth(self, facts: RequestFacts) -> CustomAuthResult: ...
 
 
 class AuthorizeHost(Protocol):

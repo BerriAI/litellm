@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, error::Error, future::Future};
+use std::{error::Error, future::Future};
 
 use crate::{
     answers::{
@@ -7,7 +7,7 @@ use crate::{
         TeamMemberModelBudgetScope,
     },
     inputs::RequestFacts,
-    outcome::{CustomIdentity, Identity, JwtIdentity, ModelBudgetExceeded},
+    outcome::{CustomAuthResult, Identity, JwtIdentity, ModelBudgetExceeded},
 };
 
 pub trait ModelBudgetHost: Sync {
@@ -133,14 +133,18 @@ pub trait JwtHost: Sync {
     ) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send;
 }
 
-pub trait OAuth2Host: Sync {
+pub trait OAuth2IntrospectionHost: Sync {
     type Error: Error + Send + Sync + 'static;
 
     fn introspect(
         &self,
         token: &str,
     ) -> impl Future<Output = Result<Introspection, Self::Error>> + Send;
-    fn proxy_headers(&self) -> &BTreeMap<String, String>;
+}
+
+pub trait OAuth2ProxyHost {
+    fn client_ip(&self) -> Option<&str>;
+    fn header(&self, name: &str) -> Option<&str>;
 }
 
 pub trait CustomAuthHost: Sync {
@@ -149,7 +153,7 @@ pub trait CustomAuthHost: Sync {
     fn custom_auth(
         &self,
         facts: &RequestFacts,
-    ) -> impl Future<Output = Result<CustomIdentity, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<CustomAuthResult, Self::Error>> + Send;
 }
 
 pub trait AuthorizeHost: Sync {

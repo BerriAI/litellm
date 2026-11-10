@@ -2,15 +2,17 @@ use std::{future::Future, time::SystemTime};
 
 use crate::{
     host::{
-        AuthorizeHost, CustomAuthHost, JwtHost, KeyHost, ModelBudgetHost, OAuth2Host,
-        TeamMemberModelBudgetHost,
+        AuthorizeHost, CustomAuthHost, JwtHost, KeyHost, ModelBudgetHost, OAuth2IntrospectionHost,
+        OAuth2ProxyHost, TeamMemberModelBudgetHost,
     },
     inputs::{
-        AuthorizeSettings, JwtSettings, KeySettings, OAuth2Settings, PlanSettings, RequestFacts,
+        AuthorizeSettings, JwtSettings, KeySettings, OAuth2IntrospectionSettings,
+        OAuth2ProxySettings, PlanFacts, PlanSettings, RequestFacts,
     },
     outcome::{
-        AnonymousReason, CustomIdentity, Denial, Identity, ModelBudgetResult, OAuth2Denial,
-        OAuth2Identity, Outcome, Validator,
+        Anonymous, AnonymousReason, CredentialPlan, CustomAuthResult, Denial, Identity, KeyPlan,
+        ModelBudgetResult, OAuth2Denial, OAuth2Identity, OAuth2ProxyDenial, OAuth2ProxyIdentity,
+        Outcome, Plan,
     },
 };
 
@@ -47,11 +49,19 @@ pub trait ModelBudgetCore: Sync {
 }
 
 pub trait AuthPlanner: Sync {
-    fn plan(&self, facts: &RequestFacts, settings: &PlanSettings) -> Validator;
+    fn plan(&self, facts: &PlanFacts, settings: &PlanSettings) -> Plan;
+    fn after_custom_auth(
+        &self,
+        facts: &PlanFacts,
+        settings: &PlanSettings,
+        issued_key: bool,
+    ) -> CredentialPlan;
+    fn after_jwt(&self, facts: &PlanFacts, settings: &PlanSettings, issued_key: bool) -> KeyPlan;
+    fn oauth2_introspection_applies(&self, facts: &PlanFacts, settings: &PlanSettings) -> bool;
 }
 
 pub trait AnonymousCore: Sync {
-    fn authenticate(&self, facts: &RequestFacts, settings: &PlanSettings) -> AnonymousReason;
+    fn authenticate(&self, reason: AnonymousReason) -> Anonymous;
 }
 
 pub trait JwtCore: Sync {
@@ -65,12 +75,17 @@ pub trait JwtCore: Sync {
 }
 
 pub trait OAuth2Core: Sync {
-    fn authenticate<H: OAuth2Host>(
+    fn introspect<H: OAuth2IntrospectionHost>(
         &self,
         host: &H,
-        facts: &RequestFacts,
-        settings: &OAuth2Settings,
+        token: &str,
+        settings: &OAuth2IntrospectionSettings,
     ) -> impl Future<Output = Result<Result<OAuth2Identity, OAuth2Denial>, H::Error>> + Send;
+    fn proxy<H: OAuth2ProxyHost>(
+        &self,
+        host: &H,
+        settings: &OAuth2ProxySettings,
+    ) -> Result<OAuth2ProxyIdentity, OAuth2ProxyDenial>;
 }
 
 pub trait CustomAuthCore: Sync {
@@ -78,7 +93,7 @@ pub trait CustomAuthCore: Sync {
         &self,
         host: &H,
         facts: &RequestFacts,
-    ) -> impl Future<Output = Result<CustomIdentity, H::Error>> + Send;
+    ) -> impl Future<Output = Result<CustomAuthResult, H::Error>> + Send;
 }
 
 pub trait AuthorizeCore: Sync {
@@ -94,12 +109,6 @@ pub trait AuthorizeCore: Sync {
 pub trait AuthCore {
     type Keys: KeyCore;
     type ModelBudgets: ModelBudgetCore;
-
-    fn keys(&self) -> &Self::Keys;
-    fn model_budgets(&self) -> &Self::ModelBudgets;
-}
-
-pub trait TargetAuthCore: AuthCore {
     type Planner: AuthPlanner;
     type Anonymous: AnonymousCore;
     type Jwt: JwtCore;
@@ -107,6 +116,8 @@ pub trait TargetAuthCore: AuthCore {
     type Custom: CustomAuthCore;
     type Authorize: AuthorizeCore;
 
+    fn keys(&self) -> &Self::Keys;
+    fn model_budgets(&self) -> &Self::ModelBudgets;
     fn plan(&self) -> &Self::Planner;
     fn anonymous(&self) -> &Self::Anonymous;
     fn jwt(&self) -> &Self::Jwt;

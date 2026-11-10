@@ -5,7 +5,6 @@
 //! facet future stays pending until Python answers it.
 
 use std::{
-    collections::BTreeMap,
     future::{Future, poll_fn},
     pin::Pin,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -14,8 +13,9 @@ use std::{
 
 use litellm_error::Report;
 use litellm_gateway_auth_core::{
-    CustomAuthCore, CustomAuthHost, CustomIdentity, Introspection, NativeCore, OAuth2Core,
-    OAuth2Denial, OAuth2Host, OAuth2Identity, OAuth2Settings, RequestFacts, TargetAuthCore,
+    AuthCore, CustomAuthCore, CustomAuthHost, CustomAuthResult, Introspection, NativeCore,
+    OAuth2Core, OAuth2Denial, OAuth2Identity, OAuth2IntrospectionHost, OAuth2IntrospectionSettings,
+    RequestFacts,
 };
 use litellm_host_python::{from_py_argument, to_py};
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -33,7 +33,7 @@ enum HostCall {
 struct Exchange {
     call: Option<HostCall>,
     introspection: Option<Introspection>,
-    custom_identity: Option<CustomIdentity>,
+    custom_auth: Option<CustomAuthResult>,
 }
 
 type Shared = Arc<Mutex<Exchange>>;
@@ -46,14 +46,12 @@ type Slot<T> = fn(&mut Exchange) -> &mut Option<T>;
 
 struct StepHost {
     exchange: Shared,
-    proxy_headers: BTreeMap<String, String>,
 }
 
 impl StepHost {
-    fn new(exchange: &Shared, proxy_headers: BTreeMap<String, String>) -> Self {
+    fn new(exchange: &Shared) -> Self {
         Self {
             exchange: exchange.clone(),
-            proxy_headers,
         }
     }
 
@@ -73,7 +71,7 @@ impl StepHost {
     }
 }
 
-impl OAuth2Host for StepHost {
+impl OAuth2IntrospectionHost for StepHost {
     type Error = std::convert::Infallible;
 
     async fn introspect(&self, token: &str) -> Result<Introspection, Self::Error> {
@@ -82,20 +80,14 @@ impl OAuth2Host for StepHost {
         };
         Ok(self.ask(call, |exchange| &mut exchange.introspection).await)
     }
-
-    fn proxy_headers(&self) -> &BTreeMap<String, String> {
-        &self.proxy_headers
-    }
 }
 
 impl CustomAuthHost for StepHost {
     type Error = std::convert::Infallible;
 
-    async fn custom_auth(&self, _facts: &RequestFacts) -> Result<CustomIdentity, Self::Error> {
+    async fn custom_auth(&self, _facts: &RequestFacts) -> Result<CustomAuthResult, Self::Error> {
         Ok(self
-            .ask(HostCall::CustomAuth, |exchange| {
-                &mut exchange.custom_identity
-            })
+            .ask(HostCall::CustomAuth, |exchange| &mut exchange.custom_auth)
             .await)
     }
 }
@@ -103,17 +95,17 @@ impl CustomAuthHost for StepHost {
 #[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum OAuth2Verdict {
-    Identity(OAuth2Identity),
-    MissingKey,
+    Identity(Box<OAuth2Identity>),
     InactiveToken,
+    IntrospectionNotConfigured,
 }
 
 impl From<Result<OAuth2Identity, OAuth2Denial>> for OAuth2Verdict {
     fn from(outcome: Result<OAuth2Identity, OAuth2Denial>) -> Self {
         match outcome {
-            Ok(identity) => Self::Identity(identity),
-            Err(OAuth2Denial::MissingKey) => Self::MissingKey,
+            Ok(identity) => Self::Identity(Box::new(identity)),
             Err(OAuth2Denial::InactiveToken) => Self::InactiveToken,
+            Err(OAuth2Denial::IntrospectionNotConfigured) => Self::IntrospectionNotConfigured,
         }
     }
 }
@@ -221,24 +213,23 @@ impl<T> Driver<T> {
 
 fn oauth2_driver(
     core: NativeCore,
-    facts: RequestFacts,
-    settings: OAuth2Settings,
-    proxy_headers: BTreeMap<String, String>,
+    token: String,
+    settings: OAuth2IntrospectionSettings,
 ) -> Driver<OAuth2Verdict> {
     let exchange = Shared::default();
-    let host = StepHost::new(&exchange, proxy_headers);
+    let host = StepHost::new(&exchange);
     Driver::new(exchange, async move {
-        let Ok(outcome) = core.oauth2().authenticate(&host, &facts, &settings).await;
+        let Ok(outcome) = core.oauth2().introspect(&host, &token, &settings).await;
         OAuth2Verdict::from(outcome)
     })
 }
 
-fn custom_driver(core: NativeCore, facts: RequestFacts) -> Driver<CustomIdentity> {
+fn custom_driver(core: NativeCore, facts: RequestFacts) -> Driver<CustomAuthResult> {
     let exchange = Shared::default();
-    let host = StepHost::new(&exchange, BTreeMap::new());
+    let host = StepHost::new(&exchange);
     Driver::new(exchange, async move {
-        let Ok(identity) = core.custom().authenticate(&host, &facts).await;
-        identity
+        let Ok(result) = core.custom().authenticate(&host, &facts).await;
+        result
     })
 }
 
@@ -268,17 +259,11 @@ impl AuthCoreHandle {
         }
     }
 
-    fn oauth2(
-        &self,
-        facts: &Bound<'_, PyAny>,
-        settings: &Bound<'_, PyAny>,
-        proxy_headers: &Bound<'_, PyAny>,
-    ) -> PyResult<OAuth2Call> {
+    fn oauth2(&self, token: String, settings: &Bound<'_, PyAny>) -> PyResult<OAuth2Call> {
         Ok(OAuth2Call(Mutex::new(oauth2_driver(
             self.core,
-            from_py_argument(facts)?,
+            token,
             from_py_argument(settings)?,
-            from_py_argument(proxy_headers)?,
         ))))
     }
 
@@ -319,7 +304,7 @@ impl OAuth2Call {
 
 /// One custom auth call.
 #[pyclass(frozen)]
-pub(crate) struct CustomAuthCall(Mutex<Driver<CustomIdentity>>);
+pub(crate) struct CustomAuthCall(Mutex<Driver<CustomAuthResult>>);
 
 #[pymethods]
 impl CustomAuthCall {
@@ -327,18 +312,14 @@ impl CustomAuthCall {
         step_to_py(py, lock_driver(&self.0).start())
     }
 
-    fn answer_custom_auth(
-        &self,
-        py: Python<'_>,
-        identity: &Bound<'_, PyAny>,
-    ) -> PyResult<Py<PyAny>> {
-        let identity = from_py_argument(identity)?;
+    fn answer_custom_auth(&self, py: Python<'_>, result: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        let result = from_py_argument(result)?;
         step_to_py(
             py,
             lock_driver(&self.0).answer(
                 "custom_auth",
-                |exchange| &mut exchange.custom_identity,
-                identity,
+                |exchange| &mut exchange.custom_auth,
+                result,
             ),
         )
     }
@@ -346,39 +327,35 @@ impl CustomAuthCall {
 
 #[cfg(test)]
 mod tests {
+    use litellm_gateway_auth_core::CustomIdentity;
     use litellm_secret_value::SecretValue;
     use rstest::rstest;
     use serde_json::{Value, json};
 
     use super::*;
 
-    fn facts(token: Option<&str>) -> RequestFacts {
+    fn facts() -> RequestFacts {
         RequestFacts {
             route: "/chat/completions".to_owned(),
-            token: token.map(SecretValue::from),
+            token: Some(SecretValue::from("tok-1")),
             is_llm_api_route: true,
         }
     }
 
-    fn oauth2(token: Option<&str>) -> Driver<OAuth2Verdict> {
-        let settings = OAuth2Settings {
-            user_id_header: None,
-            team_id_header: None,
+    fn oauth2(endpoint_configured: bool) -> Driver<OAuth2Verdict> {
+        let settings = OAuth2IntrospectionSettings {
+            endpoint_configured,
+            requires_active: true,
         };
-        oauth2_driver(
-            NativeCore::default(),
-            facts(token),
-            settings,
-            BTreeMap::new(),
-        )
+        oauth2_driver(NativeCore::default(), "tok-1".to_owned(), settings)
     }
 
     fn introspection(active: bool) -> Introspection {
         Introspection {
             active,
-            subject: Some("user-1".to_owned()),
-            client_id: None,
-            scopes: vec!["read".to_owned()],
+            user_id: json!("user-1"),
+            role: json!("internal_user"),
+            team_id: Value::Null,
         }
     }
 
@@ -393,69 +370,78 @@ mod tests {
         )
     }
 
+    fn answer_custom_auth(
+        driver: &mut Driver<CustomAuthResult>,
+        result: CustomAuthResult,
+    ) -> Result<Step<CustomAuthResult>, DriveError> {
+        driver.answer("custom_auth", |exchange| &mut exchange.custom_auth, result)
+    }
+
     fn wire<T: Serialize>(step: &Step<T>) -> Value {
         serde_json::to_value(step).unwrap()
     }
 
     #[test]
     fn oauth2_asks_python_to_introspect_the_presented_token() {
-        let step = oauth2(Some("tok-1")).start().unwrap();
+        let step = oauth2(true).start().unwrap();
         assert_eq!(wire(&step), json!({"kind": "introspect", "token": "tok-1"}));
     }
 
     #[rstest]
     #[case::active(
         true,
-        json!({"kind": "done", "outcome": {"kind": "identity", "user_id": "user-1", "team_id": null, "scopes": ["read"]}})
+        json!({"kind": "done", "outcome": {"kind": "identity", "token": "tok-1", "user_id": "user-1", "role": "internal_user", "team_id": null}})
     )]
     #[case::inactive(false, json!({"kind": "done", "outcome": {"kind": "inactive_token"}}))]
     fn oauth2_finishes_with_the_verdict_on_python_s_introspection(
         #[case] active: bool,
         #[case] expected: Value,
     ) {
-        let mut driver = oauth2(Some("tok-1"));
+        let mut driver = oauth2(true);
         driver.start().unwrap();
         let step = answer_introspection(&mut driver, introspection(active)).unwrap();
         assert_eq!(wire(&step), expected);
     }
 
     #[test]
-    fn oauth2_without_a_token_finishes_without_a_host_call() {
-        let step = oauth2(None).start().unwrap();
+    fn oauth2_without_an_endpoint_finishes_without_a_host_call() {
+        let step = oauth2(false).start().unwrap();
         assert_eq!(
             wire(&step),
-            json!({"kind": "done", "outcome": {"kind": "missing_key"}})
+            json!({"kind": "done", "outcome": {"kind": "introspection_not_configured"}})
         );
     }
 
-    #[test]
-    fn custom_auth_finishes_with_the_identity_python_resolved() {
-        let identity = CustomIdentity {
+    #[rstest]
+    #[case::identity(
+        CustomAuthResult::Identity(CustomIdentity {
             user_id: Some("user-1".to_owned()),
             team_id: Some("team-1".to_owned()),
             hashed_token: None,
-        };
-        let mut driver = custom_driver(NativeCore::default(), facts(Some("tok-1")));
+        }),
+        json!({"kind": "identity", "user_id": "user-1", "team_id": "team-1", "hashed_token": null})
+    )]
+    #[case::replaced_key(
+        CustomAuthResult::ReplacedKey { token: "sk-new".to_owned() },
+        json!({"kind": "replaced_key", "token": "sk-new"})
+    )]
+    #[case::no_identity(CustomAuthResult::NoIdentity, json!({"kind": "no_identity"}))]
+    fn custom_auth_finishes_with_what_python_resolved(
+        #[case] result: CustomAuthResult,
+        #[case] outcome: Value,
+    ) {
+        let mut driver = custom_driver(NativeCore::default(), facts());
         assert_eq!(
             wire(&driver.start().unwrap()),
             json!({"kind": "custom_auth"})
         );
-        let step = driver
-            .answer(
-                "custom_auth",
-                |exchange| &mut exchange.custom_identity,
-                identity,
-            )
-            .unwrap();
-        assert_eq!(
-            wire(&step),
-            json!({"kind": "done", "outcome": {"user_id": "user-1", "team_id": "team-1", "hashed_token": null}})
-        );
+        let step = answer_custom_auth(&mut driver, result).unwrap();
+        assert_eq!(wire(&step), json!({"kind": "done", "outcome": outcome}));
     }
 
     #[test]
     fn an_answer_before_start_is_refused() {
-        let mut driver = oauth2(Some("tok-1"));
+        let mut driver = oauth2(true);
         assert_eq!(
             answer_introspection(&mut driver, introspection(true)),
             Err(DriveError::NotStarted)
@@ -464,25 +450,25 @@ mod tests {
 
     #[test]
     fn a_second_start_is_refused() {
-        let mut driver = oauth2(Some("tok-1"));
+        let mut driver = oauth2(true);
         driver.start().unwrap();
         assert_eq!(driver.start(), Err(DriveError::Started));
     }
 
     #[test]
     fn an_answer_to_a_call_that_was_not_made_is_refused() {
-        let mut driver = oauth2(Some("tok-1"));
-        driver.start().unwrap();
-        let identity = CustomIdentity {
-            user_id: None,
-            team_id: None,
-            hashed_token: None,
-        };
+        let mut driver = custom_driver(NativeCore::default(), facts());
         assert_eq!(
-            driver.answer(
+            driver.start().map(|step| wire(&step)),
+            Ok(json!({"kind": "custom_auth"}))
+        );
+        let mut oauth2 = oauth2(true);
+        oauth2.start().unwrap();
+        assert_eq!(
+            oauth2.answer(
                 "custom_auth",
-                |exchange| &mut exchange.custom_identity,
-                identity
+                |exchange| &mut exchange.custom_auth,
+                CustomAuthResult::NoIdentity
             ),
             Err(DriveError::NotAsked("custom_auth"))
         );
@@ -490,7 +476,7 @@ mod tests {
 
     #[test]
     fn an_answer_after_the_call_finished_is_refused() {
-        let mut driver = oauth2(None);
+        let mut driver = oauth2(false);
         driver.start().unwrap();
         assert_eq!(
             answer_introspection(&mut driver, introspection(true)),

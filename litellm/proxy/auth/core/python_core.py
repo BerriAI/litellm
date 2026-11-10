@@ -3,10 +3,36 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
+from litellm.proxy.auth.core import oauth2 as oauth2_rules
+from litellm.proxy.auth.core import plan as plan_rules
 from litellm.proxy.auth.core.answers import AdminKey, KeyFacts, TeamMember
-from litellm.proxy.auth.core.core import AuthCore, KeyCore, ModelBudgetCore
-from litellm.proxy.auth.core.host import KeyHost, ModelBudgetHost, TeamMemberModelBudgetHost
-from litellm.proxy.auth.core.inputs import KeySettings, RequestFacts
+from litellm.proxy.auth.core.core import (
+    AnonymousCore,
+    AuthCore,
+    AuthorizeCore,
+    AuthPlanner,
+    CustomAuthCore,
+    JwtCore,
+    KeyCore,
+    ModelBudgetCore,
+    OAuth2Core,
+)
+from litellm.proxy.auth.core.host import (
+    CustomAuthHost,
+    KeyHost,
+    ModelBudgetHost,
+    OAuth2IntrospectionHost,
+    OAuth2ProxyHost,
+    TeamMemberModelBudgetHost,
+)
+from litellm.proxy.auth.core.inputs import (
+    KeySettings,
+    OAuth2IntrospectionSettings,
+    OAuth2ProxySettings,
+    PlanFacts,
+    PlanSettings,
+    RequestFacts,
+)
 from litellm.proxy.auth.core.key import hash_token, is_master_key
 from litellm.proxy.auth.core.model_budgets import (
     check_key_and_user_model_budgets,
@@ -15,11 +41,16 @@ from litellm.proxy.auth.core.model_budgets import (
 )
 from litellm.proxy.auth.core.outcome import (
     Allow,
+    Anonymous,
+    AnonymousReason,
     CachedAdminKey,
+    CredentialPlan,
+    CustomAuthResult,
     Deny,
     ExpiredKey,
     KeyBlocked,
     KeyBudgetExceeded,
+    KeyPlan,
     KeyWithoutToken,
     MalformedKey,
     MasterKey,
@@ -30,8 +61,13 @@ from litellm.proxy.auth.core.outcome import (
     NoDatabase,
     NoMasterKey,
     NotAVirtualKey,
+    OAuth2Denial,
+    OAuth2Identity,
+    OAuth2ProxyDenial,
+    OAuth2ProxyIdentity,
     Outcome,
     OwnerDeactivated,
+    Plan,
     TeamMemberBudgetExceeded,
     UserAuthDisabled,
     UserAuthRoute,
@@ -62,6 +98,58 @@ class PythonCore(AuthCore):
 
     def model_budgets(self) -> ModelBudgetCore:
         return PythonModelBudgetCore()
+
+    def plan(self) -> AuthPlanner:
+        return PythonAuthPlanner()
+
+    def anonymous(self) -> AnonymousCore:
+        return PythonAnonymousCore()
+
+    def jwt(self) -> JwtCore:
+        raise NotImplementedError
+
+    def oauth2(self) -> OAuth2Core:
+        return PythonOAuth2Core()
+
+    def custom(self) -> CustomAuthCore:
+        return PythonCustomAuthCore()
+
+    def authorize(self) -> AuthorizeCore:
+        raise NotImplementedError
+
+
+class PythonAuthPlanner(AuthPlanner):
+    def plan(self, facts: PlanFacts, settings: PlanSettings) -> Plan:
+        return plan_rules.plan(facts, settings)
+
+    def after_custom_auth(self, facts: PlanFacts, settings: PlanSettings, *, issued_key: bool) -> CredentialPlan:
+        return plan_rules.after_custom_auth(facts, settings, issued_key=issued_key)
+
+    def after_jwt(self, facts: PlanFacts, settings: PlanSettings, *, issued_key: bool) -> KeyPlan:
+        return plan_rules.after_jwt(facts, settings, issued_key=issued_key)
+
+    def oauth2_introspection_applies(self, facts: PlanFacts, settings: PlanSettings) -> bool:
+        return plan_rules.oauth2_introspection_applies(facts, settings)
+
+
+class PythonAnonymousCore(AnonymousCore):
+    def authenticate(self, reason: AnonymousReason) -> Anonymous:
+        return Anonymous(reason)
+
+
+class PythonOAuth2Core(OAuth2Core):
+    async def introspect(
+        self, host: OAuth2IntrospectionHost, token: str, settings: OAuth2IntrospectionSettings
+    ) -> OAuth2Identity | OAuth2Denial:
+        return await oauth2_rules.introspect(host, token, settings)
+
+    def proxy(self, host: OAuth2ProxyHost, settings: OAuth2ProxySettings) -> OAuth2ProxyIdentity | OAuth2ProxyDenial:
+        return oauth2_rules.proxy(host, settings)
+
+
+class PythonCustomAuthCore(CustomAuthCore):
+    async def authenticate(self, host: CustomAuthHost, facts: RequestFacts) -> CustomAuthResult:
+        return await host.custom_auth(facts)
 
 
 class PythonKeyCore(KeyCore):

@@ -120,6 +120,10 @@ def select_api_key(keys: PresentedKeys) -> SelectedKey | None:
     return _raw_key(keys)
 
 
+def is_jwt(token: str | None) -> bool:
+    return token is not None and len(token.split(".")) == 3
+
+
 def _subprotocol_api_key(subprotocols: str | None) -> str | None:
     protocols: Final = tuple(protocol.strip() for protocol in (subprotocols or "").split(","))
     return next(

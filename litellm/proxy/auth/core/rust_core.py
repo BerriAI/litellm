@@ -1,5 +1,6 @@
 from litellm.proxy.auth.core.core import (
     AnonymousCore,
+    AuthCore,
     AuthorizeCore,
     AuthPlanner,
     CustomAuthCore,
@@ -7,11 +8,10 @@ from litellm.proxy.auth.core.core import (
     KeyCore,
     ModelBudgetCore,
     OAuth2Core,
-    TargetAuthCore,
 )
 
 
-class RustCore(TargetAuthCore):
+class RustCore(AuthCore):
     def keys(self) -> KeyCore:
         raise NotImplementedError
 

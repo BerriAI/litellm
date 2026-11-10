@@ -85,9 +85,9 @@ class SigningKey:
 @dataclass(frozen=True, slots=True)
 class Introspection:
     active: bool
-    subject: str | None
-    client_id: str | None
-    scopes: tuple[str, ...]
+    user_id: object
+    role: object
+    team_id: object
 
 
 @dataclass(frozen=True, slots=True)

@@ -7,8 +7,10 @@ repository.workspace = true
 description = "The pure request auth core behind litellm/proxy/auth/core: facets, their hosts and the values they exchange"
 
 [dependencies]
+ipnet.workspace = true
 litellm-secret-value.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 strum.workspace = true
 
 [dev-dependencies]

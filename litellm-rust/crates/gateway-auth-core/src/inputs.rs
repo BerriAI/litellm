@@ -1,7 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+use ipnet::IpNet;
 
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RequestFacts {
@@ -10,13 +13,33 @@ pub struct RequestFacts {
     pub is_llm_api_route: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlanFacts {
+    pub request: RequestFacts,
+    pub is_info_route: bool,
+    pub unverified_claims: Option<Map<String, Value>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RoutingOverride {
+    pub iss: Option<Vec<String>>,
+    pub client_id: Option<Vec<String>>,
+    pub scope: Option<Vec<String>>,
+    pub aud: Option<Vec<String>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanSettings {
     pub custom_auth: bool,
-    pub jwt_enabled: bool,
+    pub premium_user: bool,
+    pub public_routes: BTreeSet<String>,
+    pub additional_public_routes: Vec<String>,
+    pub metrics_require_auth: bool,
     pub oauth2_introspection: bool,
     pub oauth2_proxy: bool,
-    pub public_routes: BTreeSet<String>,
+    pub jwt_enabled: bool,
+    pub oauth2_routing_overrides: Vec<RoutingOverride>,
+    pub unauthenticated_pass_through_routes: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -34,10 +57,16 @@ pub struct JwtSettings {
     pub leeway_seconds: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-pub struct OAuth2Settings {
-    pub user_id_header: Option<String>,
-    pub team_id_header: Option<String>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub struct OAuth2IntrospectionSettings {
+    pub endpoint_configured: bool,
+    pub requires_active: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OAuth2ProxySettings {
+    pub trusted_networks: Vec<IpNet>,
+    pub header_mappings: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

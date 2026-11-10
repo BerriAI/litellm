@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, time::SystemTime};
 
 use serde::Deserialize;
+use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentedKey {
@@ -76,9 +77,9 @@ pub struct SigningKey {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Introspection {
     pub active: bool,
-    pub subject: Option<String>,
-    pub client_id: Option<String>,
-    pub scopes: Vec<String>,
+    pub user_id: Value,
+    pub role: Value,
+    pub team_id: Value,
 }
 
 #[derive(Clone, Debug, PartialEq)]

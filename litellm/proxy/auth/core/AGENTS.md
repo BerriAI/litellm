@@ -10,19 +10,19 @@ Modules here import only the standard library and each other. `tests/code_covera
 
 `core.py` splits the decision into facets, each a protocol with its own host. A core hands each facet out through an accessor, the way `RouterCore` hands out `registry()`. Nothing inherits from another facet.
 
-`AuthCore` lists the facets a core decides today. `keys()` returns the `KeyCore` that authenticates a key credential (master key, virtual key, UI session, cached admin key) and re-checks a key the proxy resolved itself. `model_budgets()` returns the `ModelBudgetCore` that checks per-model budgets for the key and user, the user alone, or a team member.
+`AuthCore` has one accessor per facet. `plan()` picks the credential path a request takes, in the proxy's order: custom auth, public routes, OAuth2 introspection, OAuth2 proxy headers, JWT, unauthenticated pass-through routes, then keys. A path that can hand the request on (custom auth issuing a key, a JWT mapped to a virtual key) resumes planning through `after_custom_auth()` or `after_jwt()`, whose narrower return types exclude the paths already taken. `anonymous()`, `oauth2()`, `custom()` and `jwt()` turn a credential into an identity. `keys()` authenticates a key credential (master key, virtual key, UI session, cached admin key) and re-checks a key the proxy resolved itself. `model_budgets()` checks per-model budgets for the key and user, the user alone, or a team member. `authorize()` decides whether an identity may make the request.
 
-`TargetAuthCore` extends `AuthCore` with the facets that still run in the proxy: `plan()` picks the credential path, `anonymous()`, `jwt()`, `oauth2()` and `custom()` turn a credential into an `Identity`, and `authorize()` decides whether that identity may make the request. `PythonCore` implements `AuthCore`. `RustCore` declares `TargetAuthCore` with every facet stubbed. The signatures of the target facets, their hosts, settings and identities are provisional and change when the facet moves into the core.
+`litellm/proxy/auth/selected_core.py` picks the core the proxy runs, `PythonCore`. `RustCore` declares every accessor and implements none. `PythonCore` does not implement `jwt()` or `authorize()` yet, so their signatures are provisional and the proxy still runs that logic itself.
 
-Each facet returns only its own results. `KeyCore` returns an `Outcome` (`Allow` with a key `Grant`, or `Deny` with a `Denial`), and `ModelBudgetCore` returns `WithinModelBudgets` or `ModelBudgetExceeded`. The proxy converts each one separately.
+Each facet returns only its own results, and the proxy converts each one separately. `KeyCore` returns an `Outcome` (`Allow` with a key `Grant`, or `Deny` with a `Denial`), `ModelBudgetCore` returns `WithinModelBudgets` or `ModelBudgetExceeded`, and the planner returns a validator or `PremiumRequired`.
 
 ## Hosts carry the IO
 
-`host.py` lists every read, write and alert a facet may ask for, as typed async methods, one host per facet. A host performs IO and returns data. Anything that compares, chooses or denies belongs in the core. When a decision needs data the core doesn't have, add a host method that returns that data instead of letting the host decide. When one check runs another, its host hands out the other host through an accessor, as `KeyHost.model_budgets()` does.
+`host.py` lists every read, write and alert a facet may ask for, as typed methods, one host per kind of IO a facet needs (OAuth2 introspection calls out over HTTP while proxy-header mode only reads the request, so each has its own host). A host performs IO and returns data. Anything that compares, chooses or denies belongs in the core. When a decision needs data the core doesn't have, add a host method that returns that data instead of letting the host decide. When one check runs another, its host hands out the other host through an accessor, as `KeyHost.model_budgets()` does.
 
 ## Model the data, not flags
 
-The values that cross the boundary live in one module per direction. `inputs.py` holds what a caller passes in (`RequestFacts` and one settings type per facet), `outcome.py` holds what a facet returns (grants, denials, identities and validators), and `answers.py` holds what host methods return. Each is a frozen dataclass, and each choice is a union of them. Express "absent" as `None` on a typed value (a key without a team membership has `team_member=None`) instead of a boolean next to optional fields.
+The values that cross the boundary live in one module per direction. `inputs.py` holds what a caller passes in (`RequestFacts`, `PlanFacts` and the settings each facet reads), `outcome.py` holds what a facet returns (grants, denials, identities and validators), and `answers.py` holds what host methods return. Each is a frozen dataclass, and each choice is a union of them. Express "absent" as `None` on a typed value (a key without a team membership has `team_member=None`) instead of a boolean next to optional fields.
 
 ## Order is behavior
 
@@ -34,7 +34,7 @@ Nothing here knows about `UserAPIKeyAuth`, HTTP status codes or the proxy's exce
 
 ## Credentials
 
-`credential.py` picks the key from the presented headers, query and WebSocket values and owns the precedence between those sources. `key.py` hashes tokens and compares the master key in constant time. Code that needs either goes through these two modules instead of parsing headers or comparing keys itself.
+`credential.py` picks the key from the presented headers, query and WebSocket values, owns the precedence between those sources and tells a JWT from a key. `key.py` hashes tokens and compares the master key in constant time. `network.py` decides whether a peer address falls inside the trusted proxy ranges. Code that needs either goes through these two modules instead of parsing headers or comparing keys itself.
 
 ## Tests
 

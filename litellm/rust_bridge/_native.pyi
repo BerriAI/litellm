@@ -1295,20 +1295,15 @@ class _AuthRequestFacts(TypedDict):
     token: str | None
     is_llm_api_route: bool
 
-class _AuthOAuth2Settings(TypedDict):
-    user_id_header: str | None
-    team_id_header: str | None
+class _AuthIntrospectionSettings(TypedDict):
+    endpoint_configured: bool
+    requires_active: bool
 
 class _AuthIntrospection(TypedDict):
     active: bool
-    subject: str | None
-    client_id: str | None
-    scopes: Sequence[str]
-
-class _AuthCustomIdentity(TypedDict):
-    user_id: str | None
-    team_id: str | None
-    hashed_token: str | None
+    user_id: JsonValue
+    role: JsonValue
+    team_id: JsonValue
 
 class _AuthIntrospectStep(TypedDict):
     kind: Literal["introspect"]
@@ -1316,23 +1311,39 @@ class _AuthIntrospectStep(TypedDict):
 
 class _AuthOAuth2Identity(TypedDict):
     kind: Literal["identity"]
-    user_id: str | None
-    team_id: str | None
-    scopes: list[str]
+    token: str
+    user_id: JsonValue
+    role: JsonValue
+    team_id: JsonValue
 
 class _AuthOAuth2Denied(TypedDict):
-    kind: Literal["missing_key", "inactive_token"]
+    kind: Literal["inactive_token", "introspection_not_configured"]
 
 class _AuthOAuth2Done(TypedDict):
     kind: Literal["done"]
     outcome: _AuthOAuth2Identity | _AuthOAuth2Denied
+
+class _AuthCustomIdentity(TypedDict):
+    kind: Literal["identity"]
+    user_id: str | None
+    team_id: str | None
+    hashed_token: str | None
+
+class _AuthReplacedKey(TypedDict):
+    kind: Literal["replaced_key"]
+    token: str
+
+class _AuthNoCustomIdentity(TypedDict):
+    kind: Literal["no_identity"]
+
+_AuthCustomAuthResult = _AuthCustomIdentity | _AuthReplacedKey | _AuthNoCustomIdentity
 
 class _AuthCustomAuthStep(TypedDict):
     kind: Literal["custom_auth"]
 
 class _AuthCustomAuthDone(TypedDict):
     kind: Literal["done"]
-    outcome: _AuthCustomIdentity
+    outcome: _AuthCustomAuthResult
 
 _AuthOAuth2Steps = _AuthIntrospectStep | _AuthOAuth2Done
 _AuthCustomAuthSteps = _AuthCustomAuthStep | _AuthCustomAuthDone
@@ -1340,9 +1351,7 @@ _AuthCustomAuthSteps = _AuthCustomAuthStep | _AuthCustomAuthDone
 @final
 class AuthCoreHandle:
     def __new__(cls) -> AuthCoreHandle: ...
-    def oauth2(
-        self, facts: _AuthRequestFacts, settings: _AuthOAuth2Settings, proxy_headers: Mapping[str, str]
-    ) -> OAuth2Call: ...
+    def oauth2(self, token: str, settings: _AuthIntrospectionSettings) -> OAuth2Call: ...
     def custom(self, facts: _AuthRequestFacts) -> CustomAuthCall: ...
 
 # Each call raises ValueError when started twice, or answered before it starts, after it ends, or
@@ -1355,4 +1364,4 @@ class OAuth2Call:
 @final
 class CustomAuthCall:
     def start(self) -> _AuthCustomAuthSteps: ...
-    def answer_custom_auth(self, identity: _AuthCustomIdentity) -> _AuthCustomAuthSteps: ...
+    def answer_custom_auth(self, result: _AuthCustomAuthResult) -> _AuthCustomAuthSteps: ...

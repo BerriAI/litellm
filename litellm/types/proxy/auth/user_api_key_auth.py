@@ -12,6 +12,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-valid
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
+from litellm.proxy.auth.core.credential import is_jwt as is_jwt  # noqa: PLC0414  # public re-export
 from litellm.proxy.auth.core.key import hash_token as hash_token  # noqa: PLC0414  # public re-export
 from litellm.types.agents import AgentCaller, AgentResponse
 from litellm.types.proxy.agent_identity import ManagedAgentContext
@@ -30,13 +31,6 @@ if TYPE_CHECKING:
     Span: TypeAlias = _Span | Any
 else:
     Span: TypeAlias = Any
-
-
-def is_jwt(token: str | None) -> bool:
-    if token is None:
-        return False
-    parts: Final = token.split(".")
-    return len(parts) == 3
 
 
 _UntypedDict: TypeAlias = dict[Any, Any]

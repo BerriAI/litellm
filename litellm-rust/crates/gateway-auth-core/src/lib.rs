@@ -12,18 +12,20 @@ pub use answers::{
 };
 pub use facets::{
     AnonymousCore, AuthCore, AuthPlanner, AuthorizeCore, CustomAuthCore, JwtCore, KeyCore,
-    ModelBudgetCore, OAuth2Core, TargetAuthCore,
+    ModelBudgetCore, OAuth2Core,
 };
 pub use host::{
-    AuthorizeHost, CustomAuthHost, JwtHost, KeyHost, ModelBudgetHost, OAuth2Host, SpendCounter,
-    TeamMemberModelBudgetHost,
+    AuthorizeHost, CustomAuthHost, JwtHost, KeyHost, ModelBudgetHost, OAuth2IntrospectionHost,
+    OAuth2ProxyHost, SpendCounter, TeamMemberModelBudgetHost,
 };
 pub use inputs::{
-    AuthorizeSettings, JwtSettings, KeySettings, OAuth2Settings, PlanSettings, RequestFacts,
+    AuthorizeSettings, JwtSettings, KeySettings, OAuth2IntrospectionSettings, OAuth2ProxySettings,
+    PlanFacts, PlanSettings, RequestFacts, RoutingOverride,
 };
 pub use native::{NativeCore, NativeCustomAuthCore, NativeOAuth2Core, Unported};
 pub use outcome::{
-    AnonymousReason, CustomIdentity, Denial, Grant, Identity, JwtIdentity, ModelBudgetExceeded,
-    ModelBudgetResult, OAuth2Denial, OAuth2Identity, OAuth2Mode, Outcome, Validator,
-    WithinModelBudgets,
+    Anonymous, AnonymousReason, CredentialPlan, CustomAuthResult, CustomIdentity, Denial, Grant,
+    Identity, JwtIdentity, KeyPlan, ModelBudgetExceeded, ModelBudgetResult, OAuth2Denial,
+    OAuth2Identity, OAuth2Mode, OAuth2ProxyDenial, OAuth2ProxyIdentity, Outcome, Plan,
+    PremiumFeature, WithinModelBudgets,
 };

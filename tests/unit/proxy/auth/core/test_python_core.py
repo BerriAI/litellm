@@ -1,6 +1,6 @@
 import math
 from collections.abc import Awaitable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -18,6 +18,9 @@ from litellm.proxy.auth.core.answers import (
 )
 from litellm.proxy.auth.core.inputs import RequestFacts, KeySettings
 from litellm.proxy.auth.core.outcome import (
+    CustomIdentity,
+    NoCustomIdentity,
+    ReplacedKey,
     Allow,
     CachedAdminKey,
     Deny,
@@ -534,3 +537,26 @@ async def test_a_model_budget_denial_stops_the_key_chain_before_its_context_load
     outcome, calls = await _run(PythonCore().keys().check(handler, _facts("hash"), SETTINGS, NOW), handler)
     assert outcome == Deny(exceeded)
     assert calls[-2:] == ("read_model_budget_scope", "check_user_model_budget")
+
+
+@dataclass
+class ScriptedCustomAuth:
+    answer: CustomIdentity | ReplacedKey | NoCustomIdentity
+    asked: list[RequestFacts] = field(default_factory=list)  # mutable-ok: records host calls under test
+
+    async def custom_auth(self, facts: RequestFacts) -> CustomIdentity | ReplacedKey | NoCustomIdentity:
+        self.asked.append(facts)
+        return self.answer
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [CustomIdentity(user_id="u", team_id="t", hashed_token=None), ReplacedKey(token="sk-new"), NoCustomIdentity()],
+)
+async def test_custom_auth_returns_what_the_custom_function_resolved_for_the_request(
+    answer: CustomIdentity | ReplacedKey | NoCustomIdentity,
+) -> None:
+    host: Final = ScriptedCustomAuth(answer)
+    facts: Final = RequestFacts(route="/chat/completions", token="sk-1", is_llm_api_route=True)
+    assert await PythonCore().custom().authenticate(host, facts) == answer
+    assert host.asked == [facts]

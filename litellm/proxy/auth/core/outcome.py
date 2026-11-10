@@ -147,7 +147,6 @@ ModelBudgetResult: TypeAlias = WithinModelBudgets | ModelBudgetExceeded
 class AnonymousReason(Enum):
     PUBLIC_ROUTE = "public_route"
     PASS_THROUGH_AUTH_OFF = "pass_through_auth_off"
-    NO_MASTER_KEY = "no_master_key"
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,9 +171,20 @@ class JwtIdentity:
 
 @dataclass(frozen=True, slots=True)
 class OAuth2Identity:
+    token: str
+    user_id: object
+    role: object
+    team_id: object
+
+
+@dataclass(frozen=True, slots=True)
+class OAuth2ProxyIdentity:
     user_id: str | None
+    user_email: str | None
     team_id: str | None
-    scopes: tuple[str, ...]
+    team_alias: str | None
+    org_id: str | None
+    models: tuple[str, ...] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +192,19 @@ class CustomIdentity:
     user_id: str | None
     team_id: str | None
     hashed_token: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplacedKey:
+    token: str
+
+
+@dataclass(frozen=True, slots=True)
+class NoCustomIdentity:
+    pass
+
+
+CustomAuthResult: TypeAlias = CustomIdentity | ReplacedKey | NoCustomIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,10 +217,42 @@ class InactiveToken:
     pass
 
 
-OAuth2Denial: TypeAlias = MissingKey | InactiveToken
+@dataclass(frozen=True, slots=True)
+class IntrospectionNotConfigured:
+    pass
 
 
-Identity: TypeAlias = MasterKeyIdentity | KeyIdentity | JwtIdentity | OAuth2Identity | CustomIdentity | Anonymous
+OAuth2Denial: TypeAlias = InactiveToken | IntrospectionNotConfigured
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedProxyRangesMissing:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class UntrustedProxy:
+    client_ip: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyMappingsMissing:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class DisallowedProxyMappings:
+    fields: tuple[str, ...]
+
+
+OAuth2ProxyDenial: TypeAlias = (
+    TrustedProxyRangesMissing | UntrustedProxy | ProxyMappingsMissing | DisallowedProxyMappings
+)
+
+
+Identity: TypeAlias = (
+    MasterKeyIdentity | KeyIdentity | JwtIdentity | OAuth2Identity | OAuth2ProxyIdentity | CustomIdentity | Anonymous
+)
 
 
 class OAuth2Mode(Enum):
@@ -207,7 +262,7 @@ class OAuth2Mode(Enum):
 
 @dataclass(frozen=True, slots=True)
 class KeyValidator:
-    pass
+    pass_through_key: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,4 +285,18 @@ class AnonymousValidator:
     reason: AnonymousReason
 
 
-Validator: TypeAlias = KeyValidator | JwtValidator | OAuth2Validator | CustomValidator | AnonymousValidator
+class PremiumFeature(Enum):
+    OAUTH2 = "oauth2"
+    JWT = "jwt"
+
+
+@dataclass(frozen=True, slots=True)
+class PremiumRequired:
+    feature: PremiumFeature
+
+
+KeyPlan: TypeAlias = KeyValidator | AnonymousValidator
+
+CredentialPlan: TypeAlias = KeyPlan | JwtValidator | OAuth2Validator | PremiumRequired
+
+Plan: TypeAlias = CredentialPlan | CustomValidator

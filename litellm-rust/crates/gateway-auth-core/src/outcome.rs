@@ -2,6 +2,7 @@ use std::time::SystemTime;
 
 use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Grant {
@@ -67,7 +68,11 @@ pub type ModelBudgetResult = Result<WithinModelBudgets, ModelBudgetExceeded>;
 pub enum AnonymousReason {
     PublicRoute,
     PassThroughAuthOff,
-    NoMasterKey,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Anonymous {
+    pub reason: AnonymousReason,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,9 +87,20 @@ pub struct JwtIdentity {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OAuth2Identity {
+    pub token: String,
+    pub user_id: Value,
+    pub role: Value,
+    pub team_id: Value,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct OAuth2ProxyIdentity {
     pub user_id: Option<String>,
+    pub user_email: Option<String>,
     pub team_id: Option<String>,
-    pub scopes: Vec<String>,
+    pub team_alias: Option<String>,
+    pub org_id: Option<String>,
+    pub models: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,14 +110,37 @@ pub struct CustomIdentity {
     pub hashed_token: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CustomAuthResult {
+    Identity(CustomIdentity),
+    ReplacedKey { token: String },
+    NoIdentity,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Identity {
     MasterKey,
     Key { hashed_token: String },
     Jwt(JwtIdentity),
     OAuth2(OAuth2Identity),
+    OAuth2Proxy(OAuth2ProxyIdentity),
     Custom(CustomIdentity),
-    Anonymous(AnonymousReason),
+    Anonymous(Anonymous),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
+pub enum OAuth2Denial {
+    InactiveToken,
+    IntrospectionNotConfigured,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OAuth2ProxyDenial {
+    TrustedProxyRangesMissing,
+    UntrustedProxy { client_ip: Option<String> },
+    ProxyMappingsMissing,
+    DisallowedProxyMappings { fields: Vec<String> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
@@ -110,17 +149,28 @@ pub enum OAuth2Mode {
     Proxy,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Validator {
-    Key,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
+pub enum PremiumFeature {
+    OAuth2,
     Jwt,
-    OAuth2(OAuth2Mode),
-    Custom,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyPlan {
+    Key { pass_through_key: bool },
     Anonymous(AnonymousReason),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
-pub enum OAuth2Denial {
-    MissingKey,
-    InactiveToken,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialPlan {
+    Key(KeyPlan),
+    Jwt,
+    OAuth2(OAuth2Mode),
+    PremiumRequired(PremiumFeature),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plan {
+    Credential(CredentialPlan),
+    Custom,
 }
