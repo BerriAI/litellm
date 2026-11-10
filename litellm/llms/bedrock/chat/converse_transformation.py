@@ -185,6 +185,7 @@ def _tools_the_model_accepts(
 
 
 _OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
+_OUTPUT_CONFIG_NORMALIZED: Final = "_output_config_normalized"
 
 
 def _with_extra_body_fields(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
@@ -193,7 +194,13 @@ def _with_extra_body_fields(params: Mapping[str, object], drop_params: bool) -> 
     if extra_body is None:
         return without_extra_body
     if isinstance(extra_body, Mapping):
-        return {**without_extra_body, **_JSON_OBJECT.validate_python(extra_body)}
+        fields: Final = _JSON_OBJECT.validate_python(extra_body)
+        if "output_config" not in fields:
+            return {**without_extra_body, **fields}
+        not_normalized: Final = {
+            key: value for key, value in without_extra_body.items() if key != _OUTPUT_CONFIG_NORMALIZED
+        }
+        return {**not_normalized, **fields}
     if drop_params:
         return without_extra_body
     raise litellm.exceptions.BadRequestError(
@@ -589,7 +596,7 @@ class AmazonConverseConfig(BaseConfig):
                     mapped_effort = existing_output_config["effort"]
                     self._validate_anthropic_adaptive_effort(model=model, effort=mapped_effort)
                     optional_params["output_config"] = existing_output_config
-                    optional_params["_output_config_normalized"] = True
+                    optional_params[_OUTPUT_CONFIG_NORMALIZED] = True
 
     @staticmethod
     def _validate_anthropic_adaptive_effort(model: str, effort: str) -> None:
@@ -1703,15 +1710,12 @@ class AmazonConverseConfig(BaseConfig):
     ) -> tuple[dict, dict, dict, OutputConfigBlock | None]:
         """Prepare and separate request parameters."""
         # Consume the internal ``_output_config_normalized`` marker set by
-        # ``_handle_reasoning_effort_parameter`` so it does not linger on the
-        # caller's ``optional_params`` after the transformation returns.
-        anthropic_output_config_already_normalized = bool(optional_params.pop("_output_config_normalized", False))
+        # ``_handle_reasoning_effort_parameter``.
+        anthropic_output_config_already_normalized = optional_params.pop(_OUTPUT_CONFIG_NORMALIZED, False) is True
         # Filter out exception objects before deepcopy to prevent deepcopy failures
         # Exceptions should not be stored in optional_params (this is a defensive fix)
         cleaned_params: Final = filter_exceptions_from_params(optional_params)
-        inference_params = safe_deep_copy(
-            _with_extra_body_fields(cleaned_params, drops_unsupported_params(drop_params))
-        )
+        inference_params = safe_deep_copy(cleaned_params)
         supported_converse_params: Final = list(AmazonConverseConfig.__annotations__.keys()) + ["top_k"]
         supported_tool_call_params: Final = ["tools", "tool_choice"]
         supported_config_params: Final = list(self.get_config_blocks().keys())
@@ -2127,9 +2131,10 @@ class AmazonConverseConfig(BaseConfig):
             messages, model=capability_model, deployment_model=model
         )
 
+        request_params: Final = self._request_params(optional_params, litellm_params)
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
-            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+            self._handle_orphaned_tool_blocks(messages, request_params), request_params
         )
         ## TRANSFORMATION ##
 
@@ -2137,7 +2142,7 @@ class AmazonConverseConfig(BaseConfig):
             model=capability_model,
             deployment_model=model,
             system_content_blocks=system_content_blocks,
-            optional_params=optional_params,
+            optional_params=request_params,
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
@@ -2169,6 +2174,19 @@ class AmazonConverseConfig(BaseConfig):
         data: Final[RequestObject] = {"messages": bedrock_messages, **_data}
 
         return data
+
+    @staticmethod
+    def _request_params(
+        optional_params: dict[str, object],  # mutable-ok: the internal marker is popped off the caller's params
+        litellm_params: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: the tool block and thinking checks edit the params they are given
+        request_params: Final = dict(
+            _with_extra_body_fields(
+                optional_params, drops_unsupported_params(litellm_params.get("drop_params") is True)
+            )
+        )
+        optional_params.pop(_OUTPUT_CONFIG_NORMALIZED, None)
+        return request_params
 
     @staticmethod
     def _deployment_base_model(litellm_params: Mapping[str, object]) -> str | None:
@@ -2208,16 +2226,17 @@ class AmazonConverseConfig(BaseConfig):
             messages, model=capability_model, deployment_model=model
         )
 
+        request_params: Final = self._request_params(optional_params, litellm_params)
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
-            self._handle_orphaned_tool_blocks(messages, optional_params), optional_params
+            self._handle_orphaned_tool_blocks(messages, request_params), request_params
         )
 
         _data: Final[CommonRequestObject] = self._transform_request_helper(
             model=capability_model,
             deployment_model=model,
             system_content_blocks=system_content_blocks,
-            optional_params=optional_params,
+            optional_params=request_params,
             messages=messages,
             headers=headers,
             drop_params=litellm_params.get("drop_params") is True,
@@ -2269,7 +2288,7 @@ class AmazonConverseConfig(BaseConfig):
             model=model,
             response=raw_response,
             model_response=model_response,
-            stream=optional_params.get("stream", False),
+            stream=optional_params.get("stream") is True,
             logging_obj=logging_obj,
             optional_params=optional_params,
             api_key=api_key,

@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -483,31 +483,32 @@ def test_bedrock_nova_top_k_aliases_are_forwarded(parameter: str, respx_mock: re
     assert request_body["additionalModelRequestFields"]["inferenceConfig"]["topK"] == 10
 
 
-def _converse_body_sent(**params: object) -> Mapping[str, object]:
-    requests: Final[list[httpx.Request]] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(
-            200,
-            json={
-                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
-                "stopReason": "end_turn",
-                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
-            },
-            request=request,
+def _converse_body_sent(
+    model: str = "bedrock/converse/global.openai.gpt-6.1-sol",
+    messages: Sequence[Mapping[str, object]] = ({"role": "user", "content": "Weather in Paris?"},),
+    **params: object,
+) -> Mapping[str, object]:
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(url__regex=r"/converse$").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                    "stopReason": "end_turn",
+                    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+                },
+            )
         )
-
-    litellm.completion(
-        model="bedrock/converse/global.openai.gpt-6.1-sol",
-        messages=[{"role": "user", "content": "Weather in Paris?"}],
-        aws_access_key_id="AKIAEXTRABODYKEY",
-        aws_secret_access_key="extra-body-secret",
-        aws_region_name="us-east-1",
-        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
-        **params,
-    )
-    return json.loads(requests[0].content)
+        litellm.completion(
+            model=model,
+            messages=list(messages),
+            aws_access_key_id="AKIAEXTRABODYKEY",
+            aws_secret_access_key="extra-body-secret",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+            **params,
+        )
+    return json.loads(route.calls[0].request.content)
 
 
 @pytest.mark.parametrize("drop_params", [True, False])
@@ -525,6 +526,57 @@ def test_bedrock_converse_extra_body_field_wins_over_the_same_top_level_field() 
     body: Final = _converse_body_sent(instructions="top level", extra_body={"instructions": "from extra_body"})
 
     assert body["additionalModelRequestFields"]["instructions"] == "from extra_body"
+
+
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the weather for a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    },
+}
+_TOOL_FOLLOW_UP: Final = (
+    {"role": "user", "content": "Weather in Paris?"},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+        ],
+    },
+    {"role": "tool", "tool_call_id": "call_1", "content": "Sunny, 20C"},
+)
+
+
+@pytest.mark.parametrize(
+    ("messages", "fields"),
+    [
+        (_TOOL_FOLLOW_UP, {"tools": [_WEATHER_TOOL]}),
+        (
+            ({"role": "user", "content": "Weather in Paris?"},),
+            {"guardrailConfig": {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"}},
+        ),
+    ],
+    ids=["tools-on-a-tool-follow-up", "guardrail-config"],
+)
+def test_bedrock_converse_extra_body_field_reaches_the_message_checks_like_a_top_level_field(
+    messages: Sequence[Mapping[str, object]], fields: Mapping[str, object]
+) -> None:
+    assert _converse_body_sent(messages=messages, extra_body=fields) == _converse_body_sent(messages=messages, **fields)
+
+
+def test_bedrock_converse_extra_body_output_config_gets_the_effort_cap_alongside_reasoning_effort() -> None:
+    model: Final = "bedrock/converse/us.anthropic.claude-opus-4-6-v1"
+    output_config: Final = {"effort": "xhigh"}
+
+    with_reasoning_effort: Final = _converse_body_sent(
+        model, reasoning_effort="high", extra_body={"output_config": output_config}
+    )
+    alone: Final = _converse_body_sent(model, output_config=output_config)
+
+    sent_effort: Final = with_reasoning_effort["additionalModelRequestFields"]["output_config"]
+    assert sent_effort == alone["additionalModelRequestFields"]["output_config"]
 
 
 def test_bedrock_converse_drops_a_non_object_extra_body_under_drop_params() -> None:
