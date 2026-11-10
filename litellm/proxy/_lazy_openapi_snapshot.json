@@ -4882,6 +4882,12 @@
               "title": "Gateway Injected Caching Savings Spend",
               "type": "number"
             },
+            "guardrail_spend": {
+              "default": 0.0,
+              "description": "Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost",
+              "title": "Guardrail Spend",
+              "type": "number"
+            },
             "prompt_caching_savings_spend": {
               "default": 0.0,
               "title": "Prompt Caching Savings Spend",
