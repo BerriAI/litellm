@@ -15,7 +15,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.cohere import CohereV2ChatResponse
@@ -50,6 +50,7 @@ _COHERE_THINKING_BUDGET: Final = MappingProxyType(
     }
 )
 _NOTHING: Final[Mapping[str, object]] = MappingProxyType({})
+_RESPONSE_FORMAT_EXCLUSIVE_PARAMS: Final = ("tools", "documents")
 
 
 def _cohere_model_id(model: str) -> str:
@@ -130,6 +131,17 @@ def _cohere_v2_native_params(
         else _NOTHING
     )
     return {**tool_choice, **thinking, **response_format}
+
+
+def _without_response_format_cohere_rejects(
+    optional_params: Mapping[str, object], drop_params: object
+) -> dict[str, object]:
+    rejected: Final = "response_format" in optional_params and any(
+        optional_params.get(param) for param in _RESPONSE_FORMAT_EXCLUSIVE_PARAMS
+    )
+    if not rejected or not drops_unsupported_params(drop_params):
+        return {**optional_params}
+    return {param: value for param, value in optional_params.items() if param != "response_format"}
 
 
 class CohereV2ChatConfig(OpenAIGPTConfig):
@@ -280,14 +292,20 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict,
     ) -> dict:
         """
         Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
         """
-        data: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
+        data: Final = super().transform_request(
+            model,
+            messages,
+            _without_response_format_cohere_rejects(optional_params, litellm_params.get("drop_params")),
+            litellm_params,
+            headers,
+        )
 
         return data
 

@@ -985,6 +985,34 @@ def test_cohere_v2_tool_choice_reaches_cohere(
     assert body.get("tool_choice") == cohere_tool_choice
 
 
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    "companion",
+    [{"tools": [WEATHER_TOOL]}, {"documents": [{"data": {"text": "Paris is in France"}}]}],
+    ids=["tools", "documents"],
+)
+@pytest.mark.parametrize(("drop_via", "forwarded"), [("request", False), ("global", False), (None, True)])
+def test_cohere_v2_response_format_beside_tools_or_documents_follows_drop_params(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    companion: Mapping[str, object],
+    drop_via: str | None,
+    forwarded: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_via == "global")
+    request_params: Final = {
+        **companion,
+        "response_format": {"type": "json_object"},
+        **({"drop_params": True} if drop_via == "request" else {}),
+    }
+
+    body: Final = _cohere_v2_request_body(respx_mock, NON_REASONING_MODEL, request_params)
+
+    assert ("response_format" in body) is forwarded
+    assert {key: body[key] for key in companion} == companion
+
+
 UNSUPPORTED_COHERE_V2_PARAMS: Final = [
     pytest.param(NO_TOOL_CHOICE_MODEL, {"tools": [WEATHER_TOOL], "tool_choice": "required"}, id="no-tool-choice-model"),
     pytest.param(
