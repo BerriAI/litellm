@@ -1952,17 +1952,30 @@ async def test_framing_stands_in_when_a_pinned_runtime_deployment_has_no_mantle_
         ({}, {"BEDROCK_MANTLE_API_BASE": "https://vpce-0e1f2a3b.bedrock-mantle.us-west-2.vpce.api.aws"}, "us-west-2"),
         ({}, {}, "us-east-1"),
         ({"api_base": ""}, {}, "us-east-1"),
+        ({"api_base": "https://bedrock-mantle.us-west-2.api.aws"}, {}, "us-east-1"),
+        ({}, {"BEDROCK_MANTLE_API_BASE": "https://bedrock-mantle.us-east-1.api.aws"}, "us-east-1"),
     ],
     ids=[
         "its_own_mantle_host",
         "the_mantle_host_the_operator_named",
         "the_public_mantle_host",
         "a_blank_api_base_as_the_public_mantle_host",
+        "a_public_mantle_host_it_names",
+        "a_public_mantle_host_the_operator_names",
     ],
+)
+@pytest.mark.parametrize(
+    "model_info",
+    [{}, {"token_count_model": _MANTLE_COUNT_MODEL["token_count_model"]}],
+    ids=["cost_map_token_count_model", "configured_token_count_model"],
 )
 @pytest.mark.asyncio
 async def test_mantle_deployment_signs_counts_on_its_own_host_for_its_own_region(
-    monkeypatch: pytest.MonkeyPatch, endpoint: Mapping[str, str], environment: Mapping[str, str], counted_in: str
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: Mapping[str, str],
+    environment: Mapping[str, str],
+    counted_in: str,
+    model_info: Mapping[str, object],
 ):
     monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
     for name, value in environment.items():
@@ -1982,6 +1995,7 @@ async def test_mantle_deployment_signs_counts_on_its_own_host_for_its_own_region
                         "aws_region_name": "us-west-2",
                         **endpoint,
                     },
+                    "model_info": dict(model_info),
                 }
             ]
         ),
@@ -1995,6 +2009,55 @@ async def test_mantle_deployment_signs_counts_on_its_own_host_for_its_own_region
     )
 
     assert (counter.calls[0][0], counter.regions[0]) == ("bedrock_mantle/anthropic.claude-opus-5-5", counted_in)
+
+
+class _CountingBedrockPeer:
+    def __init__(self) -> None:
+        self.hosts: tuple[str, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.hosts = (*self.hosts, request.url.host)
+        return httpx.Response(200, json={"inputTokens": 25})
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_no_bedrock_endpoint_env")
+async def test_router_wide_runtime_endpoint_keeps_counts_on_that_endpoint(monkeypatch: pytest.MonkeyPatch):
+    private_runtime: Final = "vpce-0a1b2c3d.bedrock-runtime.us-west-2.vpce.amazonaws.com"
+    peer: Final = _CountingBedrockPeer()
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "sonnet",
+                    "litellm_params": {
+                        "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                        "aws_access_key_id": "AKIATESTACCESSKEY",
+                        "aws_secret_access_key": "test-secret",
+                        "aws_region_name": "us-west-2",
+                    },
+                }
+            ],
+            default_litellm_params={"aws_bedrock_runtime_endpoint": f"https://{private_runtime}"},
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "_get_provider_token_counter",
+        lambda deployment, model: (
+            BedrockTokenCounter(client=AsyncHTTPHandler(transport=httpx.MockTransport(peer))),
+            model,
+            "bedrock",
+        ),
+    )
+
+    result: Final = await token_counter(
+        request=TokenCountRequest(model="sonnet", messages=[{"role": "user", "content": "hi"}]), call_endpoint=True
+    )
+
+    assert (result.total_tokens, peer.hosts) == (25, (private_runtime,))
 
 
 @pytest.mark.parametrize(

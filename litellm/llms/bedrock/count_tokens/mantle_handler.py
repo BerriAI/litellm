@@ -17,6 +17,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.bedrock.common_utils import BedrockError, build_mantle_messages_url, mantle_api_base_from_env
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensRequestError
 from litellm.llms.bedrock.count_tokens.transformation import count_tokens_messages_problem
+from litellm.llms.bedrock_mantle.common_utils import MANTLE_HOST_RE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.secret_managers.main import get_secret_str
 
@@ -75,11 +76,14 @@ def _deploys_on_mantle(litellm_params: Mapping[str, object]) -> bool:
 
 
 def deployment_names_mantle_host(litellm_params: Mapping[str, object]) -> bool:
-    return _deploys_on_mantle(litellm_params) and (
-        _endpoint_setting(litellm_params, "api_base") is not None
-        or _endpoint_setting(litellm_params, "aws_bedrock_runtime_endpoint") is not None
-        or mantle_api_base_from_env() is not None
+    if not _deploys_on_mantle(litellm_params):
+        return False
+    inference_host: Final = (
+        _endpoint_setting(litellm_params, "api_base")
+        or _endpoint_setting(litellm_params, "aws_bedrock_runtime_endpoint")
+        or mantle_api_base_from_env()
     )
+    return inference_host is not None and MANTLE_HOST_RE.match(inference_host.rstrip("/")) is None
 
 
 def _pins_private_runtime(endpoint: str | None) -> bool:
@@ -91,12 +95,16 @@ def _pins_private_runtime(endpoint: str | None) -> bool:
 def deployment_mantle_endpoint(litellm_params: Mapping[str, object]) -> MantleEndpointSettings | None:
     api_base: Final = _endpoint_setting(litellm_params, "api_base")
     runtime_endpoint: Final = _endpoint_setting(litellm_params, "aws_bedrock_runtime_endpoint")
-    if _deploys_on_mantle(litellm_params):
+    if deployment_names_mantle_host(litellm_params):
         return MantleEndpointSettings(api_base=api_base, aws_bedrock_runtime_endpoint=runtime_endpoint)
-    if mantle_api_base_from_env() or not (
-        _pins_private_runtime(api_base)
-        or _pins_private_runtime(runtime_endpoint)
-        or _pins_private_runtime(get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT"))
+    if (
+        _deploys_on_mantle(litellm_params)
+        or mantle_api_base_from_env()
+        or not (
+            _pins_private_runtime(api_base)
+            or _pins_private_runtime(runtime_endpoint)
+            or _pins_private_runtime(get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT"))
+        )
     ):
         return _OPERATOR_MANTLE_ENDPOINT
     return None

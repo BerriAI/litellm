@@ -16137,7 +16137,7 @@ async def _count_request_tokens(
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
             "litellm_params": with_named_credential(
-                _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+                _inference_params(_LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})), {})
             ),
         }
         # remove the custom_llm_provider_prefix in the litellm_model_name

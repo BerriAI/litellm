@@ -192,13 +192,21 @@ def _not_on_own_mantle_host() -> bool:
     return False
 
 
+def _signed_for_own_mantle_host(
+    count_model: TokenCountModel | None, counts_on_own_mantle_host: Callable[[], bool]
+) -> TokenCountModel | None:
+    if count_model is None or count_model.litellm_provider != "bedrock_mantle" or not counts_on_own_mantle_host():
+        return None
+    return replace(count_model, region=None)
+
+
 def _shipped_count_model(
     default: Mapping[str, object], deployment_region: Callable[[], str], counts_on_own_mantle_host: Callable[[], bool]
 ) -> TokenCountModel | None:
     count_model: Final = _count_model(default, configured=False)
-    if count_model is not None and count_model.litellm_provider == "bedrock_mantle" and counts_on_own_mantle_host():
-        return replace(count_model, region=None)
-    return _within_deployment_geography(count_model, deployment_region)
+    return _signed_for_own_mantle_host(count_model, counts_on_own_mantle_host) or _within_deployment_geography(
+        count_model, deployment_region
+    )
 
 
 def _resolved_count_model(
@@ -209,7 +217,8 @@ def _resolved_count_model(
 ) -> TokenCountModel | None:
     configured_mapping: Final = as_str_mapping(configured)
     if configured_mapping is not None:
-        return _count_model(configured_mapping, configured=True)
+        configured_model: Final = _count_model(configured_mapping, configured=True)
+        return _signed_for_own_mantle_host(configured_model, counts_on_own_mantle_host) or configured_model
     default_mapping: Final = as_str_mapping(default)
     return (
         None

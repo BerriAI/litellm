@@ -209,3 +209,21 @@ async def test_runtime_deployment_with_its_own_endpoint_is_never_counted_on_publ
     assert raised.value.status_code == 400
     assert "BEDROCK_MANTLE_API_BASE" in raised.value.message
     assert mantle.requests == ()
+
+
+@pytest.mark.asyncio
+async def test_mantle_deployment_naming_a_public_mantle_host_counts_on_public_mantle_in_the_count_region() -> None:
+    mantle: Final = _MantleEndpoint(200, {"input_tokens": 3})
+
+    await BedrockMantleCountTokensHandler().handle_count_tokens_request(
+        request_data=dict(REQUEST),
+        litellm_params={
+            **LITELLM_PARAMS,
+            "model": "bedrock/mantle/anthropic.claude-opus-5-5",
+            "api_base": "https://bedrock-mantle.us-west-2.api.aws",
+        },
+        resolved_model="anthropic.claude-opus-5-5",
+        client=_client(mantle),
+    )
+
+    assert str(mantle.only_request().url) == MANTLE_COUNT_URL
