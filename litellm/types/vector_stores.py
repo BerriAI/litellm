@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -74,11 +74,29 @@ class VectorStoreInfoRequest(LiteLLMBaseModel):
     vector_store_id: str
 
 
+VectorStoreSearchImageMediaType: TypeAlias = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+
+class VectorStoreSearchQueryImage(TypedDict):
+    """Base64 image to search a multimodal vector store with, in place of a text query"""
+
+    type: ReadOnly[Literal["base64"]]
+    media_type: ReadOnly[VectorStoreSearchImageMediaType]
+    data: ReadOnly[str]
+
+
+class VectorStoreResultImageSource(TypedDict):
+    type: ReadOnly[Literal["base64"]]
+    media_type: ReadOnly[str]
+    data: ReadOnly[str]
+
+
 class VectorStoreResultContent(TypedDict, total=False):
     """Content of a vector store result"""
 
     text: str | None
     type: str | None
+    source: ReadOnly[VectorStoreResultImageSource]
 
 
 class VectorStoreSearchResult(TypedDict, total=False):
@@ -117,6 +135,7 @@ class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     max_num_results: int | None
     ranking_options: dict | None
     rewrite_query: bool | None
+    query_image: ReadOnly[VectorStoreSearchQueryImage | None]
 
 
 class VectorStoreSearchRequest(VectorStoreSearchOptionalRequestParams, total=False):
@@ -320,6 +339,7 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
     "max_num_results",
     "ranking_options",
     "rewrite_query",
+    "query_image",
 ]
 
 

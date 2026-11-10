@@ -13,6 +13,7 @@ import httpx
 
 import litellm
 from litellm.constants import request_timeout
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -28,10 +29,12 @@ from litellm.types.vector_stores import (
     VectorStoreFileCounts,
     VectorStoreResultContent,
     VectorStoreSearchOptionalRequestParams,
+    VectorStoreSearchQueryImage,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
 from litellm.utils import ProviderConfigManager, client, load_credentials_from_list
+from litellm.vector_stores.search_query import searched_query
 from litellm.vector_stores.utils import VectorStoreRequestUtils
 
 if TYPE_CHECKING:
@@ -289,11 +292,12 @@ def create(
 @client
 async def asearch(
     vector_store_id: str,
-    query: str | builtins.list[str],
+    query: str | builtins.list[str] | None = None,
     filters: dict | None = None,
     max_num_results: int | None = None,
     ranking_options: dict | None = None,
     rewrite_query: bool | None = None,
+    query_image: VectorStoreSearchQueryImage | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -329,6 +333,7 @@ async def asearch(
             max_num_results=max_num_results,
             ranking_options=ranking_options,
             rewrite_query=rewrite_query,
+            query_image=query_image,
             extra_headers=extra_headers,
             extra_query=extra_query,
             extra_body=extra_body,
@@ -362,11 +367,12 @@ async def asearch(
 @client
 def search(
     vector_store_id: str,
-    query: str | builtins.list[str],
+    query: str | builtins.list[str] | None = None,
     filters: dict | None = None,
     max_num_results: int | None = None,
     ranking_options: dict | None = None,
     rewrite_query: bool | None = None,
+    query_image: VectorStoreSearchQueryImage | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -383,11 +389,12 @@ def search(
 
     Args:
         vector_store_id: The ID of the vector store to search.
-        query: A query string or array for the search.
+        query: A query string or array for the search. Optional when query_image is sent.
         filters: Optional filter to apply based on file attributes.
         max_num_results: Maximum number of results to return (1-50, default 10).
         ranking_options: Optional ranking options for search.
         rewrite_query: Whether to rewrite the natural language query for vector search.
+        query_image: A base64 image to search with in place of query, on providers that support it.
 
     Returns:
         VectorStoreSearchResponse containing the search results.
@@ -444,10 +451,18 @@ def search(
 
         local_vars.update(kwargs)
 
+        search_query: Final = searched_query(
+            query=query,
+            query_image=query_image,
+            custom_llm_provider=custom_llm_provider,
+            supports_query_image="query_image" in vector_store_provider_config.get_supported_openai_params(model=""),
+            drop_params=drops_unsupported_params(local_vars.get("drop_params")),
+        )
+
         # Get VectorStoreSearchOptionalRequestParams with only valid parameters
         vector_store_search_optional_params: Final[VectorStoreSearchOptionalRequestParams] = (
             VectorStoreRequestUtils.get_requested_vector_store_search_optional_param(
-                local_vars,
+                {**local_vars, "query_image": search_query.image},
                 vector_store_provider_config=vector_store_provider_config,
             )
         )
@@ -458,7 +473,7 @@ def search(
             model=api_type,
             optional_params={
                 "vector_store_id": vector_store_id,
-                "query": query,
+                "query": search_query.query,
                 **vector_store_search_optional_params,
             },
             litellm_params={
@@ -471,7 +486,7 @@ def search(
 
         response: Final = base_llm_http_handler.vector_store_search_handler(
             vector_store_id=vector_store_id,
-            query=query,
+            query=search_query.query,
             vector_store_search_optional_params=vector_store_search_optional_params,
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,
