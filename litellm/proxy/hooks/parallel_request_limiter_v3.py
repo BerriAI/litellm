@@ -2507,6 +2507,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             },
         )
 
+    def _end_user_model_rate_limit_descriptor(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> RateLimitDescriptor | None:
+        model: Final = self._rate_limited_model(requested_model)
+        if model is None or not user_api_key_dict.end_user_id:
+            return None
+        tpm_limit: Final = model.limit_in(user_api_key_dict.end_user_model_tpm_limit)
+        rpm_limit: Final = model.limit_in(user_api_key_dict.end_user_model_rpm_limit)
+        if tpm_limit is None and rpm_limit is None:
+            return None
+        return RateLimitDescriptor(
+            key="model_per_end_user",
+            value=f"{user_api_key_dict.end_user_id}:{model.group}",
+            rate_limit={
+                "requests_per_unit": rpm_limit,
+                "tokens_per_unit": tpm_limit,
+                "window_size": self.window_size,
+            },
+        )
+
     def _add_model_per_key_rate_limit_descriptor(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2999,6 +3019,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 requested_model=candidate,
                 descriptors=descriptors,
             )
+            if (end_user_model := self._end_user_model_rate_limit_descriptor(user_api_key_dict, candidate)) is not None:
+                descriptors.append(end_user_model)
 
         # Per-request-tag rate limits scoped to this key
         self._add_tag_per_key_rate_limit_descriptor(
@@ -4531,6 +4553,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     targets.append(("model_per_key", f"{user_api_key}:{group}"))
                 if user_api_key_team_id:
                     targets.append(("model_per_team", f"{user_api_key_team_id}:{group}"))
+                if user_api_key_end_user_id:
+                    targets.append(("model_per_end_user", f"{user_api_key_end_user_id}:{group}"))
                 if user_api_key_organization_id:
                     targets.append(
                         (
