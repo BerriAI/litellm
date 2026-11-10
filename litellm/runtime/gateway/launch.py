@@ -1,6 +1,6 @@
 """Gateway supervisor: assemble DATABASE_URL, start the in-container PgBouncer, then run uvicorn.
 
-``gateway/main.py`` assembles ``DATABASE_URL`` inside every uvicorn worker, which
+``litellm/runtime/gateway/main.py`` assembles ``DATABASE_URL`` inside every uvicorn worker, which
 is fine for a plain Postgres URL but not for the pooler: PgBouncer must be
 started exactly once per pod, before the workers fork, and the workers must be
 handed the loopback URL it listens on. A pre-existing ``DATABASE_URL`` wins in

@@ -147,6 +147,7 @@ def test_accepts_expected_release_wheel_tags(tmp_path: Path) -> None:
         "litellm/packaging/litellm-core/pyproject.toml",
         "litellm/scripts/default_branch.py",
         "litellm/runtime/backend/main.py",
+        "litellm/runtime/gateway/launch.py",
         "litellm/schema.prisma",
     ),
 )

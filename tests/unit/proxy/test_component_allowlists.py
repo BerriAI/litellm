@@ -106,6 +106,7 @@ for _key, _previous in _PRE_DB_ENV.items():
 _COVERAGE_PROBE: Final = """
 import json, os, sys
 sys.path.insert(0, os.environ["LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT"])
+sys.path.insert(0, os.path.join(os.environ["LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT"], "litellm", "runtime"))
 from starlette.routing import Mount
 from litellm.runtime.backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
 from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
@@ -286,7 +287,7 @@ def test_gateway_plus_backend_covers_full_app():
     uncovered: Final = report["uncovered"]
     assert not uncovered, (
         f"{len(uncovered)} route(s) are not exposed on either component. "
-        f"Update gateway/routes/allowlist.py or litellm/runtime/backend/routes/allowlist.py to cover:\n  "
+        f"Update litellm/runtime/gateway/routes/allowlist.py or litellm/runtime/backend/routes/allowlist.py to cover:\n  "
         + "\n  ".join(uncovered)
     )
 

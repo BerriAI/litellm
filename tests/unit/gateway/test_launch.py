@@ -35,8 +35,10 @@ def test_a_uvicorn_worker_reimports_the_launcher_without_loading_litellm():
             sys.executable,
             "-I",
             "-c",
-            'import runpy, sys; runpy.run_module("gateway.launch", run_name="__mp_main__", alter_sys=True); '
+            'import runpy, sys; sys.path.insert(0, sys.argv[1]); '
+            'runpy.run_module("gateway.launch", run_name="__mp_main__", alter_sys=True); '
             'print("litellm" in sys.modules)',
+            str(Path(__file__).resolve().parents[3] / "litellm" / "runtime"),
         ],
         capture_output=True,
         text=True,

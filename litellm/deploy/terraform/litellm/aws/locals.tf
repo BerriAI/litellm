@@ -1,4 +1,4 @@
-# Gateway path prefixes — mirrored verbatim from gateway/routes/allowlist.py
+# Gateway path prefixes — mirrored verbatim from litellm/runtime/gateway/routes/allowlist.py
 # and the helm ingress in litellm/deploy/helm/litellm/templates/ingress.yaml. Anything not in
 # this list and not a UI asset path falls through to the backend (management
 # API) catch-all rule on the ALB.

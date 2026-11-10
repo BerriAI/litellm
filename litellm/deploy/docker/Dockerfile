@@ -181,7 +181,7 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=liteadmin-builder /opt/liteadmin /opt/liteadmin
 COPY --from=builder /app/litellm/deploy/docker/docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY --from=builder /app/litellm/schema.prisma /app/litellm/schema.prisma
-COPY --from=builder /app/gateway /app/gateway
+COPY --from=builder /app/litellm/runtime/gateway /app/gateway
 COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
 # enterprise/ is imported by source path at runtime (proxy_cli puts the
 # working directory on sys.path; litellm/proxy/hooks resolves

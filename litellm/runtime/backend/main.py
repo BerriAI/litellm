@@ -16,7 +16,7 @@ from starlette.applications import Starlette
 from starlette.routing import Mount
 from starlette.types import Lifespan
 
-# See gateway/main.py for why we assemble DATABASE_URL(s) here before
+# See litellm/runtime/gateway/main.py for why we assemble DATABASE_URL(s) here before
 # importing proxy_server.
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 
@@ -45,7 +45,7 @@ def _is_backend_route(route) -> bool:
     return any(path.startswith(prefix) for prefix in BACKEND_PATH_PREFIXES)
 
 
-# See gateway/main.py for why the trim runs inside the lifespan instead of at
+# See litellm/runtime/gateway/main.py for why the trim runs inside the lifespan instead of at
 # module scope.
 _proxy_lifespan: Final = app.router.lifespan_context
 
