@@ -11877,7 +11877,25 @@ class ProxyStartupEvent:
             read_general_settings=_current_general_settings,
         )
 
-        cls._initialize_performance_alerts_job(scheduler=scheduler, prisma_client=prisma_client)
+        from litellm.proxy.spend_tracking.performance_alerts import RUN_INTERVAL, run_performance_alerts
+        from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
+
+        performance_alert_repository: Final = PerformanceAlertRepository(prisma_client)
+
+        async def run_performance_alerts_job() -> None:
+            if _current_general_settings().get("performance_alerts_enabled") is True:
+                await run_performance_alerts(performance_alert_repository)
+
+        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
+            run_performance_alerts_job,
+            "interval",
+            seconds=RUN_INTERVAL.total_seconds(),
+            id="performance_alerts",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
 
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
@@ -12254,28 +12272,6 @@ class ProxyStartupEvent:
                 "Expired UI session key cleanup disabled (set "
                 "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)"
             )
-
-    @classmethod
-    def _initialize_performance_alerts_job(cls, scheduler: AsyncIOScheduler, prisma_client: PrismaClient) -> None:
-        from litellm.proxy.spend_tracking.performance_alerts import RUN_INTERVAL, run_performance_alerts
-        from litellm.repositories.performance_alert_repository import PerformanceAlertRepository
-
-        repository: Final = PerformanceAlertRepository(prisma_client)
-
-        async def run() -> None:
-            if _current_general_settings().get("performance_alerts_enabled") is True:
-                await run_performance_alerts(repository)
-
-        scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
-            run,
-            "interval",
-            seconds=RUN_INTERVAL.total_seconds(),
-            id="performance_alerts",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-        )
 
     @classmethod
     def _initialize_spend_capture_rate_check_job(
