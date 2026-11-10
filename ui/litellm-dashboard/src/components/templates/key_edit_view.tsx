@@ -49,6 +49,7 @@ import {
   clearMcpGrants,
   writeMcpToolPermissions,
 } from "./keyEditFormValues";
+import { BudgetAlertEmailsEditor } from "../key_team_helpers/BudgetAlertEmailsEditor";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
 import {
@@ -465,6 +466,21 @@ function KeyEditSession({
             name="soft_budget"
             label={t("keyDetail.keyEditView.fields.softBudget")}
             placeholder={t("keyDetail.keyEditView.fields.softBudgetPlaceholder")}
+          />
+
+          <BudgetAlertEmailsEditor
+            control={form.control}
+            name="max_budget_alert_emails"
+            label={labelWithHint(
+              t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholds"),
+              t("keyDetail.maxBudgetAlertEmails.budgetAlertThresholdsHint"),
+            )}
+            text={{
+              thresholdPlaceholder: t("keyDetail.maxBudgetAlertEmails.thresholdPlaceholder"),
+              recipientsPlaceholder: t("keyDetail.maxBudgetAlertEmails.recipientsPlaceholder"),
+              removeThreshold: t("keyDetail.maxBudgetAlertEmails.removeThreshold"),
+              addThreshold: t("keyDetail.maxBudgetAlertEmails.addThreshold"),
+            }}
           />
 
           <FormField

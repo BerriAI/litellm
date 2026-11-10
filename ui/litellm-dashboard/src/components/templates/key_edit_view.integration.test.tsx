@@ -2577,6 +2577,7 @@ describe("KeyEditView", () => {
     models: [],
     max_budget: 0,
     soft_budget: null,
+    max_budget_alert_emails: [],
     budget_duration: "30d",
     tpm_limit: 10,
     tpm_limit_type: null,
@@ -3306,6 +3307,93 @@ describe("KeyEditView", () => {
         kind: "ok",
         payload: { key: MOCK_KEY_DATA.token, max_budget: "25" },
       });
+    });
+  });
+
+  describe("budget alert recipients", () => {
+    const KEY_WITH_ALERTS: KeyResponse = {
+      ...MOCK_KEY_DATA,
+      max_budget: 100,
+      metadata: {
+        ...MOCK_KEY_DATA.metadata,
+        cost_center: "ops",
+        max_budget_alert_emails: { "80": ["shared-mailbox@example.com", "finance-dl@example.com"], "50": [] },
+      },
+    };
+
+    const renderAlerts = (onSubmit: (values: Record<string, unknown>) => Promise<void>) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={KEY_WITH_ALERTS}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={"Admin"}
+          premiumUser={true}
+        />,
+      );
+
+    const save = async (onSubmit: ReturnType<typeof vi.fn>) => {
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      return onSubmit.mock.calls[0][0];
+    };
+
+    it("shows the stored thresholds as rows and keeps them out of the metadata JSON box", async () => {
+      renderAlerts(vi.fn());
+
+      const thresholds = await screen.findAllByPlaceholderText("% of budget");
+      expect(thresholds.map((input) => (input as HTMLInputElement).value)).toEqual(["50", "80"]);
+      expect(screen.getAllByPlaceholderText("Additional recipients, e.g. finance@example.com")[1]).toHaveValue(
+        "shared-mailbox@example.com, finance-dl@example.com",
+      );
+      expect(JSON.parse((screen.getByLabelText("Metadata") as HTMLTextAreaElement).value)).toEqual({
+        cost_center: "ops",
+      });
+    });
+
+    it("submits an untouched key's rows unchanged", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAlerts(onSubmit);
+      await screen.findAllByPlaceholderText("% of budget");
+
+      expect((await save(onSubmit)).max_budget_alert_emails).toEqual([
+        { threshold: 50, emails: "" },
+        { threshold: 80, emails: "shared-mailbox@example.com, finance-dl@example.com" },
+      ]);
+    });
+
+    it("submits an added row and drops a removed one", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAlerts(onSubmit);
+      await screen.findAllByPlaceholderText("% of budget");
+
+      await userEvent.click(screen.getAllByRole("button", { name: "Remove budget alert threshold" })[0]);
+      await userEvent.click(screen.getByRole("button", { name: "Add Budget Alert Threshold" }));
+      const thresholds = screen.getAllByPlaceholderText("% of budget");
+      fireEvent.change(thresholds[thresholds.length - 1], { target: { value: "100" } });
+      const recipients = screen.getAllByPlaceholderText("Additional recipients, e.g. finance@example.com");
+      fireEvent.change(recipients[recipients.length - 1], { target: { value: "ap-team@example.com" } });
+
+      expect((await save(onSubmit)).max_budget_alert_emails).toEqual([
+        { threshold: 80, emails: "shared-mailbox@example.com, finance-dl@example.com" },
+        { threshold: 100, emails: "ap-team@example.com" },
+      ]);
+    });
+
+    it("blocks the save on a duplicate threshold", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderAlerts(onSubmit);
+      await screen.findAllByPlaceholderText("% of budget");
+
+      await userEvent.click(screen.getByRole("button", { name: "Add Budget Alert Threshold" }));
+      const thresholds = screen.getAllByPlaceholderText("% of budget");
+      fireEvent.change(thresholds[thresholds.length - 1], { target: { value: "80" } });
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await screen.findAllByText("Duplicate threshold")).toHaveLength(2);
+      expect(onSubmit).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,6 +1,11 @@
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import type { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
+import {
+  type BudgetAlertRow,
+  budgetAlertEmailsMetadata,
+  KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+} from "../key_team_helpers/budgetAlertEmails";
 import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
 import type { ModelMaxBudget } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { tagRowsToLimits, type TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
@@ -103,7 +108,11 @@ const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInpu
     input.disabledCallbacks.length > 0
       ? { ...(logged as object), litellm_disabled_callbacks: mapDisplayToInternalNames(input.disabledCallbacks) }
       : logged;
-  return JSON.stringify(disabled);
+  const alertEmails = budgetAlertEmailsMetadata(
+    values[KEY_MAX_BUDGET_ALERT_EMAILS_KEY] as readonly BudgetAlertRow[] | undefined,
+    KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
+  );
+  return JSON.stringify(Object.keys(alertEmails).length > 0 ? { ...(disabled as object), ...alertEmails } : disabled);
 };
 
 interface PermissionSources {
@@ -153,6 +162,7 @@ const consumedSourceKeys = (
   new Set<string>([
     "mcp_tool_permissions",
     "allowed_skills",
+    KEY_MAX_BUDGET_ALERT_EMAILS_KEY,
     ...(values.disable_global_guardrails ? [] : ["disable_global_guardrails"]),
     ...(vectorStores ? ["allowed_vector_store_ids"] : []),
     ...(mcp ? ["allowed_mcp_servers_and_groups"] : []),

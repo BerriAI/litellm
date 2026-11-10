@@ -2,6 +2,8 @@
  * Utility functions for handling key information and metadata
  */
 
+import { KEY_MAX_BUDGET_ALERT_EMAILS_KEY } from "./key_team_helpers/budgetAlertEmails";
+
 // Fields that should be filtered out from metadata display due to security concerns
 const SENSITIVE_METADATA_FIELDS = ["logging"] as const;
 
@@ -59,5 +61,16 @@ export const stripTagsFromMetadata = (metadata: any) => {
   }
   // Remove tags key from metadata shown in textarea to avoid duplication
   const { tags, ...rest } = metadata as Record<string, any>;
+  return rest;
+};
+
+export const stripFieldManagedKeysFromMetadata = (
+  metadata: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null | undefined => {
+  const withoutTags: Record<string, unknown> | null | undefined = stripTagsFromMetadata(metadata);
+  if (!withoutTags || typeof withoutTags !== "object") {
+    return withoutTags;
+  }
+  const { [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: _maxBudgetAlertEmails, ...rest } = withoutTags;
   return rest;
 };

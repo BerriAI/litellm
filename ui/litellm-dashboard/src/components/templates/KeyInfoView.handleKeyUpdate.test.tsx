@@ -713,3 +713,61 @@ describe("KeyInfoView handleKeyUpdate organization", () => {
     expect(shownOrganization()).toHaveTextContent("org-1");
   });
 });
+
+describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
+  const submit = async (formValues: Record<string, unknown>) => {
+    renderView(true);
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    Object.assign(globalThis, { __TEST_FORM_VALUES: { token: "tok_123", ...formValues } });
+    fireEvent.click(screen.getByText("Mock Submit"));
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+    return keyUpdateCallMock.mock.calls[0][1];
+  };
+
+  it("writes the alert rows into metadata next to the JSON box content and the dedicated metadata fields", async () => {
+    const formValues = {
+      metadata: JSON.stringify({ cost_center: "ops", nested: { owner: "platform" } }),
+      tags: ["prod"],
+      guardrails: ["gr-1"],
+      logging_settings: [{ callback_name: "langfuse" }],
+      disabled_callbacks: ["langsmith"],
+      max_budget_alert_emails: [
+        { threshold: 80, emails: "shared-mailbox@example.com, finance-dl@example.com" },
+        { threshold: 50, emails: "" },
+      ],
+    };
+    const expectedMetadata = {
+      cost_center: "ops",
+      nested: { owner: "platform" },
+      tags: ["prod"],
+      guardrails: ["gr-1"],
+      logging: [{ callback_name: "langfuse" }],
+      litellm_disabled_callbacks: ["langsmith"],
+      max_budget_alert_emails: { "80": ["shared-mailbox@example.com", "finance-dl@example.com"], "50": [] },
+    };
+
+    const sentPayload = await submit(formValues);
+
+    expect(sentPayload.metadata).toEqual(expectedMetadata);
+    expect(sentPayload).not.toHaveProperty("max_budget_alert_emails");
+  });
+
+  it("clears the stored recipients when every row is removed, even if the JSON box still names them", async () => {
+    const sentPayload = await submit({
+      metadata: JSON.stringify({ cost_center: "ops", max_budget_alert_emails: { "80": ["old@example.com"] } }),
+      max_budget_alert_emails: [],
+    });
+
+    expect(sentPayload.metadata).toEqual({ cost_center: "ops" });
+  });
+
+  it("replaces the stored recipients with the rows when the metadata arrives as an object", async () => {
+    const sentPayload = await submit({
+      metadata: { cost_center: "ops", max_budget_alert_emails: { "50": ["old@example.com"] } },
+      max_budget_alert_emails: [{ threshold: 90, emails: "dl@example.com" }],
+    });
+
+    expect(sentPayload.metadata).toEqual({ cost_center: "ops", max_budget_alert_emails: { "90": ["dl@example.com"] } });
+  });
+});

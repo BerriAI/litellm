@@ -37,6 +37,7 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import RouterSettingsSummary from "../common_components/RouterSettingsSummary";
 import { hasRouterSettings } from "../common_components/routerSettingsPayload";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { budgetAlertEmailsMetadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY } from "../key_team_helpers/budgetAlertEmails";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import { toast } from "@/lib/toast";
@@ -333,9 +334,11 @@ export default function KeyInfoView({
           if ("tags" in parsedMetadata) {
             delete parsedMetadata["tags"];
           }
+          delete parsedMetadata[KEY_MAX_BUDGET_ALERT_EMAILS_KEY];
           formValues.metadata = {
             ...parsedMetadata,
             ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
+            ...budgetAlertEmailsMetadata(formValues.max_budget_alert_emails, KEY_MAX_BUDGET_ALERT_EMAILS_KEY),
             ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
             ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
               ? { logging: formValues.logging_settings }
@@ -353,10 +356,11 @@ export default function KeyInfoView({
         }
       } else {
         const baseMetadata = formValues.metadata || {};
-        const { tags: _omitTags, ...rest } = baseMetadata;
+        const { tags: _omitTags, [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: _omitAlertEmails, ...rest } = baseMetadata;
         formValues.metadata = {
           ...rest,
           ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),
+          ...budgetAlertEmailsMetadata(formValues.max_budget_alert_emails, KEY_MAX_BUDGET_ALERT_EMAILS_KEY),
           ...(formValues.guardrails?.length > 0 ? { guardrails: formValues.guardrails } : {}),
           ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
             ? { logging: formValues.logging_settings }
@@ -374,6 +378,7 @@ export default function KeyInfoView({
         delete formValues.tags;
       }
       delete formValues.logging_settings;
+      delete formValues.max_budget_alert_emails;
 
       // Normalize any legacy word-form budget_duration to the canonical API format
       if (formValues.budget_duration) {
