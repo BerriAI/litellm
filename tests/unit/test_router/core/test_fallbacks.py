@@ -708,6 +708,44 @@ async def test_router_debug_names_only_the_chain_that_ran_not_the_whole_config(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "downstream_error",
+    (
+        litellm.ContextWindowExceededError(
+            message="Context window exceeded\n  openai/b: max_input_tokens=50, got 88 input tokens",
+            llm_provider="openai",
+            model="b",
+        ),
+        bad_request(message="Request rejected\ninvalid field: tools[0].input_schema"),
+        litellm.ContentPolicyViolationError(
+            message="Request blocked\npolicy category: unsafe input", llm_provider="openai", model="b"
+        ),
+    ),
+    ids=("context-window", "invalid-field", "content-policy"),
+)
+async def test_router_debug_preserves_multiline_downstream_failure_without_nested_hints(
+    make_core: MakeCore, host: ScriptedHost, downstream_error: litellm.BadRequestError
+) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}])
+    show_router_debug(host)
+    host.answer("openai/a", rate_limit())
+    host.answer("openai/b", downstream_error)
+
+    with pytest.raises(litellm.RateLimitError) as raised:
+        await complete(core)
+
+    message: Final = str(raised.value)
+    detail: Final = message.split("Fallback to b also failed: ", 1)[1]
+    assert host.deployments_called("acompletion") == ["a", "b"]
+    for line in downstream_error.message.splitlines():
+        assert line.strip() in detail
+    assert "\n" not in detail
+    assert "context_window_fallbacks" not in detail
+    assert "content_policy_fallbacks" not in detail
+    assert message.count("LiteLLM: model group") == 1
+
+
+@pytest.mark.asyncio
 async def test_router_debug_states_how_many_groups_the_config_covers_when_the_chain_does_not_match(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:

@@ -185,14 +185,8 @@ def truncate_fallback_error_detail(detail: str) -> str:
 
 
 def compact_fallback_error_detail(detail: str) -> str:
-    """Reduce a nested hop failure to one line for the user-facing message.
-
-    The detail of a failed hop is the whole message of the hop below it, which already ends
-    with that hop's own fallback explanation. Carrying that verbatim into this hop makes the
-    text repeat itself once per hop and buries the first, most useful failure.
-    """
-    first_line: Final = detail.strip().split("\n", 1)[0].strip()
-    return truncate_fallback_error_detail(first_line)
+    compacted: Final = " ".join(line.strip() for line in detail.splitlines() if line.strip())
+    return truncate_fallback_error_detail(compacted)
 
 
 def _configured_groups_text(configured: Sequence[str]) -> str:
@@ -351,12 +345,14 @@ def format_content_policy_no_fallback_note(
     fallbacks: object,
     nested_fallback_hop: bool,
 ) -> str:
-    outcome: Final = "" if nested_fallback_hop else format_fallback_outcome_message(model_group, None, "")
+    if nested_fallback_hop:
+        return ""
+    outcome: Final = format_fallback_outcome_message(model_group, None, "")
     if content_policy_fallbacks is not None:
         return outcome
     hint: Final = f"\n{format_content_policy_fallback_hint(model_group, content_policy_fallbacks, lookup_groups)}"
     fallback_entries: Final = _as_fallback_entries(fallbacks) if fallbacks is not None else None
-    if fallback_entries is None or not lookup_groups or nested_fallback_hop:
+    if fallback_entries is None or not lookup_groups:
         return hint + outcome
     return hint + format_no_fallback_group_message(lookup_groups, fallback_entries)
 

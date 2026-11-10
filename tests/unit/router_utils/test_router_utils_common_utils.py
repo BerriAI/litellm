@@ -710,7 +710,9 @@ def test_chain_names_the_lookup_group_that_owns_it_not_the_first_one_searched() 
     """A pre-routing hook puts the tier first, and the chain usually belongs to the group
     behind it; naming the tier would point a reader at the wrong config entry."""
     chain: Final = format_chain_for_lookup_groups(
-        "fallbacks", [{"cheap-tier": ["tier-backup"]}, {"requested-model": ["requested-backup"]}], ("cheap-tier", "requested-model")
+        "fallbacks",
+        [{"cheap-tier": ["tier-backup"]}, {"requested-model": ["requested-backup"]}],
+        ("cheap-tier", "requested-model"),
     )
     behind_the_tier: Final = format_chain_for_lookup_groups(
         "fallbacks", [{"requested-model": ["requested-backup"]}], ("cheap-tier", "requested-model")
@@ -726,6 +728,21 @@ def test_chain_attributes_a_generic_entry_to_the_wildcard_not_to_a_lookup_group(
     assert chain == "fallbacks: '*' -> ['backup']"
 
 
+@pytest.mark.parametrize(
+    ("requested", "configured"),
+    (("openai/gpt-x", "gpt-x"), ("gpt-4o", "openai/gpt-4o")),
+    ids=("provider-stripped", "provider-prefixed"),
+)
+def test_chain_names_the_matched_config_key_when_provider_matching_resolves_another_name(
+    requested: str, configured: str
+) -> None:
+    message: Final = format_chain_for_lookup_groups(
+        "fallbacks", [{"*": ["generic"]}, {configured: ["backup"]}], ("tier", requested)
+    )
+
+    assert message == f"fallbacks: {configured!r} -> ['backup']"
+
+
 def test_chain_renders_fallback_entries_that_override_request_params_instead_of_dumping_the_config() -> None:
     chain: Final = format_chain_for_lookup_groups(
         "fallbacks", [{"a": [{"model": "b", "api_key": "sk-secret"}]}, {"unrelated": ["c"]}], ("a",)
@@ -737,7 +754,9 @@ def test_chain_renders_fallback_entries_that_override_request_params_instead_of_
 
 
 def test_chain_says_which_lookup_groups_it_searched_when_none_of_them_has_one() -> None:
-    chain: Final = format_chain_for_lookup_groups("fallbacks", [{"x": ["y"]}, {"z": ["w"]}], ("tier", "requested-model"))
+    chain: Final = format_chain_for_lookup_groups(
+        "fallbacks", [{"x": ["y"]}, {"z": ["w"]}], ("tier", "requested-model")
+    )
 
     assert chain == "fallbacks has no chain for 'tier' -> 'requested-model' (2 other model groups are configured)"
 
@@ -788,12 +807,7 @@ class TestWarnOnProviderCredentialMismatch:
         )
 
     def test_silent_when_no_provider_scoped_credentials_are_set(self):
-        assert (
-            warn_on_provider_credential_mismatch(
-                model_name="gpt-5.5", litellm_params={"model": "gpt-5.5"}
-            )
-            is None
-        )
+        assert warn_on_provider_credential_mismatch(model_name="gpt-5.5", litellm_params={"model": "gpt-5.5"}) is None
 
     def test_vertex_params_name_vertex_not_bedrock(self):
         """The hint must follow the params that were actually set, otherwise it
