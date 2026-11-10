@@ -2639,7 +2639,7 @@ async def test_affinity_strips_and_dispatches_when_origin_already_failed_this_re
         request_kwargs={"litellm_metadata": {}, "input": reasoning_input, **failed_in_request, **continuing},
     )
 
-    assert result is group
+    assert [deployment["model_info"]["id"] for deployment in result] == ["region-b"]
     assert reasoning_input[0] == {"type": "reasoning", "summary": [{"type": "summary_text", "text": "scattering"}]}
 
 
