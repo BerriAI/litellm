@@ -411,10 +411,11 @@ async def test_create_user_without_groups_defers_to_default_team(mocker: MockerF
 
 
 @pytest.mark.asyncio
-async def test_create_user_with_groups_keeps_idp_teams(mocker: MockerFixture, monkeypatch):
+@pytest.mark.parametrize("user_id", ["new-user", " employee-42 "])
+async def test_create_user_with_groups_keeps_idp_teams(mocker: MockerFixture, monkeypatch, user_id: str):
     scim_user = SCIMUser(
         schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
-        userName="new-user",
+        userName=user_id,
         emails=[SCIMUserEmail(value="new@example.com")],
         groups=[SCIMUserGroup(value="idp-team")],
     )
@@ -428,10 +429,12 @@ async def test_create_user_with_groups_keeps_idp_teams(mocker: MockerFixture, mo
     await create_user(user=scim_user)
 
     assert new_user_mock.call_args.kwargs["data"].teams == ["idp-team"]
+    assert new_user_mock.call_args.kwargs["data"].user_id == user_id
 
 
 @pytest.mark.asyncio
-async def test_create_user_if_not_exists_defers_to_default_team(mocker: MockerFixture, monkeypatch):
+@pytest.mark.parametrize("user_id", ["group-user", " employee-42 "])
+async def test_create_user_if_not_exists_defers_to_default_team(mocker: MockerFixture, monkeypatch, user_id: str):
     monkeypatch.setattr(
         "litellm.default_internal_user_params",
         {"teams": [{"team_id": "default-team", "max_budget_in_team": 25}]},
@@ -439,14 +442,15 @@ async def test_create_user_if_not_exists_defers_to_default_team(mocker: MockerFi
     )
     new_user_mock = mocker.patch(  # test-quality-ok: new_user is imported inside the helper, not injectable
         "litellm.proxy.management_endpoints.internal_user_endpoints.new_user",
-        AsyncMock(return_value=NewUserResponse(user_id="group-user", key="k")),
+        AsyncMock(return_value=NewUserResponse(user_id=user_id, key="k")),
     )
 
-    created = await _create_user_if_not_exists(user_id="group-user")
+    created = await _create_user_if_not_exists(user_id=user_id)
 
     assert created is not None
     assert new_user_mock.call_args.kwargs["data"].teams is None
     assert new_user_mock.call_args.kwargs["user_api_key_dict"] == UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    assert new_user_mock.call_args.kwargs["data"].user_id == user_id
 
 
 @pytest.mark.asyncio

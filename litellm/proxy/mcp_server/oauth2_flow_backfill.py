@@ -39,15 +39,17 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, Protocol
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy.mcp_server.db import (  # noqa: F401  # legacy module exports
     _decode_oauth_payload,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decode_oauth_payload,
     decrypt_credentials,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import MCPUserCredentialsRepository
 from litellm.types.mcp import MCPCredentials
 
 OAuth2Flow = Literal["client_credentials", "authorization_code"]
@@ -60,6 +62,7 @@ BackfillRule = Literal[
 ]
 
 _BACKFILL_AUDIT_ACTOR: Final = "oauth2_flow_backfill"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _MCPServerRow(Protocol):
@@ -108,21 +111,21 @@ def _mcp_server_table(prisma_client: PrismaClient) -> _MCPServerTable:
 
 def _mcp_user_credentials_table(prisma_client: PrismaClient) -> _MCPUserCredentialsTable:
     """The per-user MCP credential table, typed so the untyped prisma client surface stops here."""
-    return prisma_client.db.litellm_mcpusercredentials
+    return MCPUserCredentialsRepository(prisma_client).table
 
 
 def _decrypted_credentials(raw_credentials: str | Mapping[str, JsonValue] | None) -> MCPCredentials | None:
     if raw_credentials is None:
         return None
-    parsed: JsonValue | Mapping[str, JsonValue]
+    parsed: Mapping[str, object] | None
     if isinstance(raw_credentials, str):
         try:
-            parsed = json.loads(raw_credentials)
+            parsed = as_str_mapping(_DECODED_JSON.validate_python(json.loads(raw_credentials)))
         except (ValueError, TypeError):
             return None
     else:
-        parsed = raw_credentials
-    if not isinstance(parsed, dict):
+        parsed = raw_credentials if isinstance(raw_credentials, dict) else None
+    if parsed is None:
         return None
     return decrypt_credentials(credentials=dict(parsed))
 

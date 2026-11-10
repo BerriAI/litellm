@@ -45,11 +45,16 @@ ENDPOINTS: Final[dict[str, tuple[str, EndpointCall]]] = {
         "anthropic_messages",
         lambda core: core.aanthropic_messages(model="g", messages=MESSAGES, max_tokens=5),
     ),
+    # The proxy's /v1/messages route calls the router by this name (route_request).
+    "anthropic_messages": (
+        "anthropic_messages",
+        lambda core: core.anthropic_messages(model="g", messages=MESSAGES, max_tokens=5),
+    ),
     "call-acompletion": ("acompletion", lambda core: core.call("acompletion", {"model": "g", "messages": MESSAGES})),
     "call-completion": ("completion", lambda core: core.call("completion", {"model": "g", "messages": MESSAGES})),
 }
 SYNC_ENDPOINTS: Final = frozenset({"completion", "embedding", "image_generation"})
-LITELLM_METADATA_ENDPOINTS: Final = frozenset({"aresponses", "aanthropic_messages"})
+LITELLM_METADATA_ENDPOINTS: Final = frozenset({"aresponses", "aanthropic_messages", "anthropic_messages"})
 EMBEDDING_ENDPOINTS: Final = frozenset({"aembedding", "embedding"})
 
 
@@ -273,20 +278,18 @@ async def test_request_level_api_key_replaces_the_deployment_key_on_the_host_cal
     )
 
 
-async def test_construction_registers_one_success_and_one_failure_callback_per_mode(
-    make_core: MakeCore, host: ScriptedHost
-):
-    _one_group(make_core)
-    registered: Final = {name: len(callbacks) for name, callbacks in host.lists.items()}
-    assert registered == {
+async def test_construction_registers_no_outcome_callbacks(make_core: MakeCore, host: ScriptedHost):
+    """The core records every attempt's outcome itself, so it registers no callbacks on its host."""
+    core: Final = _one_group(make_core)
+    assert core.registry() is not None
+    assert {name: len(callbacks) for name, callbacks in host.lists.items()} == {
         "callbacks": 0,
-        "success_callback": 1,
-        "_async_success_callback": 1,
-        "failure_callback": 1,
-        "_async_failure_callback": 1,
+        "success_callback": 0,
+        "_async_success_callback": 0,
+        "failure_callback": 0,
+        "_async_failure_callback": 0,
         "input_callback": 0,
     }
-    assert all(callable(callbacks[0]) for callbacks in host.lists.values() if callbacks)
 
 
 async def test_retire_removes_the_callbacks_the_core_registered(make_core: MakeCore, host: ScriptedHost):
@@ -415,7 +418,6 @@ def _scripted_stream(*texts: str) -> Callable[..., CustomStreamWrapper]:
             for text in texts:
                 yield ModelResponseStream(choices=[{"index": 0, "delta": {"role": "assistant", "content": text}}])
             # A stream that ends without a finish reason fails since #47665.
-            yield ModelResponseStream(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}])
             yield ModelResponseStream(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}])
 
         logging_obj: Final = LiteLLMLogging(

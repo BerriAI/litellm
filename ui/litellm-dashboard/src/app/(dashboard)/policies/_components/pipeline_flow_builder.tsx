@@ -23,8 +23,10 @@ import {
   createPolicyVersion,
   updatePolicyVersionStatus,
 } from "@/components/networking";
-import { getComplianceDatasetPrompts, getFrameworks } from "@/data/compliancePrompts";
+import { COMPLIANCE_FRAMEWORK_LABEL_KEYS, getComplianceDatasetPrompts, getFrameworks } from "@/data/compliancePrompts";
 import type { CompliancePrompt } from "@/data/compliancePrompts";
+
+const DEFAULT_VERSION_STATUS = "draft";
 
 const TEST_SOURCE_QUICK = "quick_chat";
 const TEST_SOURCE_ALL = "__all__";
@@ -853,7 +855,11 @@ type TestSourceOption = { value: string; labelKey: ParseKeys } | { value: string
 
 const testSourceOptions: TestSourceOption[] = [
   { value: TEST_SOURCE_QUICK, labelKey: "policies.flowBuilder.testPanel.sources.quickChat" },
-  ...getFrameworks().map((f) => ({ value: f.name, label: f.name })),
+  ...getFrameworks().map((f) =>
+    Object.hasOwn(COMPLIANCE_FRAMEWORK_LABEL_KEYS, f.name)
+      ? { value: f.name, labelKey: COMPLIANCE_FRAMEWORK_LABEL_KEYS[f.name] }
+      : { value: f.name, label: f.name },
+  ),
   { value: TEST_SOURCE_ALL, labelKey: "policies.flowBuilder.testPanel.sources.allDatasets" },
 ];
 
@@ -957,7 +963,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
             padding: "0 4px",
           }}
         >
-          x
+          {t("policies.flowBuilder.testPanel.close")}
         </button>
       </div>
 
@@ -1033,7 +1039,7 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
               ? t("policies.flowBuilder.testPanel.allDatasetsDescription")
               : t("policies.flowBuilder.testPanel.frameworkDescription", {
                   promptCount: promptsForSource.length,
-                  source: testSource,
+                  source: selectedSource ? testSourceLabel(selectedSource, t) : testSource,
                 })}
           </div>
         )}
@@ -1194,7 +1200,9 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
               }}
             >
               {complianceResults.map((entry, i) => {
-                const actual = entry.result?.terminal_action ?? (entry.error ? "error" : "—");
+                const actual =
+                  entry.result?.terminal_action ??
+                  (entry.error ? t("policies.flowBuilder.testPanel.compliance.errorResult") : "—");
                 const matchStyle = entry.matched
                   ? { bg: "color-mix(in oklab, var(--color-success) 10%, transparent)", color: "var(--color-success)" }
                   : {
@@ -1405,7 +1413,7 @@ const PolicyVersionsSidebar: React.FC<PolicyVersionsSidebarProps> = ({
                           borderRadius: 4,
                         }}
                       >
-                        {v.version_status ?? "draft"}
+                        {v.version_status ?? DEFAULT_VERSION_STATUS}
                       </span>
                     </div>
                   </button>
