@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { testMCPToolsListRequest } from "../components/networking";
 import { AUTH_TYPE, OAUTH_FLOW, TRANSPORT, isClientForwardedTokenMode } from "@/components/mcp_tools/types";
+import {
+  hasUnfinishedHeaderRow,
+  withSecretHeaders,
+} from "@/app/(dashboard)/mcp-servers/_components/createServerPayload";
 
 interface MCPServerConfig {
   server_id?: string;
@@ -20,6 +24,7 @@ interface MCPServerConfig {
     client_id?: string;
     client_secret?: string;
     scopes?: string[];
+    headers?: Record<string, string>;
   };
 }
 
@@ -62,6 +67,9 @@ export const useTestMCPConnection = ({
   const requiresOAuthToken = (formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth) || isBrowserHeldTokenMode;
   const isOpenAPITransport = formValues.transport === TRANSPORT.OPENAPI;
   const hasEndpoint = isOpenAPITransport ? !!formValues.spec_path : !!formValues.url;
+  const lacksSecretHeaders =
+    formValues.auth_type === AUTH_TYPE.SECRET_HEADERS &&
+    (!formValues.secret_headers?.length || hasUnfinishedHeaderRow(formValues.secret_headers));
 
   // For OpenAPI: tools are derived from the spec itself — no auth needed to load them.
   // For other transports: auth_type is required, and OAuth interactive flows need a token.
@@ -72,11 +80,13 @@ export const useTestMCPConnection = ({
         formValues.transport &&
         formValues.auth_type &&
         accessToken &&
+        !lacksSecretHeaders &&
         (!requiresOAuthToken || oauthAccessToken)
       );
 
   const staticHeadersKey = JSON.stringify(formValues.static_headers ?? {});
   const credentialsKey = JSON.stringify(formValues.credentials ?? {});
+  const secretHeadersKey = JSON.stringify(formValues.secret_headers ?? []);
 
   const fetchTools = async () => {
     if (!accessToken || (!formValues.url && !formValues.spec_path)) {
@@ -152,8 +162,9 @@ export const useTestMCPConnection = ({
         static_headers: staticHeaders,
       };
 
-      if (credentials && Object.keys(credentials).length > 0) {
-        mcpServerConfig.credentials = credentials;
+      const credentialsWithHeaders = withSecretHeaders(credentials, formValues.auth_type, formValues.secret_headers);
+      if (credentialsWithHeaders && Object.keys(credentialsWithHeaders).length > 0) {
+        mcpServerConfig.credentials = credentialsWithHeaders;
       }
 
       const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
@@ -217,6 +228,7 @@ export const useTestMCPConnection = ({
     canFetchTools,
     staticHeadersKey,
     credentialsKey,
+    secretHeadersKey,
   ]);
 
   return {

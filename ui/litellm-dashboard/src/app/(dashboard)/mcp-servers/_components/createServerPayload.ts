@@ -76,6 +76,9 @@ export const reduceStaticHeaders = (list: unknown): Record<string, string> => {
   }, {});
 };
 
+export const hasUnfinishedHeaderRow = (list: unknown): boolean =>
+  Array.isArray(list) && list.some((entry) => !entry?.header?.trim() || !entry?.value?.trim());
+
 export const withSecretHeaders = (
   credentials: Readonly<Record<string, unknown>> | undefined,
   authType: string | undefined,

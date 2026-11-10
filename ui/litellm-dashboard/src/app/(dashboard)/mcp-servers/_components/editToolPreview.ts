@@ -1,7 +1,17 @@
 import type { TFunction } from "i18next";
 import i18n from "@/i18n/i18n";
 import { AUTH_TYPE, TRANSPORT } from "@/components/mcp_tools/types";
-import { AUTH_TYPES_REQUIRING_AUTH_VALUE, reduceStaticHeaders } from "./createServerPayload";
+import { AUTH_TYPES_REQUIRING_AUTH_VALUE, hasUnfinishedHeaderRow, reduceStaticHeaders } from "./createServerPayload";
+
+const previewCredentials = (
+  authValue: unknown,
+  needsAuthValue: boolean,
+  secretHeaders: Readonly<Record<string, string>>,
+) => {
+  if (needsAuthValue && typeof authValue === "string" && authValue.trim()) return { auth_value: authValue };
+  if (Object.keys(secretHeaders).length > 0) return { headers: secretHeaders };
+  return undefined;
+};
 
 const connectionConfig = (values: Readonly<Record<string, unknown>>) => {
   const credentials = values.credentials;
@@ -9,6 +19,12 @@ const connectionConfig = (values: Readonly<Record<string, unknown>>) => {
     credentials && typeof credentials === "object" && "auth_value" in credentials ? credentials.auth_value : undefined;
   const needsAuthValue =
     typeof values.auth_type === "string" && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(values.auth_type);
+  const secretHeaders =
+    values.auth_type === AUTH_TYPE.SECRET_HEADERS
+      ? Object.fromEntries(
+          Object.entries(reduceStaticHeaders(values.secret_headers)).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : {};
   return {
     url: typeof values.url === "string" ? values.url : "",
     transport: typeof values.transport === "string" ? values.transport : "",
@@ -16,8 +32,7 @@ const connectionConfig = (values: Readonly<Record<string, unknown>>) => {
     static_headers: Object.fromEntries(
       Object.entries(reduceStaticHeaders(values.static_headers)).sort(([a], [b]) => a.localeCompare(b)),
     ),
-    credentials:
-      needsAuthValue && typeof authValue === "string" && authValue.trim() ? { auth_value: authValue } : undefined,
+    credentials: previewCredentials(authValue, needsAuthValue, secretHeaders),
   };
 };
 
@@ -33,6 +48,7 @@ export const getEditToolPreview = (
 ): EditToolPreview => {
   const staticAuth =
     values.auth_type === AUTH_TYPE.NONE ||
+    values.auth_type === AUTH_TYPE.SECRET_HEADERS ||
     (typeof values.auth_type === "string" && AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(values.auth_type));
   if (!staticAuth || ![TRANSPORT.HTTP, TRANSPORT.SSE].includes(String(values.transport))) {
     return { kind: "saved" };
@@ -45,11 +61,16 @@ export const getEditToolPreview = (
 
   const missingNewCredential =
     config.auth_type !== initialValues.auth_type &&
-    AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(config.auth_type) &&
+    (AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(config.auth_type) || config.auth_type === AUTH_TYPE.SECRET_HEADERS) &&
     config.credentials === undefined;
   const validUrl = URL.canParse(config.url) && ["http:", "https:"].includes(new URL(config.url).protocol);
-  const incompleteHeaders = Object.values(config.static_headers).some((value) => !value.trim());
-  if (!validUrl || missingNewCredential || incompleteHeaders) {
+  const incompleteHeaders = [
+    ...Object.values(config.static_headers),
+    ...Object.values(config.credentials?.headers ?? {}),
+  ].some((value) => !value.trim());
+  const unfinishedSecretRow =
+    config.auth_type === AUTH_TYPE.SECRET_HEADERS && hasUnfinishedHeaderRow(values.secret_headers);
+  if (!validUrl || missingNewCredential || incompleteHeaders || unfinishedSecretRow) {
     return { kind: "incomplete" };
   }
   const savedConfig = connectionConfig(initialValues);
@@ -58,7 +79,9 @@ export const getEditToolPreview = (
   const reusesHeader = Object.entries(config.static_headers).some(
     ([key, value]) => savedConfig.static_headers[key] === value,
   );
-  const needsSavedCredential = AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(config.auth_type) && !config.credentials;
+  const needsSavedCredential =
+    (AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(config.auth_type) || config.auth_type === AUTH_TYPE.SECRET_HEADERS) &&
+    !config.credentials;
   if (changedOrigin && (needsSavedCredential || reusesHeader)) {
     return {
       kind: "incomplete",
