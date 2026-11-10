@@ -140,6 +140,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    get_chain_id_from_headers,
     redact_credential_headers,
     strip_client_guardrail_information,
 )
@@ -782,9 +783,18 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if isinstance(deployment_model_info, Mapping):
             _metadata["model_info"] = dict(deployment_model_info)
 
+        # Passthrough routes share the same session header contract as /v1
+        # endpoints. The OTel V2 model reads session_id from metadata, not
+        # from Logging.litellm_trace_id used by the spend logger.
+        session_id: Final = get_chain_id_from_headers(dict(request.headers))
+        if session_id:
+            _metadata["trace_id"] = session_id
+            _metadata["session_id"] = session_id
+
         kwargs: Final = {
             "litellm_params": {
                 **litellm_params_in_body,
+                **({"litellm_session_id": session_id, "litellm_trace_id": session_id} if session_id else {}),
                 "metadata": _metadata,
                 COMMITTED_BUDGET_SPEND_PARAM: user_api_key_dict.committed_budget_spend or CommittedBudgetSpend(),
                 "proxy_server_request": {
