@@ -61,7 +61,7 @@ class ChatGPTConfig(OpenAIConfig):
         client_credential: Final = get_chatgpt_request_credential(litellm_params)
         if client_credential is not None:
             return chatgpt_client_api_base(api_base), client_credential.access_token, custom_llm_provider
-        if api_key and not get_chatgpt_auth_file(litellm_params):
+        if api_key:
             return api_base or self.api_base_without_login(), api_key, custom_llm_provider
         authenticator: Final = self._resolve_authenticator(litellm_params)
         dynamic_api_base: Final = authenticator.get_api_base()

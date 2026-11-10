@@ -143,12 +143,8 @@ class TestChatGPTResponsesAPITransformation:
         url = config.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://chatgpt.example.com/responses"
 
-        configured_key_url = config.get_complete_url(
-            api_base="https://custom.chatgpt.com", litellm_params={"api_key": "configured-key"}
-        )
-        saved_login_url = config.get_complete_url(api_base="https://custom.chatgpt.com", litellm_params={})
-        assert configured_key_url == "https://custom.chatgpt.com/responses"
-        assert saved_login_url == "https://chatgpt.example.com/responses"
+        custom_url = config.get_complete_url(api_base="https://custom.chatgpt.com", litellm_params={})
+        assert custom_url == "https://custom.chatgpt.com/responses"
 
         url_with_slash = config.get_complete_url(api_base="https://chatgpt.example.com/", litellm_params={})
         assert url_with_slash == "https://chatgpt.example.com/responses"

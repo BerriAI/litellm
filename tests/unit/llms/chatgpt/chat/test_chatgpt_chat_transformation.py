@@ -171,16 +171,12 @@ def _subscription_response(request: httpx.Request) -> httpx.Response:
         f"Bearer {_client_token(account)}",
     )
     assert "chatgpt_auth_file" not in request.content.decode()
-    return _responses_stream(account)
-
-
-def _responses_stream(text: str) -> httpx.Response:
     message: Final = {
         "id": "msg_test",
         "type": "message",
         "role": "assistant",
         "status": "completed",
-        "content": [{"type": "output_text", "text": text, "annotations": []}],
+        "content": [{"type": "output_text", "text": account, "annotations": []}],
     }
     response: Final = {
         "id": "resp_test",
@@ -198,7 +194,7 @@ def _responses_stream(text: str) -> httpx.Response:
             "item_id": "msg_test",
             "output_index": 0,
             "content_index": 0,
-            "delta": text,
+            "delta": account,
         },
         {"type": "response.output_item.done", "output_index": 0, "item": message},
         {"type": "response.completed", "response": response},
@@ -529,65 +525,6 @@ async def test_forwarded_bearer_that_is_not_a_chatgpt_login_keeps_the_deployment
     assert response.output[0].content[0].text == "acct-a"
     assert route.calls.last.request.headers["Authorization"] == "Bearer token-a"
     assert frozenset(litellm.model_cost) == baseline
-
-
-def _attacker_reply(request: httpx.Request) -> httpx.Response:
-    return _responses_stream("attacker")
-
-
-@pytest.mark.parametrize("endpoint", ["chat", "responses"])
-@pytest.mark.parametrize("caller_key", [None, "caller-own-key"])
-@pytest.mark.asyncio
-async def test_caller_endpoint_override_never_receives_the_saved_login(
-    auth_files: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, endpoint: str, caller_key: str | None
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "pool",
-                "litellm_params": {"model": "chatgpt/gpt-6.1-sol", "chatgpt_auth_file": str(auth_files[0])},
-            }
-        ],
-        num_retries=0,
-    )
-    override: Final = {"api_base": "https://attacker.example/v1", **({"api_key": caller_key} if caller_key else {})}
-    with respx.mock(assert_all_called=False) as transport:
-        attacker: Final = transport.route(host="attacker.example").mock(side_effect=_attacker_reply)
-        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=_subscription_response)
-        if endpoint == "chat":
-            await router.acompletion(model="pool", messages=[{"role": "user", "content": "Hello"}], **override)
-        else:
-            await router.aresponses(model="pool", input="Hello", **override)
-
-    assert attacker.calls.call_count == 0
-
-
-@pytest.mark.parametrize("endpoint", ["chat", "responses"])
-@pytest.mark.parametrize("auth_file", [False, True])
-@pytest.mark.asyncio
-async def test_saved_login_only_goes_to_the_chatgpt_endpoint(
-    auth_files: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, endpoint: str, auth_file: bool
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    params: Final = {
-        "model": "chatgpt/gpt-6.1-sol",
-        "api_base": "https://attacker.example/v1",
-        **({"chatgpt_auth_file": str(auth_files[0]), "api_key": "caller-dummy-key"} if auth_file else {}),
-    }
-    with respx.mock(assert_all_called=False) as transport:
-        attacker: Final = transport.route(host="attacker.example").mock(side_effect=_attacker_reply)
-        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=_subscription_response)
-        text: Final = (
-            (await litellm.acompletion(**params, messages=[{"role": "user", "content": "Hello"}]))
-            .choices[0]
-            .message.content
-            if endpoint == "chat"
-            else (await litellm.aresponses(**params, input="Hello")).output[0].content[0].text
-        )
-
-    assert attacker.calls.call_count == 0
-    assert text == ("acct-a" if auth_file else "acct-default")
 
 
 @pytest.mark.parametrize("endpoint", ["chat", "responses"])

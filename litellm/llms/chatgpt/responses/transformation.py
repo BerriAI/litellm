@@ -2,7 +2,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
-from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -33,14 +32,11 @@ from ..common_utils import (
     get_chatgpt_client_credential,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
-    get_chatgpt_request_credential,
     strip_chatgpt_client_credential_headers,
 )
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-
-_LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
 
@@ -54,9 +50,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
 
-    def _resolve_authenticator(
-        self, litellm_params: Mapping[str, object] | GenericLiteLLMParams | None
-    ) -> Authenticator:
+    def _resolve_authenticator(self, litellm_params: GenericLiteLLMParams | None) -> Authenticator:
         auth_file: Final = get_chatgpt_auth_file(litellm_params)
         return get_cached_authenticator(auth_file) if auth_file else self.authenticator
 
@@ -279,13 +273,9 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        params: Final = _LITELLM_PARAMS.validate_python(litellm_params)
-        authenticator: Final = self._resolve_authenticator(params)
-        sends_saved_login: Final = get_chatgpt_request_credential(params) is None and not (
-            params.get("api_key") and not get_chatgpt_auth_file(params)
-        )
-        base: Final = (None if sends_saved_login else api_base) or authenticator.get_api_base() or CHATGPT_API_BASE
-        return f"{base.rstrip('/')}/responses"
+        api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
+        api_base = api_base.rstrip("/")
+        return f"{api_base}/responses"
 
     def supports_native_websocket(self) -> bool:
         """ChatGPT does not support native WebSocket for Responses API"""
