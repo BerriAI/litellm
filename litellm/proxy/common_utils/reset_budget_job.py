@@ -302,13 +302,16 @@ def _queue_enduser_page_resets(
     and the spend predicates still classify each row at write time.
     """
     for tier, user_ids in _enduser_ids_by_tier(rows).items():
-        if tier is None or tier not in cascade.windows:
-            continue
-        _queue_enduser_tier_resets(writes, user_ids, cap=cascade.rollover_caps.get(tier), window=cascade.windows[tier])
+        _queue_enduser_tier_resets(
+            writes,
+            user_ids,
+            cap=cascade.rollover_caps.get(tier) if tier is not None else None,
+            window=cascade.windows.get(tier) if tier is not None else None,
+        )
 
 
 def _queue_enduser_tier_resets(
-    writes: EndUserSpendResetWrites, user_ids: Sequence[str], cap: float | None, window: datetime
+    writes: EndUserSpendResetWrites, user_ids: Sequence[str], cap: float | None, window: datetime | None
 ) -> None:
     page: Final = {"user_id": {"in": list(user_ids)}}  # bounded-ok: one page of RESET_BUDGET_JOB_BATCH_SIZE ids
     if cap is None:
@@ -316,10 +319,6 @@ def _queue_enduser_tier_resets(
         return
     writes.queue_spend_zero(where={**page, "spend": {"gt": 0, "lte": cap}}, window=window)
     writes.queue_spend_decrement(where={**page, "spend": {"gt": cap}}, amount=cap, window=window)
-
-
-def _closing_window(budget: LiteLLM_BudgetTableFull) -> datetime:
-    return budget.budget_reset_at if budget.budget_reset_at is not None else budget.created_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -859,7 +858,11 @@ class ResetBudgetJob:
             ),
             rollover_caps=rollover_caps,
             windows=MappingProxyType(
-                {b.budget_id: _closing_window(b) for b in budgets_to_reset if b.budget_id is not None}
+                {
+                    b.budget_id: b.budget_reset_at
+                    for b in budgets_to_reset
+                    if b.budget_id is not None and b.budget_reset_at is not None
+                }
             ),
             cache_keys=(
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
@@ -875,7 +878,8 @@ class ResetBudgetJob:
         """Reset the end users the expiring tiers gate, one committed page at a time.
 
         Runs before ``_commit_budget_cascade`` so a failure here leaves the
-        tiers due: the next tick resumes with the pages still carrying spend.
+        tiers due: the next tick walks again and skips the end users a
+        committed page already reset for the same window.
         Each page invalidates its own caches right after its commit, so no
         zeroed row sits behind a cached spend that still rejects requests.
         Capless like ``_invalidate_enduser_caches``, for its reason.
@@ -1022,8 +1026,8 @@ class ResetBudgetJob:
             case _BudgetCascadeFailed(cascade=cascade, error=error):
                 verbose_proxy_logger.exception(
                     "Failed to reset the budget table cascade (team member, enduser, org, tag and model access "
-                    "group spend, plus budget_reset_at); the budgets stay due for the next run, which resumes "
-                    "with the end-user pages not committed yet: %s",
+                    "group spend, plus budget_reset_at); the budgets stay due for the next run, which skips "
+                    "the end users already reset for this window: %s",
                     error,
                     exc_info=error,
                 )

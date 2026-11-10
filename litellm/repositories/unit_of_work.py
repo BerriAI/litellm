@@ -193,21 +193,30 @@ class EndUserSpendResetWrites:
     """End-user pages commit ahead of the window advance, so a failed advance
     replays them. Each reset stamps the tier window it closes and skips rows
     already stamped with it: replaying the cap predicate would zero a carried
-    overage, and replaying the zero would erase spend accrued since."""
+    overage, and replaying the zero would erase spend accrued since. A tier
+    that has never reset has no window to stamp, so its resets stay unguarded."""
 
     table: BatchTable
 
-    def queue_spend_zero(self, where: Mapping[str, object], window: datetime) -> None:
-        self.table.update_many(where=_not_reset_in(window, where), data={"spend": 0, "spend_reset_window": window})
+    def queue_spend_zero(self, where: Mapping[str, object], window: datetime | None) -> None:
+        self.table.update_many(where=_not_reset_in(window, where), data=_stamped(window, {"spend": 0}))
 
-    def queue_spend_decrement(self, where: Mapping[str, object], amount: float, window: datetime) -> None:
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float, window: datetime | None) -> None:
         self.table.update_many(
             where=_not_reset_in(window, where),
-            data={"spend": {"decrement": amount}, "spend_reset_window": window},
+            data=_stamped(window, {"spend": {"decrement": amount}}),
         )
 
 
-def _not_reset_in(window: datetime, where: Mapping[str, object]) -> Mapping[str, object]:
+def _stamped(window: datetime | None, data: Mapping[str, object]) -> Mapping[str, object]:
+    if window is None:
+        return data
+    return {**data, "spend_reset_window": window}
+
+
+def _not_reset_in(window: datetime | None, where: Mapping[str, object]) -> Mapping[str, object]:
+    if window is None:
+        return where
     return {
         "AND": [
             {**where},
