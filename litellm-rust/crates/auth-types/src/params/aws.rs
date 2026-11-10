@@ -53,6 +53,9 @@ pub struct AwsParams {
 }
 
 impl AwsParams {
+    pub const ROLE_ARN_ENV: &str = "AWS_ROLE_ARN";
+    pub const WEB_IDENTITY_TOKEN_FILE_ENV: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
+
     pub const ACCESS_KEY_ID: ParamSpec = spec(
         "access key id",
         ParamKind::Credential,
@@ -149,6 +152,10 @@ impl AwsParams {
             AwsParams::SPECS
                 .iter()
                 .flat_map(|spec| spec.env.iter().copied())
+                .chain([
+                    AwsParams::ROLE_ARN_ENV,
+                    AwsParams::WEB_IDENTITY_TOKEN_FILE_ENV,
+                ])
                 .fold(Vec::new(), |mut names, name| {
                     if !names.contains(&name) {
                         names.push(name);

@@ -4,7 +4,9 @@ use futures_util::{FutureExt, TryStreamExt};
 use litellm_host::interceptors::{
     ExecutionFacts, Interceptors, RawResponse, RequestContext, ResultSource, WireRequest,
 };
-use litellm_inference_messages::{Error, MessagesCall, MessagesCallResponse, MessagesRoute};
+use litellm_inference_messages::{
+    Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
+};
 use litellm_inference_testing::live::{LiveResources, model, within_deadline};
 use litellm_llms_types::formats::messages::MessagesResponse;
 use serde_json::{Value, json};
@@ -111,7 +113,10 @@ pub(super) fn call(provider: &str, payload: Value) -> MessagesCall {
 
 pub(super) fn complete(response: MessagesCallResponse) -> Box<MessagesResponse> {
     match response {
-        MessagesCallResponse::Complete(message) => message,
+        MessagesCallResponse::Complete(message) => match message {
+            MessagesBody::Message(message) => message,
+            MessagesBody::Unchecked(_) => panic!("a complete request returned no message"),
+        },
         MessagesCallResponse::Stream { .. } => panic!("a complete request returned a stream"),
     }
 }

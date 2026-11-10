@@ -3,8 +3,11 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import i18n from "@/i18n/i18n";
 import { Plus, X } from "lucide-react";
 import React, { useState } from "react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 
 export interface ModelBudgetConfig {
   budget_limit: number;
@@ -40,17 +43,20 @@ const readNumber = (raw: unknown): number | null => {
 
 const readPeriod = (raw: unknown): string | null => (typeof raw === "string" && raw !== "" ? raw : null);
 
-export const MODEL_BUDGET_PERIOD_OPTIONS = [
-  { value: "1h", label: "Hourly" },
-  { value: "24h", label: "Daily" },
-  { value: "7d", label: "Weekly" },
-  { value: "30d", label: "Monthly" },
-  { value: "1mo", label: "Calendar month" },
+export const MODEL_BUDGET_PERIOD_OPTIONS: readonly { value: string; labelKey: ParseKeys }[] = [
+  { value: "1h", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.hourly" },
+  { value: "24h", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.daily" },
+  { value: "7d", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.weekly" },
+  { value: "30d", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.monthly" },
+  { value: "1mo", labelKey: "keyTeamHelpers.modelMaxBudgetEditor.periods.calendarMonth" },
 ];
 
 const DEFAULT_PERIOD = "30d";
 
-const MODEL_PATTERN_VALUE = { hint: "Model pattern", accepts: (typed: string) => typed.includes("*") };
+const MODEL_PATTERN_VALUE = {
+  hintKey: "keyTeamHelpers.modelMaxBudgetEditor.modelPattern" as ParseKeys,
+  accepts: (typed: string) => typed.includes("*"),
+};
 
 export const entriesToModelMaxBudget = (entries: readonly ModelBudgetEntry[]): ModelMaxBudget =>
   Object.fromEntries(
@@ -74,7 +80,7 @@ export const modelMaxBudgetToEntries = (budget: ModelMaxBudget | null | undefine
     extra: Object.fromEntries(Object.entries(config ?? {}).filter(([field]) => !MODELLED_FIELDS.includes(field))),
   }));
 
-export const MODEL_MAX_BUDGET_PREMIUM_HINT = "Premium feature - Upgrade to set per-model budgets";
+export const MODEL_MAX_BUDGET_PREMIUM_HINT: ParseKeys = "keyTeamHelpers.modelMaxBudgetEditor.premiumHint";
 
 interface ModelMaxBudgetEditorProps {
   value: ModelMaxBudget;
@@ -92,6 +98,7 @@ export function ModelMaxBudgetEditor({
   premiumUser,
   usage,
 }: ModelMaxBudgetEditorProps) {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<ModelBudgetEntry[]>(() => modelMaxBudgetToEntries(value));
 
   const incoming = JSON.stringify(value ?? {});
@@ -118,13 +125,13 @@ export function ModelMaxBudgetEditor({
     emitChange(entries.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
 
   const usedModels = new Set(entries.map((entry) => entry.model).filter(Boolean));
-  const hintWhenLocked = premiumUser ? undefined : MODEL_MAX_BUDGET_PREMIUM_HINT;
+  const hintWhenLocked = premiumUser ? undefined : t(MODEL_MAX_BUDGET_PREMIUM_HINT);
+  const periodItems = MODEL_BUDGET_PERIOD_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
+  const modelPatternValue = { hint: t(MODEL_PATTERN_VALUE.hintKey), accepts: MODEL_PATTERN_VALUE.accepts };
 
   const blurb = (
     <div className="text-xs text-muted-foreground">
-      {premiumUser
-        ? "Cap spend per model over its own window. A budget set on the bare model name also covers the provider-prefixed spelling of that model. Pick an access group, or type a pattern like claude-opus*, to share one budget across every model it covers."
-        : MODEL_MAX_BUDGET_PREMIUM_HINT}
+      {premiumUser ? t("keyTeamHelpers.modelMaxBudgetEditor.blurb") : t(MODEL_MAX_BUDGET_PREMIUM_HINT)}
     </div>
   );
 
@@ -134,7 +141,7 @@ export function ModelMaxBudgetEditor({
         <div className="mb-2">{blurb}</div>
         <Button variant="outline" size="sm" onClick={addEntry} disabled={!premiumUser} title={hintWhenLocked}>
           <Plus className="w-3 h-3" />
-          Add Model Budget
+          {t("keyTeamHelpers.modelMaxBudgetEditor.addModelBudget")}
         </Button>
       </div>
     );
@@ -153,21 +160,23 @@ export function ModelMaxBudgetEditor({
               onClick={() => removeEntry(entry.id)}
               disabled={!premiumUser}
               title={hintWhenLocked}
-              aria-label="Remove model budget"
+              aria-label={t("keyTeamHelpers.modelMaxBudgetEditor.removeModelBudget")}
               className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors p-1"
             >
               <X className="w-4 h-4" />
             </button>
 
             <div className="mb-3">
-              <label className="block text-xs font-medium text-muted-foreground mb-1">Model</label>
+              <label className="block text-xs font-medium text-muted-foreground mb-1">
+                {t("keyTeamHelpers.modelMaxBudgetEditor.model")}
+              </label>
               <SearchSelect
                 options={modelOptions.map((model) => ({ label: model, value: model }))}
                 value={entry.model}
                 onValueChange={(model) => updateEntry(entry.id, { model })}
-                placeholder="Select model"
-                emptyText="No models found"
-                customValue={MODEL_PATTERN_VALUE}
+                placeholder={t("keyTeamHelpers.modelMaxBudgetEditor.selectModel")}
+                emptyText={t("keyTeamHelpers.modelMaxBudgetEditor.noModels")}
+                customValue={modelPatternValue}
                 reservedValues={entries.flatMap((other) => (other.id !== entry.id && other.model ? [other.model] : []))}
                 disabled={!premiumUser}
               />
@@ -189,12 +198,12 @@ export function ModelMaxBudgetEditor({
                     const typed = event.target.valueAsNumber;
                     updateEntry(entry.id, { budgetLimit: Number.isNaN(typed) ? null : typed });
                   }}
-                  placeholder="Max spend ($)"
+                  placeholder={t("keyTeamHelpers.modelMaxBudgetEditor.maxSpend")}
                   disabled={!premiumUser}
                 />
               </InputGroup>
               <Select
-                items={MODEL_BUDGET_PERIOD_OPTIONS}
+                items={periodItems}
                 value={entry.timePeriod}
                 onValueChange={(period: string | null) => period && updateEntry(entry.id, { timePeriod: period })}
               >
@@ -202,7 +211,7 @@ export function ModelMaxBudgetEditor({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {MODEL_BUDGET_PERIOD_OPTIONS.map((option) => (
+                  {periodItems.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>
@@ -213,8 +222,10 @@ export function ModelMaxBudgetEditor({
 
             {spent !== undefined && (
               <div className="text-[11px] text-muted-foreground mt-2 ml-1">
-                Current window spend: ${spent}
-                {entry.budgetLimit !== null && ` of $${entry.budgetLimit}`}
+                {t("keyTeamHelpers.modelMaxBudgetEditor.currentSpend")}
+                {spent}
+                {entry.budgetLimit !== null &&
+                  t("keyTeamHelpers.modelMaxBudgetEditor.ofLimit", { limit: entry.budgetLimit })}
               </div>
             )}
           </div>
@@ -222,7 +233,7 @@ export function ModelMaxBudgetEditor({
       })}
       <Button variant="outline" size="sm" onClick={addEntry} disabled={!premiumUser} title={hintWhenLocked}>
         <Plus className="w-3 h-3" />
-        Add Model Budget
+        {t("keyTeamHelpers.modelMaxBudgetEditor.addModelBudget")}
       </Button>
     </div>
   );
@@ -234,7 +245,11 @@ interface ModelMaxBudgetFieldProps extends ModelMaxBudgetEditorProps {
 }
 
 /** The editor with its label, so every form that offers it presents it the same way. */
-export function ModelMaxBudgetField({ hint, label = "Per-Model Budgets", ...editorProps }: ModelMaxBudgetFieldProps) {
+export function ModelMaxBudgetField({
+  hint,
+  label = i18n.t("keyTeamHelpers.modelMaxBudgetEditor.fieldLabel"),
+  ...editorProps
+}: ModelMaxBudgetFieldProps) {
   return (
     <Field>
       <FieldLabel>

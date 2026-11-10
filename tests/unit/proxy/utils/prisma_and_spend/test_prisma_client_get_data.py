@@ -659,3 +659,14 @@ async def test_authoritative_combined_key_view_uses_writer_through_rotation(
     assert response.token == "current-token"
     reader.query_first.assert_not_awaited()
     assert writer.query_first.await_count == (2 if rotated else 1)
+
+
+@pytest.mark.asyncio
+async def test_get_data_all_users_pages_the_raw_user_query(prisma_client: PrismaClient) -> None:
+    rows: Final = [{"user_id": "u-1", "spend": 3.0, "key_aliases": ["alias-a"]}]
+    prisma_client.db.query_raw = AsyncMock(return_value=rows)
+
+    result: Final = await prisma_client.get_data(table_name="user", query_type="find_all", limit=10, offset=20)
+
+    assert result == rows
+    assert prisma_client.db.query_raw.await_args.args[1:] == (10, 20)
