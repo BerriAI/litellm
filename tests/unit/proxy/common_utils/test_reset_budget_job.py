@@ -3667,10 +3667,19 @@ class _EndUserLedger:
         }
         self.fail_commit: int | None = None
         self.commits = 0
-        self.client = MockPrismaClient()
-        self.client.db.litellm_endusertable = self
-        self.client.db.batch_ = self._batch
-        self.client.get_data = self._due_budgets
+        self.client = types.SimpleNamespace(
+            db=types.SimpleNamespace(
+                litellm_endusertable=self,
+                litellm_teammembership=MockTable(),
+                litellm_verificationtoken=MockTable(),
+                litellm_organizationtable=MockTable(),
+                litellm_tagtable=MockTable(),
+                litellm_modelaccessgroupbudgettable=MockTable(),
+                litellm_projecttable=MockTable(),
+                batch_=self._batch,
+            ),
+            get_data=self._due_budgets,
+        )
 
     def spend(self) -> dict[str, _Cell]:
         return {user_id: row["spend"] for user_id, row in self.rows.items()}
