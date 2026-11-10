@@ -67,7 +67,6 @@ SKIP_DIRS = {
     "litellm-rust",
     "ui",
     "docs",
-    "cookbook",
     "tests",
     "test",
 }

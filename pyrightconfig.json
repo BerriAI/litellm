@@ -1,7 +1,7 @@
 {
     "include": ["litellm", "litellm_cli"],
     "ignore": [],
-    "exclude": ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py"],
+    "exclude": ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"],
     "executionEnvironments": [
         {
             "root": "tests/e2e_harness",

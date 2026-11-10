@@ -28,6 +28,8 @@ lint.external = [
 ]
 line-length = 120
 
+extend-exclude = ["litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
+
 format.exclude = ["**/enterprise/**"]
 
 # Was the top-level `exclude`. Scoped to lint so `ruff format` still formats these paths

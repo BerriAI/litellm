@@ -2,11 +2,11 @@
 
 This standalone adapter runs NVIDIA SkillSpector on a separate machine. It is not installed in the LiteLLM proxy and does not require a shared Helm or Compose deployment
 
-Start it with Python 3.12 or newer and uv. The script pins SkillSpector and its HTTP dependencies
+Start it from the repository root with Python 3.12 or newer and uv. The script pins SkillSpector and its HTTP dependencies. The adapter is not included in the wheel or sdist
 
 ```sh
 export SKILL_SCANNER_API_KEY="$(openssl rand -hex 32)"
-uv run server.py
+uv run litellm/proxy/discovery_endpoints/skill_scanner_adapter/server.py
 ```
 
 For another host, place the loopback service behind an HTTPS reverse proxy that forwards the Authorization header and enforces a 65 MiB request limit. Run it under an unprivileged account with a writable temporary directory and no production files or credentials. The scanner host needs Git and network access to requested sources and optional model providers. Apply network egress restrictions suitable for those sources

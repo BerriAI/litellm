@@ -8,7 +8,7 @@ import psutil
 import pytest
 from fastapi import HTTPException
 
-from cookbook.skill_scanner import server
+from litellm.proxy.discovery_endpoints.skill_scanner_adapter import server
 from tests.integration._support.process import _wait_until_gone, group_members, stop_processes
 
 

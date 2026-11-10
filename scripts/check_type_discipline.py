@@ -1158,8 +1158,12 @@ def collect_paths(raw: Iterable[str]) -> Iterator[Path]:
     for item in raw:
         p = Path(item)
         if p.is_dir():
-            yield from sorted(p.rglob("*.py"))
-        elif p.suffix == ".py":
+            yield from (
+                path
+                for path in sorted(p.rglob("*.py"))
+                if "litellm/proxy/discovery_endpoints/skill_scanner_adapter/" not in path.as_posix()
+            )
+        elif p.suffix == ".py" and "litellm/proxy/discovery_endpoints/skill_scanner_adapter/" not in p.as_posix():
             yield p
 
 
