@@ -3,7 +3,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypedDict
@@ -32,7 +32,7 @@ class SpeechToCompletionBridgeHandlerInputKwargs(TypedDict):
     model: str
     input: str
     voice: str | dict | None
-    optional_params: dict
+    optional_params: dict[str, object]
     litellm_params: dict
     logging_obj: "LiteLLMLoggingObj"
     headers: dict
@@ -106,10 +106,10 @@ class SpeechToCompletionBridgeHandler:
         extra_headers: Mapping[str, object] | None,
         timeout: "float | httpx.Timeout | None",
         cache_controls: "CacheControlsHint",
-    ) -> "HttpxBinaryResponseContent":
+        aspeech: bool,
+    ) -> "HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]":
         received_args: Final = locals()
-        from litellm import completion
-        from litellm.types.utils import ModelResponse
+        from litellm import acompletion, completion
 
         validated_kwargs: Final = self.validate_input_kwargs(received_args)
         model = validated_kwargs["model"]
@@ -138,19 +138,36 @@ class SpeechToCompletionBridgeHandler:
             voice=voice,
         )
 
+        requested_response_format: Final = validated_kwargs["optional_params"].get("response_format")
+        response_format: Final = requested_response_format if isinstance(requested_response_format, str) else None
+        if aspeech:
+            return self._aspeech(acompletion(**request_data), response_format, logging_obj)
+
         with internal_sub_call():
             result: Final = completion(
                 **request_data,
             )
+        return self._to_speech_response(result, response_format)
 
-        requested_response_format: Final = optional_params.get("response_format")
-        if isinstance(result, ModelResponse):
-            return self.transformation_handler.transform_response(
-                model_response=result,
-                response_format=requested_response_format if isinstance(requested_response_format, str) else None,
-            )
-        else:
+    async def _aspeech(
+        self,
+        pending_completion: Coroutine[object, object, object],
+        response_format: str | None,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> "HttpxBinaryResponseContent":
+        with logging_obj.preserve_entrypoint_acompletion(), internal_sub_call():
+            result: Final = await pending_completion
+        return self._to_speech_response(result, response_format)
+
+    def _to_speech_response(self, result: object, response_format: str | None) -> "HttpxBinaryResponseContent":
+        from litellm.types.utils import ModelResponse
+
+        if not isinstance(result, ModelResponse):
             raise Exception(f"Unmapped response type. Got type: {type(result)}")
+        return self.transformation_handler.transform_response(
+            model_response=result,
+            response_format=response_format,
+        )
 
 
 speech_to_completion_bridge_handler = SpeechToCompletionBridgeHandler()

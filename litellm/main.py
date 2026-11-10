@@ -8753,6 +8753,7 @@ def speech(
                 extra_headers=_DEPLOYMENT_HEADERS_HINT.validate_python(kwargs).get("extra_headers"),
                 timeout=timeout,
                 cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
+                aspeech=aspeech or False,
             )
 
         # Vertex AI Text-to-Speech (Google Cloud TTS)
@@ -8808,6 +8809,7 @@ def speech(
             extra_headers=_DEPLOYMENT_HEADERS_HINT.validate_python(kwargs).get("extra_headers"),
             timeout=timeout,
             cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
+            aspeech=aspeech or False,
         )
     elif custom_llm_provider == "runwayml":
         from litellm.llms.runwayml.text_to_speech.transformation import (
