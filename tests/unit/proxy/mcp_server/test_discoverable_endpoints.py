@@ -15181,6 +15181,216 @@ async def test_managed_scope_code_cannot_cross_oauth_boundaries(jwt_oauth_identi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("header", ["Authorization", "x-litellm-api-key"])
+@pytest.mark.parametrize("same_user", [True, False])
+async def test_managed_scope_code_exchange_accepts_matching_sso_session_token(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    header: str,
+    same_user: bool,
+) -> None:
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlsplit
+
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.proxy.mcp_server import db, mcp_server_manager
+    from litellm.proxy.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    handler, _ = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sso-session-managed-scope-salt")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server: Final = _cimd_oauth_server().model_copy(update={"client_id": "scope-client"})
+    global_mcp_server_manager.registry[server.server_id] = server
+    caller_user_id: Final = "sso-owner" if same_user else "other-user"
+    for uid in ("sso-owner", "other-user"):
+        handler.user_api_key_cache.set_cache(
+            uid,
+            LiteLLM_UserTable(user_id=uid, user_role="internal_user", teams=["team-a"]),
+        )
+    handler.user_api_key_cache.set_cache(
+        "team_id:team-a",
+        LiteLLM_TeamTable(
+            team_id="team-a",
+            models=[],
+            members_with_roles=[
+                Member(user_id="sso-owner", role="user"),
+                Member(user_id="other-user", role="user"),
+            ],
+        ),
+    )
+    manager: Final = MagicMock()
+    manager.get_allowed_mcp_servers = AsyncMock(return_value=[server.server_id])
+    manager.invalidate_user_oauth_token_cache = AsyncMock()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    table: Final = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    table.find_unique = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    cookie: Final = _browser_session_cookie(
+        monkeypatch,
+        "sso-owner",
+        signing_key="sso-session-test-signing-key-123456789",
+    )
+    started: Final = await endpoints.authorize_with_server(
+        _token_request({"Cookie": f"token={cookie}"}),
+        server,
+        "scope-client",
+        "http://127.0.0.1:9/cb",
+        scope="tools.read",
+        code_challenge="challenge",
+        code_challenge_method="S256",
+    )
+    state: Final = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
+    cookies: Final = SimpleCookie()
+    cookies.load(started.headers["set-cookie"])
+    callback_request: Final = _token_request(
+        {"Cookie": "; ".join(f"{name}={value.value}" for name, value in cookies.items())}
+    )
+    returned: Final = await endpoints.callback(
+        callback_request, code="provider-code", state=state, error=None, iss=None
+    )
+    code: Final = parse_qs(urlsplit(returned.headers["location"]).query)["code"][0]
+    assert code.startswith(endpoints._MANAGED_AUTH_CODE_PREFIX)
+    session_token: Final = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info=LiteLLM_UserTable(user_id=caller_user_id, user_role="internal_user"),
+        team_id="team-a",
+    )
+    token_request: Final = _token_request(
+        {header: f"Bearer {session_token}" if header == "Authorization" else session_token}
+    )
+    upstream: Final = respx_mock.post(server.token_url).respond(
+        200,
+        json={"access_token": "new-access", "token_type": "Bearer", "refresh_token": "new-refresh"},
+    )
+    if not same_user:
+        with pytest.raises(HTTPException) as raised:
+            await endpoints.exchange_token_with_server(
+                token_request,
+                server,
+                "authorization_code",
+                code=code,
+                redirect_uri="http://127.0.0.1:9/cb",
+                client_id="scope-client",
+                client_secret=None,
+                code_verifier="verifier",
+            )
+        assert raised.value.status_code == 400
+        assert upstream.call_count == 0
+        table.upsert.assert_not_awaited()
+        return
+
+    exchanged: Final = await endpoints.exchange_token_with_server(
+        token_request,
+        server,
+        "authorization_code",
+        code=code,
+        redirect_uri="http://127.0.0.1:9/cb",
+        client_id="scope-client",
+        client_secret=None,
+        code_verifier="verifier",
+    )
+    assert exchanged.status_code == 200
+    assert json.loads(exchanged.body)["access_token"] == "new-access"
+    assert parse_qs(upstream.calls[0].request.content.decode())["code"] == ["provider-code"]
+    saved: Final = db.decode_oauth_payload(table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    assert saved is not None and saved.get("access_token") == "new-access"
+    assert table.upsert.call_args.kwargs["where"] == {
+        "user_id_server_id": {"user_id": "sso-owner", "server_id": server.server_id}
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("state", "expected_identity", "expected_writer"),
+    [
+        ("valid", "sso-owner", "sso-owner"),
+        ("no_team", "sso-owner", "sso-owner"),
+        ("expired", None, None),
+        ("malformed", None, None),
+        ("scim_inactive", None, None),
+        ("removed_from_team", None, None),
+        ("user_deleted", None, None),
+        ("ui_login_disabled", None, None),
+        ("ui_cookie_token", None, None),
+        ("route_denied", "sso-owner", None),
+        ("server_denied", "sso-owner", None),
+    ],
+)
+async def test_oauth_sso_session_token_enforces_status_grants_and_route_policy(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    expected_identity: str | None,
+    expected_writer: str | None,
+) -> None:
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import LITELLM_SESSION_TOKEN_PREFIX, ExperimentalUIJWTToken
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_bearer_token
+    from litellm.proxy.mcp_server import mcp_server_manager
+    from litellm.proxy.mcp_server.bridge_token_flow import (
+        authorize_oauth_credential_request,
+        extract_user_id_from_request,
+    )
+
+    handler, _ = jwt_oauth_identity
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sso-session-policy-salt")
+    if state == "ui_login_disabled":
+        monkeypatch.setenv("EXPERIMENTAL_UI_LOGIN", "false")
+    if state == "user_deleted":
+        proxy_server.prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    else:
+        handler.user_api_key_cache.set_cache(
+            "sso-owner",
+            LiteLLM_UserTable(
+                user_id="sso-owner",
+                user_role="internal_user",
+                teams=[] if state == "removed_from_team" else ["team-a"],
+                metadata={"scim_active": False} if state == "scim_inactive" else {},
+            ),
+        )
+    handler.user_api_key_cache.set_cache(
+        "team_id:team-a",
+        LiteLLM_TeamTable(
+            team_id="team-a",
+            models=[],
+            members_with_roles=[Member(user_id="sso-owner", role="user")],
+        ),
+    )
+    manager: Final = MagicMock()
+    manager.get_allowed_mcp_servers = AsyncMock(return_value=[] if state == "server_denied" else ["server-a"])
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    bearer: Final = (
+        ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            LiteLLM_UserTable(user_id="sso-owner", user_role="internal_user"),
+        )
+        if state == "ui_cookie_token"
+        else encrypt_bearer_token("{}", prefix=LITELLM_SESSION_TOKEN_PREFIX)
+        if state == "malformed"
+        else encrypt_bearer_token(
+            UserAPIKeyAuth(
+                token="cli-sso-sso-owner",
+                user_id="sso-owner",
+                team_id=None if state == "no_team" else "team-a",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                is_session_token=True,
+                expires=datetime(2000 if state == "expired" else 2099, 1, 1, tzinfo=timezone.utc),
+                allowed_routes=["openai_routes"] if state == "route_denied" else None,
+            ).model_dump_json(exclude_none=True),
+            prefix=LITELLM_SESSION_TOKEN_PREFIX,
+        )
+    )
+    request: Final = _token_request({"Authorization": f"Bearer {bearer}"}, path="/server-a/token")
+    assert await extract_user_id_from_request(request) == expected_identity
+    assert await authorize_oauth_credential_request(request, "server-a") == expected_writer
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "scope, requested_scope, expected",
     [

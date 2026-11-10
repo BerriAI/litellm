@@ -312,7 +312,11 @@ async def _reload_active_key_by_hash(key_hash: str) -> "_ResolvedKey | _KeyResol
 async def reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | None":
     """``None`` when the user is live, else the precise failure ``load_active_user_by_id`` found."""
     loaded: Final = await load_active_user_by_id(user_id)
-    return loaded if isinstance(loaded, str) else None
+    match loaded:
+        case "no_active_key" | "unavailable" | "faulted" | "unresolvable":
+            return loaded
+        case _:
+            return None
 
 
 _reload_active_user_by_id: Final = reload_active_user_by_id
@@ -461,13 +465,70 @@ async def authorize_oauth_credential_request(request: Request, server_id: str) -
 async def _resolve_request_auth(
     request: Request, write_route: str | None = None
 ) -> "UserAPIKeyAuth | JWTIdentity | None":
+    from litellm.proxy.auth.auth_checks import LITELLM_SESSION_TOKEN_PREFIX  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
 
     token: Final = _litellm_key_from_request(request)
+    if token is not None and token.startswith(LITELLM_SESSION_TOKEN_PREFIX):
+        return await _resolve_session_token_auth(token)
     if token is not None and JWTHandler.is_jwt(token):
         return await _resolve_jwt_auth(request, token, write_route)
     resolved: Final = await _resolve_active_litellm_key(request)
     return resolved.key if isinstance(resolved, _ResolvedKey) else None
+
+
+async def _refresh_live_session_grants(session: "UserAPIKeyAuth") -> "UserAPIKeyAuth | None":
+    from litellm.proxy._types import ProxyException  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: PLC0415  # proxy import cycle
+        _refresh_session_token_grants,  # pyright: ignore[reportPrivateUsage]  # reuse admission session-grant refresh so demoted or deleted callers fail closed
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # proxy globals initialized at startup
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        return session
+    try:
+        return await _refresh_session_token_grants(
+            valid_token=session,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except (ProxyException, HTTPException) as exc:
+        verbose_logger.debug("OAuth session token grants rejected (%s)", type(exc).__name__)
+        return None
+
+
+async def _resolve_session_token_auth(token: str) -> "UserAPIKeyAuth | None":
+    from litellm.constants import (  # noqa: PLC0415  # inline import avoids a module-load circular import
+        UI_SESSION_TOKEN_TEAM_ID,
+    )
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken  # noqa: PLC0415  # proxy import cycle
+    from litellm.secret_managers.main import get_secret_bool  # noqa: PLC0415  # proxy import cycle
+
+    if get_secret_bool("EXPERIMENTAL_UI_LOGIN") is False:
+        return None
+    try:
+        session: Final = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token)
+    except Exception as exc:  # noqa: BLE001  # malformed decrypted session payload must never crash token resolution
+        verbose_logger.debug("OAuth session token could not be decoded (%s)", type(exc).__name__)
+        return None
+    if (
+        session is None
+        or not session.is_session_token
+        or not session.user_id
+        or session.team_id == UI_SESSION_TOKEN_TEAM_ID
+        or not _key_is_active(session)
+    ):
+        return None
+    refreshed: Final = await _refresh_live_session_grants(session)
+    if refreshed is None or not _key_is_active(refreshed) or await _key_owner_scim_deactivated(refreshed):
+        return None
+    return refreshed
 
 
 async def can_store_oauth_credential(request: Request, auth: "UserAPIKeyAuth", server_id: str) -> bool:
