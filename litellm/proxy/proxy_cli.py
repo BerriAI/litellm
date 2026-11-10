@@ -1364,6 +1364,10 @@ def run_server(
                             use_migrate=not use_prisma_db_push,
                             use_v2_resolver=use_v2_migration_resolver,
                         )
+                        if setup_ok and skip_server_startup:
+                            PrismaManager.build_request_log_indexes()
+                        elif setup_ok:
+                            PrismaManager.start_request_log_index_build()
                     except RuntimeError as e:
                         # Raised on unrecoverable migration errors: the v2
                         # resolver's non-idempotent failures and permission
