@@ -647,10 +647,16 @@ impl Core {
         }
 
         // `without_deployments_that_cannot_batch`: a batch create on a group the caller may use a
-        // batch deployment of skips the Azure deployments that cannot run batches.
+        // batch deployment of skips the Azure deployments that cannot run batches. A batch upload
+        // keeps skipping them while that batch deployment cools down.
+        let batch_cooling = || {
+            all.iter()
+                .any(|d| d.is_batch_capable() && cooling.iter().any(|(id, _)| *id == d.id))
+        };
         if request.batch_create
             && !resolution.kind.is_single()
-            && healthy.iter().any(|d| d.is_batch_capable())
+            && (healthy.iter().any(|d| d.is_batch_capable())
+                || (request.batch_upload && batch_cooling()))
         {
             healthy.retain(|d| !d.cannot_run_batches());
         }

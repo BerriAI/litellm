@@ -102,6 +102,7 @@ from litellm.router_rust.invoke.endpoints import (
     endpoint_names,
     failover_fields,
     generic_plan,
+    is_batch_upload,
     log_refused_call,
     log_refused_call_sync,
     pinned_vector_store_file_deployment,
@@ -1371,7 +1372,7 @@ class _EndpointPort:
         kind: str = "pick",
         specific_deployment: bool | None = None,
         messages: object = None,
-        batch_create: bool = False,
+        batch_upload: bool = False,
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         return await self._core.select(
             model,
@@ -1379,7 +1380,7 @@ class _EndpointPort:
             kind=kind,
             specific_deployment=specific_deployment,
             messages=messages,
-            batch_create=batch_create,
+            batch_upload=batch_upload,
         )
 
     async def acompletion(self, *args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
@@ -2434,7 +2435,7 @@ class RustCore(
         messages: object = None,
         input: object = None,
         health_check_probe: bool = False,
-        batch_create: bool = False,
+        batch_upload: bool = False,
         **_: object,  # kwargs-ok: the RouterCore select options this core ignores
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         """Pick a deployment for ``model`` without calling it (``pick``), list the deployments a
@@ -2453,7 +2454,7 @@ class RustCore(
             messages,
             input,
             probe=kind == "healthy" and health_check_probe,
-            batch_create=batch_create,
+            batch_upload=batch_upload,
         )
         # A pick that makes no call holds no least-busy reservation (`select` on the Python core).
         with picks_reserve(False):
@@ -2757,7 +2758,7 @@ class RustCore(
             **({"web_search": True} if web_search else {}),
             **({"route_handler": handler} if serves_route_capability(handler) else {}),
             **({"decisions_media": True} if decisions_media else {}),
-            # `batch_create_routing`: a batch create, and its file's upload, keep to the deployments that can run batches.
+            # `batch_create_routing`: a batch create and its file upload keep to the deployments that can run batches.
             **({"batch_create": True} if _routes_as_batch_create(plan, request) else {}),
             # `deployments_admitting_embedding_batch`: an embedding keeps to the deployments admitting its input.
             **({"embedding_batch": True} if plan.kind == "embedding" else {}),
@@ -4044,7 +4045,7 @@ class _Selection:
         input: object,
         *,
         probe: bool = False,
-        batch_create: bool = False,
+        batch_upload: bool = False,
     ) -> None:
         self._core: Final = core
         # `_async_get_available_deployment` reads the alias map first, every other pick its names.
@@ -4076,8 +4077,9 @@ class _Selection:
             fields["endpoint"] = endpoint
         if probe:
             fields["health_check_probe"] = True
-        if batch_create:
+        if batch_upload:
             fields["batch_create"] = True
+            fields["batch_upload"] = True
         if kind in ("pick", "async_pass_through") or (kind == "sync_pick" and core._custom_strategy is not None):  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
             fields["pre_routes"] = True
         self._specific_deployment: Final = specific_deployment
@@ -4292,7 +4294,7 @@ def _narrowing_fields(request: dict[str, object], kind: str) -> Mapping[str, obj
 
 
 def _routes_as_batch_create(plan: Plan, request: Mapping[str, object]) -> bool:
-    return plan.kind == "batch" or (plan.kind == "create_file" and request.get("purpose") == "batch")
+    return plan.kind == "batch" or (plan.kind == "create_file" and is_batch_upload(request))
 
 
 def _request_narrowing(request: Mapping[str, object]) -> Mapping[str, object]:

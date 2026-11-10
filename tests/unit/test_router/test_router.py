@@ -8061,6 +8061,36 @@ async def test_a_failed_batch_file_upload_tries_the_batch_deployment_once_and_le
     assert chat_completions.call_count == 3
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [429, 401])
+async def test_a_batch_file_upload_the_batch_deployment_refuses_is_never_stored_on_chat(
+    monkeypatch: pytest.MonkeyPatch, status: int
+):
+    from io import BytesIO
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _ordered(_azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"), 1),
+            _ordered(_azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"), 2),
+        ],
+        num_retries=2,
+    )
+    batch_row: Final = {"custom_id": "1", "method": "POST", "url": "/chat/completions", "body": {"model": "gpt-mixed"}}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        batch_upload: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(status, json={"error": {"code": str(status), "message": "upload refused"}})
+        )
+        chat_upload: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_CREATED)
+        )
+        with pytest.raises(RouterRateLimitError, match="No deployments available"):
+            await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
+
+    assert (batch_upload.call_count, chat_upload.call_count) == (1, 0)
+
+
 def _azure_wildcard_deployment(sku_host: str, mode: str) -> dict[str, object]:
     return {
         "model_name": "mixed-wild/*",
