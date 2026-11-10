@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # tool lists stay caller-owned
@@ -168,15 +167,11 @@ def response_cache(request: NativeCall) -> bool:
     return litellm.cache is not None and cache.get("no-cache") is not True
 
 
-_NATIVE_ECDH_CURVES: Final = frozenset({"x25519", "prime256v1", "secp256r1", "p-256", "secp384r1", "p-384"})
-
-
 def tls_policy(_request: NativeCall) -> bool:
     """Python applies TLS settings or ECDH curves the native client cannot configure."""
-    curve: Final = os.getenv("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve)
-    return bool(os.getenv("SSL_SECURITY_LEVEL", litellm.ssl_security_level)) or (
-        bool(curve) and str(curve).strip().lower() not in _NATIVE_ECDH_CURVES
-    )
+    from litellm.rust_bridge import _native
+
+    return bool(_native.unsupported_tls_settings())
 
 
 COMMON: Final[Detectors] = MappingProxyType(

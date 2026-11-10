@@ -129,6 +129,22 @@ pub(crate) fn settings_config(
     Ok(resolved(py, settings))
 }
 
+#[pyfunction]
+pub(crate) fn unsupported_tls_settings(py: Python<'_>) -> PyResult<Vec<String>> {
+    let settings = HttpSettings::from_layers([
+        HttpSettingsLayer::from_environment(&ProcessEnvironment),
+        match PythonSettings::Http.read_or_unset(py)? {
+            Some(snapshot) => configured(&snapshot)?,
+            None => HttpSettingsLayer::default(),
+        },
+    ]);
+    Ok(Resolution::from(&settings)
+        .unsupported
+        .iter()
+        .map(ToString::to_string)
+        .collect())
+}
+
 /// The client config `settings` resolve to, warning once per process about each setting the client cannot apply
 fn resolved(py: Python<'_>, settings: HttpSettings) -> HttpClientConfig {
     let resolution =

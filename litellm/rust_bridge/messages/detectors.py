@@ -5,25 +5,27 @@ from __future__ import annotations
 from typing import Final
 
 import litellm
-from litellm.anthropic_beta_headers_manager import is_foundry_api_base
-from litellm.litellm_core_utils.core_helpers import (
-    drops_unsupported_params,
-    proxy_request_headers,
-    stream_cost_injection_requested,
-)
-from litellm.llms.opencode.common_utils import is_opencode_api_base
-from litellm.rust_bridge.detectors import api_base, overridden, present, streaming
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.rust_bridge.detectors import overridden, present
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
-
-def provider_affinity(request: NativeCall) -> bool:
-    return is_opencode_api_base(api_base(request))
+_CALL_TYPE: Final = "anthropic_messages"
 
 
-def foundry_beta_row(request: NativeCall) -> bool:
-    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+def response_cache(request: NativeCall) -> bool:
+    cache: Final = litellm.cache
+    controls: Final = optional_mapping(request.resolved.get("cache")) or {}
+    return (
+        cache is not None
+        and controls.get("no-cache") is not True
+        and cache.supported_call_types is not None
+        and _CALL_TYPE in cache.supported_call_types
+        and cache.should_use_cache(**request.resolved) is True  # pyright: ignore[reportUnknownMemberType]  # Cache.should_use_cache takes untyped kwargs
+    )
 
-    return is_foundry_api_base(AnthropicModelInfo.get_api_base(api_base(request)))
+
+def streamed_mock_response(request: NativeCall) -> bool:
+    return present(request, "mock_response") and request.resolved.get("stream") is True
 
 
 def anthropic_workload_identity(request: NativeCall) -> bool:
@@ -55,21 +57,11 @@ def thinking_signature_retry(request: NativeCall) -> bool:
     return any(_replays_thinking(message) for message in optional_sequence(request.resolved.get("messages")) or ())
 
 
-def tool_custom_field(request: NativeCall) -> bool:
-    tools: Final = optional_sequence(request.resolved.get("tools")) or ()
-    return any("custom" in (optional_mapping(tool) or {}) for tool in tools)
-
-
 def strict_tools_retry(request: NativeCall) -> bool:
     tools: Final = optional_sequence(request.resolved.get("tools")) or ()
     return drops_unsupported_params(request.resolved.get("drop_params")) and any(
         (optional_mapping(tool) or {}).get("strict") is True for tool in tools
     )
-
-
-def stream_cost_injection(request: NativeCall) -> bool:
-    """Python adds response cost to streaming usage when the global setting or the request header asks for it."""
-    return streaming(request) and stream_cost_injection_requested(proxy_request_headers(request.resolved))
 
 
 def pre_request_hook(_request: NativeCall) -> bool:

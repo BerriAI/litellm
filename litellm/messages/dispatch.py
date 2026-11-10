@@ -133,26 +133,25 @@ def messages_target(model: str, custom_llm_provider: str | None, model_info: obj
     return _route_target(model, resolved_model, resolved_provider, model_info, api_base, compacting=False)
 
 
+_NATIVE_COMMON_FEATURES: Final = frozenset({Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS})
+
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
-        **{feature: detect for feature, detect in detectors.COMMON.items() if feature is not Feature.TIMEOUT_VARIANTS},
-        Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
+        **{feature: detect for feature, detect in detectors.COMMON.items() if feature not in _NATIVE_COMMON_FEATURES},
         Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
-        Feature.RESPONSE_CACHE: detectors.response_cache,
+        Feature.RESPONSE_CACHE: route_detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
-        Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
         Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,
-        Feature.TOOL_CUSTOM_FIELD: route_detectors.tool_custom_field,
     }
 )
 
 _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **_FEATURES,
+        Feature.MOCK_RESPONSE: route_detectors.streamed_mock_response,
         Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
-        Feature.FOUNDRY_BETA_ROW: route_detectors.foundry_beta_row,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
         Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
         Feature.STRICT_TOOLS_RETRY: route_detectors.strict_tools_retry,

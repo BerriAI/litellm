@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import errno
+import inspect
 import ipaddress
 import os
 import socket
@@ -15,14 +16,27 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils import exception_mapping_utils
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    normalize_drop_params,
+    proxy_request_headers,
+    stream_cost_injection_requested,
+)
+from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
-from litellm.llms.anthropic.common_utils import AnthropicError, anthropic_pass_through_api_base
+from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo, anthropic_pass_through_api_base
 from litellm.llms.anthropic.messages.native import handler
+from litellm.llms.anthropic.messages.native import utils as native_utils
 from litellm.llms.anthropic.messages.native.handler import (
     _native_messages_config as native_messages_config,  # pyright: ignore[reportPrivateUsage]  # the handler's own config lookup
+)
+from litellm.llms.anthropic.messages.native.handler import (
+    _resolve_requested_provider as _requested_provider,  # pyright: ignore[reportPrivateUsage]  # the handler's own provider resolution
 )
 from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
@@ -30,10 +44,15 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.llms.custom_httpx.llm_http_handler import (
+    _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
+)
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.host import callbacks_legacy_python, http_transport
 from litellm.rust_bridge.public_call import known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ProviderSpecificHeader
 
 _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(
@@ -63,6 +82,14 @@ _BODY_FIELDS: Final = frozenset(
         "service_tier",
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CallSettings:
+    model: str
+    mock_response: Mapping[str, object] | None
+    stream_cost_model: str | None
+    provider_affinity_headers: Mapping[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +156,10 @@ _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
 _validate_metadata: Final = cast(  # cast-ok: the handler's untyped metadata validator
-    Callable[[dict[str, object]], object], handler.validate_anthropic_api_metadata
+    Callable[[object], object], handler.validate_anthropic_api_metadata
+)
+_mock_response: Final = cast(  # cast-ok: the handler's mock builder takes untyped messages
+    Callable[..., Mapping[str, object]], native_utils.mock_response
 )
 _exception_type: Final = cast(  # cast-ok: the legacy public exception mapper is untyped
     Callable[..., Exception], exception_mapping_utils.exception_type
@@ -393,4 +423,112 @@ def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
             additional_drop_params=handler.additional_drop_paths(kwargs),
             request_timeout=get_configured_request_timeout(),
         )
+    )
+
+
+_HANDLER_PARAMS: Final = frozenset(
+    name
+    for name, parameter in inspect.signature(
+        cast(Callable[..., object], handler.anthropic_messages_handler)  # noqa: TID251  # cast-ok: reads the handler's parameter names, never calls it
+    ).parameters.items()
+    if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+)
+_HEADER_VALUES: Final = TypeAdapter(dict[str, str])
+
+
+def _handler_params(request: Mapping[str, object]) -> GenericLiteLLMParams:
+    return GenericLiteLLMParams(
+        **{name: value for name, value in request.items() if name not in _HANDLER_PARAMS},
+        api_key=optional_str(request.get("api_key")),
+        api_base=optional_str(request.get("api_base")),
+        custom_llm_provider=optional_str(request.get("custom_llm_provider")),
+    )
+
+
+def _requested_model(request: Mapping[str, object]) -> str:
+    model, _, _, _ = _requested_provider(
+        str(request["model"]), optional_str(request.get("custom_llm_provider")), _handler_params(request)
+    )
+    return model
+
+
+def _model_without_latest_alias(model: str, custom_llm_provider: str | None) -> str:
+    if not is_model_latest_alias(model, custom_llm_provider):
+        return model
+    resolved, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    prefix, separator, _ = model.partition("/")
+    return f"{prefix}/{resolved}" if separator and prefix == provider else resolved
+
+
+def _mock(request: Mapping[str, object]) -> Mapping[str, object] | None:
+    mock: Final = request.get("mock_response")
+    if not mock or not isinstance(mock, str):
+        return None
+    _validate_metadata(request.get("metadata"))
+    messages: Final = request.get("messages")
+    max_tokens: Final = request.get("max_tokens")
+    return dict(
+        _mock_response(
+            model=_requested_model(request),
+            messages=messages if isinstance(messages, list) else [],
+            max_tokens=max_tokens if isinstance(max_tokens, int) else 0,
+            mock_response=mock,
+        )
+    )
+
+
+def _stream_cost_model(request: Mapping[str, object]) -> str | None:
+    if request.get("stream") is not True or not stream_cost_injection_requested(proxy_request_headers(request)):
+        return None
+    return _requested_model(request)
+
+
+def _provider_affinity_headers(request: Mapping[str, object], provider: str | None) -> Mapping[str, str]:
+    api_base: Final = optional_str(request.get("api_base"))
+    affinity_api_base: Final = AnthropicModelInfo.get_api_base(api_base) if provider == "anthropic" else api_base
+    default_header: Final = get_provider_affinity_header(affinity_api_base)
+    if default_header is None:
+        return {}
+    merged: Final = _merged_headers(
+        as_str_mapping(request.get("headers")),
+        as_str_mapping(request.get("extra_headers")),
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=cast(  # cast-ok: the handler hands the caller's value on unvalidated
+                ProviderSpecificHeader | None, request.get("provider_specific_header")
+            ),
+            custom_llm_provider=provider,
+            native_anthropic_messages=True,
+        ),
+    )
+    added: Final = add_provider_affinity_header(merged, _handler_params(request), default_header)
+    return _HEADER_VALUES.validate_python({name: value for name, value in added.items() if name not in merged})
+
+
+def call_settings(request: Mapping[str, object]) -> Mapping[str, object]:
+    explicit_provider: Final = optional_str(request.get("custom_llm_provider"))
+    model: Final = _model_without_latest_alias(str(request["model"]), explicit_provider)
+    mock: Final = _mock(request)
+    provider: Final = explicit_provider or inferred_provider(model, optional_str(request.get("api_base")))
+    return asdict(
+        CallSettings(
+            model=model,
+            mock_response=mock,
+            stream_cost_model=None if mock is not None else _stream_cost_model(request),
+            provider_affinity_headers={} if mock is not None else _provider_affinity_headers(request, provider),
+        )
+    )
+
+
+def inject_stream_cost(frames: bytes, model: str, request: Mapping[str, object]) -> object:
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    logger: Final = request.get("litellm_logging_obj")
+    logging_obj: Final = logger if isinstance(logger, LiteLLMLoggingObj) else None
+    return ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+        frames,
+        model,
+        logging_obj,
+        request_headers=proxy_request_headers(
+            as_str_mapping(logging_obj.model_call_details.get("litellm_params")) if logging_obj else None
+        ),
     )

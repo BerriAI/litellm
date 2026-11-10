@@ -34,6 +34,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.caching.caching import Cache, CacheMode
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.messages import dispatch
 from litellm.rust_bridge import catalog
@@ -342,36 +343,18 @@ S15_COMPLETE_DEADLINE: Final = (
     "S15: by design, native bounds a complete response by one overall deadline where Python bounds each read, "
     "so a body trickling in slower than the timeout succeeds in Python and times out natively"
 )
-F_MOCK: Final = "F: mock_response is Python-only (detector mock_response)"
 F_THINKING_RETRY: Final = (
     "F: retry without thinking after a rejected signature is Python-only (detector thinking_signature_retry)"
 )
 F_CACHE_INJECTION: Final = "F: prompt cache_control injection is Python-only (detector cache_control_injection)"
-F_TOOL_CUSTOM: Final = "F: hoisting a tool's custom field is Python-only (detector tool_custom_field)"
-F_STREAM_COST: Final = "F: cost injection into streamed usage is Python-only (detector stream_cost_injection)"
+F_STREAMED_MOCK: Final = (
+    "F: a mock with stream=True returns the mock dict and logs no success in Python (detector streamed_mock_response)"
+)
 
 KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
     {
         "response_private_keys": _gaps(outcome=S6_PRIVATE_KEYS),
         "missing_max_tokens": _gaps(dispatch=A10_NO_MAX_TOKENS),
-        "mock_response": _gaps(
-            logged_response_headers=F_MOCK,
-            request=F_MOCK,
-            outcome=F_MOCK,
-            hidden_params=F_MOCK,
-            logged=F_MOCK,
-            logged_metadata=F_MOCK,
-            logged_api_key=F_MOCK,
-            logged_call=F_MOCK,
-        ),
-        "mock_response_rate_limit": _gaps(
-            logged_response_headers=F_MOCK,
-            request=F_MOCK,
-            outcome=F_MOCK,
-            logged=F_MOCK,
-            logged_api_key=F_MOCK,
-            logged_call=F_MOCK,
-        ),
         "thinking_signature_rejected_then_retried": _gaps(
             request=F_THINKING_RETRY,
             outcome=F_THINKING_RETRY,
@@ -381,9 +364,13 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
             logged_response_headers=F_THINKING_RETRY,
         ),
         "cache_control_injection_points": _gaps(request=F_CACHE_INJECTION),
-        "tool_custom_field": _gaps(request=F_TOOL_CUSTOM),
-        "stream_cost_injection": _gaps(outcome=F_STREAM_COST),
         "enable_prompt_caching": _gaps(request=F_CACHE_INJECTION),
+        "mock_response_streamed": _gaps(
+            logged=F_STREAMED_MOCK,
+            logged_metadata=F_STREAMED_MOCK,
+            logged_response_headers=F_STREAMED_MOCK,
+            logged_call=F_STREAMED_MOCK,
+        ),
     }
 )
 
@@ -729,9 +716,63 @@ SYNC_CASES: Final = (
     Case("sync_upstream_429", upstream=(_failure(429, "rate_limit_error", "slow down"),), sync=True),
 )
 
-FALLBACK_CASES: Final = (
+LATEST_ALIAS: Final = "anthropic/claude-opus-latest"
+CUSTOM_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType({**WEATHER_TOOL, "custom": {"defer_loading": True}})
+COST_HEADER: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}}
+)
+
+SERVED_NATIVELY_CASES: Final = (
     Case("mock_response", _kw(mock_response="Hi from the mock"), upstream=()),
     Case("mock_response_rate_limit", _kw(mock_response="litellm.RateLimitError"), upstream=()),
+    Case("mock_response_context_window", _kw(mock_response="litellm.ContextWindowExceededError"), upstream=()),
+    Case("mock_response_empty_calls_the_provider", _kw(mock_response="")),
+    Case("mock_response_bad_metadata", _kw(mock_response="Hi", metadata={"user_id": 123}), upstream=()),
+    Case("latest_alias", model=LATEST_ALIAS),
+    Case("latest_alias_bare_with_provider", _kw(custom_llm_provider="anthropic"), model="claude-opus-latest"),
+    Case("latest_alias_stream", _kw(stream=True), upstream=(_stream(TEXT_STREAM),), model=LATEST_ALIAS),
+    Case(
+        "latest_alias_upstream_400",
+        upstream=(_failure(400, "invalid_request_error", "max_tokens: too large"),),
+        model=LATEST_ALIAS,
+    ),
+    Case("tool_custom_field", _kw(tools=[dict(CUSTOM_TOOL)])),
+    Case(
+        "tool_custom_field_keeps_other_custom_keys",
+        _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": False, "note": "kept"}}]),
+    ),
+    Case(
+        "tool_custom_field_dropped_with_drop_params",
+        _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": True, "note": "dropped"}}], drop_params=True),
+    ),
+    Case("tool_custom_field_not_an_object", _kw(tools=[{**WEATHER_TOOL, "custom": "opaque"}])),
+    Case(
+        "tool_custom_field_under_own_defer_loading",
+        _kw(tools=[{**WEATHER_TOOL, "defer_loading": False, "custom": {"defer_loading": True}}]),
+    ),
+    Case(
+        "stream_cost_injection",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        settings=MappingProxyType({"include_cost_in_streaming_usage": True}),
+    ),
+    Case(
+        "stream_cost_injection_from_proxy_header",
+        _kw(stream=True, proxy_server_request=dict(COST_HEADER)),
+        upstream=(_stream(TOOL_STREAM, chunk_delay=0.01),),
+    ),
+    Case(
+        "cache_off_by_default",
+        settings=MappingProxyType({"cache": Cache(mode=CacheMode.default_off)}),
+    ),
+    Case(
+        "cache_skips_messages_call_type",
+        settings=MappingProxyType({"cache": Cache(supported_call_types=["acompletion"])}),
+    ),
+)
+
+FALLBACK_CASES: Final = (
+    Case("mock_response_streamed", _kw(stream=True, mock_response="Hi from the mock"), upstream=()),
     Case(
         "thinking_replay",
         _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
@@ -748,7 +789,6 @@ FALLBACK_CASES: Final = (
         "cache_control_injection_points",
         _kw(system="Answer in one word.", cache_control_injection_points=[{"location": "message", "role": "system"}]),
     ),
-    Case("tool_custom_field", _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": True}}])),
     Case(
         "strict_tools_rejected_then_retried",
         _kw(tools=[{**WEATHER_TOOL, "strict": True}], drop_params=True),
@@ -758,18 +798,20 @@ FALLBACK_CASES: Final = (
         ),
     ),
     Case("modify_params", _kw(max_tokens=1), settings=MappingProxyType({"modify_params": True})),
-    Case(
-        "stream_cost_injection",
-        _kw(stream=True),
-        upstream=(_stream(TEXT_STREAM),),
-        settings=MappingProxyType({"include_cost_in_streaming_usage": True}),
-    ),
     Case("enable_prompt_caching", _kw(system="Answer in one word.", enable_prompt_caching=True)),
     Case("request_timeout_kwarg", _kw(request_timeout=30)),
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
 )
 
-CASES: Final = (*REQUEST_CASES, *RESPONSE_CASES, *FAILURE_CASES, *STREAM_CASES, *SYNC_CASES, *FALLBACK_CASES)
+CASES: Final = (
+    *REQUEST_CASES,
+    *RESPONSE_CASES,
+    *FAILURE_CASES,
+    *STREAM_CASES,
+    *SYNC_CASES,
+    *SERVED_NATIVELY_CASES,
+    *FALLBACK_CASES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1077,3 +1119,12 @@ async def test_native_messages_match_python(
             assert native.logged == python.logged
         case _:
             assert native.callback_kwargs.get(aspect) == python.callback_kwargs.get(aspect)
+
+
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in SERVED_NATIVELY_CASES])
+def test_catalog_serves_the_case_natively(case: Case, parity_server: RecordingServer) -> None:
+    with isolated_callback_registries(), _environment(case.env), _settings(case.settings):
+        request: Final = dispatch._public_request(dispatch._AMESSAGES, (), _kwargs(case, parity_server))  # pyright: ignore[reportPrivateUsage]  # the public binding the async entry routes by
+        assert request is not None
+        context: Final = dispatch._context(request, dispatch._ASYNC_FEATURES)  # pyright: ignore[reportPrivateUsage]  # the async entry's own route context
+        assert catalog.rollout(context) is Rollout.RUST_OPT_IN, context.features
