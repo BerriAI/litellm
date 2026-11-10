@@ -250,16 +250,25 @@ def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     assert response_json["error"]["code"] == "404"
 
 
-def test_delete_customer_drops_its_committed_spend_so_a_recreated_customer_starts_from_its_own_row(
-    monkeypatch, mock_prisma_client, mock_user_api_key_auth
+@pytest.mark.parametrize("has_redis", (False, True), ids=("in_memory", "redis"))
+def test_delete_customer_drops_its_spend_counters_so_a_recreated_customer_starts_from_its_own_row(
+    monkeypatch, mock_prisma_client, mock_user_api_key_auth, has_redis: bool
 ):
+    import asyncio
     from types import SimpleNamespace
 
+    from litellm.proxy._types import LiteLLM_BudgetTable
+    from litellm.proxy.auth.auth_checks import check_end_user_budget
     from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
-    spend: Final = FakeSpendCounters(
-        redis=None,
-        memory={"spend:committed:end_user:cust-gone": 7.0, "spend:committed:end_user:cust-stays": 3.0},
+    counters: Final = {
+        "spend:end_user:cust-gone": 7.0,
+        "spend:committed:end_user:cust-gone": 7.0,
+        "spend:end_user:cust-stays": 3.0,
+        "spend:committed:end_user:cust-stays": 3.0,
+    }
+    spend: Final = (
+        FakeSpendCounters(redis=dict(counters)) if has_redis else FakeSpendCounters(redis=None, memory=dict(counters))
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
     mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
@@ -272,7 +281,66 @@ def test_delete_customer_drops_its_committed_spend_so_a_recreated_customer_start
     )
 
     assert response.status_code == 200
-    assert spend.memory == {"spend:committed:end_user:cust-stays": 3.0}
+    asyncio.run(
+        check_end_user_budget(
+            LiteLLM_EndUserTable(
+                user_id="cust-gone",
+                blocked=False,
+                spend=0.0,
+                litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+            ),
+            route="/chat/completions",
+        )
+    )
+    assert (spend.redis if has_redis else spend.memory) == {
+        "spend:end_user:cust-stays": 3.0,
+        "spend:committed:end_user:cust-stays": 3.0,
+    }
+
+
+def test_delete_customer_succeeds_when_dropping_its_spend_counters_fails(
+    monkeypatch, mock_prisma_client, mock_user_api_key_auth
+):
+    from types import SimpleNamespace
+
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis={"spend:end_user:cust-gone": 7.0}, failing=frozenset({"delete"}))
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="cust-gone")]
+    )
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=1)
+
+    response: Final = client.post(
+        "/customer/delete", json={"user_ids": ["cust-gone"]}, headers={"Authorization": "Bearer test-key"}
+    )
+
+    assert response.status_code == 200
+
+
+def test_delete_customer_with_a_missing_id_keeps_the_spend_counters_of_the_existing_one(
+    monkeypatch, mock_prisma_client, mock_user_api_key_auth
+):
+    from types import SimpleNamespace
+
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    counters: Final = {"spend:end_user:cust-stays": 3.0, "spend:committed:end_user:cust-stays": 3.0}
+    spend: Final = FakeSpendCounters(redis=dict(counters))
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="cust-stays")]
+    )
+
+    response: Final = client.post(
+        "/customer/delete",
+        json={"user_ids": ["cust-stays", "missing"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 404
+    assert spend.redis == counters
 
 
 def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):

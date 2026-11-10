@@ -42,7 +42,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     handle_update_object_permission_common,
     set_object_permission,
 )
-from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
@@ -846,9 +846,16 @@ async def delete_end_user(
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
             await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
-            await drop_committed_spend(
-                spend_counter_store, tuple(end_user_counter(user_id) for user_id in data.user_ids)
-            )
+            counter_keys: Final = tuple(end_user_counter(user_id) for user_id in data.user_ids)
+            try:
+                await spend_counter_store.delete((*counter_keys, *committed_spend_keys(counter_keys)))
+            except Exception as e:  # noqa: BLE001  # the rows are already deleted, so a kept counter must not fail it
+                verbose_proxy_logger.warning(
+                    "Failed to drop spend counters %s of deleted customers: %s. Budgets may be over-enforced if "
+                    "these ids are re-created.",
+                    counter_keys,
+                    e,
+                )
 
             return DeleteCustomersResponse(
                 deleted_customers=response,
