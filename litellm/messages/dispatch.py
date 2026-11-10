@@ -139,7 +139,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **{feature: detect for feature, detect in detectors.COMMON.items() if feature not in _NATIVE_COMMON_FEATURES},
         Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
-        Feature.RESPONSE_CACHE: route_detectors.sync_response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
@@ -150,7 +149,6 @@ _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
         **_FEATURES,
         Feature.MOCK_RESPONSE: route_detectors.streamed_mock_response,
-        Feature.RESPONSE_CACHE: route_detectors.response_cache,
         Feature.PRE_REQUEST_HOOK: route_detectors.pre_request_hook,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
         Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,

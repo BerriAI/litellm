@@ -273,11 +273,31 @@ impl LegacyLogging {
             self.call.kwargs(),
             &self.start,
             &self.end,
+            self.messages_cache_hit(),
         )?;
         self.response
             .as_ref()
             .map(|response| HookStep::Ready(response.clone_ref(py)))
             .ok_or_else(|| HostError::MissingState.into())
+    }
+
+    fn messages_cache_hit(&self) -> bool {
+        self.operation == LoggingOperation::Messages && self.cache_key.is_some()
+    }
+
+    fn dispatch_cache_hit(&self, py: Python<'_>) -> PyResult<()> {
+        let logger = self.logger()?;
+        let logged = Logging::CacheHitSuccess.call(
+            py,
+            (logger.object(py), &self.response, &self.start, &self.end),
+        );
+        match logged {
+            Err(error) if error.is_instance_of::<PyException>(py) => {
+                error.write_unraisable(py, Some(logger.object(py)));
+                Ok(())
+            }
+            result => result.map(|_| ()),
+        }
     }
 
     fn dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
@@ -576,7 +596,7 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, Py<PyAny>>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
-        if self.runs_deployment_hooks() {
+        if self.runs_deployment_hooks() && !self.messages_cache_hit() {
             return Ok(HookStep::Await(
                 DeploymentHooks::after_success(
                     py,
@@ -597,7 +617,17 @@ impl LegacyLogging {
     ) -> PyResult<HookStep<Self, ()>> {
         use litellm_host::interceptors::{Cost, ResultSource};
 
+        self.cache_key = match &facts.source {
+            ResultSource::Provider => None,
+            ResultSource::Cache { key } => Some(key.clone()),
+        };
         let logger = self.logger()?.object(py);
+        if self.messages_cache_hit() {
+            logger
+                .getattr("model_call_details")?
+                .set_item("cache_hit", true)?;
+            return Ok(HookStep::Ready(()));
+        }
         let params = logger
             .getattr("litellm_params")?
             .cast_into::<PyDict>()?
@@ -625,10 +655,6 @@ impl LegacyLogging {
         };
         logger.setattr("_provider_reported_cost", reported_cost)?;
         details.call_method1("pop", ("response_cost", py.None()))?;
-        self.cache_key = match &facts.source {
-            ResultSource::Provider => None,
-            ResultSource::Cache { key } => Some(key.clone()),
-        };
         if self.cache_key.is_some() {
             details.set_item("cache_hit", true)?;
         } else {
@@ -717,6 +743,7 @@ impl LegacyLogging {
         self.response = Some(response.clone_ref(py));
         match &self.stream {
             Some(stream) => self.stream_success(py, stream, false)?,
+            None if self.messages_cache_hit() => self.dispatch_cache_hit(py)?,
             None => self.dispatch_success(py)?,
         }
         Ok(HookStep::Ready(()))
@@ -751,7 +778,11 @@ impl LegacyLogging {
         if self.stream_billing().is_none() {
             return Err(HostError::MissingState.into());
         }
-        if let Some(key) = &self.cache_key {
+        if let Some(key) = self
+            .cache_key
+            .as_ref()
+            .filter(|_| !self.messages_cache_hit())
+        {
             head.bind(py).set_item("cache_key", key)?;
             head.bind(py).set_item("cache_hit", true)?;
         }
@@ -766,6 +797,7 @@ impl LegacyLogging {
                     self.call.kwargs(),
                     &self.start,
                     datetime(py, epoch_seconds())?,
+                    self.messages_cache_hit(),
                 ),
             )?;
         }
@@ -790,7 +822,7 @@ impl LegacyLogging {
     // A caller that goes away mid-stream cancels the call before it ends: Python's Messages
     // stream iterator still bills the chunks it read, straight away rather than deferred.
     fn bill_abandoned_stream(&mut self, py: Python<'_>) -> PyResult<()> {
-        if !self.asynchronous || self.end.is_some() {
+        if !self.asynchronous || self.end.is_some() || self.messages_cache_hit() {
             return Ok(());
         }
         let Some(stream) = self.stream.take() else {

@@ -139,6 +139,13 @@ def _with_deployment_effort(params: Mapping[str, object], request: Mapping[str, 
     )
 
 
+def cached_function() -> Callable[..., object]:
+    return cast(  # cast-ok: the @client cache read names and checks the legacy handler it wraps
+        "Callable[..., object]",
+        handler.anthropic_messages,  # noqa: TID251  # the @client cache read names and checks the legacy handler it wraps
+    )
+
+
 def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         anthropic_messages_stream_hidden_params,

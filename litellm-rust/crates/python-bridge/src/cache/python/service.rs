@@ -79,6 +79,10 @@ where
         &self.config
     }
 
+    fn keyed_by_caller(&self) -> bool {
+        true
+    }
+
     fn lookup<'a>(
         &'a self,
         _: &'a ResponseCacheRequest,

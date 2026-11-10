@@ -64,6 +64,8 @@ pub(crate) enum Logging {
     SubmitSuccess,
     #[strum(serialize = "async_success_handler")]
     AsyncSuccessHandler,
+    #[strum(serialize = "cache_hit_success")]
+    CacheHitSuccess,
     #[strum(serialize = "mark_async_success_enqueued")]
     MarkAsyncSuccessEnqueued,
     #[strum(serialize = "enqueue_logging")]

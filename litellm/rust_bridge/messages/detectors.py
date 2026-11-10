@@ -10,33 +10,6 @@ from litellm.rust_bridge.detectors import overridden, present
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
 
-def _response_cache_consulted(request: NativeCall, call_type: str, *, honours_cache_controls: bool) -> bool:
-    from litellm.caching.caching_handler import is_call_type_supported_by_cache, is_response_cache_excluded
-
-    cache: Final = litellm.cache
-    kwargs: Final = request.resolved
-    if (
-        cache is None
-        or is_response_cache_excluded(optional_str(kwargs.get("model")), kwargs)
-        or not is_call_type_supported_by_cache(call_type)
-    ):
-        return False
-    if honours_cache_controls and (
-        kwargs.get("caching") not in (None, True)
-        or (optional_mapping(kwargs.get("cache")) or {}).get("no-cache") is True
-    ):
-        return False
-    return cache.should_use_cache(**kwargs) is True  # pyright: ignore[reportUnknownMemberType]  # Cache.should_use_cache takes untyped kwargs
-
-
-def response_cache(request: NativeCall) -> bool:
-    return _response_cache_consulted(request, "anthropic_messages", honours_cache_controls=True)
-
-
-def sync_response_cache(request: NativeCall) -> bool:
-    return _response_cache_consulted(request, "anthropic_messages_handler", honours_cache_controls=False)
-
-
 def streamed_mock_response(request: NativeCall) -> bool:
     return present(request, "mock_response") and request.resolved.get("stream") is True
 

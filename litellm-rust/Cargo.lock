@@ -4158,6 +4158,7 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-core-utils",
