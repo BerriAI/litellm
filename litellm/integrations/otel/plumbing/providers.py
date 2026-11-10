@@ -492,16 +492,24 @@ class _CountedSpanView(_SpanView):
         return self._dropped_counts[2]
 
 
+class _PendingMetadataSpan(_CountedSpanView):
+    """``inner`` as it ended, carrying the destination metadata added once the destination's view is built."""
+
+    def __init__(self, inner: ReadableSpan, metadata: tuple[tuple[str, str], ...], limits: SpanLimits) -> None:
+        super().__init__(inner, inner.attributes)
+        self.destination_metadata: Final = metadata
+        self.limits: Final = limits
+
+
 def with_destination_metadata(
     span: ReadableSpan, metadata_keys: tuple[str, ...], metadata: Mapping[str, str], limits: SpanLimits
 ) -> ReadableSpan:
-    """``span`` plus the ``litellm.metadata.*`` values a destination's own ``metadata_keys`` select.
+    """``span`` carrying the ``litellm.metadata.*`` values a destination's own ``metadata_keys`` select.
 
-    Bound when the span ends, so a tree held for sampling keeps its own request's values. An
-    attribute the span already carries wins, so a destination key never replaces a value the
-    global allowlist or the proxy's identity wrote. The additions obey the span limits the SDK
-    applies to ``set_attribute``: values are cut to the length limit, and keys past the count
-    limit are dropped and counted, never evicting an attribute the span already carries.
+    Bound when the span ends, so a tree held for sampling keeps its own request's values, along
+    with the span limits it ended under. :func:`with_pending_metadata` adds them once the
+    destination's view is built. An attribute the span already carries wins, so a destination key
+    never replaces a value the global allowlist or the proxy's identity wrote.
     """
     if not metadata_keys:
         return span
@@ -511,14 +519,27 @@ def with_destination_metadata(
     )
     if not extra:
         return span
-    room: Final = (
-        len(extra) if limits.max_span_attributes is None else max(0, limits.max_span_attributes - len(attributes))
-    )
-    max_length: Final = limits.max_span_attribute_length
+    return _PendingMetadataSpan(span, extra, limits)
+
+
+def with_pending_metadata(ended: ReadableSpan, exported: ReadableSpan) -> ReadableSpan:
+    """``exported``, the destination's view of ``ended``, plus the metadata ``ended`` carries.
+
+    Counted against what the destination exports rather than the span as it ended, since the view
+    can drop prompt content and backend-specific attributes. Values are cut to the length limit,
+    and keys past the count limit are dropped and counted, never evicting an exported attribute.
+    """
+    if not isinstance(ended, _PendingMetadataSpan):
+        return exported
+    attributes: Final = exported.attributes or _NO_ATTRIBUTES
+    extra: Final = tuple((key, value) for key, value in ended.destination_metadata if key not in attributes)
+    max_attributes: Final = ended.limits.max_span_attributes
+    max_length: Final = ended.limits.max_span_attribute_length
+    room: Final = len(extra) if max_attributes is None else max(0, max_attributes - len(attributes))
     kept: Final = {key: value if max_length is None else value[:max_length] for key, value in extra[:room]}
-    if not kept:
-        return _CountedSpanView(span, attributes, dropped_attributes=len(extra))
-    return _CountedSpanView(span, MappingProxyType({**attributes, **kept}), dropped_attributes=len(extra) - len(kept))
+    return _CountedSpanView(
+        exported, MappingProxyType({**attributes, **kept}), dropped_attributes=len(extra) - len(kept)
+    )
 
 
 def _is_litellm_span(span: ReadableSpan) -> bool:
@@ -796,10 +817,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
-        self._span_limits: Final = SpanLimits()
+        self._span_limits = SpanLimits()  # replaced by the provider's own limits from the first span that starts
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         context: Final = span.context
+        self._span_limits = span._limits  # pyright: ignore[reportPrivateUsage]  # the SDK has no public accessor for a span's limits
         with self._lock:
             request: Final = self._request_of(span, trace.get_current_span(parent_context))
             if context is not None:
@@ -874,12 +896,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         if processor is None:
             return
         try:
-            processor.on_end(
-                _scoped(
-                    _for_destination(span, destination, self._default_capture_for(destination), self._langfuse_mapped),
-                    destination.span_scope,
-                )
+            exported: Final = _scoped(
+                _for_destination(span, destination, self._default_capture_for(destination), self._langfuse_mapped),
+                destination.span_scope,
             )
+            processor.on_end(with_pending_metadata(span, exported))
         except Exception as exc:  # noqa: BLE001  # one destination's failure must not cost the others their span
             verbose_logger.debug("OTel V2 fan-out: forwarding to %s failed: %s", destination.endpoint, exc)
         finally:

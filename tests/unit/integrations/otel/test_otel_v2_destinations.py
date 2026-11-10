@@ -72,7 +72,6 @@ from litellm.integrations.otel.plumbing.providers import (
     deliverable_destinations,
     operator_sink_scopes,
     register_exporter_factory,
-    with_destination_metadata,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache, get_tracer
 from litellm.integrations.otel.presets.arize import arize_preset
@@ -670,6 +669,48 @@ class TestFanOut:
         in_fresh_context(run)
 
         assert team.get_finished_spans()[0].attributes["litellm.metadata.tenant_id"] == "x" * 8
+
+    @staticmethod
+    def _limited_team_export(
+        limits: SpanLimits, attributes: Mapping[str, str], metadata: Mapping[str, str]
+    ) -> ReadableSpan:
+        team: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider(span_limits=limits)
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _: SimpleSpanProcessor(team)))
+
+        def run():
+            set_request_destinations((OtelDestination(endpoint="http://team.local", metadata_keys=tuple(metadata)),))
+            set_request_metadata(MappingProxyType(dict(metadata)))
+            with get_tracer(provider, "litellm").start_as_current_span("chat gpt-4") as span:
+                span.set_attributes(dict(attributes))
+
+        in_fresh_context(run)
+        return team.get_finished_spans()[0]
+
+    def test_destination_metadata_obeys_a_providers_own_span_limits(self):
+        exported: Final = self._limited_team_export(
+            SpanLimits(max_span_attributes=3, max_span_attribute_length=4),
+            {"litellm.team.id": "team-a", "litellm.metadata.correlation_id": "corr"},
+            {"requester_metadata.a": "abcdefgh", "requester_metadata.b": "2", "requester_metadata.c": "3"},
+        )
+
+        assert dict(exported.attributes or {}) == {
+            "litellm.team.id": "team",
+            "litellm.metadata.correlation_id": "corr",
+            "litellm.metadata.a": "abcd",
+        }
+        assert exported.dropped_attributes == 2
+
+    def test_destination_metadata_counts_against_the_view_after_content_is_redacted(self):
+        prompt: Final = {f"llm.input_messages.{index}.message.content": "hello" for index in range(4)}
+        exported: Final = self._limited_team_export(
+            SpanLimits(max_span_attributes=4),
+            prompt,
+            {"requester_metadata.correlation_id": "corr-1"},
+        )
+
+        assert dict(exported.attributes or {}) == {"litellm.metadata.correlation_id": "corr-1"}
+        assert exported.dropped_attributes == 0
 
     def test_sampled_destination_keeps_the_metadata_of_the_request_that_ended_its_spans(self):
         team: Final = InMemorySpanExporter()
@@ -5982,53 +6023,3 @@ class TestLangfuseRequestMetadataStaysWithLangfuse:
         assert [(span.dropped_attributes, span.dropped_events, span.dropped_links) for span in stripped] == [
             (1, 1, 1)
         ] * 2
-
-
-def _span_with(attributes: Mapping[str, str]) -> ReadableSpan:
-    exporter: Final = InMemorySpanExporter()
-    provider: Final = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    with get_tracer(provider, "litellm").start_as_current_span("chat gpt-4") as span:
-        span.set_attributes(dict(attributes))
-    return exporter.get_finished_spans()[0]
-
-
-def test_destination_metadata_past_the_count_limit_is_dropped_and_counted_without_evicting():
-    span: Final = _span_with({"litellm.team.id": "team-a", "litellm.metadata.correlation_id": "corr-1"})
-    view: Final = with_destination_metadata(
-        span,
-        ("requester_metadata.a", "requester_metadata.b", "requester_metadata.c"),
-        MappingProxyType({"requester_metadata.a": "1", "requester_metadata.b": "2", "requester_metadata.c": "3"}),
-        SpanLimits(max_span_attributes=3),
-    )
-
-    assert dict(view.attributes or {}) == {
-        "litellm.team.id": "team-a",
-        "litellm.metadata.correlation_id": "corr-1",
-        "litellm.metadata.a": "1",
-    }
-    assert view.dropped_attributes == span.dropped_attributes + 2
-
-
-def test_destination_metadata_on_a_full_span_adds_nothing_and_counts_every_key():
-    span: Final = _span_with({"litellm.team.id": "team-a"})
-    view: Final = with_destination_metadata(
-        span,
-        ("requester_metadata.a",),
-        MappingProxyType({"requester_metadata.a": "1"}),
-        SpanLimits(max_span_attributes=1),
-    )
-
-    assert dict(view.attributes or {}) == {"litellm.team.id": "team-a"}
-    assert view.dropped_attributes == span.dropped_attributes + 1
-
-
-def test_destination_metadata_values_are_cut_to_the_length_limit():
-    view: Final = with_destination_metadata(
-        _span_with({}),
-        ("requester_metadata.a",),
-        MappingProxyType({"requester_metadata.a": "abcdefghij"}),
-        SpanLimits(max_span_attribute_length=4),
-    )
-
-    assert (view.attributes or {})["litellm.metadata.a"] == "abcd"
