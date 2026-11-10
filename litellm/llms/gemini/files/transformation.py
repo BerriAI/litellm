@@ -6,6 +6,7 @@ For vertex ai, check out the vertex_ai/files/handler.py file.
 
 import time
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Final, Literal, TypedDict
 from urllib.parse import urlparse
 
@@ -52,6 +53,11 @@ class _GeminiFileMetadata(TypedDict, total=False):
 
 class _GeminiCreateFileResponse(TypedDict):
     file: ReadOnly[_GeminiFileMetadata]
+
+
+def _gemini_timestamp(rfc3339: str) -> int:
+    """Gemini stamps files with up to nine fractional digits, which strptime's %f rejects."""
+    return int(datetime.fromisoformat(rfc3339).timestamp())
 
 
 def gemini_file_name(file_id: str) -> str:
@@ -210,14 +216,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             return OpenAIFileObject(
                 id=response_object["uri"],  # Gemini uses URI as identifier
                 bytes=int(response_object["sizeBytes"]),  # Gemini doesn't return file size
-                created_at=int(
-                    time.mktime(
-                        time.strptime(
-                            response_object["createTime"].replace("Z", "+00:00"),
-                            "%Y-%m-%dT%H:%M:%S.%f%z",
-                        )
-                    )
-                ),
+                created_at=_gemini_timestamp(response_object["createTime"]),
                 filename=response_object["displayName"],
                 object="file",
                 purpose="user_data",  # Default to assistants as that's the main use case
@@ -290,14 +289,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             return OpenAIFileObject(
                 id=response_json.get("uri", ""),
                 bytes=int(response_json.get("sizeBytes", 0)),
-                created_at=int(
-                    time.mktime(
-                        time.strptime(
-                            response_json["createTime"].replace("Z", "+00:00"),
-                            "%Y-%m-%dT%H:%M:%S.%f%z",
-                        )
-                    )
-                ),
+                created_at=_gemini_timestamp(response_json["createTime"]),
                 filename=response_json.get("displayName", ""),
                 object="file",
                 purpose="user_data",

@@ -377,3 +377,23 @@ def test_file_content_response_passes_the_jsonl_bytes_through():
     assert (
         handler.transform_file_content_response(raw_response=raw, logging_obj=Mock(), litellm_params={}).content == body
     )
+
+
+def test_retrieve_file_response_accepts_nanosecond_create_time():
+    handler = GoogleAIStudioFilesHandler()
+    raw = httpx.Response(
+        200,
+        json={
+            "name": "files/batch-la6",
+            "displayName": "Results of batch la6",
+            "mimeType": "application/jsonl",
+            "sizeBytes": "1024",
+            "createTime": "2026-11-10T21:35:00.902340270Z",
+            "updateTime": "2026-11-10T21:35:00.902340270Z",
+            "uri": "https://generativelanguage.googleapis.com/v1beta/files/batch-la6",
+            "state": "ACTIVE",
+        },
+        request=httpx.Request("GET", "https://generativelanguage.googleapis.com/v1beta/files/batch-la6"),
+    )
+    file_object = handler.transform_retrieve_file_response(raw_response=raw, logging_obj=Mock(), litellm_params={})
+    assert (file_object.created_at, file_object.bytes, file_object.status) == (1794346500, 1024, "processed")
