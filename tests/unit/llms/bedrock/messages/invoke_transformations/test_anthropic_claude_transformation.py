@@ -4723,13 +4723,13 @@ async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_respons
     monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS", 0)
     monkeypatch.setattr(streaming_iterator_module, "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE", 2)
 
-    closed = False
-    frames_sent = 0
-
     class _TrackedByteStream(httpx.AsyncByteStream):
+        def __init__(self) -> None:
+            self.closed: Final = asyncio.Event()
+            self.frames_sent = 0
+
         async def __aiter__(self) -> AsyncIterator[bytes]:
-            nonlocal frames_sent
-            frames_sent += 1
+            self.frames_sent += 1
             yield _bedrock_event_frame(
                 {
                     "type": "message_start",
@@ -4745,9 +4745,9 @@ async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_respons
             )
             for idx in range(50):
                 await asyncio.sleep(0.005)
-                if closed:
+                if self.closed.is_set():
                     break
-                frames_sent += 1
+                self.frames_sent += 1
                 yield _bedrock_event_frame(
                     {
                         "type": "content_block_delta",
@@ -4757,10 +4757,10 @@ async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_respons
                 )
 
         async def aclose(self) -> None:
-            nonlocal closed
-            closed = True
+            self.closed.set()
 
-    response: Final = httpx.Response(200, stream=_TrackedByteStream())
+    tracked_stream: Final = _TrackedByteStream()
+    response: Final = httpx.Response(200, stream=tracked_stream)
     iterator: Final = AmazonAnthropicClaudeMessagesConfig().get_async_streaming_response_iterator(
         model="us.anthropic.claude-sonnet-4-6",
         httpx_response=response,
@@ -4770,7 +4770,7 @@ async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_respons
             messages=[{"role": "user", "content": "Count to 50"}],
             stream=True,
             call_type="chat",
-            start_time=datetime.now(),
+            start_time=datetime(2026, 1, 1),
             litellm_call_id="test_bedrock_abort_closes_httpx_response",
             function_id="test_bedrock_abort_closes_httpx_response",
         ),
@@ -4778,17 +4778,17 @@ async def test_bedrock_messages_abort_on_detached_drain_cap_closes_httpx_respons
 
     first_frame: Final = await asyncio.wait_for(anext(iterator), timeout=5)
     assert first_frame.startswith(b"event: message_start\n"), first_frame
-    assert not closed
+    assert not tracked_stream.closed.is_set()
 
     await iterator.aclose()
+    await asyncio.wait_for(tracked_stream.closed.wait(), timeout=5)
 
-    for _ in range(50):
-        if closed:
-            break
-        await asyncio.sleep(0.01)
-
-    assert closed, "Expected httpx.Response stream to be closed when detached-drain cap aborts upstream"
-    assert frames_sent < 10, f"Expected upstream to stop generating after abort, but {frames_sent} frames were read"
+    assert tracked_stream.closed.is_set(), (
+        "Expected httpx.Response stream to be closed when detached-drain cap aborts upstream"
+    )
+    assert tracked_stream.frames_sent < 10, (
+        f"Expected upstream to stop generating after abort, but {tracked_stream.frames_sent} frames were read"
+    )
 
 
 @pytest.mark.asyncio
@@ -4796,21 +4796,22 @@ async def test_aws_event_stream_decoder_aiter_bytes_closes_source_iterator_on_ac
     """Verify AWSEventStreamDecoder.aiter_bytes closes its byte iterator when closed early."""
     from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 
-    source_closed = False
+    source_closed: Final = asyncio.Event()
 
     async def _byte_source() -> AsyncIterator[bytes]:
-        nonlocal source_closed
         try:
             yield _bedrock_event_frame({"type": "message_start", "message": {"id": "msg_1"}})
             for _ in range(20):
                 await asyncio.sleep(0.01)
                 yield _bedrock_event_frame({"type": "ping"})
         finally:
-            source_closed = True
+            source_closed.set()
 
     decoder: Final = AWSEventStreamDecoder(model="us.anthropic.claude-sonnet-4-6")
     stream: Final = decoder.aiter_bytes(_byte_source())
     await anext(stream)
     await stream.aclose()
-    assert source_closed, "Expected AWSEventStreamDecoder.aiter_bytes to close its source byte iterator on aclose()"
+    assert source_closed.is_set(), (
+        "Expected AWSEventStreamDecoder.aiter_bytes to close its source byte iterator on aclose()"
+    )
 
