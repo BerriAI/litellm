@@ -4,12 +4,10 @@ import base64
 import json
 import os
 from collections.abc import Mapping
-from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from opentelemetry.trace import Status, StatusCode
-from pydantic_core import to_jsonable_python
 from typing_extensions import override
 
 from litellm._logging import verbose_logger
@@ -23,7 +21,7 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     safe_set_attribute,
 )
 from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_dumps import jsonable_or_str, safe_dumps
 from litellm.types.integrations.weave_otel import WeaveOtelConfig, WeaveSpanAttributes
 from litellm.types.utils import StandardCallbackDynamicParams
 
@@ -79,7 +77,7 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
         safe_set_attribute(
             span,
             OpenInferenceSpanAttributes.INPUT_VALUE,
-            json.dumps(prompt, default=partial(to_jsonable_python, fallback=str)),
+            json.dumps(prompt, default=jsonable_or_str),
         )
 
 

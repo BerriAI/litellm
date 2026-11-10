@@ -7,11 +7,9 @@ Relevant Issue: https://github.com/BerriAI/litellm/issues/13764
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from functools import partial
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel
-from pydantic_core import to_jsonable_python
 from typing_extensions import override
 
 from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
@@ -19,6 +17,7 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     safe_set_attribute,
 )
 from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.safe_json_dumps import jsonable_or_str
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
@@ -105,9 +104,7 @@ class LangfuseLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
             prompt["tools"] = tools
 
         input: Final = prompt
-        safe_set_attribute(
-            span, "langfuse.observation.input", json.dumps(input, default=partial(to_jsonable_python, fallback=str))
-        )
+        safe_set_attribute(span, "langfuse.observation.input", json.dumps(input, default=jsonable_or_str))
 
     @staticmethod
     @override

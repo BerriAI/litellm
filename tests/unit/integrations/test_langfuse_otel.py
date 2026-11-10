@@ -36,6 +36,7 @@ CHAT_MESSAGE_OBJECTS: Final = tuple(
     Message(role=message["role"], content=message["content"]) for message in CHAT_MESSAGE_DICTS
 )
 NOT_JSON_ENCODABLE: Final = object()
+NON_UTF8_BYTES: Final = b"\x80"
 GENERATION_USAGE_AND_PARAM_KEYS: Final = (
     SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
     SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
@@ -162,8 +163,17 @@ class TestLangfuseOtelIntegration:
                 (Message(role="user", content="hello", trace_handle=NOT_JSON_ENCODABLE),),
                 [{**CHAT_MESSAGE_OBJECTS[0].model_dump(), "trace_handle": str(NOT_JSON_ENCODABLE)}],
             ),
+            (
+                (Message(role="user", content="hello", audio_bytes=NON_UTF8_BYTES),),
+                [{**CHAT_MESSAGE_OBJECTS[0].model_dump(), "audio_bytes": str(NON_UTF8_BYTES)}],
+            ),
         ],
-        ids=["dict_messages", "litellm_message_objects", "litellm_message_with_value_json_cannot_encode"],
+        ids=[
+            "dict_messages",
+            "litellm_message_objects",
+            "litellm_message_with_value_json_cannot_encode",
+            "litellm_message_with_non_utf8_bytes",
+        ],
     )
     def test_generation_keeps_input_model_params_and_token_usage(
         self, messages: Sequence[object], expected_input: Sequence[object]

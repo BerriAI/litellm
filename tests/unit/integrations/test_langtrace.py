@@ -14,6 +14,7 @@ CHAT_MESSAGE_OBJECTS: Final = tuple(
     Message(role=message["role"], content=message["content"]) for message in CHAT_MESSAGE_DICTS
 )
 NOT_JSON_ENCODABLE: Final = object()
+NON_UTF8_BYTES: Final = b"\x80"
 
 
 @pytest.mark.parametrize(
@@ -29,12 +30,17 @@ NOT_JSON_ENCODABLE: Final = object()
             (Message(role="user", content="weather in SF?", trace_handle=NOT_JSON_ENCODABLE),),
             [{**CHAT_MESSAGE_OBJECTS[0].model_dump(), "trace_handle": str(NOT_JSON_ENCODABLE)}],
         ),
+        (
+            (Message(role="user", content="weather in SF?", audio_bytes=NON_UTF8_BYTES),),
+            [str(Message(role="user", content="weather in SF?", audio_bytes=NON_UTF8_BYTES))],
+        ),
     ],
     ids=[
         "dict_messages",
         "litellm_message_objects",
         "dict_message_with_nul_and_int_key",
         "litellm_message_with_value_json_cannot_encode",
+        "litellm_message_with_non_utf8_bytes",
     ],
 )
 def test_langtrace_span_keeps_prompt_and_token_usage(

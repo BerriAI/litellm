@@ -1,6 +1,6 @@
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -209,18 +209,32 @@ def test_weave_output_value_is_the_dumped_model_response() -> None:
 
 
 NOT_JSON_ENCODABLE: Final = object()
+NON_UTF8_BYTES: Final = b"\x80"
 
 
 @pytest.mark.parametrize(
-    "messages",
+    ("messages", "expected_messages"),
     [
-        (Message(role="user", content="weather in SF?"), Message(role="assistant", content="Sunny.")),
-        (Message(role="user", content="weather in SF?", trace_handle=NOT_JSON_ENCODABLE),),
+        (
+            (Message(role="user", content="weather in SF?"), Message(role="assistant", content="Sunny.")),
+            [
+                Message(role="user", content="weather in SF?").model_dump(),
+                Message(role="assistant", content="Sunny.").model_dump(),
+            ],
+        ),
+        (
+            (Message(role="user", content="weather in SF?", trace_handle=NOT_JSON_ENCODABLE),),
+            [{**Message(role="user", content="weather in SF?").model_dump(), "trace_handle": str(NOT_JSON_ENCODABLE)}],
+        ),
+        (
+            (Message(role="user", content="weather in SF?", audio_bytes=NON_UTF8_BYTES),),
+            [str(Message(role="user", content="weather in SF?", audio_bytes=NON_UTF8_BYTES))],
+        ),
     ],
-    ids=["litellm_messages", "litellm_message_with_value_json_cannot_encode"],
+    ids=["litellm_messages", "litellm_message_with_value_json_cannot_encode", "litellm_message_with_non_utf8_bytes"],
 )
 def test_weave_span_keeps_input_and_token_usage_when_messages_are_litellm_messages(
-    messages: tuple[Message, ...],
+    messages: tuple[Message, ...], expected_messages: Sequence[object]
 ) -> None:
     span: Final = _TRACER.start_span("litellm_request")
     response: Final = ModelResponse(
@@ -232,9 +246,7 @@ def test_weave_span_keeps_input_and_token_usage_when_messages_are_litellm_messag
     set_weave_otel_attributes(span, {"messages": messages, "standard_logging_object": {}}, response)
 
     attributes: Final = span.attributes or {}
-    assert json.loads(str(attributes[OpenInferenceSpanAttributes.INPUT_VALUE])) == {
-        "messages": [message.model_dump(fallback=str) for message in messages]
-    }
+    assert json.loads(str(attributes[OpenInferenceSpanAttributes.INPUT_VALUE])) == {"messages": expected_messages}
     assert {
         key: attributes.get(key)
         for key in (
