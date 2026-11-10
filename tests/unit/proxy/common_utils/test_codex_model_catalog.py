@@ -33,9 +33,7 @@ _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
 
 
-def _stock(
-    slug, *, visibility="list", supported_in_api=True, upgrade=None, service_tiers=(_FAST,), default_tier=None
-):
+def _stock(slug, *, visibility="list", supported_in_api=True, upgrade=None, service_tiers=(_FAST,), default_tier=None):
     return CodexStockModel(
         slug=slug,
         display_name=slug.upper(),
@@ -192,7 +190,6 @@ def test_a_model_codex_knows_keeps_its_own_reasoning_levels(levels):
     [
         ("0.153.0", "GPT-6.1 Terra", ["low", "max"]),
         ("0.166.0", "GPT-6.1 Terra", ["low", "max"]),
-        ("0.166.0-alpha.5.1", "GPT-6.1 Terra", ["low", "max"]),
         (None, "GPT-6.1 Terra", ["low", "max"]),
         ("0.152.9", "gpt-6.1-terra", ["low", "max"]),
         ("0.137.0", "gpt-6.1-terra", ["low"]),
@@ -635,14 +632,17 @@ def test_default_service_tier_survives_only_while_still_offered(configured, expe
     assert entry["default_service_tier"] == expected
 
 
-
 @pytest.mark.parametrize(("alias_defaults", "expected"), [("codex", "priority"), ("deployment", None)])
 def test_alias_with_offered_tiers_takes_codexs_default_tier_only_under_codex_defaults(alias_defaults, expected):
     (entry,) = _models(
         _row("team-sol", upstream_model="gpt-6-sol", service_tiers=["priority"]), alias_defaults=alias_defaults
     )
 
-    assert (_tiers(entry), entry["default_service_tier"]) == ([("priority", "Fast", "2x speed, increased usage")], expected)
+    assert (_tiers(entry), entry["default_service_tier"]) == (
+        [("priority", "Fast", "2x speed, increased usage")],
+        expected,
+    )
+
 
 def test_non_chat_and_wildcard_rows_are_left_out_of_the_catalog():
     body = _body(

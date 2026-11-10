@@ -9,7 +9,6 @@ releases knows are sent.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from functools import cache
@@ -28,8 +27,7 @@ CodexInputModality: TypeAlias = Literal["text", "image"]
 _TEXT_ONLY: Final[tuple[CodexInputModality, ...]] = ("text",)
 _TEXT_AND_IMAGE: Final[tuple[CodexInputModality, ...]] = ("text", "image")
 TOKEN_PRICE_KEY: Final = "input_cost_per_token"
-_FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = "0.138.0"
-_CODEX_PATCHED_ALPHA: Final = re.compile(r"-alpha\.(\d+)\.(\d+)$")
+_FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
 _EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
 _PREFERRED_DEFAULT_EFFORT: Final = "medium"
 _CODEX_UNSET_EFFORT: Final = "none"
@@ -186,16 +184,9 @@ def combined_capabilities(
     )
 
 
-def _codex_version(version: str) -> Version:
-    """Codex's semver tags in PEP 440 terms, a patched alpha such as `0.166.0-alpha.5.1` as the post-release
-    `0.166.0a5.post1`, which orders between `alpha.5` and `alpha.6` just as semver does."""
-    return Version(_CODEX_PATCHED_ALPHA.sub(r"a\1.post\2", version))
-
-
-def codex_release_at_least(client_version: str | None, first: str) -> bool:
-    """Whether the requesting Codex is release `first` or newer. A missing or unparseable version counts as older."""
+def _parses_custom_efforts(client_version: str | None) -> bool:
     try:
-        return client_version is not None and _codex_version(client_version) >= _codex_version(first)
+        return client_version is not None and Version(client_version) >= _FIRST_CODEX_WITH_CUSTOM_EFFORTS
     except ValueError:
         return False
 
@@ -211,7 +202,7 @@ def codex_reasoning_levels(
     group accepts it, so a user who picks no level sends what Codex sent before, else medium, else the
     nearest weaker declared level, so picking no level never costs more reasoning than Codex's usual medium,
     else the weakest declared level, else the first one."""
-    parses_any: Final = codex_release_at_least(client_version, _FIRST_CODEX_WITH_CUSTOM_EFFORTS)
+    parses_any: Final = _parses_custom_efforts(client_version)
     offered: Final = tuple(effort for effort in efforts if parses_any or effort in _EFFORTS_EVERY_CODEX_PARSES)
     if not offered:
         return (), None
