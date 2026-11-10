@@ -48849,6 +48849,7 @@
         "output_cost_per_token": 1.06e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/qwen/qwen3-235b-a22b-instruct-2507",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -98523,5 +98524,487 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.03,
         "source": "https://replicate.com/qwen/qwen-edit-multiangle"
+    },
+    "replicate/qwen/qwen-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/qwen/qwen-image"
+    },
+    "replicate/qwen/qwen-image-2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/qwen/qwen-image-2"
+    },
+    "replicate/qwen/qwen-image-2-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.075,
+        "source": "https://replicate.com/qwen/qwen-image-2-pro"
+    },
+    "replicate/qwen/qwen-image-2512": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/qwen/qwen-image-2512"
+    },
+    "replicate/qwen/qwen-image-edit": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit"
+    },
+    "replicate/qwen/qwen-image-edit-2511": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit-2511"
+    },
+    "replicate/qwen/qwen-image-edit-plus": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit-plus"
+    },
+    "replicate/qwen/qwen-image-edit-plus-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/qwen/qwen-image-edit-plus-lora"
+    },
+    "replicate/qwen/qwen3-7-plus": {
+        "input_cost_per_token": 2.76e-07,
+        "input_cost_per_token_above_256k_tokens": 8.26e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.101e-06,
+        "output_cost_per_token_above_256k_tokens": 3.301e-06,
+        "source": "https://replicate.com/qwen/qwen3-7-plus",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/qwen/qwen3-tts": {
+        "input_cost_per_character": 2e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/qwen/qwen3-tts"
+    },
+    "replicate/recraft-ai/recraft-20b": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.022,
+        "source": "https://replicate.com/recraft-ai/recraft-20b"
+    },
+    "replicate/recraft-ai/recraft-20b-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.044,
+        "source": "https://replicate.com/recraft-ai/recraft-20b-svg"
+    },
+    "replicate/recraft-ai/recraft-creative-upscale": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://replicate.com/recraft-ai/recraft-creative-upscale"
+    },
+    "replicate/recraft-ai/recraft-crisp-upscale": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.006,
+        "source": "https://replicate.com/recraft-ai/recraft-crisp-upscale"
+    },
+    "replicate/recraft-ai/recraft-remove-background": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/recraft-ai/recraft-remove-background"
+    },
+    "replicate/recraft-ai/recraft-v3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v3"
+    },
+    "replicate/recraft-ai/recraft-v3-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/recraft-ai/recraft-v3-svg"
+    },
+    "replicate/recraft-ai/recraft-v4": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4"
+    },
+    "replicate/recraft-ai/recraft-v4-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-pro"
+    },
+    "replicate/recraft-ai/recraft-v4-pro-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-pro-svg"
+    },
+    "replicate/recraft-ai/recraft-v4-styles-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-styles-pro"
+    },
+    "replicate/recraft-ai/recraft-v4-styles-pro-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.12,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-styles-pro-svg"
+    },
+    "replicate/recraft-ai/recraft-v4-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/recraft-ai/recraft-v4-svg"
+    },
+    "replicate/recraft-ai/recraft-v4.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1"
+    },
+    "replicate/recraft-ai/recraft-v4.1-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-pro"
+    },
+    "replicate/recraft-ai/recraft-v4.1-pro-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-pro-svg"
+    },
+    "replicate/recraft-ai/recraft-v4.1-svg": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-svg"
+    },
+    "replicate/recraft-ai/recraft-v4.1-utility": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-utility"
+    },
+    "replicate/recraft-ai/recraft-v4.1-utility-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.25,
+        "source": "https://replicate.com/recraft-ai/recraft-v4.1-utility-pro"
+    },
+    "replicate/recraft-ai/recraft-vectorize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://replicate.com/recraft-ai/recraft-vectorize"
+    },
+    "replicate/resemble-ai/chatterbox": {
+        "input_cost_per_character": 2.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/resemble-ai/chatterbox"
+    },
+    "replicate/resemble-ai/chatterbox-pro": {
+        "input_cost_per_character": 4e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/resemble-ai/chatterbox-pro"
+    },
+    "replicate/resemble-ai/chatterbox-turbo": {
+        "input_cost_per_character": 2.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/resemble-ai/chatterbox-turbo"
+    },
+    "replicate/retro-diffusion/rd-animation": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://replicate.com/retro-diffusion/rd-animation"
+    },
+    "replicate/runwayml/aleph-2": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.336,
+        "source": "https://replicate.com/runwayml/aleph-2"
+    },
+    "replicate/runwayml/gen-4.5": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.12,
+        "source": "https://replicate.com/runwayml/gen-4.5"
+    },
+    "replicate/runwayml/gen4-image-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/runwayml/gen4-image-turbo"
+    },
+    "replicate/runwayml/gen4-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/runwayml/gen4-turbo"
+    },
+    "replicate/snowflake/snowflake-arctic-instruct": {
+        "input_cost_per_token": 2e-05,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2e-05,
+        "source": "https://replicate.com/snowflake/snowflake-arctic-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/stability-ai/stable-diffusion-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3"
+    },
+    "replicate/stability-ai/stable-diffusion-3.5-large": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.065,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3.5-large"
+    },
+    "replicate/stability-ai/stable-diffusion-3.5-large-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3.5-large-turbo"
+    },
+    "replicate/stability-ai/stable-diffusion-3.5-medium": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/stability-ai/stable-diffusion-3.5-medium"
+    },
+    "replicate/sync/lipsync-2": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/sync/lipsync-2"
+    },
+    "replicate/sync/lipsync-2-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08325,
+        "source": "https://replicate.com/sync/lipsync-2-pro"
+    },
+    "replicate/sync/react-1": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.167,
+        "source": "https://replicate.com/sync/react-1"
+    },
+    "replicate/tencent/hunyuan-image-2.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/tencent/hunyuan-image-2.1"
+    },
+    "replicate/tencent/hunyuan-image-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/tencent/hunyuan-image-3"
+    },
+    "replicate/veed/fabric-1.0": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.15,
+        "source": "https://replicate.com/veed/fabric-1.0"
+    },
+    "replicate/wan-video/wan-2.2-s2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "source": "https://replicate.com/wan-video/wan-2.2-s2v"
+    },
+    "replicate/wan-video/wan-2.5-i2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.5-i2v"
+    },
+    "replicate/wan-video/wan-2.5-i2v-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.068,
+        "output_cost_per_second_1080p": 0.102,
+        "output_cost_per_second_720p": 0.068,
+        "source": "https://replicate.com/wan-video/wan-2.5-i2v-fast"
+    },
+    "replicate/wan-video/wan-2.5-t2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.5-t2v"
+    },
+    "replicate/wan-video/wan-2.5-t2v-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.068,
+        "output_cost_per_second_1080p": 0.102,
+        "output_cost_per_second_720p": 0.068,
+        "source": "https://replicate.com/wan-video/wan-2.5-t2v-fast"
+    },
+    "replicate/wan-video/wan-2.6-i2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.6-i2v"
+    },
+    "replicate/wan-video/wan-2.6-t2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.6-t2v"
+    },
+    "replicate/wan-video/wan-2.7-i2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_720p": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-i2v"
+    },
+    "replicate/wan-video/wan-2.7-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/wan-video/wan-2.7-image"
+    },
+    "replicate/wan-video/wan-2.7-image-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/wan-video/wan-2.7-image-pro"
+    },
+    "replicate/wan-video/wan-2.7-r2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-r2v"
+    },
+    "replicate/wan-video/wan-2.7-t2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-t2v"
+    },
+    "replicate/wan-video/wan-2.7-videoedit": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/wan-video/wan-2.7-videoedit"
+    },
+    "replicate/wan-video/wan2.6-i2v-flash": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_1080p": 0.075,
+        "output_cost_per_second_720p": 0.05,
+        "source": "https://replicate.com/wan-video/wan2.6-i2v-flash"
+    },
+    "replicate/wavespeedai/qwen-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/wavespeedai/qwen-image"
+    },
+    "replicate/wavespeedai/wan-2.1-i2v-480p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.09,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-i2v-480p"
+    },
+    "replicate/wavespeedai/wan-2.1-i2v-720p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.25,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-i2v-720p"
+    },
+    "replicate/wavespeedai/wan-2.1-t2v-480p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-t2v-480p"
+    },
+    "replicate/wavespeedai/wan-2.1-t2v-720p": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.24,
+        "source": "https://replicate.com/wavespeedai/wan-2.1-t2v-720p"
+    },
+    "replicate/xai/grok-imagine-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/xai/grok-imagine-image"
+    },
+    "replicate/xai/grok-imagine-image-quality": {
+        "input_cost_per_pixel": 1e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "output_cost_per_image_1K": 0.04,
+        "output_cost_per_image_2K": 0.06,
+        "source": "https://replicate.com/xai/grok-imagine-image-quality"
+    },
+    "replicate/xai/grok-imagine-r2v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/xai/grok-imagine-r2v"
+    },
+    "replicate/xai/grok-imagine-video": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://replicate.com/xai/grok-imagine-video"
+    },
+    "replicate/xai/grok-imagine-video-1.5": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "source": "https://replicate.com/xai/grok-imagine-video-1.5"
+    },
+    "replicate/xai/grok-imagine-video-extension": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/xai/grok-imagine-video-extension"
+    },
+    "replicate/xai/grok-text-to-speech": {
+        "input_cost_per_character": 1.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/xai/grok-text-to-speech"
     }
 }
