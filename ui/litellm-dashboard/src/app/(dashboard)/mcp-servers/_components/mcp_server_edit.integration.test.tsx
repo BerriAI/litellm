@@ -485,4 +485,33 @@ describe("MCPServerEdit live tool preview", () => {
     expect(await screen.findByText("Saved credentials rejected")).toBeInTheDocument();
     expect(networking.listMCPTools).toHaveBeenCalledTimes(2);
   });
+
+  it("drops the Secret Headers selection when the transport switches to OpenAPI", async () => {
+    const server = { ...BASE, auth_type: "secret_headers" } as MCPServer;
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(server as never);
+    render(
+      <MCPServerEdit
+        mcpServer={server}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+    await selectOption("Transport Type", "OpenAPI Spec");
+    const specInput = await screen.findByPlaceholderText("https://petstore3.swagger.io/api/v3/openapi.json");
+    fireEvent.change(specInput, { target: { value: "https://example.com/openapi.json" } });
+    await act(async () => {
+      screen.getAllByRole("button", { name: "Save Changes" })[0].click();
+    });
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    await selectOption("Authentication", "None");
+    await act(async () => {
+      screen.getAllByRole("button", { name: "Save Changes" })[0].click();
+    });
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect((payload as { auth_type?: string }).auth_type).toBe("none");
+  });
 });

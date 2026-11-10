@@ -59,9 +59,15 @@ export const AUTH_TYPE_ITEMS = [
   { value: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, label: "OAuth Token Exchange (OBO)" },
   { value: AUTH_TYPE.OAUTH2_ID_JAG, label: "ID-JAG (Okta Cross App Access)" },
   { value: AUTH_TYPE.AWS_SIGV4, label: "AWS SigV4 (Bedrock AgentCore MCPs)" },
+  { value: AUTH_TYPE.SECRET_HEADERS, label: "Secret Headers" },
   { value: AUTH_TYPE.TRUE_PASSTHROUGH, label: "True Passthrough (no LiteLLM auth)" },
   { value: AUTH_TYPE.OAUTH_DELEGATE, label: "OAuth Delegate (client-supplied upstream token)" },
 ];
+
+export const authTypeItemsFor = (transport: string | undefined) =>
+  transport === TRANSPORT.OPENAPI
+    ? AUTH_TYPE_ITEMS.filter((item) => item.value !== AUTH_TYPE.SECRET_HEADERS)
+    : AUTH_TYPE_ITEMS;
 
 // The two client-forwarded token modes: the caller supplies the upstream Authorization (forwarded
 // verbatim for true_passthrough, alongside LiteLLM admission for oauth_delegate). The dashboard holds

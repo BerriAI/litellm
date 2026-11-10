@@ -436,6 +436,43 @@ describe("CreateMCPServer", () => {
       expect(payload.credentials).toEqual({ auth_value: "ApiKey raw-key-123" });
     });
 
+    it("drops the Secret Headers selection when the transport switches to OpenAPI, so the server can still be saved", async () => {
+      await selectHttpTransport();
+      await selectOption("Authentication", "Secret Headers");
+      await screen.findByPlaceholderText("Header name (e.g., DD-API-KEY)");
+
+      await selectOption("Transport Type", "OpenAPI Spec");
+      const specInput = await screen.findByPlaceholderText("https://petstore3.swagger.io/api/v3/openapi.json");
+      fireEvent.change(getServerNameInput(), { target: { value: "Switched_To_OpenAPI" } });
+      fireEvent.change(specInput, { target: { value: "https://example.com/openapi.json" } });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+      expect(networking.createMCPServer).not.toHaveBeenCalled();
+      await selectOption("Authentication", "None");
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-3",
+        server_name: "Switched_To_OpenAPI",
+        alias: "Switched_To_OpenAPI",
+        url: "",
+        transport: "http",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("none");
+      expect(payload.credentials?.headers).toBeUndefined();
+    });
+
     it("does not write the browser-authorized token into form.credentials for true_passthrough", async () => {
       await selectHttpTransport();
 
