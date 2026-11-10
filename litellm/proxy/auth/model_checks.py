@@ -490,11 +490,9 @@ def _ids_routing_through_catch_all(
     return tuple(dict.fromkeys(listed_ids))
 
 
-def _catch_all_catalog(catalog_ids: Sequence[str], litellm_params: LiteLLM_Params | None) -> Sequence[str]:
+def _catch_all_catalog(litellm_params: LiteLLM_Params | None) -> Sequence[str]:
     pinned_provider: Final = litellm_params.custom_llm_provider if litellm_params is not None else None
-    if not pinned_provider:
-        return catalog_ids
-    return get_provider_models(provider=pinned_provider, litellm_params=litellm_params) or ()
+    return get_provider_models(provider=pinned_provider or "*", litellm_params=litellm_params) or ()
 
 
 def _catalog_ids_a_wider_name_matches(
@@ -698,10 +696,6 @@ def _known_models_from_wildcard(
 
     litellm_params = _hydrate_litellm_credential_name(litellm_params)
 
-    wildcard_models = get_provider_models(provider=provider, litellm_params=litellm_params)
-
-    if wildcard_models is None:
-        return ()
     routes_through_catch_all: Final = (
         _routes_through_alias(wildcard_model, rival_patterns(wildcard_model), routes_to_model)
         if litellm_params is not None and litellm_params.model == "*"
@@ -709,8 +703,13 @@ def _known_models_from_wildcard(
     )
     if routes_through_catch_all is not None and not _names_whole_models(wildcard_model):
         return _ids_routing_through_catch_all(
-            wildcard_model, _catch_all_catalog(wildcard_models, litellm_params), routes_through_catch_all
+            wildcard_model, _catch_all_catalog(litellm_params), routes_through_catch_all
         )
+
+    wildcard_models = get_provider_models(provider=provider, litellm_params=litellm_params)
+
+    if wildcard_models is None:
+        return ()
     if deployment_pattern_naming_listed_ids is not None:
         return _ids_routing_to_catalog_models(
             name_pattern=wildcard_model,
