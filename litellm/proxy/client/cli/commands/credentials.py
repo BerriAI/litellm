@@ -216,16 +216,16 @@ def _poll_until_settled(
     credential_name: str,
     flow_handle: str,
     interval: int,
-    last_poll_at: float,
+    expires_at: float,
     clock: PollClock,
 ) -> UserConnectionPollResponse:
-    if clock.now() + interval > last_poll_at:
+    if clock.now() + interval >= expires_at:
         return UserConnectionPollResponse(status="expired")
     clock.sleep(interval)
     poll: Final = client.poll_user_connection(credential_name, flow_handle)
     if poll.status in ("pending", "slow_down"):
         return _poll_until_settled(
-            client, credential_name, flow_handle, _next_poll_interval(poll, interval), last_poll_at, clock
+            client, credential_name, flow_handle, _next_poll_interval(poll, interval), expires_at, clock
         )
     return poll
 
@@ -237,12 +237,14 @@ def connect_user_credential(
 ) -> UserConnectionPollResponse:
     """Run the GitHub device login for the calling key's user and return the final poll result.
 
-    Polling stops one interval before the code expires, since the proxy rejects polls on an expired code."""
+    Polling stops once the next poll would land after the code expires, since the proxy rejects polls on an expired
+    code. The countdown starts before the code is requested, so it never runs past the proxy's own."""
+    requested_at: Final = clock.now()
     started: Final = client.start_user_connection(credential_name)
     click.echo(f"Go to {started.verification_uri} and enter code {started.user_code}")
     click.echo("Waiting for approval...")
-    last_poll_at: Final = clock.now() + started.expires_in - started.interval
-    return _poll_until_settled(client, credential_name, started.flow_handle, started.interval, last_poll_at, clock)
+    expires_at: Final = requested_at + started.expires_in
+    return _poll_until_settled(client, credential_name, started.flow_handle, started.interval, expires_at, clock)
 
 
 def _report_http_error(response: requests.Response) -> None:

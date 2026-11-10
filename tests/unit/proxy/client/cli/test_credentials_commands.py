@@ -367,10 +367,10 @@ def test_connect_waits_the_interval_github_asks_for_and_backs_off_on_slow_down()
 
 
 @responses.activate
-def test_connect_stops_polling_before_the_code_expires_and_reports_it_expired():
+def test_connect_stops_polling_once_the_next_poll_would_land_after_the_code_expires():
     responses.add(responses.POST, f"{CONNECT_URL}/start", json=_start_body(interval=5, expires_in=19))
-    responses.add(responses.POST, f"{CONNECT_URL}/poll", json={"status": "pending"})
-    responses.add(responses.POST, f"{CONNECT_URL}/poll", json={"status": "pending"})
+    for _ in range(3):
+        responses.add(responses.POST, f"{CONNECT_URL}/poll", json={"status": "pending"})
     responses.add(responses.POST, f"{CONNECT_URL}/poll", status=400, json={"detail": "invalid or expired flow_handle"})
     clock = _FakeClock()
 
@@ -379,8 +379,24 @@ def test_connect_stops_polling_before_the_code_expires_and_reports_it_expired():
     )
 
     assert result.status == "expired"
-    assert clock.waits == (5, 5)
-    assert sum(call.request.url.endswith("/poll") for call in responses.calls) == 2
+    assert clock.waits == (5, 5, 5)
+    assert sum(call.request.url.endswith("/poll") for call in responses.calls) == 3
+
+
+@responses.activate
+def test_connect_still_collects_an_approval_on_the_last_poll_before_the_code_expires():
+    responses.add(responses.POST, f"{CONNECT_URL}/start", json=_start_body(interval=5, expires_in=19))
+    responses.add(responses.POST, f"{CONNECT_URL}/poll", json={"status": "pending"})
+    responses.add(responses.POST, f"{CONNECT_URL}/poll", json={"status": "pending"})
+    responses.add(responses.POST, f"{CONNECT_URL}/poll", json={"status": "connected", "github_login": "octocat"})
+    clock = _FakeClock()
+
+    result = connect_user_credential(
+        CredentialsManagementClient(PROXY, "sk-user"), "team/copilot", clock.as_poll_clock()
+    )
+
+    assert result.status == "connected"
+    assert clock.elapsed == 15
 
 
 @responses.activate
