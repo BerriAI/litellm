@@ -32,6 +32,29 @@ from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_free"),
+    [("parallel_ai/decision", False), ("fireworks_ai/accounts/fireworks/routers/rune", True)],
+)
+def test_query_price_keeps_budgets_only_where_it_is_billed(model: str, expected_free: bool) -> None:
+    router = Router(
+        model_list=[
+            {
+                "model_name": "query-priced",
+                "litellm_params": {
+                    "model": model,
+                    "api_key": "test-key",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                    "input_cost_per_query": 0.025,
+                },
+            }
+        ]
+    )
+
+    assert is_model_cost_zero("query-priced", router) is expected_free
+
+
 @pytest.fixture
 def mock_router_with_zero_cost_model():
     """Create a mock router with a zero-cost model."""

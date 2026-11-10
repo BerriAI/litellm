@@ -19,7 +19,14 @@ from unittest.mock import patch
 
 
 _ENV_HELPERS = frozenset(
-    {"get_env_int", "get_env_float", "get_env_int_in_range", "get_env_int_or_none", "get_env_float_or_none"}
+    {
+        "get_env_int",
+        "get_env_float",
+        "get_env_int_in_range",
+        "get_env_float_in_range",
+        "get_env_int_or_none",
+        "get_env_float_or_none",
+    }
 )
 
 

@@ -104,7 +104,7 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
             "error": {
                 "message": "Authentication Error, Tried to access route=/global/spend/reset, which is only for MASTER KEY",
                 "type": "auth_error",
-                "param": "None",
+                "param": None,
                 "code": "401",
             }
         }, refused.text

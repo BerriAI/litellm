@@ -1,6 +1,8 @@
 use std::sync::LazyLock;
 
-use litellm_auth::{AwsParams, CredentialPlacement, SecretValue};
+use litellm_auth::{AwsParams, CredentialPlacement};
+use litellm_secret_value::SecretValue;
+
 use litellm_auth_aws::AwsCredentialSource;
 use litellm_auth_aws::bedrock_model_id_and_region;
 use litellm_core_utils::settings::resolve_non_empty;
