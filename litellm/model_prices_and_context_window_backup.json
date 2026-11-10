@@ -25566,6 +25566,14 @@
             "notes": "SearXNG is an open-source metasearch engine. Free to use when self-hosted or using public instances."
         }
     },
+    "autom/search": {
+        "input_cost_per_query": 0.001,
+        "litellm_provider": "autom",
+        "mode": "search",
+        "metadata": {
+            "notes": "Autom Google Search, one results page: 1 credit a query, whatever the engine; failed requests are free. Starter: $50 for 50,000 credits ($1.00/1k queries); Standard $0.75/1k, Premium $0.50/1k, Ultimate $0.30/1k."
+        }
+    },
     "serper/search": {
         "input_cost_per_query": 0.001,
         "litellm_provider": "serper",
