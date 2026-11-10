@@ -123,12 +123,9 @@
   in a single rule are resolved by position or by controller-specific tie
   breaking, so the operator entry could take over a built-in route (an entry
   at "/" Prefix would swallow the whole backend management API) instead of
-  adding to it. The exception is an entry that sends a built-in gateway path
-  to the gateway, which is what operators added before the chart covered that
-  path, so it is skipped and their values keep rendering on upgrade.
+  adding to it.
 */}}
 {{- $builtinPathKeys := list "/|Prefix" -}}
-{{- $builtinGatewayPathKeys := list -}}
 {{- if $hasComponentHosts }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -232,7 +229,6 @@ spec:
           # gate); the rest of /debug/* stays on the backend.
           {{- range $gatewayExactPaths }}
           {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|Exact" .) }}
-          {{- $builtinGatewayPathKeys = append $builtinGatewayPathKeys (printf "%s|Exact" .) }}
           - path: {{ . }}
             pathType: Exact
             backend:
@@ -244,7 +240,6 @@ spec:
           {{- range $gatewayPrefixes }}
           {{- $pathType := include "litellm.ingress.pathType" (dict "controller" $controller "path" . "pathType" "Prefix") }}
           {{- $builtinPathKeys = append $builtinPathKeys (printf "%s|%s" . $pathType) }}
-          {{- $builtinGatewayPathKeys = append $builtinGatewayPathKeys (printf "%s|%s" . $pathType) }}
           - path: {{ . }}
             pathType: {{ $pathType }}
             backend:
@@ -317,13 +312,9 @@ spec:
           {{- if eq $extra.path "/" }}
           {{- fail (printf "ingress.extraPaths[%d]: path / is already routed in both directions, Exact to ui and Prefix to backend, so no pathType leaves a request for an entry here to capture" $idx) }}
           {{- end }}
-          {{- $pathKey := printf "%s|%s" $extra.path $pathType }}
-          {{- $targetsGateway := and (eq $target.name $gatewayName) (eq (toString (get $port "number")) (toString $gatewayPort)) }}
-          {{- $alreadyOnGateway := and (has $pathKey $builtinGatewayPathKeys) $targetsGateway }}
-          {{- if and (has $pathKey $builtinPathKeys) (not $alreadyOnGateway) }}
+          {{- if has (printf "%s|%s" $extra.path $pathType) $builtinPathKeys }}
           {{- fail (printf "ingress.extraPaths[%d]: path %s with pathType %s is already routed by this chart, and a duplicate would take it over rather than add to it" $idx $extra.path $pathType) }}
           {{- end }}
-          {{- if not $alreadyOnGateway }}
           - path: {{ $extra.path | quote }}
             pathType: {{ $pathType }}
             backend:
@@ -331,7 +322,6 @@ spec:
                 name: {{ $target.name | quote }}
                 port:
                   {{- toYaml $port | nindent 18 }}
-          {{- end }}
           {{- end }}
           # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
           - path: /
