@@ -2,6 +2,7 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
+import json
 from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final
 
@@ -15,6 +16,16 @@ if TYPE_CHECKING:
     from litellm import LiteLLMLoggingObj
     from litellm.types.llms.openai import HttpxBinaryResponseContent
     from litellm.types.utils import CacheControlsHint
+
+
+def _header_text(value: object) -> object:
+    return json.dumps(value) if isinstance(value, bool | int | float) else value
+
+
+def _headers_as_text(extra_headers: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    if extra_headers is None:
+        return None
+    return {name: _header_text(value) for name, value in extra_headers.items()}
 
 
 class SpeechToCompletionBridgeHandlerInputKwargs(TypedDict):
@@ -117,7 +128,7 @@ class SpeechToCompletionBridgeHandler:
             litellm_params={
                 **litellm_params,
                 "api_base": api_base,
-                "extra_headers": extra_headers,
+                "extra_headers": _headers_as_text(extra_headers),
                 "timeout": timeout,
                 **cache_controls,
             },

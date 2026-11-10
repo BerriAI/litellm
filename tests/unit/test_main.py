@@ -6379,33 +6379,28 @@ def test_speech_gemini_tts_keeps_cached_audio_only_for_the_request_ttl(
     assert route.call_count == 2
 
 
-def test_speech_gemini_tts_fails_like_chat_on_a_non_string_deployment_header(respx_mock: respx.MockRouter):
+def test_speech_gemini_tts_sends_number_and_boolean_deployment_headers_as_their_config_text(
+    respx_mock: respx.MockRouter,
+):
     route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
         return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
     )
-    deployment_headers: Final = {"x-gateway-key": "gateway-secret", "x-org-id": 12345}
 
-    with pytest.raises(litellm.APIConnectionError) as chat_error:
-        litellm.completion(
-            model=f"gemini/{GEMINI_TTS_MODEL}",
-            messages=[{"role": "user", "content": "hello"}],
-            modalities=["audio"],
-            audio={"voice": "Kore", "format": "pcm16"},
-            api_key="fake-gemini-key",
-            extra_headers=deployment_headers,
-        )
-    with pytest.raises(litellm.APIConnectionError) as speech_error:
-        litellm.speech(
-            model=f"gemini/{GEMINI_TTS_MODEL}",
-            input="hello",
-            voice="Kore",
-            api_key="fake-gemini-key",
-            extra_headers=deployment_headers,
-        )
+    litellm.speech(
+        model=f"gemini/{GEMINI_TTS_MODEL}",
+        input="hello",
+        voice="Kore",
+        api_key="fake-gemini-key",
+        extra_headers={"x-gateway-key": "gateway-secret", "x-org-id": 12345, "x-ratio": 1.5, "x-audit": True},
+    )
 
-    assert "Header value must be str or bytes" in str(chat_error.value)
-    assert "Header value must be str or bytes" in str(speech_error.value)
-    assert route.call_count == 0
+    sent: Final = route.calls.last.request.headers
+    assert (sent["x-gateway-key"], sent["x-org-id"], sent["x-ratio"], sent["x-audit"]) == (
+        "gateway-secret",
+        "12345",
+        "1.5",
+        "true",
+    )
 
 
 async def test_aspeech_gemini_tts_waits_for_a_stalled_upstream_without_holding_a_worker_thread(
