@@ -330,7 +330,8 @@ nothing here imports outside it:
   into Baggage: the tenant fan-out adds them as `litellm.metadata.<key>` to that
   destination's view of each span, on top of the global list, so the operator's
   exporter and other destinations never see them. A key the span already carries
-  wins, and names of proxy identity fields are rejected when saved.
+  wins, and names of proxy identity fields and `requester_metadata.headers.*` (the
+  request headers the proxy copies there) are rejected when saved.
 - [`utils.py`](./model/utils.py) — value coercion, JSON serialization, and
   extractor-table application, shared across the package.
 

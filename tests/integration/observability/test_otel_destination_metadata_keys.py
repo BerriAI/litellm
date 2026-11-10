@@ -6,7 +6,6 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -231,6 +230,7 @@ def test_a_team_admin_can_set_keys_and_a_plain_member_cannot(rig: Rig) -> None:
     [
         ("requester_metadata.user_api_key_user_id", "proxy identity attribute"),
         ("tenant_id", "requester_metadata.<key>"),
+        ("requester_metadata.headers.x-internal-token", "would export request headers"),
         (",".join(f"requester_metadata.k{index}" for index in range(21)), "at most 20 keys"),
     ],
 )

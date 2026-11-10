@@ -72,9 +72,13 @@ DEFAULT_BAGGAGE_TEAM_METADATA_KEYS: Final[tuple[str, ...]] = ()
 # A team or key OTel v2 destination can add caller metadata keys on top of the
 # global ``baggage_metadata_keys``, for its own destination only. Each key names
 # a ``requester_metadata.<key>`` path, so only what the caller sent can be read,
-# and a key whose exported name is a proxy-owned identity field is refused.
+# and a key whose exported name is a proxy-owned identity field is refused. The
+# proxy copies the request headers into ``requester_metadata.headers``, credentials
+# masked but anything a gateway in front of it added left as sent, so exporting a
+# header stays an operator decision made in the global list.
 MAX_DESTINATION_METADATA_KEYS: Final = 20
 _RESERVED_METADATA_PREFIX: Final = "user_api_key_"
+_REQUEST_HEADERS_KEY: Final = "headers"
 
 
 def destination_metadata_keys_error(value: str) -> str | None:
@@ -90,6 +94,12 @@ def destination_metadata_keys_error(value: str) -> str | None:
         return (
             f"Invalid baggage_metadata_keys {value!r}: {', '.join(reserved)} would overwrite a proxy identity attribute"
         )
+    headers: Final = tuple(key for key in keys if _is_request_header(key.removeprefix(REQUESTER_METADATA_PATH)))
+    if headers:
+        return (
+            f"Invalid baggage_metadata_keys {value!r}: {', '.join(headers)} would export request headers, "
+            "which only the proxy-wide LITELLM_OTEL_BAGGAGE_METADATA_KEYS can do"
+        )
     if len(frozenset(keys)) > MAX_DESTINATION_METADATA_KEYS:
         return f"Invalid baggage_metadata_keys {value!r}: at most {MAX_DESTINATION_METADATA_KEYS} keys"
     return None
@@ -104,6 +114,10 @@ def parse_destination_metadata_keys(value: object) -> tuple[str, ...] | None:
 
 def _is_reserved_metadata_name(name: str) -> bool:
     return name in DEFAULT_BAGGAGE_METADATA_KEYS or name.startswith(_RESERVED_METADATA_PREFIX)
+
+
+def _is_request_header(name: str) -> bool:
+    return name.partition(".")[0].strip().lower() == _REQUEST_HEADERS_KEY
 
 
 def promoted_baggage(

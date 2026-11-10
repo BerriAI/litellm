@@ -606,6 +606,9 @@ def test_baggage_metadata_keys_is_rejected_where_it_would_never_take_effect(call
         ("requester_metadata.user_api_key_user_id", "proxy identity attribute"),
         ("requester_metadata.user_api_key_hash", "proxy identity attribute"),
         ("requester_metadata.requester_ip_address", "proxy identity attribute"),
+        ("requester_metadata.headers.x-internal-token", "would export request headers"),
+        ("requester_metadata.headers", "would export request headers"),
+        ("requester_metadata.Headers.authorization", "would export request headers"),
         (",".join(f"requester_metadata.k{index}" for index in range(21)), "at most 20 keys"),
     ],
 )
