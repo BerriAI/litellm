@@ -1,7 +1,9 @@
 
+import asyncio
 import copy
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from concurrent.futures import Future
 from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock
@@ -9,8 +11,10 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 import respx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openrouter.chat.transformation import (
@@ -1055,3 +1059,96 @@ def test_openrouter_streaming_chunk_ignores_invalid_provider_guard(provider_fiel
     ).chunk_parser(chunk)
 
     assert response._hidden_params.get("upstream_provider") is None
+
+
+class _FailureUsageRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payload: Final[Future[Mapping[str, object]]] = Future()
+
+    def log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.payload.set_result(TypeAdapter(Mapping[str, object]).validate_python(kwargs["standard_logging_object"]))
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.log_failure_event(kwargs, response_obj, start_time, end_time)
+
+
+@pytest.mark.parametrize("reported_cost", [0.0, 0.001])
+@pytest.mark.parametrize("async_call", [False, True])
+@pytest.mark.parametrize(
+    ("finish_reason", "error", "expected_status"),
+    [
+        ("error", {"code": 502, "message": "Provider failed"}, 502),
+        ("error", None, 502),
+        ("stop", {"code": 429, "message": "Provider failed"}, 429),
+        ("error", {"code": "bad", "message": "Provider failed"}, 502),
+        ("error", {"code": 200, "message": "Provider failed"}, 502),
+    ],
+)
+@pytest.mark.asyncio
+async def test_openrouter_non_streaming_failure_raises(
+    async_call: bool, finish_reason: str, error: object, expected_status: int, reported_cost: float
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"retry-after": "3"},
+            json={
+                "id": "gen-error",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "openai/gpt-4o",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": finish_reason,
+                        "message": {"role": "assistant", "content": "partial answer"},
+                        "error": error,
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": reported_cost},
+            },
+        )
+
+    recorder: Final = _FailureUsageRecorder()
+    transport: Final = httpx.MockTransport(respond)
+
+    async def complete() -> None:
+        if async_call:
+            client: Final = AsyncHTTPHandler(transport=transport)
+            try:
+                await litellm.acompletion(
+                    model="openrouter/openai/gpt-4o",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_key="sk-test",
+                    client=client,
+                    num_retries=0,
+                    callbacks=[recorder],
+                )
+            finally:
+                await client.close()
+        else:
+            with httpx.Client(transport=transport) as sync_client:
+                litellm.completion(
+                    model="openrouter/openai/gpt-4o",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_key="sk-test",
+                    client=HTTPHandler(client=sync_client),
+                    num_retries=0,
+                    callbacks=[recorder],
+                )
+
+    with pytest.raises((litellm.APIError, litellm.RateLimitError)) as exc_info:
+        await complete()
+    assert exc_info.value.status_code == expected_status
+    assert "provider failed" in str(exc_info.value).lower()
+    payload: Final = await asyncio.wait_for(asyncio.wrap_future(recorder.payload), timeout=10)
+    assert payload["status"] == "failure"
+    assert payload["prompt_tokens"] == 10
+    assert payload["completion_tokens"] == 5
+    assert payload["total_tokens"] == 15
+    assert payload["response_cost"] == pytest.approx(reported_cost)
