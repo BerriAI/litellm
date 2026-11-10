@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from prisma import Prisma
-from prisma.engine.errors import EngineConnectionError
+from prisma.engine.errors import AlreadyConnectedError, EngineConnectionError
 
 from litellm.caching.caching import DualCache
 from litellm.proxy.db.prisma_client import PrismaWrapper
@@ -27,6 +27,8 @@ async def test_prisma_connect_owns_its_listening_port(occupied: bool, monkeypatc
         client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(DualCache()))
         try:
             await client.db.connect(timeout=timedelta(seconds=5))
+            with pytest.raises(AlreadyConnectedError):
+                await client.db.connect(timeout=timedelta(seconds=5))
             assert await client.db.query_raw("SELECT 1 AS result") == [{"result": 1}]
             assert client.db.is_connected() is True
         finally:
@@ -48,7 +50,7 @@ async def test_concurrent_prisma_engines_query_their_own_databases() -> None:
 
 
 @pytest.mark.asyncio
-async def test_prisma_startup_database_failure_closes_the_engine() -> None:
+async def test_prisma_startup_database_failure_closes_the_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as unavailable:
         unavailable.bind(  # test-quality-ok: socket remains bound throughout the connection attempt
             ("127.0.0.1", 0)
@@ -58,11 +60,19 @@ async def test_prisma_startup_database_failure_closes_the_engine() -> None:
         )
         original: Final = Prisma(datasource={"url": url})
         client: Final = PrismaWrapper(original)
+        connecting: Final = asyncio.create_task(client.connect(timeout=timedelta(seconds=5)))
         try:
+            await asyncio.sleep(0)
+            engine: Final = original._engine
             with pytest.raises(EngineConnectionError):
-                await client.connect(timeout=timedelta(seconds=5))
-            assert original._engine.process is None
-            assert original._engine.session.should_close() is False
+                await connecting
+            assert original.is_connected() is False
+            assert engine.process is None
+            assert engine.session.should_close() is False
+            monkeypatch.setattr(original, "_datasource", {"url": os.environ["DATABASE_URL"]})
+            await client.connect(timeout=timedelta(seconds=5))
+            assert await client.query_raw("SELECT 1 AS result") == [{"result": 1}]
+            assert original.is_connected() is True
         finally:
             await client.disconnect()
 
@@ -84,6 +94,6 @@ async def test_cancelled_prisma_startup_stops_its_engine() -> None:
             with pytest.raises(asyncio.CancelledError):
                 await connecting
             assert process.poll() is not None
-            assert original._engine.process is None
+            assert original.is_connected() is False
         finally:
             await client.disconnect()

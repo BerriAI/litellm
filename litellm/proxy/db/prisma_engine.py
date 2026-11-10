@@ -78,20 +78,6 @@ def initialize_query_engine(client: "Prisma") -> None:
     )
 
     class PortOwningQueryEngine(QueryEngine):
-        async def connect(
-            self,
-            timeout: timedelta = DEFAULT_CONNECT_TIMEOUT,
-            datasources: Sequence["DatasourceOverride"] | None = None,
-        ) -> None:
-            if self.process is not None:
-                raise errors.AlreadyConnectedError("Already connected to the query engine")
-            try:
-                self.file = self._ensure_file()
-                await self.spawn(self.file, timeout=timeout, datasources=datasources)
-            except (Exception, asyncio.CancelledError):
-                await self.aclose()
-                raise
-
         async def spawn(
             self,
             file: Path,

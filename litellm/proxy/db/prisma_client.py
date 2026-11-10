@@ -403,14 +403,20 @@ class PrismaWrapper:
 
     @staticmethod
     async def _connect_prisma(prisma_client: "Prisma", timeout: int | timedelta | None = None) -> None:
-        if prisma_client.is_connected() is False:
+        new_connection: Final = prisma_client.is_connected() is False
+        if new_connection:
             from litellm.proxy.db.prisma_engine import initialize_query_engine
 
             initialize_query_engine(prisma_client)
-        if timeout is None:
-            await prisma_client.connect()
-        else:
-            await prisma_client.connect(timeout)
+        try:
+            if timeout is None:
+                await prisma_client.connect()
+            else:
+                await prisma_client.connect(timeout)
+        except (Exception, asyncio.CancelledError):
+            if new_connection:
+                await prisma_client.disconnect()
+            raise
 
     @staticmethod
     async def _kill_engine_process(pid: int) -> None:
