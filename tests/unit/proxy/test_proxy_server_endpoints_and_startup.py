@@ -7550,15 +7550,44 @@ async def test_async_data_generator_cleanup_on_early_exit():
     mock_response.aclose.assert_awaited_once()
 
 
+class _FakeClock:
+    """Hand-advanced stand-in for time.perf_counter, so the hook's cost is exact and no real time passes."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _TimeWithFakeClock:
+    """The module's `time` with perf_counter swapped for the fake clock, everything else untouched."""
+
+    def __init__(self, clock: _FakeClock) -> None:
+        self.perf_counter = clock
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(time, name)
+
+
 @pytest.mark.asyncio
-async def test_async_data_generator_records_first_chunk_work_on_the_logging_object():
+async def test_async_data_generator_records_first_chunk_work_on_the_logging_object(monkeypatch: pytest.MonkeyPatch):
     """The overhead header is stamped before any chunk is read, so the time the proxy spends in the
     hook on the first chunk of a chat stream is recorded on the logging object for the success callback.
     Later chunks are not summed, a 20 ms hook on 3 chunks delays the client by 20 ms, not 60."""
+    import litellm.proxy.common_request_processing as common_request_processing_module
+    import litellm.proxy.proxy_server as proxy_server_module
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import async_data_generator
     from litellm.proxy.utils import ProxyLogging
+
+    clock: Final = _FakeClock()
+    monkeypatch.setattr(proxy_server_module, "time", _TimeWithFakeClock(clock))
+    monkeypatch.setattr(common_request_processing_module, "time", _TimeWithFakeClock(clock))
 
     logging_obj = Logging(
         model="gpt-5.4-mini",
@@ -7588,7 +7617,7 @@ async def test_async_data_generator_records_first_chunk_work_on_the_logging_obje
             yield chunk
 
     async def slow_hook(**kwargs: object) -> object:
-        await asyncio.sleep(0.02)
+        clock.advance(0.02)
         return kwargs.get("response")
 
     mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = mock_streaming_iterator
@@ -7604,8 +7633,7 @@ async def test_async_data_generator_records_first_chunk_work_on_the_logging_obje
         ]
 
     assert len([frame for frame in yielded if frame.startswith("data: {")]) == len(mock_chunks)
-    assert logging_obj.first_chunk_overhead_ms is not None
-    assert 20 <= logging_obj.first_chunk_overhead_ms < 60
+    assert logging_obj.first_chunk_overhead_ms == pytest.approx(20.0)
 
 
 def _guarded_chain_logging(chain):

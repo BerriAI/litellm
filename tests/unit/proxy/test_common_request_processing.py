@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import copy
 import datetime
+import time
 import gzip
 import json
 from collections.abc import AsyncIterable, Mapping
@@ -5364,6 +5365,29 @@ class TestHandleLLMApiExceptionFramingHeaders:
         assert proxy_exc.headers["x-request-id"] == "abc-123"
 
 
+class _FakeClock:
+    """Hand-advanced stand-in for time.perf_counter, so the hook's cost is exact and no real time passes."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _TimeWithFakeClock:
+    """The module's `time` with perf_counter swapped for the fake clock, everything else untouched."""
+
+    def __init__(self, clock: _FakeClock) -> None:
+        self.perf_counter = clock
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(time, name)
+
+
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""
 
@@ -5438,6 +5462,10 @@ class TestAsyncStreamingDataGeneratorFastPath:
         """The overhead header is stamped before any chunk is read, so the time the proxy spends in
         the hook on the first chunk is recorded on the logging object for the success callback to add.
         Later chunks are not summed, a 20 ms hook on 3 chunks delays the client by 20 ms, not 60."""
+        import litellm.proxy.common_request_processing as common_request_processing_module
+
+        clock: Final = _FakeClock()
+        monkeypatch.setattr(common_request_processing_module, "time", _TimeWithFakeClock(clock))
 
         class _StreamingCb(CustomLogger):
             async def async_post_call_streaming_hook(
@@ -5451,7 +5479,7 @@ class TestAsyncStreamingDataGeneratorFastPath:
         proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
 
         async def slow_hook(**kw: object) -> object:
-            await asyncio.sleep(0.02)
+            clock.advance(0.02)
             return kw["response"]
 
         monkeypatch.setattr(proxy_logging_obj, "async_post_call_streaming_hook", slow_hook)
@@ -5479,8 +5507,7 @@ class TestAsyncStreamingDataGeneratorFastPath:
         ]
 
         assert len(out) == len(chunks)
-        assert logging_obj.first_chunk_overhead_ms is not None
-        assert 20 <= logging_obj.first_chunk_overhead_ms < 60
+        assert logging_obj.first_chunk_overhead_ms == pytest.approx(20.0)
 
         ProxyLogging._callback_capabilities_cache.clear()
 
