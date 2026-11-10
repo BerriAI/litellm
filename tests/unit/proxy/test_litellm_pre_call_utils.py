@@ -8243,12 +8243,15 @@ async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_fall
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fallback_key", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
-async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_grouped_fallbacks(fallback_key: str):
+@pytest.mark.parametrize("group", ["primary-model", "model"])
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_grouped_fallbacks(
+    fallback_key: str, group: str
+):
     updated: Final = await _pre_call_body(
         {
             fallback_key: [
                 {
-                    "primary-model": [
+                    group: [
                         "plain-model",
                         {"model": "blank-pair-model", "client_id": "", "client_secret": None},
                         {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},
@@ -8260,7 +8263,7 @@ async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_grou
 
     assert updated[fallback_key] == [
         {
-            "primary-model": [
+            group: [
                 "plain-model",
                 {"model": "blank-pair-model"},
                 {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},

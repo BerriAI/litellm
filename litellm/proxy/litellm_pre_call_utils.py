@@ -851,7 +851,7 @@ def _drop_blank_client_oauth_pair_in_entry(
     entry: dict[str, object],  # mutable-ok: strips in place on a fallback target or a model group's fallback chain
 ) -> None:
     _drop_blank_client_oauth_pair(entry)
-    if "model" in entry:
+    if isinstance(entry.get("model"), str):
         _drop_blank_client_oauth_pair_in_fallbacks(entry)
         return
     for chain in entry.values():
