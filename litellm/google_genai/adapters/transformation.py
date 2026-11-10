@@ -423,16 +423,8 @@ def _genai_turn_messages(
     )
 
 
-def _answered_by_next_turn(turns: Sequence[_GenAITurn], index: int) -> bool:
-    return index + 1 < len(turns) and bool(turns[index + 1].responses)
-
-
-def _skipped_results_after(
-    turns: Sequence[_GenAITurn], skipped_results: Sequence[tuple[ChatCompletionToolMessage, ...]], index: int
-) -> tuple[ChatCompletionToolMessage, ...]:
-    previous: Final = skipped_results[index - 1] if index > 0 and _answered_by_next_turn(turns, index - 1) else ()
-    own: Final = () if _answered_by_next_turn(turns, index) else skipped_results[index]
-    return (*previous, *own)
+def _last_answering_turn(turns: Sequence[_GenAITurn], index: int) -> int:
+    return next((later for later in range(index + 1, len(turns)) if not turns[later].responses), len(turns)) - 1
 
 
 def _genai_contents_messages(contents: Sequence[object]) -> tuple[AllMessageValues, ...]:
@@ -458,6 +450,9 @@ def _genai_contents_messages(contents: Sequence[object]) -> tuple[AllMessageValu
         )
         for turn, (start, end) in zip(turns, pairwise(call_starts))
     )
+    skipped_after: Final = MappingProxyType(
+        {_last_answering_turn(turns, index): results for index, results in enumerate(skipped_results) if results}
+    )
     return tuple(
         chain.from_iterable(
             (
@@ -466,7 +461,7 @@ def _genai_contents_messages(contents: Sequence[object]) -> tuple[AllMessageValu
                     call_ids[call_starts[index] : call_starts[index + 1]],
                     response_ids[response_starts[index] : response_starts[index + 1]],
                 ),
-                *_skipped_results_after(turns, skipped_results, index),
+                *skipped_after.get(index, ()),
             )
             for index, turn in enumerate(turns)
         )
