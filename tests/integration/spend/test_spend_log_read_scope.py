@@ -1,10 +1,11 @@
+import json
 import os
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
@@ -146,15 +147,50 @@ async def test_ownership_sql_selects_allowed_rows_and_intersects_filters(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("scope", "expected"),
-    [(AllRows(), ("foreign",)), (OwnedRows("caller"), ("own",)), (OwnedRows(None), ())],
+    ("id_column", "scope", "expected"),
+    [
+        ("request_id", AllRows(), ("foreign",)),
+        ("request_id", OwnedRows("caller"), ()),
+        ("litellm_call_id", AllRows(), ("own",)),
+        ("litellm_call_id", OwnedRows("caller"), ("own",)),
+        ("litellm_call_id", OwnedRows(None), ()),
+    ],
 )
-async def test_payload_sql_filters_foreign_collisions_and_prefers_exact_ids_for_admins(
-    spend_database: Prisma, scope: ReadScope, expected: tuple[str, ...]
+async def test_payload_sql_filters_foreign_collisions(
+    spend_database: Prisma,
+    id_column: Literal["request_id", "litellm_call_id"],
+    scope: ReadScope,
+    expected: tuple[str, ...],
 ) -> None:
-    query, params = _spend_log_payload_query("foreign", scope)
+    query, params = _spend_log_payload_query(id_column, "foreign", scope)
     result: Final = await spend_database.query_raw(query, *params)
     assert tuple(row.request_id for row in REQUEST_IDS.validate_python(result)) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [AllRows(), OwnedRows("caller", ("first",))])
+async def test_payload_sql_by_request_id_needs_no_call_id_index(spend_database: Prisma, scope: ReadScope) -> None:
+    await spend_database.execute_raw(
+        """
+        DO $$
+        DECLARE index_name text;
+        BEGIN
+            FOR index_name IN
+                SELECT indexname FROM pg_indexes
+                WHERE schemaname = current_schema()
+                AND tablename = 'LiteLLM_SpendLogs'
+                AND indexdef LIKE '%litellm_call_id%'
+            LOOP
+                EXECUTE format('DROP INDEX %I', index_name);
+            END LOOP;
+        END $$
+        """
+    )
+    query, params = _spend_log_payload_query("request_id", "own", scope)
+    async with spend_database.tx() as transaction:
+        await transaction.execute_raw("SET LOCAL enable_seqscan = off")
+        plan: Final = await transaction.query_raw(f"EXPLAIN (FORMAT JSON) {query}", *params)
+    assert "Seq Scan" not in json.dumps(plan), plan
 
 
 def _delete_session(session_id: str) -> None:
