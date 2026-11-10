@@ -14,7 +14,7 @@ use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
-    types::{PyDateTime, PyDict, PyList},
+    types::{PyDateTime, PyDict, PyList, PyString},
 };
 use serde_json::Value;
 
@@ -22,7 +22,7 @@ use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
-    python::Streaming,
+    python::{Logging, Streaming},
     setup,
 };
 
@@ -137,6 +137,40 @@ impl LegacyLogging {
         Some(params)
     }
 
+    // Compared as Python compares them, so a caller's `0` is kept over a typed float's `0.0`.
+    fn caller_value<'py>(
+        &self,
+        py: Python<'py>,
+        name: &str,
+        sent: &Value,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match self.call.lookup(py, name)? {
+            Some(value) if from_py::<Value>(&value).is_ok() && value.eq(to_py(py, sent)?)? => {
+                Ok(Some(value))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    // Python's Messages handler logs the caller's own optional params, not their typed copies.
+    fn as_called(&self, py: Python<'_>, context: &RequestContext) -> PyResult<RequestContext> {
+        let mut context = context.clone();
+        if self.operation != LoggingOperation::Messages {
+            return Ok(context);
+        }
+        for (name, sent) in context
+            .optional_params
+            .as_object_mut()
+            .into_iter()
+            .flatten()
+        {
+            if let Some(value) = self.caller_value(py, name, sent)? {
+                *sent = from_py(&value)?;
+            }
+        }
+        Ok(context)
+    }
+
     /// Python times the provider exchange inside the async `AsyncHTTPHandler.post`; its sync
     /// client is untimed.
     fn close_api_window(&mut self, py: Python<'_>, end: f64) -> PyResult<()> {
@@ -158,13 +192,20 @@ impl LegacyLogging {
         }
     }
 
-    fn input_description(&self) -> &'static str {
-        match self.operation {
+    fn logged_input<'py>(
+        &self,
+        py: Python<'py>,
+        body: &Bound<'py, PyDict>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let description = match self.operation {
             LoggingOperation::Completion => "Chat completions",
             LoggingOperation::Responses => "Responses",
-            LoggingOperation::Messages => "Messages",
+            LoggingOperation::Messages => {
+                return Logging::MessagesInput.call(py, (body, self.call.kwargs().bind(py)));
+            }
             LoggingOperation::Ocr => "OCR document processing",
-        }
+        };
+        Ok(PyString::new(py, description).into_any())
     }
 
     /// The key `pre_call` logs. Python's Messages handler logs an empty string, never the key.
@@ -456,6 +497,7 @@ impl LegacyLogging {
         wire: Box<WireRequest>,
         context: &RequestContext,
     ) -> PyResult<HookStep<Self, Box<WireRequest>>> {
+        let context = &self.as_called(py, context)?;
         let logger = self.logger()?;
         logger.update_from_kwargs(
             py,
@@ -468,11 +510,16 @@ impl LegacyLogging {
             .into_bound(py)
             .cast_into::<PyDict>()?;
         for (name, sent) in wire.body.as_object().into_iter().flatten() {
-            if let Some(value) = self.call.lookup(py, name)?
-                && from_py::<Value>(&value).is_ok_and(|caller| caller == *sent)
-            {
+            if let Some(value) = self.caller_value(py, name, sent)? {
                 body.set_item(name, value)?;
             }
+        }
+        if self.operation == LoggingOperation::Messages {
+            // Python's Messages handler merges its transformed request body into the call details.
+            logger
+                .object(py)
+                .getattr("model_call_details")?
+                .call_method1("update", (&body,))?;
         }
         let headers = PyDict::new(py);
         for (name, value) in &wire.headers {
@@ -483,9 +530,10 @@ impl LegacyLogging {
             headers: headers.clone().unbind(),
             context: context.clone(),
         });
+        let input = self.logged_input(py, &body)?;
         self.logger()?.pre_call(
             py,
-            self.input_description(),
+            &input,
             self.logged_api_key(context),
             &body,
             &headers,
@@ -539,7 +587,11 @@ impl LegacyLogging {
             .getattr("litellm_params")?
             .cast_into::<PyDict>()?
             .copy()?;
-        params.set_item("custom_llm_provider", &facts.provider.provider)?;
+        if self.operation != LoggingOperation::Messages {
+            // Python's Messages handler hands the provider to the logger beside its params, never
+            // in them, and the proxy's logger carries over to the next fallback hop.
+            params.set_item("custom_llm_provider", &facts.provider.provider)?;
+        }
         crate::python::Logging::Update.call(
             py,
             (
@@ -562,8 +614,17 @@ impl LegacyLogging {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
         };
-        details.set_item("cache_hit", self.cache_key.is_some())?;
+        if self.cache_key.is_some() {
+            details.set_item("cache_hit", true)?;
+        } else {
+            details.call_method1("pop", ("cache_hit", py.None()))?;
+        }
         details.set_item("cache_key", self.cache_key.as_deref())?;
+        if let (LoggingOperation::Messages, ResultSource::Provider, Some(request)) =
+            (self.operation, &facts.source, &self.request)
+        {
+            details.call_method1("update", (request.body.bind(py),))?;
+        }
         Ok(HookStep::Ready(()))
     }
 
@@ -1128,10 +1189,10 @@ logger._provider_reported_cost = None
             };
             let previous = litellm_host::interceptors::ExecutionFacts {
                 provider: facts.provider.clone(),
-                cost: litellm_host::interceptors::Cost::Reported {
-                    amount: serde_json::Number::from_f64(9.0).unwrap(),
+                cost: litellm_host::interceptors::Cost::CacheHit,
+                source: litellm_host::interceptors::ResultSource::Cache {
+                    key: "earlier-hit".into(),
                 },
-                source: litellm_host::interceptors::ResultSource::Provider,
             };
             logging.result_ready(py, &previous).unwrap();
             local(&locals, "logger")
@@ -1149,8 +1210,54 @@ logger._provider_reported_cost = None
                 c"
 assert logger.model_call_details.get('response_cost') is None, logger.model_call_details
 assert logger._provider_reported_cost == reported, logger._provider_reported_cost
-assert logger.model_call_details['cache_hit'] is cache_hit, logger.model_call_details
+assert logger.model_call_details.get('cache_hit') is (True if cache_hit else None), logger.model_call_details
 assert logger.update['custom_llm_provider'] == 'edenai', logger.update
+",
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::messages(crate::LoggingOperation::Messages, false)]
+    #[case::ocr(crate::LoggingOperation::Ocr, true)]
+    fn result_ready_puts_the_provider_in_the_logged_params_except_for_messages(
+        #[case] operation: crate::LoggingOperation,
+        #[case] in_params: bool,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, PAYLOAD_LOGGER);
+            run(
+                py,
+                &locals,
+                c"
+logger.litellm_params = {}
+logger.optional_params = {}
+logger.model_call_details = {}
+logger._provider_reported_cost = None
+",
+            );
+            let mut logging = LegacyLogging {
+                logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
+                operation,
+                ..legacy_call(py, &locals, false)
+            };
+            let facts = litellm_host::interceptors::ExecutionFacts {
+                provider: litellm_host::interceptors::ProviderIdentity {
+                    model: "native-test".into(),
+                    provider: "anthropic".into(),
+                },
+                cost: litellm_host::interceptors::Cost::Deferred,
+                source: litellm_host::interceptors::ResultSource::Provider,
+            };
+            logging.result_ready(py, &facts).unwrap();
+            locals.set_item("in_params", in_params).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+assert logger.update['custom_llm_provider'] == 'anthropic', logger.update
+assert ('custom_llm_provider' in logger.update['litellm_params']) is in_params, logger.update
 ",
             );
         });
@@ -1290,7 +1397,10 @@ assert logger.update['custom_llm_provider'] == 'edenai', logger.update
     #[rstest]
     #[case::completion(crate::LoggingOperation::Completion, "Chat completions")]
     #[case::responses(crate::LoggingOperation::Responses, "Responses")]
-    #[case::messages(crate::LoggingOperation::Messages, "Messages")]
+    #[case::messages(
+        crate::LoggingOperation::Messages,
+        r#"[{'role': 'user', 'content': '{"pages": [1]}'}]"#
+    )]
     #[case::ocr(crate::LoggingOperation::Ocr, "OCR document processing")]
     fn prepared_arguments_replace_the_legacy_view_without_losing_callback_aliases(
         #[case] operation: crate::LoggingOperation,
@@ -1331,7 +1441,7 @@ prepared = {'pages': replacement}
                 &locals,
                 c"
 assert logger.pre['complete_input_dict']['pages'] is replacement
-assert logger.pre_input == description
+assert str(logger.pre_input) == description
 assert original == [0]
 ",
             );
