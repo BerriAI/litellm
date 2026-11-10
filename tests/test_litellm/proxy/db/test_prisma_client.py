@@ -3,6 +3,7 @@ import os
 import signal
 import sys
 import urllib.parse
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -464,7 +465,9 @@ def test_db_push_without_the_prisma_runner_fails_the_migration_instead_of_crashi
     ),
     ids=("wait-for-the-build", "start-the-build"),
 )
-def test_without_proxy_extras_the_index_build_reports_failure_instead_of_raising(monkeypatch, run, outcome):
+def test_without_proxy_extras_the_index_build_reports_failure_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch, run: Callable[[], bool | None], outcome: bool | None
+) -> None:
     """The migration job exits non-zero and a serving proxy keeps booting when the extras
     package that owns the index build is not installed."""
     monkeypatch.setitem(sys.modules, "litellm_proxy_extras.utils", None)
