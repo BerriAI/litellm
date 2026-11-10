@@ -6,10 +6,11 @@ to models with zero cost (e.g., on-premises models).
 """
 
 import asyncio
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+from starlette.requests import Request as StarletteRequest
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -653,8 +654,8 @@ class TestOverBudgetRequestThroughModelGroupAlias:
 
         router = self._router()
         request_data = {"model": model}
-        skip_budget_checks = _should_skip_budget_checks(
-            request_data=request_data, route=self.ROUTE, request=None, llm_router=router
+        skip_budget_checks = await _should_skip_budget_checks(
+            request_data=request_data, route=self.ROUTE, request=None, llm_router=router, valid_token=UserAPIKeyAuth()
         )
         return await common_checks(
             request_body=request_data,
@@ -692,3 +693,237 @@ class TestOverBudgetRequestThroughModelGroupAlias:
     async def test_over_budget_request_for_paid_model_is_blocked(self, mock_proxy_logging):
         with pytest.raises(litellm.BudgetExceededError):
             await self._request("paid-model", mock_proxy_logging)
+
+
+def _http_request(path: str) -> StarletteRequest:
+    return StarletteRequest({"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""})
+
+
+class TestOverBudgetRequestThroughKeyAndTeamAliases:
+    """Key `aliases` and team `model_aliases` are rewritten after auth, so the waiver must
+    resolve them itself or it judges a name the request is never served under."""
+
+    ROUTE = "/v1/chat/completions"
+
+    @staticmethod
+    def _router() -> Router:
+        return Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "openai/free-backend",
+                        "api_key": "sk-fixture",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {
+                        "model": "openai/paid-backend",
+                        "api_key": "sk-fixture",
+                        "input_cost_per_token": 1e-6,
+                        "output_cost_per_token": 2e-6,
+                    },
+                },
+            ]
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "token_fields", "router_settings", "expected_skip"),
+        [
+            ("free-key", {"aliases": {"free-key": "free-model"}}, None, True),
+            ("free-team", {"team_model_aliases": {"free-team": "free-model"}}, None, True),
+            ("free-model", {"aliases": {"free-model": "paid-model"}}, None, False),
+            ("free-model", {"team_model_aliases": {"free-model": "paid-model"}}, None, False),
+            (
+                "free-team",
+                {"team_model_aliases": {"free-team": "free-model"}, "aliases": {"free-model": "paid-model"}},
+                None,
+                False,
+            ),
+            (
+                "free-team",
+                {"team_model_aliases": {"free-team": "free-model"}},
+                {"model_group_alias": {"free-model": "paid-model"}},
+                False,
+            ),
+            (["free-key"], {"aliases": {"free-key": "free-model"}}, None, False),
+        ],
+    )
+    async def test_centralized_skip_flag_follows_the_served_model(
+        self, model, token_fields, router_settings, expected_skip
+    ):
+        from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+
+        valid_token = UserAPIKeyAuth(token="t", router_settings=router_settings, **token_fields)
+        assert (
+            await _should_skip_budget_checks(
+                request_data={"model": model},
+                route=self.ROUTE,
+                request=_http_request(self.ROUTE),
+                llm_router=self._router(),
+                valid_token=valid_token,
+            )
+            is expected_skip
+        )
+
+    @pytest.mark.asyncio
+    async def test_sub_call_is_judged_by_its_own_model_not_the_callers_aliases(self):
+        from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+
+        valid_token = UserAPIKeyAuth(token="t", aliases={"paid-model": "free-model"})
+        assert (
+            await _should_skip_budget_checks(
+                request_data={"model": "paid-model"},
+                route=self.ROUTE,
+                request=_http_request(self.ROUTE),
+                llm_router=self._router(),
+                valid_token=valid_token,
+                sub_call=True,
+            )
+            is False
+        )
+
+    @pytest.mark.asyncio
+    async def test_provider_pass_through_model_is_not_rewritten_by_key_aliases(self):
+        from starlette.requests import Request
+
+        from litellm.proxy.auth.user_api_key_auth import budget_served_model
+
+        route = "/openai/v1/chat/completions"
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": route,
+                "headers": [],
+                "query_string": b"",
+                "path_params": {"endpoint": "v1/chat/completions"},
+            }
+        )
+        valid_token = UserAPIKeyAuth(token="t", aliases={"paid-model": "free-model"})
+
+        served: Final = await budget_served_model(
+            "paid-model", {"model": "paid-model"}, route, request, self._router(), valid_token
+        )
+
+        assert served == "paid-model"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("route", "scope_extra"),
+        [
+            ("/v1/chat/completions", {"query_string": b"model=free-key"}),
+            ("/v1/chat/completions", {"path_params": {"model": "free-key"}}),
+            ("/v1/embeddings", {}),
+        ],
+    )
+    async def test_requested_model_is_judged_when_preparation_may_pick_the_model_elsewhere(
+        self, route: str, scope_extra: dict[str, object]
+    ) -> None:
+        from starlette.requests import Request
+
+        from litellm.proxy.auth.user_api_key_auth import budget_served_model
+
+        request: Final = Request(
+            {"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b"", **scope_extra}
+        )
+        served: Final = await budget_served_model(
+            "free-key",
+            {"model": "free-key"},
+            route,
+            request,
+            self._router(),
+            UserAPIKeyAuth(token="t", aliases={"free-key": "free-model"}),
+        )
+
+        assert served == "free-key"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("completion_model", ["paid-model", "free-model"])
+    async def test_requested_model_is_judged_when_a_completion_model_overrides_it(self, completion_model: str) -> None:
+        from litellm.proxy.auth.user_api_key_auth import budget_served_model
+
+        with patch("litellm.proxy.proxy_server.general_settings", {"completion_model": completion_model}):
+            served: Final = await budget_served_model(
+                "free-key",
+                {"model": "free-key"},
+                self.ROUTE,
+                _http_request(self.ROUTE),
+                self._router(),
+                UserAPIKeyAuth(token="t", aliases={"free-key": "free-model"}),
+            )
+
+        assert served == "free-key"
+
+    @pytest.mark.asyncio
+    async def test_common_checks_honours_the_callers_decision_not_to_skip_budgets(
+        self, mock_proxy_logging: ProxyLogging
+    ) -> None:
+        with pytest.raises(litellm.BudgetExceededError):
+            await common_checks(
+                request_body={"model": "free-model"},
+                team_object=None,
+                user_object=LiteLLM_UserTable(user_id="test-user", spend=100.0, max_budget=50.0),
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route=self.ROUTE,
+                llm_router=self._router(),
+                proxy_logging_obj=mock_proxy_logging,
+                valid_token=UserAPIKeyAuth(token="t", aliases={"free-model": "paid-model"}),
+                request=MagicMock(),
+                skip_budget_checks=False,
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("bypass_flag", "expected_skip"), [("false", True), ("true", False)])
+async def test_waiver_skips_a_stale_team_alias_exactly_when_dispatch_does(monkeypatch, bypass_flag, expected_skip):
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils
+    from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+
+    monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", bypass_flag)
+    monkeypatch.setattr(pre_call_utils, "_ENABLE_TEAM_STALE_ALIAS_BYPASS", None)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-1_legacy",
+                "litellm_params": {
+                    "model": "openai/free-backend",
+                    "api_key": "sk-fixture",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {"team_id": "team-1", "team_public_model_name": "legacy"},
+            },
+            {
+                "model_name": "model_name_team-1_current",
+                "litellm_params": {
+                    "model": "openai/paid-backend",
+                    "api_key": "sk-fixture",
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token": 2e-6,
+                },
+                "model_info": {"team_id": "team-1", "team_public_model_name": "team-model"},
+            },
+        ]
+    )
+    assert ("team-1", "team-model") in router.registry().index("team_model")
+    valid_token = UserAPIKeyAuth(
+        token="t", team_id="team-1", team_model_aliases={"team-model": "model_name_team-1_legacy"}
+    )
+
+    assert (
+        await _should_skip_budget_checks(
+            request_data={"model": "team-model"},
+            route="/v1/chat/completions",
+            request=_http_request("/v1/chat/completions"),
+            llm_router=router,
+            valid_token=valid_token,
+        )
+        is expected_skip
+    )

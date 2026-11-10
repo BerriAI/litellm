@@ -1,5 +1,5 @@
 from typing import Final
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.requests import Request
@@ -451,3 +451,71 @@ def test_apply_budget_limits_copies_per_model_limits_onto_end_user_params():
         "end_user_model_tpm_limit": {"gpt-4o": 400000},
         "end_user_model_rpm_limit": {"gpt-4o": 200},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "requested_model, key_aliases, expect_enforced",
+    [
+        ("free-key", {"free-key": "free-model"}, False),
+        ("free-model", {"free-model": "paid-model"}, True),
+    ],
+)
+async def test_custom_auth_judges_the_zero_cost_waiver_by_the_key_alias_target(
+    requested_model: str, key_aliases: dict[str, str], expect_enforced: bool
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {
+                    "model": "openai/free-backend",
+                    "api_key": "sk-fixture",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {
+                    "model": "openai/paid-backend",
+                    "api_key": "sk-fixture",
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token": 2e-6,
+                },
+            },
+        ]
+    )
+    valid_token: Final = UserAPIKeyAuth(
+        token="test_token",
+        aliases=key_aliases,
+        end_user_id="end-user",
+        end_user_model_max_budget={requested_model: {"budget_limit": 1.0, "time_period": "1d"}},
+    )
+    limiter: Final = MagicMock()
+    limiter.is_end_user_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(current_cost=5.0, max_budget=1.0)
+    )
+    http_request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions"})
+
+    async def run() -> UserAPIKeyAuth:
+        return await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=http_request,
+            request_data={"model": requested_model},
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+    ):
+        if expect_enforced:
+            with pytest.raises(litellm.BudgetExceededError):
+                await run()
+            assert limiter.is_end_user_within_model_budget.await_args.kwargs["model"] == requested_model
+        else:
+            result: Final = await run()
+            assert result.token == "test_token"
+            limiter.is_end_user_within_model_budget.assert_not_awaited()

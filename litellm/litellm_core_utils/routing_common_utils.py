@@ -38,7 +38,6 @@ _V = TypeVar("_V")
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
-_OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -213,30 +212,6 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     if not isinstance(target, str) or not target:
         return None
     return target
-
-
-def resolve_served_model(
-    model: str,
-    model_alias_map: object,
-    key_aliases: object,
-    model_group_alias: object,
-) -> str:
-    """Model the request preparation serves for `model`.
-
-    Apply the global alias map, then key aliases, then `router_settings.model_group_alias`.
-    """
-    global_aliases: Final = (
-        _OBJECT_MAPPING_ADAPTER.validate_python(model_alias_map) if isinstance(model_alias_map, Mapping) else None
-    )
-    global_target: Final = global_aliases.get(model) if global_aliases is not None else None
-    after_global: Final = global_target if isinstance(global_target, str) else model
-    key_alias_mapping: Final = (
-        _OBJECT_MAPPING_ADAPTER.validate_python(key_aliases) if isinstance(key_aliases, Mapping) else None
-    )
-    key_target: Final = key_alias_mapping.get(after_global) if key_alias_mapping is not None else None
-    after_key: Final = key_target if isinstance(key_target, str) else after_global
-    router_target: Final = resolve_model_group_alias(model_group_alias, after_key)
-    return router_target if router_target is not None else after_key
 
 
 def truncate_fallback_error_detail(detail: str) -> str:
