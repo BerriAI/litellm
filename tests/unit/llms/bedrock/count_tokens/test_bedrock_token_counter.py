@@ -491,6 +491,12 @@ _CONTINUED: Final = (("user", "What is 2+2?"), ("assistant", "Please continue.")
         ),
         ({"role": "assistant", "content": ""}, True, _CONTINUED),
         ({"role": "assistant", "content": [{"type": "text", "text": " "}]}, True, _CONTINUED),
+        ({"role": "assistant", "content": ""}, None, _CONTINUED),
+        (
+            {"role": "assistant", "content": "", "function_call": {"name": "add", "arguments": "{}"}},
+            True,
+            _CONTINUED,
+        ),
     ),
     ids=(
         "empty_string",
@@ -498,11 +504,13 @@ _CONTINUED: Final = (("user", "What is 2+2?"), ("assistant", "Please continue.")
         "thinking_and_empty_string",
         "modify_params_empty_string",
         "modify_params_blank_text_block",
+        "modify_params_null_empty_string",
+        "modify_params_function_call_and_empty_string",
     ),
 )
 async def test_claude_converse_count_sends_the_texts_converse_inference_sends(
     assistant_turn: dict[str, JsonValue],
-    modify_params: bool,
+    modify_params: bool | None,
     expected_sent: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -538,6 +546,32 @@ async def test_claude_converse_count_sends_the_texts_converse_inference_sends(
     converse_sent: Final = _sent_texts(_JSON_BODY.validate_json(inference.requests[0].content))
     assert _sent_texts(_counted_body(bedrock.requests[0])) == converse_sent
     assert converse_sent == expected_sent
+
+
+@pytest.mark.asyncio
+async def test_claude_converse_count_under_modify_params_answers_for_a_text_block_without_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "What is 2+2?"},
+            {"role": "assistant", "content": [{"type": "text"}]},
+            {"role": "user", "content": "And 3+3?"},
+        ],
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": "bedrock/us.anthropic.claude-haiku-5-5"}},
+        request_model="claude-haiku-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert result.error is False
+    assert _sent_texts(_counted_body(bedrock.requests[0])) == _DROPPED
 
 
 @pytest.mark.asyncio
