@@ -199,7 +199,7 @@ mod tests {
             {"role": "assistant", "content": "   "},
             {"role": "user", "content": "real"}
         ])));
-        // Must equal `_EMPTY_TEXT_PLACEHOLDER` in litellm/litellm_core_utils/prompt_templates/factory.py
+        // Must equal `EMPTY_TEXT_PLACEHOLDER` in litellm/litellm_core_utils/prompt_templates/factory.py
         let placeholder = "[System: Empty message content sanitised to satisfy protocol]";
         assert_eq!(conversation.turns[0].texts, vec![placeholder]);
         assert_eq!(conversation.turns[1].texts, vec![placeholder]);
