@@ -27,9 +27,9 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 WATCHED: Final = (
     "schema.prisma",
     "litellm/proxy/schema.prisma",
-    "litellm-proxy-extras/litellm_proxy_extras/schema.prisma",
+    "litellm/proxy-extras/litellm_proxy_extras/schema.prisma",
 )
-MIGRATIONS_PREFIX: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/"
+MIGRATIONS_PREFIX: Final = "litellm/proxy-extras/litellm_proxy_extras/migrations/"
 TABLE: Final = re.compile(r"(?<![A-Za-z0-9])LiteLLM_SpendLogs(?![A-Za-z0-9])", re.IGNORECASE)
 DECIDING_STATES: Final = frozenset({"APPROVED", "CHANGES_REQUESTED", "DISMISSED"})
 MODEL_START: Final = re.compile(r"^model\s+LiteLLM_SpendLogs\s*\{")

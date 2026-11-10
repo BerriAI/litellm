@@ -108,7 +108,7 @@ class TestSpendLogHits:
         assert guard.spend_log_hits(diff, _blocks("schema.prisma", head=head)) == ("schema.prisma: +new_col String?",)
 
     def test_an_added_migration_line_is_a_hit_in_any_case_and_a_removed_one_is_not(self):
-        path: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
+        path: Final = "litellm/proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
         diff: Final = _diff(
             path,
             _hunk(
@@ -125,7 +125,7 @@ class TestSpendLogHits:
         )
 
     def test_another_table_in_a_migration_or_an_unwatched_file_is_not_a_hit(self):
-        path: Final = "litellm-proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
+        path: Final = "litellm/proxy-extras/litellm_proxy_extras/migrations/20260101000000_x/migration.sql"
         other: Final = _added(
             path, 'ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN "x" TEXT; -- not MyLiteLLM_SpendLogs', 5
         )

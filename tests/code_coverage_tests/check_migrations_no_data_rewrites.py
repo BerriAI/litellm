@@ -123,7 +123,7 @@ from pathlib import Path
 from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MIGRATIONS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
+MIGRATIONS_DIR = REPO_ROOT / "litellm" / "proxy-extras" / "litellm_proxy_extras" / "migrations"
 
 GRANDFATHERED = frozenset(
     {

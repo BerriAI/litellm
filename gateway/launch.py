@@ -25,8 +25,6 @@ from typing import TYPE_CHECKING, Final
 from typing_extensions import assert_never
 from uvicorn.main import main as uvicorn_main
 
-from litellm_cli.main import without_gc_pauses
-
 if TYPE_CHECKING:
     from litellm.proxy.db.db_url_settings import DatabaseURLSettings
     from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings
@@ -67,6 +65,8 @@ def pool_database_url(
 
 
 def worker_app() -> "ASGIApp":
+    from litellm_cli.main import without_gc_pauses
+
     with without_gc_pauses():
         from gateway.main import app
         from litellm.proxy.rust_forward.mode import rust_forward_mode

@@ -1,6 +1,8 @@
 litellm/vscode-extension
 litellm/proxy/discovery_endpoints/skill_scanner_adapter
-.github
+.github/*
+!.github/packaging/
+!.github/packaging/*.py
 tests
 .git
 .devcontainer
@@ -49,7 +51,7 @@ build/
 **/node_modules
 litellm/ui/litellm-dashboard/.next
 litellm/ui/litellm-dashboard/out
-litellm-rust/target/
+litellm/rust/target/
 litellm/rust_bridge/_native*.so
 *.log
 .env

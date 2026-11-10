@@ -103,7 +103,7 @@ spec_pattern='^(litellm/.*|enterprise/.*|pyproject\.toml|uv\.lock|litellm/ui/lit
 ui_prettier_pattern='^litellm/ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$'
 ui_eslint_pattern='^litellm/ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$'
 
-litellm_py_files=$(scope_match "$litellm_py_pattern" | grep -Ev '^litellm/(ui|vscode-extension)/' || true)
+litellm_py_files=$(scope_match "$litellm_py_pattern" | grep -Ev '^litellm/(enterprise|ui|vscode-extension|rust|proxy-extras|packaging|cli)/' || true)
 if [ -n "$(scope_match '^(litellm/proxy/mcp_server/|scripts/check_mcp_operation_boundary\.py)')" ]; then
     uv run --no-sync python scripts/check_mcp_operation_boundary.py || exit 1
 fi
@@ -112,7 +112,7 @@ test_tree_files=$(scope_match "$test_tree_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
 spec_files=$({
-    scope_match "$spec_pattern" | grep -Ev '^litellm/(ui|vscode-extension)/' || true
+    scope_match "$spec_pattern" | grep -Ev '^litellm/(ui|vscode-extension|rust|proxy-extras|packaging|cli)/' || true
     scope_match '^litellm/ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts)$'
 })
 # CI's ui job runs prettier over a wider extension set than eslint; keep that

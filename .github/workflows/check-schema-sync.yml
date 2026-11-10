@@ -5,7 +5,7 @@ on:
     paths:
       - 'schema.prisma'
       - 'litellm/proxy/schema.prisma'
-      - 'litellm-proxy-extras/litellm_proxy_extras/schema.prisma'
+      - 'litellm/proxy-extras/litellm_proxy_extras/schema.prisma'
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
 
       - name: Reject symlinked schema files
         run: |
-          for f in schema.prisma litellm/proxy/schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma; do
+          for f in schema.prisma litellm/proxy/schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma; do
             if [ -L "$f" ]; then
               echo "::error file=$f::$f is a symlink, which is not allowed"
               exit 1
@@ -43,8 +43,8 @@ jobs:
             EXIT=1
           }
 
-          diff schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma || {
-            echo "::error file=litellm-proxy-extras/litellm_proxy_extras/schema.prisma::litellm-proxy-extras/litellm_proxy_extras/schema.prisma differs from root schema.prisma"
+          diff schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma || {
+            echo "::error file=litellm/proxy-extras/litellm_proxy_extras/schema.prisma::litellm/proxy-extras/litellm_proxy_extras/schema.prisma differs from root schema.prisma"
             EXIT=1
           }
 
@@ -55,7 +55,7 @@ jobs:
             echo ""
             echo "To fix, run from the repo root:"
             echo "  cp schema.prisma litellm/proxy/schema.prisma"
-            echo "  cp schema.prisma litellm-proxy-extras/litellm_proxy_extras/schema.prisma"
+            echo "  cp schema.prisma litellm/proxy-extras/litellm_proxy_extras/schema.prisma"
             exit 1
           fi
 

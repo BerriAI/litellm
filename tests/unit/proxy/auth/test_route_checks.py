@@ -2769,6 +2769,7 @@ class TestModelsRouteExemptFromDisableLLMEndpoints:
             "..",
             "..",
             "..",
+            "litellm",
             "enterprise",
             "litellm_enterprise",
             "proxy",

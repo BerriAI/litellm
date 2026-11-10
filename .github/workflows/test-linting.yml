@@ -114,7 +114,7 @@ jobs:
       - name: Check ruff format
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          git diff --name-only --diff-filter=ACMR "$GATE_BASE_SHA" HEAD -- ':(glob)litellm/**/*.py' | grep -Ev '^litellm/(enterprise|ui|vscode-extension)/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
+          git diff --name-only --diff-filter=ACMR "$GATE_BASE_SHA" HEAD -- ':(glob)litellm/**/*.py' | grep -Ev '^litellm/(enterprise|ui|vscode-extension|rust|proxy-extras|packaging|cli)/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
           if [ ! -s "$RUNNER_TEMP/ruff_format_files.txt" ]; then
             echo "No changed litellm Python files to check with ruff format."
             exit 0
@@ -375,7 +375,7 @@ jobs:
             exit 0
           fi
           files="$(git diff --name-only "$base" HEAD)"
-          if grep -Ev '^litellm/(ui|vscode-extension)/' <<< "$files" | grep -E '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|\.github/workflows/test-linting\.yml$)' >/dev/null || grep -Eq '^litellm/ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$' <<< "$files"; then
+          if grep -Ev '^litellm/(ui|vscode-extension|rust|proxy-extras|packaging|cli)/' <<< "$files" | grep -E '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|\.github/workflows/test-linting\.yml$)' >/dev/null || grep -Eq '^litellm/ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$' <<< "$files"; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "No litellm, enterprise, dependency or generator changes in this pull request, nothing to verify."
