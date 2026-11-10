@@ -2009,6 +2009,7 @@ class RustCore(
     def retire(self) -> None:
         """``_core_discard``: only the router's global registrations go; it keeps serving calls."""
         untrack_live_registry(self._hosted)
+        self._hosted.retire_shared_capabilities()
         self._retire_callbacks()
         if self._hosted.strategies is not None:
             self._hosted.strategies.retire()

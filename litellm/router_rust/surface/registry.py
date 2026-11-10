@@ -42,6 +42,7 @@ router and every ``registry()`` query dispatches the way it does on the Python c
 
 import copy
 import dataclasses
+import itertools
 import json
 import os
 import re
@@ -102,6 +103,7 @@ from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET
 from litellm.router_rust.surface.indexes import HostedIndexes
 from litellm.router_rust.surface.model_info import HostModelInfo
 from litellm.router_rust.surface.model_list import HostedModelList
+from litellm.router_rust.surface.replay import live_registries
 from litellm.router_strategy.auto_router.auto_router_model_naming import classify_strategy_router_model
 from litellm.router_utils.deployment_numbers import refuse_unservable_numbers, refuse_wide_numbers
 from litellm.router_utils.endpoint_eligibility import warn_on_unenforced_endpoint_flag
@@ -121,6 +123,7 @@ from litellm.types.router import (
 )
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS,
+    SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS,
     CustomPricingLiteLLMParams,
     LlmProviders,
     LlmProvidersSet,
@@ -133,6 +136,7 @@ from litellm.utils import (
     get_potential_model_names,
     get_secret,
     lookup_model_info_for_registration,
+    model_cost_registration_key,
     model_info_with_pricing_overrides,
 )
 
@@ -221,6 +225,17 @@ class _Build:
     # `create`: the error a deployment raised. The Python core's loop stops there, so every later
     # step is answered as invalid and the build ends, then this is raised.
     failure: Exception | None = None
+
+    def reached_entries(self) -> tuple[UntypedEntry, ...]:
+        return tuple(
+            {"model_name": entry.model_name, "litellm_params": entry.litellm_params, "model_info": entry.model_info}
+            for entry in self.entries.values()
+        )
+
+
+def _creating(model_list: Sequence[object]) -> _Build:
+    raw: Final[list[UntypedEntry]] = copy.deepcopy(list(model_list))  # pyright: ignore[reportAssignmentType]  # model_list entries  # mutable-ok: a deep copy the build consumes
+    return _Build(path="create", raw=raw)
 
 
 def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
@@ -551,6 +566,95 @@ def register_deployment_pricing(host: "PythonHost", deployment: Deployment) -> N
     )
 
 
+def _entry_section(entry: Mapping[str, object], section: str) -> Mapping[str, object]:
+    value: Final = entry.get(section)
+    return _MODEL_INFO_ADAPTER.validate_python(value) if isinstance(value, Mapping) else {}
+
+
+def _entry_backend(entry: Mapping[str, object]) -> tuple[str, str | None] | None:
+    params: Final = _entry_section(entry, "litellm_params")
+    model: Final = params.get("model")
+    provider: Final = params.get("custom_llm_provider")
+    return (model, provider if isinstance(provider, str) else None) if isinstance(model, str) else None
+
+
+def _entry_backend_keys(entry: Mapping[str, object]) -> frozenset[str]:
+    backend: Final = _entry_backend(entry)
+    return frozenset() if backend is None else frozenset(_backend_cost_map_keys(*backend))
+
+
+def _entry_row_keys(entry: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(model_cost_registration_key(key) for key in _entry_backend_keys(entry))
+
+
+def _shared_capabilities_set_true(entry: Mapping[str, object]) -> frozenset[str]:
+    model_info: Final = _entry_section(entry, "model_info")
+    return frozenset(field for field in SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS if model_info.get(field) is True)
+
+
+def _distinct_withdrawals(entries: Iterable[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        {(_entry_backend_keys(entry), _shared_capabilities_set_true(entry)): entry for entry in entries}.values()
+    )
+
+
+def _row_sets_true(host: "PythonHost", key: str, fields: frozenset[str]) -> bool:
+    row: Final[object] = host.dynamic().model_cost.get(model_cost_registration_key(key))
+    return isinstance(row, dict) and any(
+        _MODEL_INFO_ADAPTER.validate_python(row).get(field) is True for field in fields
+    )
+
+
+def _catalog_sets_true(catalog: Mapping[str, Mapping[str, object]], catalog_keys: tuple[str, ...], field: str) -> bool:
+    entry: Final = next((catalog[key] for key in catalog_keys if key in catalog), None)
+    return entry is not None and entry.get(field) is True
+
+
+def withdraw_shared_capabilities(
+    host: "PythonHost",
+    removed: Mapping[str, object],
+    replacement: Mapping[str, object] | None,
+    served: Iterable[Mapping[str, object]],
+) -> None:
+    """For each ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag ``removed`` set ``True``, set the shared
+    ``litellm.model_cost`` row(s) ``removed`` registers onto that still hold it ``True`` to whether ``replacement``,
+    a ``served`` deployment registering onto one of them, or the catalog still sets it ``True``."""
+    backend: Final = _entry_backend(removed)
+    set_true: Final = _shared_capabilities_set_true(removed)
+    if backend is None or not set_true:
+        return
+    row_keys: Final = _entry_row_keys(removed)
+    kept: Final = (
+        _shared_capabilities_set_true(replacement)
+        if replacement is not None and _entry_row_keys(replacement) == row_keys
+        else frozenset[str]()
+    )
+    withdrawn: Final = set_true - kept
+    held: Final = tuple(key for key in _entry_backend_keys(removed) if _row_sets_true(host, key, withdrawn))
+    if not held:
+        return
+    candidates: Final = tuple(
+        entry for entry in served if not withdrawn.isdisjoint(_shared_capabilities_set_true(entry))
+    )
+    rows_by_backend: Final = {
+        keys: frozenset(model_cost_registration_key(key) for key in keys)
+        for keys in frozenset(_entry_backend_keys(entry) for entry in candidates)
+    }
+    siblings_set_true: Final = frozenset(
+        itertools.chain.from_iterable(
+            _shared_capabilities_set_true(entry) & withdrawn
+            for entry in candidates
+            if not rows_by_backend[_entry_backend_keys(entry)].isdisjoint(row_keys)
+        )
+    )
+    catalog: Final = catalog_with_runtime_registrations()
+    catalog_keys: Final = _catalog_backend_keys(*backend, _backend_cost_map_keys(*backend))
+    restored: Final = {
+        field: field in siblings_set_true or _catalog_sets_true(catalog, catalog_keys, field) for field in withdrawn
+    }
+    host.invoke("register_model")(model_cost={key: restored for key in held}, persist_across_reloads=False)
+
+
 # -- the registry --------------------------------------------------------------------------------
 
 
@@ -850,15 +954,24 @@ class HostRegistry(HostModelInfo):
         """Replace every deployment (``set_model_list``). All or nothing: when an entry raises,
         the deployments served before the call are put back and the error is raised."""
         previous: Final = [copy.deepcopy(dict(entry)) for entry in self._core_model_list]
+        attempt: Final = _creating(model_list)
         try:
-            self._replace_model_list(model_list)
+            self._replace_model_list(attempt)
         except Exception:
-            self._replace_model_list(previous)
+            self._replace_model_list(_creating(previous))
+            self._withdraw_shared_capabilities(attempt.reached_entries(), self._served_by_live_routers())
             raise
+        self._withdraw_shared_capabilities(previous, self._served_by_live_routers())
 
-    def _replace_model_list(self, model_list: Sequence[object]) -> None:
+    def _withdraw_shared_capabilities(
+        self, entries: Iterable[Mapping[str, object]], served: Sequence[Mapping[str, object]]
+    ) -> None:
+        for entry in _distinct_withdrawals(entries):
+            withdraw_shared_capabilities(self._host, entry, None, served)
+
+    def _replace_model_list(self, build: _Build) -> None:
         self._discovered_model_info_cache.flush_cache()
-        original_model_list: Final[list[UntypedEntry]] = copy.deepcopy(list(model_list))  # pyright: ignore[reportAssignmentType]  # model_list entries  # mutable-ok: a deep copy the build consumes
+        original_model_list: Final = build.raw
         if self.strategies is not None:
             self.strategies.reset()
         self._provider_unresolved_deployments = ()
@@ -879,12 +992,7 @@ class HostRegistry(HostModelInfo):
         # router-core walks the list (one deployment per organization, secrets resolved first,
         # ids assigned), asking this registry about each deployment in turn; it starts the list
         # and its id, name and team indexes over, and takes the given names as `model_names`.
-        self._run_build(
-            _Build(path="create", raw=original_model_list),
-            original_model_list,
-            resolve_secrets=True,
-            install="replace",
-        )
+        self._run_build(build, original_model_list, resolve_secrets=True, install="replace")
         if self.strategies is not None:
             self.strategies.finalize()
         self._on_change()
@@ -1312,8 +1420,11 @@ class HostRegistry(HostModelInfo):
                 with self._deployment_index_lock:
                     removal_idx: Final = self.model_id_to_deployment_index_map.get(model_id)
                     if removal_idx is not None:
-                        _ = self._core_model_list[removal_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
+                        removed: Final = self._core_model_list[removal_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
                         self._remove(model_id)
+                        withdraw_shared_capabilities(
+                            self._host, removed, deployment.to_json(exclude_none=True), self._served_by_live_routers()
+                        )
                 if self.strategies is not None:
                     self.strategies.release(on_router)
                 self._on_change()
@@ -1490,6 +1601,18 @@ class HostRegistry(HostModelInfo):
         self._registry_version += 1
         self._on_change()
 
+    def _served_by_other_routers(self) -> tuple[UntypedEntry, ...]:
+        others: Final = (tuple(registry._core_model_list) for registry in live_registries() if registry is not self)
+        return tuple(itertools.chain.from_iterable(others))
+
+    def _served_by_live_routers(self) -> tuple[UntypedEntry, ...]:
+        return (*self._core_model_list, *self._served_by_other_routers())
+
+    def retire_shared_capabilities(self) -> None:
+        """Take back the ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flags this router's deployments put on shared
+        ``litellm.model_cost`` rows that no other live router's deployment still sets (``retire``)."""
+        self._withdraw_shared_capabilities(self._core_model_list, self._served_by_other_routers())
+
     def _core_delete_deployment(self, id: str) -> UntypedEntry | None:
         """Remove one deployment and return its stored entry (``_delete_deployment``)."""
         try:
@@ -1499,6 +1622,7 @@ class HostRegistry(HostModelInfo):
                     return None
                 item: Final = self._core_model_list[deployment_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
                 self._remove(id)
+                withdraw_shared_capabilities(self._host, item, None, self._served_by_live_routers())
             if self.checks is not None:
                 self.checks.unregister_deployment_budget(id)
             if self.strategies is not None:
