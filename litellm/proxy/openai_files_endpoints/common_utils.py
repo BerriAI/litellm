@@ -23,6 +23,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
+from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
@@ -763,20 +764,27 @@ def add_deployment_model_info(
     }
 
 
+_REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
     file_id: str | None = None,
 ) -> None:
     """
-    Update data dictionary with model credentials (in-place).
+    Update data dictionary with model credentials (in-place), keeping any bucket the request already chose.
 
     Args:
         data: Data dictionary to update
         credentials: Credentials from router
         file_id: Optional original file_id to set (for decoded file IDs)
     """
-    data.update(credentials)
+    request_fields: Final = _REQUEST_FIELDS.validate_python(data)
+    request_buckets: Final = MappingProxyType(
+        {key: request_fields[key] for key in REQUEST_S3_BUCKET_PARAMS if key in request_fields}
+    )
+    data.update({**credentials, **request_buckets})
     data.pop("custom_llm_provider", None)
 
     if file_id is not None:

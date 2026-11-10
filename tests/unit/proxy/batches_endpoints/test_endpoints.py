@@ -85,6 +85,12 @@ CREDS: Dict[str, Dict[str, str]] = {
         "api_base": "http://vllm.test/v1",
         "model": "hosted_vllm/qwen",
     },
+    "bedrock-batch": {
+        "custom_llm_provider": "bedrock",
+        "model": "bedrock/us.amazon.nova-lite-v1:0",
+        "s3_bucket_name": "model-bucket",
+        "s3_output_bucket_name": "model-bucket",
+    },
 }
 
 # A real model-encoded file id: decodes to "azure/gpt-4o", strips to "file-original123".
@@ -465,6 +471,26 @@ async def test_create__team_with_an_allowlist_and_no_request_bucket_leaves_the_b
     await call_create(harness, user=_TEAM_A_KEY)
 
     assert "s3_output_bucket_name" not in harness.acreate_kwargs()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_bucket,expected_bucket", [("team-a-bucket", "team-a-bucket"), (None, "model-bucket")]
+)
+async def test_create__model_routed_batch_keeps_the_team_bucket_over_the_deployment_bucket(
+    harness, request_bucket: str | None, expected_bucket: str
+):
+    body: Final = {
+        "input_file_id": "file-plain",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "model": "bedrock-batch",
+    }
+    set_body(harness, body if request_bucket is None else {**body, "s3_output_bucket_name": request_bucket})
+
+    await call_create(harness, user=_TEAM_A_KEY)
+
+    assert harness.acreate_kwargs()["s3_output_bucket_name"] == expected_bucket
 
 
 @pytest.mark.asyncio

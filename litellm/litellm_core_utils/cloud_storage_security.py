@@ -18,6 +18,7 @@ BEDROCK_MANAGED_S3_PREFIXES: Final = (
 )
 MANAGED_CLOUD_STORAGE_SCHEMES: Final = ("s3://", "gs://")
 STORED_S3_BUCKET_PARAM: Final = "stored_s3_bucket_name"
+REQUEST_S3_BUCKET_PARAMS: Final = frozenset({"s3_bucket_name", "s3_output_bucket_name"})
 
 
 def stored_s3_bucket_kwargs(stored_file_id: str) -> Mapping[str, str]:

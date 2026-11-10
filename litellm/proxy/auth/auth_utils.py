@@ -22,7 +22,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
-from litellm.litellm_core_utils.cloud_storage_security import STORED_S3_BUCKET_PARAM
+from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS, STORED_S3_BUCKET_PARAM
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor, reject_api_key_secret_reference
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
@@ -496,7 +496,6 @@ _PROXY_ALLOWLIST_SETTING_BY_PARAM: Final[Mapping[str, _ClientSideAllowlistSettin
     }
 )
 
-_S3_BUCKET_PARAMS: Final = frozenset({"s3_bucket_name", "s3_output_bucket_name"})
 TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY: Final = "allowed_s3_buckets"
 _BUCKET_NAMES: Final = TypeAdapter(tuple[str, ...])
 
@@ -518,7 +517,9 @@ class _ClientSideStorageAllowlist(BaseModel):
 def _banned_param_error(param: str) -> ValueError:
     setting: Final = _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
     team_hint: Final = (
-        f" or in the team's `metadata.{TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY}`" if param in _S3_BUCKET_PARAMS else ""
+        f" or in the team's `metadata.{TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY}`"
+        if param in REQUEST_S3_BUCKET_PARAMS
+        else ""
     )
     allowlist_hint: Final = (
         ""
@@ -570,7 +571,7 @@ def _check_banned_params(
             setting := _PROXY_ALLOWLIST_SETTING_BY_PARAM.get(param)
         ) is not None and _ClientSideStorageAllowlist.model_validate(general_settings).admits(setting, body[param]):
             continue
-        if defer_s3_buckets and param in _S3_BUCKET_PARAMS:
+        if defer_s3_buckets and param in REQUEST_S3_BUCKET_PARAMS:
             continue
         if (
             _allow_model_level_clientside_configurable_parameters(

@@ -20,6 +20,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_team_provider_credentials,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
+    prepare_data_with_credentials,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
@@ -896,3 +897,16 @@ def test_a_provider_wildcard_grant_finds_only_deployments_named_under_it(deploye
     )
 
     assert (None if credentials is None else credentials["api_key"]) == api_key
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_deployment_credentials_keep_a_request_bucket_and_fill_a_missing_one(field: str) -> None:
+    deployment: Final = {"custom_llm_provider": "bedrock", "api_key": "sk-deployment", field: "model-bucket"}
+    with_request_bucket: Final[dict[str, object]] = {field: "team-a-bucket"}
+    without_request_bucket: Final[dict[str, object]] = {}
+
+    prepare_data_with_credentials(data=with_request_bucket, credentials=dict(deployment))
+    prepare_data_with_credentials(data=without_request_bucket, credentials=dict(deployment))
+
+    assert with_request_bucket == {field: "team-a-bucket", "api_key": "sk-deployment"}
+    assert without_request_bucket == {field: "model-bucket", "api_key": "sk-deployment"}
