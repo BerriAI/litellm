@@ -4,7 +4,7 @@ import inspect
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # a duck-typed logger double stands in for Logging
 
 import httpx
 import pytest
@@ -321,6 +321,54 @@ def test_native_provider_exchange_window_is_recorded_like_the_timed_post() -> No
     assert logger.model_call_details["llm_api_duration_ms"] == 250.0
     metadata: Final = logger.model_call_details["litellm_params"]["litellm_metadata"]
     assert metadata["llm_api_timing_windows"] == ((1_700_000_000.0, 1_700_000_000.25),)
+
+
+@pytest.mark.asyncio
+async def test_a_retried_request_rewrites_the_logged_body_in_place_like_the_python_retry_loop() -> None:
+    logger: Final = _messages_logger()
+    metadata: Final = {"user_id": "u-1"}
+    replayed: Final = [
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "s"}]},
+        {"role": "user", "content": "again"},
+    ]
+    logged: Final[dict[str, object]] = {
+        "model": "claude-sonnet-4-5",
+        "messages": replayed,
+        "metadata": metadata,
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+    }
+    logger.model_call_details.update(logged)
+    retried: Final = {
+        "model": "claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": "again"}],
+        "metadata": {"user_id": "u-1"},
+    }
+
+    await legacy.retried_request(logger, logged, retried)
+
+    assert logged == retried
+    assert logged["metadata"] is metadata
+    assert logger.model_call_details["messages"] == [{"role": "user", "content": "again"}]
+    assert logger.model_call_details["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+
+
+class _BaselineLogger:
+    def __init__(self) -> None:
+        self.baseline_cache_context: object = object()
+        self.model_call_details: dict[str, object] = {}
+        self.invalidated: list[str] = []
+
+    async def invalidate_baseline_cache_estimate(self, reason: str) -> None:
+        self.invalidated.append(reason)
+
+
+@pytest.mark.asyncio
+async def test_a_retried_request_invalidates_the_baseline_cache_estimate() -> None:
+    logger: Final = _BaselineLogger()
+
+    await legacy.retried_request(cast(Logging, logger), {"messages": []}, {"messages": []})  # cast-ok: duck-typed
+
+    assert logger.invalidated == ["retried_request"]
 
 
 def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:

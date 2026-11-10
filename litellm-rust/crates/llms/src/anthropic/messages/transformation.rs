@@ -16,10 +16,13 @@ use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling,
+        anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
+        get_auth_header, has_advisor_tool, has_anthropic_credential,
+        is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
+        is_tool_search_used, merge_beta_headers, optionally_handle_anthropic_oauth,
+        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
+        strip_thinking_blocks_from_anthropic_messages_request,
     },
     base_llm::{
         auth::AuthScheme,
@@ -115,6 +118,34 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
             headers,
             provider_feature_betas(request, BetaProvider::Anthropic),
         )
+    }
+
+    fn should_retry_anthropic_messages_on_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        _context: &MessagesTransformContext,
+    ) -> bool {
+        if status != 400 {
+            return false;
+        }
+        let caller_asked_for_this_error =
+            anthropic_request_errors_on_thinking_binding_mismatch(request_body)
+                && is_anthropic_thinking_binding_mismatch_error(error_text);
+        !caller_asked_for_this_error && is_anthropic_invalid_thinking_block_error(error_text)
+    }
+
+    fn transform_anthropic_messages_request_on_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: Value,
+    ) -> Value {
+        if status == 400 && is_anthropic_invalid_thinking_block_error(error_text) {
+            return strip_thinking_blocks_from_anthropic_messages_request(request_body);
+        }
+        request_body
     }
 }
 
@@ -1351,5 +1382,79 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+
+    const INVALID_SIGNATURE: &str = "messages.1.content.0: Invalid `signature` in `thinking` block";
+    const BOUND_ELSEWHERE: &str = "messages.1.content.0: Invalid `signature` in `thinking` block. The block is bound to a different conversation.";
+
+    fn replayed(thinking: Value) -> Value {
+        json!({
+            "model": "claude-sonnet-4-5",
+            "thinking": thinking,
+            "messages": [{"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "t", "signature": "s"},
+                {"type": "text", "text": "a"}
+            ]}]
+        })
+    }
+
+    #[rstest]
+    #[case::invalid_signature(400, INVALID_SIGNATURE, json!({"type": "enabled"}), true)]
+    #[case::unpinned_binding(400, BOUND_ELSEWHERE, json!({"type": "adaptive"}), true)]
+    #[case::pinned_binding(
+        400,
+        BOUND_ELSEWHERE,
+        json!({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}),
+        false
+    )]
+    #[case::pinned_binding_other_signature_error(
+        400,
+        INVALID_SIGNATURE,
+        json!({"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}),
+        true
+    )]
+    #[case::not_a_400(429, INVALID_SIGNATURE, json!({"type": "enabled"}), false)]
+    #[case::unrelated(400, "max_tokens: 4096 > 64000", json!({"type": "enabled"}), false)]
+    fn only_a_rejected_thinking_replay_is_retried(
+        #[case] status: u16,
+        #[case] error_text: &str,
+        #[case] thinking: Value,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.should_retry_anthropic_messages_on_http_error(
+                status,
+                error_text,
+                &replayed(thinking),
+                &MessagesTransformContext::default(),
+            ),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::invalid_signature(400, INVALID_SIGNATURE, true)]
+    #[case::not_a_400(429, INVALID_SIGNATURE, false)]
+    #[case::unrelated(400, "max_tokens: 4096 > 64000", false)]
+    fn the_retry_drops_thinking_only_for_a_rejected_thinking_replay(
+        #[case] status: u16,
+        #[case] error_text: &str,
+        #[case] stripped: bool,
+    ) {
+        let body = replayed(json!({"type": "enabled"}));
+        let retried = ANTHROPIC_MESSAGES_CONFIG.transform_anthropic_messages_request_on_http_error(
+            status,
+            error_text,
+            body.clone(),
+        );
+        let expected = if stripped {
+            json!({
+                "model": "claude-sonnet-4-5",
+                "messages": [{"role": "assistant", "content": [{"type": "text", "text": "a"}]}]
+            })
+        } else {
+            body
+        };
+        assert_eq!(retried, expected);
     }
 }

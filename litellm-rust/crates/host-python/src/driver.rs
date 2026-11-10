@@ -310,6 +310,14 @@ where
                 reply.send(Ok(()));
                 Ok(())
             }
+            HostRequest::Intercept(InterceptRequest::ProviderRequestRetried { wire, reply }) => {
+                self.notify(PythonCallEvent::Execution(
+                    ExecutionEvent::ProviderRequestRetried { wire: *wire },
+                ))
+                .await?;
+                reply.send(Ok(()));
+                Ok(())
+            }
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                 self.streaming = true;
                 let head = {

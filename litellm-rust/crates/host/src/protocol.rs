@@ -33,6 +33,10 @@ pub enum InterceptRequest<E> {
         raw: RawResponse,
         reply: Reply<Result<(), E>>,
     },
+    ProviderRequestRetried {
+        wire: Box<WireRequest>,
+        reply: Reply<Result<(), E>>,
+    },
 }
 
 pub enum StreamDelivery<P: Protocol> {

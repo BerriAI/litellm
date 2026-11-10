@@ -84,6 +84,13 @@ where
                     reply.send(self.interceptors.after_provider_response(raw).await);
                     Ok(())
                 }
+                HostRequest::Intercept(InterceptRequest::ProviderRequestRetried {
+                    wire,
+                    reply,
+                }) => {
+                    reply.send(self.interceptors.provider_request_retried(*wire).await);
+                    Ok(())
+                }
                 HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                     self.demand = Some(reply);
                     return Ok(Boundary::Open(head));

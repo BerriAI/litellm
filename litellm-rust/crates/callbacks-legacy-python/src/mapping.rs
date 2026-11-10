@@ -179,6 +179,9 @@ impl CallHooks<PythonRuntime> for LegacyLogging {
             PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
                 (AFTER.invoke)(self, py, raw)
             }
+            PythonCallEvent::Execution(ExecutionEvent::ProviderRequestRetried { wire }) => {
+                self.request_retried(py, &wire)
+            }
             PythonCallEvent::Succeeded { timing, response } => {
                 (SUCCESS.invoke)(self, py, timing, response)
             }

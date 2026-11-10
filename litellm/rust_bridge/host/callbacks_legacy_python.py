@@ -285,6 +285,19 @@ def record_response(logger: Logging, status: int, headers: Sequence[tuple[str, s
     details["response_headers"] = dict(response.headers)
 
 
+async def retried_request(
+    logger: Logging,
+    logged_body: dict[str, object],  # mutable-ok: the retry rewrites the body pre_call logged, as Python's loop does
+    body: Mapping[str, object],
+) -> None:
+    if logger.baseline_cache_context is not None:
+        await logger.invalidate_baseline_cache_estimate("retried_request")
+    for name in logged_body.keys() - body.keys():
+        del logged_body[name]  # rebind-ok: the logged body is the one logging already holds
+    logged_body.update({name: value for name, value in body.items() if logged_body.get(name) != value})
+    logger.model_call_details.update(logged_body)
+
+
 def record_api_window(logger: Logging, start: float, end: float) -> None:
     """Records the provider exchange's window the way Python's timed `AsyncHTTPHandler.post` does."""
     from litellm.litellm_core_utils.logging_utils import (

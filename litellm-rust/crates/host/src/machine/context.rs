@@ -119,6 +119,17 @@ where
             })
             .await?
     }
+
+    async fn provider_request_retried(&self, wire: WireRequest) -> Result<(), P::Error> {
+        self.0
+            .request_reply(|reply| {
+                HostRequest::Intercept(InterceptRequest::ProviderRequestRetried {
+                    wire: Box::new(wire),
+                    reply,
+                })
+            })
+            .await?
+    }
 }
 
 pub struct StreamSender<P: Protocol>(Channel<P>);

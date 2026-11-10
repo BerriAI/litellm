@@ -91,6 +91,25 @@ pub trait BaseMessagesConfig: Sync {
     fn wire_body(&self, body: Value) -> Value {
         body
     }
+
+    fn should_retry_anthropic_messages_on_http_error(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        _request_body: &Value,
+        _context: &MessagesTransformContext,
+    ) -> bool {
+        false
+    }
+
+    fn transform_anthropic_messages_request_on_http_error(
+        &self,
+        _status: u16,
+        _error_text: &str,
+        request_body: Value,
+    ) -> Value {
+        request_body
+    }
 }
 
 #[cfg(test)]

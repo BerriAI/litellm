@@ -107,6 +107,13 @@ pub trait Interceptors<E>: Send + Sync {
         &self,
         raw: RawResponse,
     ) -> impl Future<Output = Result<(), E>> + Send;
+
+    fn provider_request_retried(
+        &self,
+        _wire: WireRequest,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        async { Ok(()) }
+    }
 }
 
 impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
@@ -127,6 +134,13 @@ impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
         raw: RawResponse,
     ) -> impl Future<Output = Result<(), E>> + Send {
         (**self).after_provider_response(raw)
+    }
+
+    fn provider_request_retried(
+        &self,
+        wire: WireRequest,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        (**self).provider_request_retried(wire)
     }
 }
 

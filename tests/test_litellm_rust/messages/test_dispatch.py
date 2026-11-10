@@ -18,7 +18,7 @@ from litellm.messages.dispatch import (
 )
 from litellm.proxy import proxy_server
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Feature, Route, RouteRule, Rules, Target
+from litellm.rust_bridge.catalog import RULES, Feature, Route, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, NativeAmessages, NativeMessages
 from litellm.rust_bridge.public_call import NativeCall
@@ -487,12 +487,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
         ),
         (Feature.CACHE_CONTROL_INJECTION, "anthropic/claude-sonnet-4-5", {"enable_prompt_caching": True}, {}),
         (
-            Feature.THINKING_SIGNATURE_RETRY,
-            "anthropic/claude-sonnet-4-5",
-            {"messages": [{"role": "assistant", "content": [{"type": "redacted_thinking", "data": "x"}]}]},
-            {},
-        ),
-        (
             Feature.TOOL_CUSTOM_FIELD,
             "anthropic/claude-sonnet-4-5",
             {"tools": [{"name": "a", "input_schema": {"type": "object"}, "custom": {"eager_input_streaming": True}}]},
@@ -575,6 +569,46 @@ def test_proxy_request_shape_stays_native(kwargs: Mapping[str, object]) -> None:
         native=lambda hook, request, call_args, native_kwargs: hook(request),
         rules=rules,
     )
+    assert served is native_result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "block",
+    (
+        pytest.param({"type": "thinking", "thinking": "x", "signature": "s"}, id="thinking"),
+        pytest.param({"type": "redacted_thinking", "data": "x"}, id="redacted-thinking"),
+    ),
+)
+async def test_replayed_thinking_is_served_natively_under_the_shipped_rules(
+    monkeypatch: pytest.MonkeyPatch, block: Mapping[str, object]
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "cache", None)
+    replay: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [block, {"type": "text", "text": "hello"}]},
+        {"role": "user", "content": "again"},
+    ]
+    native_result: Final = response()
+    python_result: Final = response()
+
+    async def python(*call_args: object, **python_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        return native_result
+
+    served: Final = await _ADISPATCH.arun(
+        (16, replay, "anthropic/claude-sonnet-4-5"),
+        {"api_key": "sk-ant-test"},
+        python=python,
+        binding=amessages_binding(native),
+        native=lambda hook, request, call_args, native_kwargs: hook(request),
+        rules=RULES,
+    )
+
     assert served is native_result
 
 

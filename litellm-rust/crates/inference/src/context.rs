@@ -1,6 +1,6 @@
 use litellm_cache_response::CachePolicy;
 use litellm_host::{
-    interceptors::{ExecutionFacts, Interceptors, RawResponse, ResultSource},
+    interceptors::{ExecutionFacts, Interceptors, RawResponse, ResultSource, WireRequest},
     lifecycle::{CallEvent, ExecutionEvent},
     observation::ObservationSender,
 };
@@ -56,5 +56,16 @@ impl<'a, I: Interceptors<Error>> CallContext<'a, I> {
             .after_provider_response(raw)
             .await
             .map_err(Error::post_call)
+    }
+
+    pub async fn provider_request_retried(&self, wire: &WireRequest) -> Result<(), Error> {
+        if let Some(observers) = &self.observers {
+            observers.emit(CallEvent::Execution(
+                ExecutionEvent::ProviderRequestRetried { wire: wire.clone() },
+            ));
+        }
+        self.interceptors
+            .provider_request_retried(wire.clone())
+            .await
     }
 }

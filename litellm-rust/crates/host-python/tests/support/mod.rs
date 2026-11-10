@@ -422,6 +422,9 @@ impl CallHooks<PythonRuntime> for SyntheticHooks {
             PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
                 format!("response:{}", raw.body)
             }
+            PythonCallEvent::Execution(ExecutionEvent::ProviderRequestRetried { wire }) => {
+                format!("retried:{}", wire.body)
+            }
             PythonCallEvent::Succeeded { response, .. } => {
                 format!("succeeded:{}", response.bind(py))
             }

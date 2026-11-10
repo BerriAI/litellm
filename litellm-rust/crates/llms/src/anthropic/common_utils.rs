@@ -650,6 +650,62 @@ pub fn flatten_unencrypted_web_search_results(messages: Vec<Message>) -> Vec<Mes
         .collect()
 }
 
+pub fn is_anthropic_invalid_thinking_block_error(error_text: &str) -> bool {
+    let lower = error_text.to_lowercase();
+    if !lower.contains("thinking") {
+        return false;
+    }
+    (lower.contains("signature") && (lower.contains("invalid") || lower.contains("valid string")))
+        || lower.contains("must contain thinking")
+}
+
+pub fn is_anthropic_thinking_binding_mismatch_error(error_text: &str) -> bool {
+    error_text
+        .to_lowercase()
+        .contains("bound to a different conversation")
+}
+
+pub fn anthropic_request_errors_on_thinking_binding_mismatch(request_body: &Value) -> bool {
+    request_body
+        .pointer("/thinking/block_binding/prefix_mismatch_behavior")
+        .and_then(Value::as_str)
+        == Some("error")
+}
+
+fn is_thinking_value_block(block: &Value) -> bool {
+    matches!(
+        block.get("type").and_then(Value::as_str),
+        Some("thinking" | "redacted_thinking")
+    )
+}
+
+fn without_thinking_value_blocks(message: Value) -> Option<Value> {
+    let Value::Object(mut message) = message else {
+        return Some(message);
+    };
+    if let Some(Value::Array(content)) = message.get_mut("content") {
+        content.retain(|block| !is_thinking_value_block(block));
+        if content.is_empty() {
+            return None;
+        }
+    }
+    Some(Value::Object(message))
+}
+
+pub fn strip_thinking_blocks_from_anthropic_messages_request(request_body: Value) -> Value {
+    let Value::Object(mut body) = request_body else {
+        return request_body;
+    };
+    if let Some(Value::Array(messages)) = body.get_mut("messages") {
+        *messages = std::mem::take(messages)
+            .into_iter()
+            .filter_map(without_thinking_value_blocks)
+            .collect();
+    }
+    body.shift_remove("thinking");
+    Value::Object(body)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::base_llm::messages::context::SupportedEffortTiers;
@@ -1973,5 +2029,111 @@ mod tests {
     #[case::scheme_only("https://", "https:///v1/messages")]
     fn the_messages_url_follows_python_ensure_api_route(#[case] api_base: &str, #[case] url: &str) {
         assert_eq!(complete_anthropic_url(Some(api_base), &|_| None), url);
+    }
+
+    #[rstest]
+    #[case::invalid_signature(
+        "messages.1.content.0: Invalid `signature` in `thinking` block",
+        true
+    )]
+    #[case::signature_not_a_string(
+        r#"{"message":"messages.2.content.0.thinking.signature.str: Input should be a valid string"}"#,
+        true
+    )]
+    #[case::empty_thinking(
+        "messages.1.content.0.thinking: each thinking block must contain thinking",
+        true
+    )]
+    #[case::uppercase("MESSAGES.1: INVALID SIGNATURE IN THINKING BLOCK", true)]
+    #[case::signature_without_a_verdict("thinking signature mismatch", false)]
+    #[case::invalid_without_thinking("Invalid `signature` in `tool_use` block", false)]
+    #[case::unrelated("max_tokens: 4096 > 64000", false)]
+    #[case::empty("", false)]
+    fn invalid_thinking_block_errors_are_recognized(
+        #[case] error_text: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            is_anthropic_invalid_thinking_block_error(error_text),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::bound_elsewhere("The block is Bound To A Different Conversation.", true)]
+    #[case::plain_signature("Invalid `signature` in `thinking` block", false)]
+    fn binding_mismatch_errors_are_recognized(#[case] error_text: &str, #[case] expected: bool) {
+        assert_eq!(
+            is_anthropic_thinking_binding_mismatch_error(error_text),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::pinned(json!({"thinking": {"block_binding": {"prefix_mismatch_behavior": "error"}}}), true)]
+    #[case::other_behavior(json!({"thinking": {"block_binding": {"prefix_mismatch_behavior": "drop"}}}), false)]
+    #[case::string_binding(json!({"thinking": {"block_binding": "strict"}}), false)]
+    #[case::no_thinking(json!({"messages": []}), false)]
+    #[case::not_an_object(json!(["thinking"]), false)]
+    fn a_pinned_binding_is_the_caller_asking_for_the_error(
+        #[case] body: Value,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            anthropic_request_errors_on_thinking_binding_mismatch(&body),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::mixed_turn(
+        json!({"model": "m", "thinking": {"type": "enabled"}, "messages": [
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "t", "signature": "s"},
+                {"type": "text", "text": "a"},
+                {"type": "redacted_thinking", "data": "d"}
+            ]}
+        ]}),
+        json!({"model": "m", "messages": [{"role": "assistant", "content": [{"type": "text", "text": "a"}]}]})
+    )]
+    #[case::thinking_only_and_empty_turns_are_dropped(
+        json!({"messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [{"type": "redacted_thinking", "data": "d"}]},
+            {"role": "assistant", "content": []},
+            {"role": "user", "content": "again"}
+        ]}),
+        json!({"messages": [{"role": "user", "content": "hi"}, {"role": "user", "content": "again"}]})
+    )]
+    #[case::non_object_entries_are_kept(
+        json!({"messages": ["raw", {"role": "user", "content": ["raw", {"type": "thinking"}]}]}),
+        json!({"messages": ["raw", {"role": "user", "content": ["raw"]}]})
+    )]
+    #[case::messages_not_a_list(
+        json!({"messages": "hi", "thinking": {"type": "adaptive"}}),
+        json!({"messages": "hi"})
+    )]
+    fn retrying_strips_thinking_from_the_replay_and_the_request(
+        #[case] body: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            strip_thinking_blocks_from_anthropic_messages_request(body),
+            expected
+        );
+    }
+
+    #[test]
+    fn stripping_keeps_the_order_of_the_remaining_fields() {
+        let stripped = strip_thinking_blocks_from_anthropic_messages_request(
+            json!({"model": "m", "thinking": {}, "messages": [], "max_tokens": 1}),
+        );
+        let keys: Vec<&str> = stripped
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["model", "messages", "max_tokens"]);
     }
 }
