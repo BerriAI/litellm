@@ -3786,10 +3786,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> bool:
         """Reserve the caller's per-model limits on a router fallback target. False when any is exhausted."""
         data: Final = MappingProxyType({**request_data, "model": model})
+        hidden_stash: Final = _request_stash.set(None)
+        try:
+            built: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
+        finally:
+            _request_stash.reset(hidden_stash)
         descriptors: Final = [
-            descriptor
-            for descriptor in await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
-            if descriptor["key"] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+            descriptor for descriptor in built if descriptor["key"] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
         ]
         if not descriptors:
             return True
