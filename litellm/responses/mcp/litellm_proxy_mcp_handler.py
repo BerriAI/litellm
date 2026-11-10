@@ -168,7 +168,10 @@ class _LabelScope:
     def _allows(self, server: MCPServer | None, tool_name: str, listed_name: str) -> bool:
         if self.allowed_tools is None:
             return True
-        if not self.allowed_tools.isdisjoint((tool_name, listed_name, split_server_prefix_from_name(listed_name)[0])):
+        unprefixed_listed_name: Final = (
+            listed_name if server is None else strip_known_server_prefix(listed_name, server)
+        )
+        if not self.allowed_tools.isdisjoint((tool_name, listed_name, unprefixed_listed_name)):
             return True
         return server is not None and match_known_tool_name(tool_name, server, self.allowed_tools) is not None
 
