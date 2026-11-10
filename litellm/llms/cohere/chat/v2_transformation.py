@@ -185,13 +185,18 @@ def _rejection(
         case "reasoning_effort":
             return f"Cohere does not support reasoning_effort={value!r}."
         case "response_format" if (as_str_mapping(value) or _NOTHING).get("type") != "json_object":
-            return f"Cohere does not support response_format={value!r}."
+            return "Cohere's response_format takes only 'text', 'json_object', or 'json_schema'."
         case "response_format" if not _any_model_supports(litellm.supports_response_schema, model_ids):
-            return f"Cohere model {model} does not support response_format={value!r}."
+            return f"Cohere model {model} does not support response_format."
         case "response_format" if _beside_tools_on_rejecting_model(optional_params, model_ids):
             return f"Cohere model {model} does not take response_format beside tools or documents."
         case _:
             return None
+
+
+def _logged_value(param: str, value: object) -> object:
+    fields: Final = as_str_mapping(value)
+    return fields.get("type") if param == "response_format" and fields is not None else value
 
 
 def _translated_to_thinking(param: str, value: object) -> bool:
@@ -226,7 +231,7 @@ def _params_cohere_takes(
         verbose_logger.warning(
             "Dropping %s=%s for model=%r (drop_params=True) because %s",
             param,
-            reprlib.repr(optional_params[param]),
+            reprlib.repr(_logged_value(param, optional_params[param])),
             model_ids[0],
             reason,
         )
@@ -326,11 +331,11 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         )
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        reasoning: Final = (
-            ["reasoning_effort"]
-            if _any_model_supports(litellm.supports_reasoning, _cohere_model_ids(model, None))
-            else []
+        model_ids: Final = _cohere_model_ids(model, None)
+        json_mode: Final = (
+            ["response_format"] if _any_model_supports(litellm.supports_response_schema, model_ids) else []
         )
+        reasoning: Final = ["reasoning_effort"] if _any_model_supports(litellm.supports_reasoning, model_ids) else []
         return [
             "stream",
             "temperature",
@@ -343,9 +348,9 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             "n",
             "tools",
             "tool_choice",
-            "response_format",
             "seed",
             "extra_headers",
+            *json_mode,
             *reasoning,
         ]
 

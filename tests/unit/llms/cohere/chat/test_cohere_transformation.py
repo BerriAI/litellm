@@ -793,7 +793,6 @@ def test_cohere_v2_thinking_budget_fits_within_max_tokens(
             {"type": "json_object", "json_schema": CITY_SCHEMA},
         ),
         (JSON_SCHEMA_MODEL, {"type": "text"}, None),
-        (NO_JSON_SCHEMA_MODEL, {"type": "text"}, None),
     ],
 )
 def test_cohere_v2_response_format_reaches_cohere(
@@ -877,6 +876,7 @@ UNSUPPORTED_COHERE_V2_PARAMS: Final = [
         id="no-json-schema-model",
     ),
     pytest.param(NO_JSON_SCHEMA_MODEL, {"response_format": {"type": "json_object"}}, id="no-json-mode-model"),
+    pytest.param(NO_JSON_SCHEMA_MODEL, {"response_format": {"type": "text"}}, id="text-on-no-json-mode-model"),
     pytest.param(
         "command-r-08-2024",
         {"tools": [WEATHER_TOOL], "response_format": {"type": "json_object"}},
@@ -931,7 +931,6 @@ def test_cohere_v2_unsupported_param_is_dropped_with_drop_params(
     [
         pytest.param(NO_TOOL_CHOICE_MODEL, {"tools": [WEATHER_TOOL], "tool_choice": "none"}, "tool_choice", id="tool"),
         pytest.param(REASONING_MODEL, {"reasoning_effort": "extreme"}, "reasoning_effort", id="effort"),
-        pytest.param(NO_JSON_SCHEMA_MODEL, {"response_format": {"type": "json_object"}}, "response_format", id="json"),
     ],
 )
 def test_cohere_v2_drop_params_warns_about_the_dropped_param(
@@ -948,6 +947,53 @@ def test_cohere_v2_drop_params_warns_about_the_dropped_param(
         record.levelno == logging.WARNING and record.getMessage().startswith(f"Dropping {dropped}=")
         for record in caplog.records
     )
+
+
+SCHEMA_NOTE: Final = "internal-note-7f3a"
+RESPONSE_FORMATS_WITH_CONTENTS: Final = [
+    pytest.param(
+        "command-r-08-2024",
+        {
+            "tools": [WEATHER_TOOL],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "city", "schema": {**CITY_SCHEMA, "description": SCHEMA_NOTE}},
+            },
+        },
+        id="schema-beside-tools-on-command-r",
+    ),
+    pytest.param(JSON_SCHEMA_MODEL, {"response_format": {"type": "grammar", "grammar": SCHEMA_NOTE}}, id="unknown-type"),
+]
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(("model", "params"), RESPONSE_FORMATS_WITH_CONTENTS)
+def test_cohere_v2_drop_warning_leaves_out_the_response_format_contents(
+    respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture, model: str, params: Mapping[str, object]
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        _cohere_v2_request_body(respx_mock, model, {**params, "drop_params": True})
+
+    warnings: Final = [
+        record.getMessage() for record in caplog.records if record.getMessage().startswith("Dropping response_format=")
+    ]
+    assert warnings
+    assert not any(SCHEMA_NOTE in warning for warning in warnings)
+
+
+@pytest.mark.parametrize(("model", "params"), RESPONSE_FORMATS_WITH_CONTENTS)
+def test_cohere_v2_response_format_400_leaves_out_its_contents(model: str, params: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        litellm.completion(
+            model=f"cohere_chat/{model}",
+            messages=[{"role": "user", "content": "Name one city and its country."}],
+            api_key="cohere-test-key",
+            **params,
+        )
+
+    assert "response_format" in str(error.value)
+    assert SCHEMA_NOTE not in str(error.value)
 
 
 @pytest.mark.usefixtures("_cohere_httpx_transport")
@@ -1206,3 +1252,24 @@ async def test_cohere_v2_stream_closes_argument_less_tool_call_with_empty_object
         ("get_server_time_0", "get_server_time")
     ]
     assert json.loads("".join(call.function.arguments for call in streamed_calls)) == {}
+
+
+def test_cohere_v2_pre_call_checks_skip_a_deployment_without_json_mode() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "cohere-json",
+                "litellm_params": {"model": f"cohere_chat/{model}", "api_key": "cohere-test-key", "order": order},
+            }
+            for order, model in ((1, NO_JSON_SCHEMA_MODEL), (2, JSON_SCHEMA_MODEL))
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    picked: Final = router.get_available_deployment(
+        model="cohere-json",
+        messages=[{"role": "user", "content": "Name one city and its country."}],
+        request_kwargs={"response_format": {"type": "json_schema", "json_schema": {"name": "city", "schema": CITY_SCHEMA}}},
+    )
+
+    assert picked["litellm_params"]["model"] == f"cohere_chat/{JSON_SCHEMA_MODEL}"
