@@ -895,6 +895,15 @@ def update_litellm_params_for_health_check(
     if mode == "audio_speech":
         litellm_params["voice"] = model_info.get("health_check_voice", "alloy")
 
+    logging_model_info: Final = _MODEL_INFO_ADAPTER.validate_python(
+        _PROBE_PARAMS_ADAPTER.validate_python(litellm_params).get("model_info") or {}
+    )
+    probe_logging_model_info: Final = (
+        logging_model_info
+        if litellm_params["model"] == base_model_owner
+        else {key: value for key, value in logging_model_info.items() if key == "id"}
+    )
+
     # Handle Bedrock region routing format: bedrock/region/model
     # This is needed because health checks bypass get_llm_provider() for the model param
     # Issue #15807: Without this, health checks send "region/model" as the model ID to AWS
@@ -941,7 +950,12 @@ def update_litellm_params_for_health_check(
     model_id_params: Final = {} if model_id_pin is None else {"model_id": model_id_pin}
     return {
         key: value
-        for key, value in {**audio_output_params, **model_id_params, **probe_params}.items()
+        for key, value in {
+            **audio_output_params,
+            **model_id_params,
+            **probe_params,
+            **({"model_info": probe_logging_model_info} if "model_info" in probe_params else {}),
+        }.items()
         if not is_model_capability_field(key)
     }
 
