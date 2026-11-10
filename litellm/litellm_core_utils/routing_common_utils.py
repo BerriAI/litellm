@@ -80,7 +80,7 @@ def metadata_defaults_under_request(
 
 
 def _default_under_request(key: str, default: object, requested: object) -> object:
-    if key in _ROUTER_OWNED_METADATA_KEYS:
+    if key in _ROUTER_OWNED_METADATA_KEYS or callable(default):
         return default
     if _PRIVATE_SETTING_BY_FLAG.get(key) is _is_flag_on(default):
         return default

@@ -489,6 +489,21 @@ async def test_a_default_redis_namespace_beats_the_request_redis_namespace(
     assert _metadata(host.calls[0].kwargs)["redis_namespace"] == "tenant-a"
 
 
+def _redact(_value: object) -> str:
+    return "redacted"
+
+
+@pytest.mark.parametrize("request_value", ["", {"caller": "value"}])
+async def test_a_default_masking_function_beats_whatever_the_request_sends(
+    make_core: MakeCore, host: ScriptedHost, request_value: object
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"langfuse_masking_function": _redact}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"langfuse_masking_function": request_value})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["langfuse_masking_function"] is _redact
+
+
 _PROXY_DEFAULT_TAGS: Final = {"metadata": {"tags": ["proxy-default"]}}
 
 
