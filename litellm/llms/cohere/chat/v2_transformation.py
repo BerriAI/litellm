@@ -92,17 +92,21 @@ def _thinking_params(reasoning_effort: object, drop_params: bool) -> Mapping[str
             return _drop_or_raise(f"Cohere does not support reasoning_effort={reasoning_effort!r}.", drop_params)
 
 
+def _cohere_json_object(schema: object) -> Mapping[str, object]:
+    schema_field: Final = {} if schema is None else {"json_schema": schema}
+    return MappingProxyType({"response_format": {"type": "json_object", **schema_field}})
+
+
 def _response_format_params(response_format: object, drop_params: bool) -> Mapping[str, object]:
-    fields: Final = as_str_mapping(response_format)
-    format_type: Final = fields.get("type") if fields is not None else None
-    match format_type:
-        case "text" | "json_object":
-            return MappingProxyType({"response_format": {"type": format_type}})
+    fields: Final = as_str_mapping(response_format) or _NOTHING
+    match fields.get("type"):
+        case "text":
+            return MappingProxyType({"response_format": {"type": "text"}})
+        case "json_object":
+            return _cohere_json_object(fields.get("json_schema"))
         case "json_schema":
-            json_schema: Final = as_str_mapping(fields.get("json_schema")) if fields is not None else None
-            schema: Final = json_schema.get("schema") if json_schema is not None else None
-            schema_field: Final = {} if schema is None else {"json_schema": schema}
-            return MappingProxyType({"response_format": {"type": "json_object", **schema_field}})
+            json_schema: Final = as_str_mapping(fields.get("json_schema")) or _NOTHING
+            return _cohere_json_object(json_schema.get("schema"))
         case _:
             return _drop_or_raise(f"Cohere does not support response_format={response_format!r}.", drop_params)
 

@@ -951,6 +951,7 @@ def test_cohere_v2_reasoning_effort_becomes_thinking(
         ),
         ({"type": "json_schema", "json_schema": {"name": "city"}}, {"type": "json_object"}),
         ({"type": "json_object"}, {"type": "json_object"}),
+        ({"type": "json_object", "json_schema": CITY_SCHEMA}, {"type": "json_object", "json_schema": CITY_SCHEMA}),
         ({"type": "text"}, {"type": "text"}),
     ],
 )
