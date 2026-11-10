@@ -1,7 +1,7 @@
 import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import TypeAlias
+from typing import Final, TypeAlias
 
 import httpx
 import pytest
@@ -110,6 +110,25 @@ async def test_positional_args_keep_their_meaning_after_gateway_name_was_added(r
         await guardrail.apply_guardrail(
             inputs={"texts": ["hello"]}, request_data={"metadata": {}}, input_type="request"
         )
+
+
+@pytest.mark.asyncio
+async def test_forwarded_x_pass_headers_never_reach_noma(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(f"{_API_BASE}/litellm/guardrail").respond(json={"action": "NONE"})
+    request_data: Final = {
+        "model": "bedrock-sonnet",
+        "request_headers": {
+            "x-pass-authorization": "Bearer forwarded-upstream-secret",
+            "x-pass-cookie": "session=forwarded-cookie-secret",
+        },
+    }
+
+    await _guardrail(None).apply_guardrail(inputs={"texts": ["hi"]}, request_data=request_data, input_type="request")
+
+    posted: Final = route.calls.last.request.content.decode()
+    assert json.loads(posted)["request_data"] == {"model": "bedrock-sonnet"}
+    assert "forwarded-upstream-secret" not in posted
+    assert "forwarded-cookie-secret" not in posted
 
 
 _Loader: TypeAlias = Callable[[Path, Mapping[str, object]], CustomGuardrail | None]

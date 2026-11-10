@@ -46,9 +46,12 @@ if TYPE_CHECKING:
 BEDROCK_STREAMING_ACTIONS: Final = frozenset({"invoke-with-response-stream", "converse-stream"})
 _BEDROCK_CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _BEDROCK_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stream"})
+_BEDROCK_GUARDRAIL_IDENTIFIER_HEADER: Final = "x-amzn-bedrock-guardrailidentifier"
+_BEDROCK_TRACE_HEADER: Final = "x-amzn-bedrock-trace"
 _BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
-    {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}
+    {_BEDROCK_GUARDRAIL_IDENTIFIER_HEADER, "x-amzn-bedrock-guardrailversion", _BEDROCK_TRACE_HEADER}
 )
+_BEDROCK_GUARDRAIL_USAGE_TRACES: Final = frozenset({"ENABLED", "ENABLED_FULL"})
 _BEDROCK_SERVICE_TIER_HEADER: Final = "x-amzn-bedrock-service-tier"
 _NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 _TieredResponse: Final = TypeVar("_TieredResponse", bound=BaseModel)
@@ -146,6 +149,23 @@ def _without_invoke_guardrail_headers(headers: Mapping[str, str]) -> Mapping[str
     return {name: value for name, value in headers.items() if name.lower() not in _BEDROCK_INVOKE_GUARDRAIL_HEADERS}
 
 
+def _reports_guardrail_usage(headers: Mapping[str, str]) -> bool:
+    traces: Final = tuple(value.upper() for name, value in headers.items() if name.lower() == _BEDROCK_TRACE_HEADER)
+    return bool(traces) and all(trace in _BEDROCK_GUARDRAIL_USAGE_TRACES for trace in traces)
+
+
+def _with_caller_guardrail_trace(action: str, headers: Mapping[str, str]) -> Mapping[str, str]:
+    if action not in _BEDROCK_INVOKE_ACTIONS:
+        return headers
+    if not any(name.lower() == _BEDROCK_GUARDRAIL_IDENTIFIER_HEADER for name in headers):
+        return headers
+    if _reports_guardrail_usage(headers):
+        return headers
+    return merge_bedrock_invoke_headers(
+        dict(headers), (), (("X-Amzn-Bedrock-Trace", "ENABLED"),), frozenset({_BEDROCK_TRACE_HEADER})
+    )
+
+
 def _with_deployment_guardrail(
     action: str,
     headers: Mapping[str, str],
@@ -153,7 +173,7 @@ def _with_deployment_guardrail(
     guardrail_config: object,
 ) -> tuple[Mapping[str, str], Mapping[str, object]]:
     if guardrail_config is None:
-        return headers, body
+        return _with_caller_guardrail_trace(action, headers), body
     if action in _BEDROCK_CONVERSE_ACTIONS:
         return _without_invoke_guardrail_headers(headers), {
             **body,

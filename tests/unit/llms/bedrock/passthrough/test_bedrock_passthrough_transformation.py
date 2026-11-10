@@ -1466,8 +1466,75 @@ async def test_passthrough_without_a_deployment_guardrail_sends_the_caller_guard
     assert _invoke_guardrail_headers(invoke) == {
         "x-amzn-bedrock-guardrailidentifier": "caller-guardrail",
         "x-amzn-bedrock-guardrailversion": "9",
-        "x-amzn-bedrock-trace": "DISABLED",
+        "x-amzn-bedrock-trace": "ENABLED",
     }
+
+
+CALLER_GUARDRAIL_IDENTITY_HEADERS: Final[Mapping[str, str]] = {
+    "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+    "x-pass-X-Amzn-Bedrock-GuardrailVersion": "9",
+}
+SENT_CALLER_GUARDRAIL_IDENTITY: Final[Mapping[str, str]] = {
+    "x-amzn-bedrock-guardrailidentifier": "caller-guardrail",
+    "x-amzn-bedrock-guardrailversion": "9",
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
+@pytest.mark.parametrize(
+    ("caller_trace", "sent_trace"),
+    [
+        pytest.param(None, "ENABLED", id="no_trace"),
+        pytest.param("DISABLED", "ENABLED", id="disabled"),
+        pytest.param("disabled", "ENABLED", id="disabled_lowercase"),
+        pytest.param("enabled", "enabled", id="enabled_lowercase"),
+        pytest.param("ENABLED_FULL", "ENABLED_FULL", id="enabled_full"),
+    ],
+)
+async def test_invoke_passthrough_traces_a_caller_guardrail_so_bedrock_reports_its_usage(
+    action: str, caller_trace: str | None, sent_trace: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    caller_trace_header: Final = {} if caller_trace is None else {"x-pass-X-Amzn-Bedrock-Trace": caller_trace}
+
+    request: Final = await _sent_passthrough_request(
+        action, INVOKE_BODY, {}, request_headers={**CALLER_GUARDRAIL_IDENTITY_HEADERS, **caller_trace_header}
+    )
+
+    assert _invoke_guardrail_headers(request) == {**SENT_CALLER_GUARDRAIL_IDENTITY, "x-amzn-bedrock-trace": sent_trace}
+    assert "x-amzn-bedrock-trace" in _signed_header_names(request)
+    assert json.loads(request.content) == INVOKE_BODY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "caller_headers", "sent_guardrail_headers"),
+    [
+        pytest.param("invoke", {}, {}, id="invoke_without_guardrail"),
+        pytest.param(
+            "invoke",
+            {"x-pass-X-Amzn-Bedrock-Trace": "DISABLED"},
+            {"x-amzn-bedrock-trace": "DISABLED"},
+            id="invoke_trace_without_guardrail",
+        ),
+        pytest.param(
+            "converse", CALLER_GUARDRAIL_IDENTITY_HEADERS, SENT_CALLER_GUARDRAIL_IDENTITY, id="converse_guardrail"
+        ),
+    ],
+)
+async def test_passthrough_adds_no_trace_where_no_caller_invoke_guardrail_runs(
+    action: str,
+    caller_headers: Mapping[str, str],
+    sent_guardrail_headers: Mapping[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    body: Final = CONVERSE_BODY if action == "converse" else INVOKE_BODY
+
+    request: Final = await _sent_passthrough_request(action, body, {}, request_headers=caller_headers)
+
+    assert _invoke_guardrail_headers(request) == sent_guardrail_headers
 
 
 @pytest.mark.asyncio

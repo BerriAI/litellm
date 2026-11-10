@@ -136,7 +136,11 @@ class OnyxGuardrail(CustomGuardrail):
                         "input_type": input_type,
                     },
                 )
-                payload = request_data
+                payload = {
+                    key: value
+                    for key, value in decoded_json_object(_DECODED_JSON.validate_python(request_data)).items()
+                    if key != "request_headers"
+                }
 
         try:
             await self._validate_with_guard_server(payload, input_type, conversation_id)

@@ -408,7 +408,7 @@ def _caller_guardrail_on_the_wire(request: Request) -> Applied:
     assert {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"} <= (
         _signed_header_names(request)
     ), request.headers["authorization"]
-    return Applied("caller-guardrail", "9", "DISABLED", None)
+    return Applied("caller-guardrail", "9", "ENABLED", None)
 
 
 @pytest.mark.parametrize("action", _ACTIONS)
@@ -510,7 +510,7 @@ def test_deployment_without_a_guardrail_forwards_the_caller_guardrail_sent_as_x_
 
     outcome: Final = _send(runtime, action, rig.unguarded_model, f"{marker} say {_BLOCKED_WORD}", caller_guardrail=False)
 
-    assert outcome == Outcome(_BLOCKED_TEXT, intervened=True, traced_guardrail=None), outcome
+    assert outcome == Outcome(_BLOCKED_TEXT, intervened=True, traced_guardrail="caller-guardrail"), outcome
     (request,) = rig.received(rig.wire, marker)
     assert _applied(request) == _caller_guardrail_on_the_wire(request), (request.headers, request.body)
 
