@@ -7948,6 +7948,13 @@ async def test_key_level_callback_vars_survive_the_strip():
             id="unsupported-key-controls-ignored",
         ),
         pytest.param(None, {"use-cache": True}, {"use-cache": True}, True, id="malformed-key-cache-keeps-request"),
+        pytest.param(
+            {"no-cache": True},
+            {"use-cache": True, "ttl": 60},
+            {"ttl": 60, "no-cache": True},
+            False,
+            id="key-no-cache-keeps-the-key-out-of-opt-in-caching",
+        ),
     ],
 )
 async def test_key_cache_controls_merge_into_request_cache_controls(

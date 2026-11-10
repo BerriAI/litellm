@@ -2127,10 +2127,15 @@ class LiteLLMProxyRequestSetup:
             return data
         if "cache" in key_metadata and isinstance(key_metadata["cache"], dict):
             request_cache: Final = _DECODED_JSON.validate_python(data["cache"]) if "cache" in data else None
-            key_cache_controls: Final = _request_fields(_DECODED_JSON.validate_python(key_metadata["cache"]))
+            key_cache_controls: Final = {
+                k: v
+                for k, v in _request_fields(_DECODED_JSON.validate_python(key_metadata["cache"])).items()
+                if k in SupportedCacheControls
+            }
+            key_opts_out: Final = key_cache_controls.get("no-cache") is True
             data["cache"] = {  # rebind-ok: data is an out-param
-                **_request_fields(request_cache),
-                **{k: v for k, v in key_cache_controls.items() if k in SupportedCacheControls},
+                **{k: v for k, v in _request_fields(request_cache).items() if not (key_opts_out and k == "use-cache")},
+                **key_cache_controls,
             }
 
         ## KEY-LEVEL SPEND LOGS / TAGS
