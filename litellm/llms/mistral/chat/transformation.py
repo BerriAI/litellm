@@ -410,7 +410,9 @@ class MistralConfig(OpenAIGPTConfig):
             or "https://api.mistral.ai/v1"
         )
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+    def get_models(
+        self, api_key: str | None = None, api_base: str | None = None
+    ) -> list[str]:  # mutable-ok: matches BaseConfig contract
         resolved_base, resolved_key = self._get_openai_compatible_provider_info(api_base, api_key)
         if not resolved_key:
             raise ValueError(

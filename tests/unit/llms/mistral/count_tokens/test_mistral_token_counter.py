@@ -7,6 +7,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.mistral.count_tokens.transformation import MistralCountTokensConfig
@@ -245,7 +246,7 @@ async def test_count_tokens_openai_format_with_tool_calls_and_tool_results(monke
     assert result is not None
     assert result.total_tokens == 58
     assert result.error is False
-    sent: Final = json.loads(route.calls.last.request.content)
+    sent: Final = decoded_json_object(json.loads(route.calls.last.request.content))
     assert sent["instructions"] == "Answer concisely."
     assert sent["tools"] == [
         {
@@ -323,7 +324,7 @@ async def test_count_tokens_anthropic_format_with_tool_use_and_tool_result(monke
 
     assert result is not None
     assert result.total_tokens == 64
-    sent: Final = json.loads(route.calls.last.request.content)
+    sent: Final = decoded_json_object(json.loads(route.calls.last.request.content))
     assert sent["instructions"] == "Be precise."
     assert sent["tools"] == [
         {
@@ -513,7 +514,10 @@ async def test_native_responses_count_dispatches_to_mistral(monkeypatch: pytest.
         assert getattr(result, "total_tokens", None) == 5
         assert route.called
         assert route.calls.last.request.headers["authorization"] == "Bearer test-key"
-        assert json.loads(route.calls.last.request.content) == {"model": "mistral-large-4", "input": "Hello world"}
+        assert decoded_json_object(json.loads(route.calls.last.request.content)) == {
+            "model": "mistral-large-4",
+            "input": "Hello world",
+        }
 
 
 @pytest.mark.asyncio
@@ -587,7 +591,7 @@ async def test_count_tokens_system_blocks_instruction(monkeypatch: pytest.Monkey
     assert result is not None
     assert result.total_tokens == 12
     assert route.called
-    sent_json: Final = json.loads(route.calls.last.request.content)
+    sent_json: Final = decoded_json_object(json.loads(route.calls.last.request.content))
     assert sent_json["instructions"] == "system block"
 
 
@@ -618,7 +622,7 @@ async def test_count_responses_request_azure_returns_none() -> None:
     result: Final = await counter.count_responses_request(
         model_to_use="mistral-large-4",
         request={"model": "mistral-large-4", "input": "hi"},
-        policy=DropPolicy(drop_params=False, additional_drop_params=None),
+        policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
         deployment={"litellm_params": {"api_base": "https://foo.openai.azure.com", "api_key": "test-key"}},
         request_model="mistral/mistral-large-4",
     )

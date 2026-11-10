@@ -1,7 +1,7 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 from urllib.parse import urlparse
 
 import httpx
@@ -44,7 +44,7 @@ def _is_azure_endpoint(api_base: str | None) -> bool:
     if not api_base:
         return False
     hostname: Final = urlparse(api_base).hostname or ""
-    return hostname.endswith(".azure.com") or hostname.endswith(".azure.cn") or "azure" in hostname.lower()
+    return hostname.endswith((".azure.com", ".azure.cn")) or "azure" in hostname.lower()
 
 
 def _count_credential(
@@ -59,7 +59,7 @@ def _count_credential(
 
     from litellm.llms.mistral.chat.transformation import MistralConfig
 
-    resolved_base, resolved_key = MistralConfig()._get_openai_compatible_provider_info(
+    resolved_base, resolved_key = MistralConfig().get_openai_compatible_provider_info(
         api_base=raw_api_base if isinstance(raw_api_base, str) else None,
         api_key=raw_api_key if isinstance(raw_api_key, str) else None,
     )
@@ -164,11 +164,11 @@ class MistralTokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, object]] | None,
-        contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        messages: list[dict[str, object]] | None,  # mutable-ok: matches BaseTokenCounter signature
+        contents: list[dict[str, object]] | None,  # mutable-ok: matches BaseTokenCounter signature
+        deployment: dict[str, object] | None = None,  # mutable-ok: matches BaseTokenCounter signature
         request_model: str = "",
-        tools: list[dict[str, object]] | None = None,
+        tools: list[dict[str, object]] | None = None,  # mutable-ok: matches BaseTokenCounter signature
         system: object = None,
         messages_format: TokenCountMessagesFormat = "openai",
         output_format: JsonValue = None,
