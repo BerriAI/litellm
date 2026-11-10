@@ -1429,20 +1429,25 @@ def _vllm(name: str, host: str, **model_info: object) -> dict[str, object]:
     }
 
 
-def test_a_text_only_deployment_takes_images_off_the_name_and_a_silent_one_does_not() -> None:
+def test_images_are_offered_only_when_every_deployment_behind_the_name_says_it_reads_them() -> None:
     router: Final = litellm.Router(
         model_list=[
             _vllm("mixed", "h0", supports_vision=True),
             _vllm("mixed", "h1", supports_vision=False),
             _vllm("vision-and-silent", "h2", supports_vision=True),
             _vllm("vision-and-silent", "h3"),
+            _vllm("all-vision", "h3a", supports_vision=True),
+            _vllm("all-vision", "h3b", supports_vision=True),
+            _vllm("undeclared", "h3c"),
         ]
     )
 
-    served: Final = _served(router, "mixed", "vision-and-silent")
+    served: Final = _served(router, "mixed", "vision-and-silent", "all-vision", "undeclared")
 
     assert served["mixed"]["input_modalities"] == ["text"]
-    assert served["vision-and-silent"]["input_modalities"] == ["text", "image"]
+    assert served["vision-and-silent"]["input_modalities"] == ["text"]
+    assert served["all-vision"]["input_modalities"] == ["text", "image"]
+    assert served["undeclared"]["input_modalities"] == ["text"]
 
 
 def test_a_silent_deployment_does_not_vote_against_tool_calls_but_one_without_them_does() -> None:
