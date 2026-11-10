@@ -24,7 +24,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_items, object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     defs_unpacked,
     is_object_schema,
@@ -575,6 +575,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             function=ChatCompletionToolCallFunctionChunk(
                 name=anthropic_tool_content["name"],
                 arguments=json.dumps(anthropic_tool_content["input"]),
+                **(
+                    {"provider_specific_fields": {"server_name": server_name}}
+                    if anthropic_tool_content.get("type") == "mcp_tool_use"
+                    and isinstance(server_name := anthropic_tool_content.get("server_name"), str)
+                    else {}
+                ),
             ),
             index=index,
         )
@@ -2951,6 +2957,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and tool_use_id in inputs
         ]
 
+    @staticmethod
+    def _mcp_server_tool_calls(completion_response: object) -> tuple[ChatCompletionToolCallChunk, ...]:
+        content: Final = (object_mapping(completion_response) or {}).get("content")
+        return tuple(
+            AnthropicConfig.convert_tool_use_to_openai_format(anthropic_tool_content=dict(fields), index=index)
+            for index, fields in enumerate(map(object_mapping, object_items(content)))
+            if fields is not None and fields.get("type") == "mcp_tool_use"
+        )
+
     def _build_provider_specific_fields(
         self,
         completion_response: dict,
@@ -2960,6 +2975,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_results: Sequence[_AnthropicToolResultBlock] | None,
         compaction_blocks: Sequence[object] | None,
         tool_calls: list[ChatCompletionToolCallChunk],
+        server_tool_calls: Sequence[ChatCompletionToolCallChunk],
     ) -> dict[str, object]:
         provider_specific_fields: Final[dict[str, object]] = {
             "citations": citations,
@@ -2996,6 +3012,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
+
+        if server_tool_calls:
+            provider_specific_fields["server_tool_calls"] = list(server_tool_calls)
 
         refusal_fields: Final = refusal_provider_specific_fields(
             REFUSAL_STOP_FIELDS.validate_python(completion_response)
@@ -3064,6 +3083,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_results,
             compaction_blocks,
             tool_calls,
+            self._mcp_server_tool_calls(_DECODED_JSON.validate_python(completion_response)),
         )
 
         json_mode_message, tool_calls_for_message, json_extra_content = self._resolve_json_mode_non_streaming(

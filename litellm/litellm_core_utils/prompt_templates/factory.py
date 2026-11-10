@@ -1975,8 +1975,39 @@ def _placed_and_paired(
 _AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
 
 
+def _mcp_tool_result_ids(content: Iterable[object]) -> frozenset[object]:
+    return frozenset(
+        message_field(block, "tool_use_id") for block in content if message_field(block, "type") == "mcp_tool_result"
+    )
+
+
+def _is_answered_mcp_tool_use(block: object, answered_tool_use_ids: frozenset[object]) -> bool:
+    return message_field(block, "type") == "mcp_tool_use" and message_field(block, "id") in answered_tool_use_ids
+
+
+def _is_mcp_tool_call(tool_call: ChatCompletionAssistantToolCall) -> bool:
+    tool_call_id: Final = tool_call["id"]
+    return tool_call_id is not None and tool_call_id.startswith(ANTHROPIC_MCP_TOOL_USE_ID_PREFIX)
+
+
+def _assistant_tool_calls_with_server_tool_calls(
+    message: ChatCompletionAssistantMessage,
+) -> Sequence[ChatCompletionAssistantToolCall] | None:
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+    tool_calls: Final = message.get("tool_calls")
+    mcp_tool_calls: Final = tuple(filter(_is_mcp_tool_call, anthropic_server_tool_call_params(message)))
+    if not mcp_tool_calls:
+        return tool_calls
+    client_tool_call_ids: Final = frozenset(get_attribute_or_key(tool_call, "id") for tool_call in tool_calls or ())
+    return (
+        *(tool_call for tool_call in mcp_tool_calls if tool_call["id"] not in client_tool_call_ids),
+        *(tool_calls or ()),
+    )
+
+
 def convert_to_anthropic_tool_invoke(
-    tool_calls: list[ChatCompletionAssistantToolCall],
+    tool_calls: Sequence[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
     answered_tool_ids: Container[str] = frozenset(),
@@ -2045,7 +2076,23 @@ def convert_to_anthropic_tool_invoke(
             if tool_id in answered_tool_ids
             else find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         )
-        if server_tool_result is not None:
+        mcp_server_name = message_field(
+            message_field(get_attribute_or_key(tool, "function"), "provider_specific_fields"), "server_name"
+        )
+        if tool_id.startswith(ANTHROPIC_MCP_TOOL_USE_ID_PREFIX) and tool_id not in answered_tool_ids:
+            if server_tool_result is None or not isinstance(mcp_server_name, str) or not mcp_server_name:
+                continue
+            anthropic_tool_invoke.append(
+                {
+                    "type": "mcp_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "server_name": mcp_server_name,
+                    "input": tool_input,
+                }
+            )
+            anthropic_tool_invoke.append(server_tool_result)
+        elif server_tool_result is not None:
             anthropic_tool_invoke.append(
                 {
                     "type": "server_tool_use",
@@ -2848,12 +2895,16 @@ def anthropic_messages_pt(
             # If so, we need to interleave thinking blocks with tool call groups
             # to preserve the original content block ordering.
             # Fixes: https://github.com/BerriAI/litellm/issues/23047
-            assistant_tool_calls = assistant_content_block.get("tool_calls")
+            assistant_tool_calls = _assistant_tool_calls_with_server_tool_calls(assistant_content_block)
             _has_server_tool_calls = False
             if assistant_tool_calls is not None:
                 for _tc in assistant_tool_calls:
                     _tc_id = _tc.get("id") if isinstance(_tc, dict) else getattr(_tc, "id", None)
-                    if _tc_id and isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_"):
+                    if (
+                        _tc_id
+                        and isinstance(_tc_id, str)
+                        and _tc_id.startswith(("srvtoolu_", ANTHROPIC_MCP_TOOL_USE_ID_PREFIX))
+                    ):
                         _has_server_tool_calls = True
                         break
 
@@ -2890,7 +2941,7 @@ def anthropic_messages_pt(
                 _current_group: list[_AnthropicToolInvokeItem] = []
                 for item in tool_invoke_results:
                     item_type = item.get("type", "") if isinstance(item, dict) else getattr(item, "type", "")
-                    if item_type == "server_tool_use":
+                    if item_type in ("server_tool_use", "mcp_tool_use"):
                         if _current_group:
                             server_tool_groups.append(_current_group)
                         _current_group = [item]
@@ -3000,6 +3051,7 @@ def anthropic_messages_pt(
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
+                    _answered_mcp_tool_use_ids = _mcp_tool_result_ids(_content_list)
                     for m in _content_list:
                         if not isinstance(m, dict):
                             continue
@@ -3023,7 +3075,11 @@ def anthropic_messages_pt(
                             assistant_content.append(cast(AnthropicMessagesTextParam, _cached_message))
                         # handle server_tool_use blocks (tool search, web search, etc.)
                         # Pass through as-is since these are Anthropic-native content types
-                        elif m.get("type", "") == "server_tool_use" or m.get("type", "").endswith("_tool_result"):
+                        elif (
+                            m.get("type", "") == "server_tool_use"
+                            or m.get("type", "").endswith("_tool_result")
+                            or _is_answered_mcp_tool_use(m, _answered_mcp_tool_use_ids)
+                        ):
                             assistant_content.append(m)
                 elif (
                     "content" in assistant_content_block

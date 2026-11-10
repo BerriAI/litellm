@@ -312,11 +312,18 @@ def find_anthropic_server_tool_result(
     web_search_results: Sequence[object] | None,
     tool_results: Sequence[object] | None,
 ) -> dict[str, object] | None:
-    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
-        return None
     candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
     return next(
-        (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
+        (
+            result
+            for result in candidates
+            if (
+                tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
+                or message_field(result, "type") == "mcp_tool_result"
+            )
+            and isinstance(result, dict)
+            and result.get("tool_use_id") == tool_id
+        ),
         None,
     )
 

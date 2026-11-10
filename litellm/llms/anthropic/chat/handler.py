@@ -23,6 +23,7 @@ from litellm.anthropic_beta_headers_manager import (
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
@@ -742,6 +743,9 @@ class ModelResponseIterator:
         self._server_tool_inputs: dict[str, object] = {}
         self.tool_results: list[dict[str, Any]] = []
         self._current_server_tool_id: str | None = None
+        self._current_server_tool_name: str = ""
+        self._current_mcp_server_name: str | None = None
+        self._server_tool_calls: tuple[ChatCompletionToolCallChunk, ...] = ()
         self._container_id: str | None = None
 
     @property
@@ -901,6 +905,31 @@ class ModelResponseIterator:
 
         return content_block_start
 
+    def _finish_mcp_tool_call(self) -> tuple[ChatCompletionToolCallChunk, ...]:
+        call_id: Final = self._current_server_tool_id
+        args: Final = "".join(
+            block["delta"]["partial_json"] for block in self.content_blocks if "partial_json" in block["delta"]
+        )
+        self._server_tool_calls = (
+            *self._server_tool_calls,
+            ChatCompletionToolCallChunk(
+                id=call_id,
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(
+                    name=self._current_server_tool_name,
+                    arguments=args or json.dumps(self._server_tool_inputs.get(call_id or "", {})),
+                    **(
+                        {"provider_specific_fields": {"server_name": self._current_mcp_server_name}}
+                        if self._current_mcp_server_name is not None
+                        else {}
+                    ),
+                ),
+                index=len(self._server_tool_calls),
+            ),
+        )
+        self._current_server_tool_id = None
+        return self._server_tool_calls
+
     def _web_search_call_snapshot(self) -> dict[str, object]:
         return dict(self._web_search_calls)
 
@@ -1030,6 +1059,14 @@ class ModelResponseIterator:
                         caller_data: Final = content_block_start["content_block"]["caller"]
                         if caller_data:
                             tool_use["caller"] = cast(dict[str, Any], caller_data)
+                elif content_block_start["content_block"]["type"] == "mcp_tool_use":
+                    self._current_server_tool_id = content_block_start["content_block"]["id"]
+                    self._current_server_tool_name = content_block_start["content_block"]["name"]
+                    mcp_server_name: Final = message_field(content_block_start["content_block"], "server_name")
+                    self._current_mcp_server_name = mcp_server_name if isinstance(mcp_server_name, str) else None
+                    self._server_tool_inputs[self._current_server_tool_id] = content_block_start["content_block"].get(
+                        "input", {}
+                    )
                 elif content_block_start["content_block"]["type"] == "redacted_thinking":
                     (
                         thinking_blocks,
@@ -1107,6 +1144,8 @@ class ModelResponseIterator:
                             except (json.JSONDecodeError, TypeError):
                                 pass
                         self._current_server_tool_id = None
+                elif self.current_content_block_type == "mcp_tool_use" and self._current_server_tool_id:
+                    provider_specific_fields["server_tool_calls"] = list(self._finish_mcp_tool_call())
                 if self.is_response_format_tool:
                     text = self._flush_response_format_buffer()
                 # Reset response_format tool tracking when block stops

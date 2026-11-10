@@ -41,7 +41,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
-from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
+from litellm.types.utils import ChatCompletionToolCallChunk, Choices, Message, ModelResponse, ServerToolUse, Usage
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -3748,6 +3748,196 @@ def test_server_tool_result_round_trips_right_after_its_call(
 
 def _block_ids(message: dict[str, object], block_type: str, id_key: str) -> list[object]:
     return sorted(block[id_key] for block in message["content"] if block["type"] == block_type)
+
+
+def _parsed_choice(content: list[dict[str, object]], stop_reason: str) -> Choices:
+    anthropic_response: Final = {
+        "id": "msg_01XYZ",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5-5",
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 50},
+    }
+    raw_response: Final = MagicMock(spec=httpx.Response)
+    raw_response.json.return_value = anthropic_response
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    choice: Final = (
+        AnthropicConfig()
+        .transform_parsed_response(
+            completion_response=anthropic_response,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            json_mode=False,
+            prefix_prompt=None,
+        )
+        .choices[0]
+    )
+    assert isinstance(choice, Choices)
+    return choice
+
+
+def _replayed(*messages: Mapping[str, object]) -> list[dict[str, object]]:
+    return anthropic_messages_pt(messages=list(messages), model="claude-opus-5-5", llm_provider="anthropic")
+
+
+def _server_tool_calls(message: Message) -> list[tuple[object, object, object, object, object]]:
+    return [
+        (
+            call["id"],
+            call["type"],
+            call["function"]["name"],
+            json.loads(call["function"]["arguments"]),
+            call["function"].get("provider_specific_fields"),
+        )
+        for call in (message.provider_specific_fields or {}).get("server_tool_calls") or ()
+    ]
+
+
+_MCP_CALL: Final = {
+    "type": "mcp_tool_use",
+    "id": "mcptoolu_01Wiki",
+    "name": "read_wiki_structure",
+    "input": {"repoName": "example/project"},
+    "server_name": "wiki",
+}
+
+
+def _mcp_result(is_error: bool) -> dict[str, object]:
+    return {
+        "type": "mcp_tool_result",
+        "tool_use_id": _MCP_CALL["id"],
+        "is_error": is_error,
+        "content": [{"type": "text", "text": "Repository not found" if is_error else "Repository overview"}],
+    }
+
+
+@pytest.mark.parametrize("is_error", [False, True], ids=["success", "is_error"])
+def test_mcp_call_is_returned_under_server_tool_calls_and_replayed_with_its_result(is_error: bool):
+    answer: Final = {"type": "text", "text": "The wiki has 8 sections."}
+    choice: Final = _parsed_choice([_MCP_CALL, _mcp_result(is_error), answer], "end_turn")
+
+    assert choice.finish_reason == "stop"
+    assert choice.message.tool_calls is None
+    assert choice.message.content == answer["text"]
+    assert _server_tool_calls(choice.message) == [
+        (_MCP_CALL["id"], "function", _MCP_CALL["name"], _MCP_CALL["input"], {"server_name": "wiki"})
+    ]
+    assert choice.message.provider_specific_fields["tool_results"] == [_mcp_result(is_error)]
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "List the wiki of example/project"},
+        choice.message.model_dump(),
+        {"role": "user", "content": "What did the tool return?"},
+    )
+    assert replayed[1]["content"] == [answer, _MCP_CALL, _mcp_result(is_error)]
+
+
+@pytest.mark.parametrize("tool_input", [{}, {"repoName": "example/project"}])
+def test_mcp_call_next_to_a_client_tool_call_stays_out_of_tool_calls(tool_input: dict[str, str]):
+    mcp_call: Final = {**_MCP_CALL, "input": tool_input}
+    choice: Final = _parsed_choice([mcp_call, _mcp_result(False), _WEATHER_CALL], "tool_use")
+
+    assert _server_tool_calls(choice.message) == [
+        (mcp_call["id"], "function", mcp_call["name"], tool_input, {"server_name": "wiki"})
+    ]
+    assert [call.id for call in choice.message.tool_calls or ()] == [_WEATHER_CALL["id"]]
+    assert choice.message.provider_specific_fields["tool_results"] == [_mcp_result(False)]
+    assert choice.finish_reason == "tool_calls"
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read the repository overview and check the weather"},
+        choice.message.model_dump(),
+        {"role": "tool", "tool_call_id": _WEATHER_CALL["id"], "content": "18C"},
+    )
+    assert replayed[1]["content"] == [mcp_call, _mcp_result(False), _WEATHER_CALL]
+    assert [block["tool_use_id"] for block in replayed[2]["content"]] == [_WEATHER_CALL["id"]]
+
+
+def test_mcp_call_leaves_a_web_search_in_the_same_response_as_a_tool_call():
+    web_search_only: Final = _parsed_choice(_web_search_turn({"type": "text", "text": "Paris facts."}), "end_turn")
+    with_mcp: Final = _parsed_choice(
+        [_MCP_CALL, _mcp_result(False), *_web_search_turn({"type": "text", "text": "Paris facts."})], "end_turn"
+    )
+
+    assert [
+        (call.id, call.function.name, json.loads(call.function.arguments)) for call in with_mcp.message.tool_calls or ()
+    ] == [("srvtoolu_01Web", "web_search", {"query": "Paris facts"})]
+    assert with_mcp.finish_reason == web_search_only.finish_reason
+    assert with_mcp.message.content == web_search_only.message.content
+    assert [call[0] for call in _server_tool_calls(with_mcp.message)] == [_MCP_CALL["id"]]
+
+
+@pytest.mark.parametrize("native_content", [False, True], ids=["parsed_response", "native_blocks"])
+def test_mcp_pairs_round_trip_with_interleaved_thinking(native_content: bool):
+    second_call: Final = {**_MCP_CALL, "id": "mcptoolu_02Wiki", "server_name": "other_wiki"}
+    content: Final = [
+        {"type": "thinking", "thinking": "Read the first repository.", "signature": "sig_first"},
+        _MCP_CALL,
+        _mcp_result(False),
+        {"type": "thinking", "thinking": "Read the second repository.", "signature": "sig_second"},
+        second_call,
+        {**_mcp_result(False), "tool_use_id": second_call["id"]},
+        {"type": "text", "text": "Both repositories are documented."},
+    ]
+    message: Final = (
+        {"role": "assistant", "content": content}
+        if native_content
+        else _parsed_choice(content, "end_turn").message.model_dump()
+    )
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read both repositories"},
+        message,
+        {"role": "user", "content": "What did you find?"},
+    )
+
+    assert replayed[1]["content"] == content
+
+
+_SECOND_MCP_CALL: Final = {**_MCP_CALL, "id": "mcptoolu_02Wiki"}
+_SECOND_MCP_RESULT: Final = {**_mcp_result(False), "tool_use_id": _SECOND_MCP_CALL["id"]}
+
+
+@pytest.mark.parametrize(
+    "unreplayable",
+    [
+        pytest.param(
+            [{key: value for key, value in _SECOND_MCP_CALL.items() if key != "server_name"}, _SECOND_MCP_RESULT],
+            id="no_server_name",
+        ),
+        pytest.param([{**_SECOND_MCP_CALL, "server_name": ""}, _SECOND_MCP_RESULT], id="empty_server_name"),
+        pytest.param([_SECOND_MCP_CALL], id="no_result"),
+    ],
+)
+def test_mcp_call_that_cannot_be_replayed_as_a_pair_is_left_out(unreplayable: list[dict[str, object]]):
+    answer: Final = {"type": "text", "text": "Repository overview"}
+    choice: Final = _parsed_choice([_MCP_CALL, _mcp_result(False), *unreplayable, answer], "end_turn")
+
+    assert [call[0] for call in _server_tool_calls(choice.message)] == [_MCP_CALL["id"], _SECOND_MCP_CALL["id"]]
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read the repository"},
+        choice.message.model_dump(),
+        {"role": "user", "content": "What did you find?"},
+    )
+
+    assert replayed[1]["content"] == [answer, _MCP_CALL, _mcp_result(False)]
+
+
+def test_native_mcp_call_is_replayed_only_next_to_its_result():
+    answer: Final = {"type": "text", "text": "Repository overview"}
+
+    replayed: Final = _replayed(
+        {"role": "user", "content": "Read the repository"},
+        {"role": "assistant", "content": [_MCP_CALL, _mcp_result(False), _SECOND_MCP_CALL, answer]},
+        {"role": "user", "content": "What did you find?"},
+    )
+
+    assert replayed[1]["content"] == [_MCP_CALL, _mcp_result(False), answer]
 
 
 _SEARCH_THAT_FOUND_NOTHING: Final = _tool_search_turn(

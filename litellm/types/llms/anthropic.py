@@ -851,6 +851,7 @@ ANTHROPIC_TOOL_SEARCH_TOOL_TYPES: Final = frozenset(
 ANTHROPIC_TOOL_SEARCH_TOOL_NAMES: Final = frozenset({"tool_search_tool_regex", "tool_search_tool_bm25"})
 ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
 ANTHROPIC_TOOL_SEARCH_RESULT_CONTENT_TYPE: Final = "tool_search_tool_search_result"
+ANTHROPIC_MCP_TOOL_USE_ID_PREFIX: Final = "mcptoolu_"
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"

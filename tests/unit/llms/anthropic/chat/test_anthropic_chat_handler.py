@@ -3480,6 +3480,197 @@ def _assemble_stream(events: tuple[dict, ...]) -> litellm.ModelResponse:
     return litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
 
 
+_STREAMED_MCP_RESULT: Final = {
+    "type": "mcp_tool_result",
+    "tool_use_id": "mcptoolu_01Wiki",
+    "is_error": False,
+    "content": [{"type": "text", "text": "Available pages for example/project"}],
+}
+
+
+def _streamed_mcp_call(initial_input: dict[str, str], partial_json: tuple[str, ...]) -> tuple[dict, ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {"id": "msg_01", "model": "claude-opus-5-5", "usage": {"input_tokens": 9}},
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "mcp_tool_use",
+                "id": _STREAMED_MCP_RESULT["tool_use_id"],
+                "name": "read_wiki_structure",
+                "input": initial_input,
+                "server_name": "wiki",
+            },
+        },
+        *(
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": part}}
+            for part in partial_json
+        ),
+        {"type": "content_block_stop", "index": 0},
+        {"type": "content_block_start", "index": 1, "content_block": _STREAMED_MCP_RESULT},
+        {"type": "content_block_stop", "index": 1},
+    )
+
+
+def _streamed_text(text: str) -> tuple[dict, ...]:
+    return (
+        {"type": "content_block_start", "index": 2, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 2, "delta": {"type": "text_delta", "text": text}},
+        {"type": "content_block_stop", "index": 2},
+    )
+
+
+_STREAMED_WEATHER_CALL: Final = (
+    {
+        "type": "content_block_start",
+        "index": 2,
+        "content_block": {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {}},
+    },
+    {
+        "type": "content_block_delta",
+        "index": 2,
+        "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+    },
+    {"type": "content_block_stop", "index": 2},
+)
+
+
+def _streamed_stop(stop_reason: str) -> dict:
+    return {
+        "type": "message_delta",
+        "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+        "usage": {"output_tokens": 12},
+    }
+
+
+def _parsed_stream(events: tuple[dict, ...]) -> list[ModelResponseStream]:
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    return [iterator.chunk_parser(event) for event in events]
+
+
+def _streamed_server_tool_calls(message: litellm.Message) -> list[tuple[object, object, object, object, object]]:
+    return [
+        (
+            call["id"],
+            call["type"],
+            call["function"]["name"],
+            json.loads(call["function"]["arguments"]),
+            call["function"].get("provider_specific_fields"),
+        )
+        for call in (message.provider_specific_fields or {}).get("server_tool_calls") or ()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("initial_input", "partial_json", "expected_input"),
+    [
+        pytest.param({}, (), {}, id="empty_input"),
+        pytest.param({"repoName": "example/project"}, (), {"repoName": "example/project"}, id="initial_input"),
+        pytest.param(
+            {}, ("", '{"repoN', 'ame": "', "example/project", '"}'), {"repoName": "example/project"}, id="split_input"
+        ),
+    ],
+)
+def test_streamed_mcp_call_is_returned_once_under_server_tool_calls(
+    initial_input: dict[str, str], partial_json: tuple[str, ...], expected_input: dict[str, str]
+):
+    answer: Final = "The wiki has 8 sections."
+    chunks: Final = _parsed_stream(
+        (*_streamed_mcp_call(initial_input, partial_json), *_streamed_text(answer), _streamed_stop("end_turn"))
+    )
+    assembled: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+    choice: Final = assembled.choices[0]
+
+    assert [
+        len(fields["server_tool_calls"])
+        for chunk in chunks
+        for delta_choice in chunk.choices
+        if "server_tool_calls" in (fields := delta_choice.delta.provider_specific_fields or {})
+    ] == [1]
+    assert [
+        call for chunk in chunks for delta_choice in chunk.choices for call in delta_choice.delta.tool_calls or ()
+    ] == []
+    assert choice.finish_reason == "stop"
+    assert choice.message.tool_calls is None
+    assert choice.message.content == answer
+    assert _streamed_server_tool_calls(choice.message) == [
+        ("mcptoolu_01Wiki", "function", "read_wiki_structure", expected_input, {"server_name": "wiki"})
+    ]
+    assert choice.message.provider_specific_fields["tool_results"] == [_STREAMED_MCP_RESULT]
+
+    replayed: Final = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "List the wiki of example/project"},
+            choice.message.model_dump(),
+            {"role": "user", "content": "What did the tool return?"},
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+    assert replayed[1]["content"] == [
+        {"type": "text", "text": answer},
+        {
+            "type": "mcp_tool_use",
+            "id": "mcptoolu_01Wiki",
+            "name": "read_wiki_structure",
+            "server_name": "wiki",
+            "input": expected_input,
+        },
+        _STREAMED_MCP_RESULT,
+    ]
+
+
+def test_streamed_mcp_call_next_to_a_client_tool_call_stays_out_of_tool_calls():
+    chunks: Final = _parsed_stream(
+        (
+            *_streamed_mcp_call({}, ('{"repoName": "example/', 'project"}')),
+            *_STREAMED_WEATHER_CALL,
+            _streamed_stop("tool_use"),
+        )
+    )
+    choice: Final = litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}]).choices[0]
+
+    assert (
+        "".join(
+            call.function.arguments or ""
+            for chunk in chunks
+            for delta_choice in chunk.choices
+            for call in delta_choice.delta.tool_calls or ()
+        )
+        == '{"city": "Paris"}'
+    )
+    assert [
+        (call.id, call.function.name, json.loads(call.function.arguments)) for call in choice.message.tool_calls or ()
+    ] == [("toolu_01Weather", "get_weather", {"city": "Paris"})]
+    assert [call[0] for call in _streamed_server_tool_calls(choice.message)] == ["mcptoolu_01Wiki"]
+    assert choice.message.provider_specific_fields["tool_results"] == [_STREAMED_MCP_RESULT]
+    assert choice.finish_reason == "tool_calls"
+
+    replayed: Final = anthropic_messages_pt(
+        messages=[
+            {"role": "user", "content": "Read the repository overview and check the weather"},
+            choice.message.model_dump(),
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+        ],
+        model="claude-opus-5-5",
+        llm_provider="anthropic",
+    )
+    assert [block for block in replayed[1]["content"] if block["type"] != "text"] == [
+        {
+            "type": "mcp_tool_use",
+            "id": "mcptoolu_01Wiki",
+            "name": "read_wiki_structure",
+            "server_name": "wiki",
+            "input": {"repoName": "example/project"},
+        },
+        _STREAMED_MCP_RESULT,
+        {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}},
+    ]
+
+
 def test_streamed_refusal_stop_details_reach_the_assembled_message():
     stop_details: Final = ANTHROPIC_DOCS_REFUSAL_MESSAGE["stop_details"]
     assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
