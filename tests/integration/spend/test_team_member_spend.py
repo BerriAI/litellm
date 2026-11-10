@@ -278,7 +278,7 @@ def test_member_added_without_any_budget_is_charged_on_its_membership_row(gatewa
 
 
 @pytest.mark.covers("spend.team_member.stale_low_redis_counter_still_blocks_member_over_budget")
-def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gateway: Gateway) -> None:
+def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gateway: Gateway, peer: Gateway) -> None:
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
@@ -308,7 +308,7 @@ def test_member_over_budget_is_blocked_when_redis_counter_reads_stale_low(gatewa
         assert float(counted) == pytest.approx(0.06), counted
         cache.set(counter_key, "0.01")
         upstream.delete("/__observations").raise_for_status()
-        denied: Final = gateway.request(
+        denied: Final = peer.request(
             "POST",
             "/v1/chat/completions",
             {"model": model, "messages": [{"role": "user", "content": f"stale counter {uuid.uuid4().hex}"}]},
