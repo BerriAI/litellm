@@ -2282,14 +2282,18 @@ def test_turning_reasoning_off_for_a_catalog_non_reasoning_model_drops_it_silent
     ({"vector_store_ids": []}, {"vector_store_ids": ["vs_abc"]}, {"vector_store_id": "vs_abc"}),
 )
 @pytest.mark.parametrize(("model", "provider_url", "provider_response"), PROVIDER_CHAT_ROUTES)
+@pytest.mark.parametrize("other_handler_names", ((), ("echo-handler",)))
 @pytest.mark.respx(assert_all_called=True)
 def test_completion_keeps_vector_store_params_out_of_provider_request(
     respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    other_handler_names: tuple[str, ...],
     model: str,
     provider_url: str,
     provider_response: dict[str, object],
     vector_store_params: dict[str, object],
 ) -> None:
+    _register_handlers(monkeypatch, *((name, OptionalParamsEchoHandler()) for name in other_handler_names))
     route: Final = respx_mock.post(provider_url)
     route.return_value = httpx.Response(200, json=provider_response)
 
@@ -2333,8 +2337,12 @@ class OptionalParamsEchoHandler(CustomLLM):
         )
 
 
-def _register_handler(monkeypatch: pytest.MonkeyPatch, provider: str, handler: CustomLLM | BaseVideoConfig) -> None:
-    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": provider, "custom_handler": handler}])
+def _register_handlers(monkeypatch: pytest.MonkeyPatch, *handlers: tuple[str, CustomLLM | BaseVideoConfig]) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [{"provider": provider, "custom_handler": handler} for provider, handler in handlers],
+    )
     monkeypatch.setattr(litellm, "_custom_providers", [])
     monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
 
@@ -2347,7 +2355,7 @@ def _register_handler(monkeypatch: pytest.MonkeyPatch, provider: str, handler: C
 def test_completion_passes_vector_store_params_to_custom_handler(
     monkeypatch: pytest.MonkeyPatch, provider: str, vector_store_params: Mapping[str, object]
 ) -> None:
-    _register_handler(monkeypatch, provider, OptionalParamsEchoHandler())
+    _register_handlers(monkeypatch, (provider, OptionalParamsEchoHandler()))
 
     response: Final = litellm.completion(
         model=f"{provider}/any-model", messages=[{"role": "user", "content": "hello"}], **vector_store_params
@@ -2357,11 +2365,32 @@ def test_completion_passes_vector_store_params_to_custom_handler(
     assert received_params.items() >= vector_store_params.items()
 
 
+def test_completion_passes_vector_store_params_to_custom_handler_listed_after_other_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _register_handlers(
+        monkeypatch,
+        ("other-handler", OptionalParamsEchoHandler()),
+        ("echo-handler", OpenAIVideoConfig()),
+        ("echo-handler", OptionalParamsEchoHandler()),
+    )
+
+    response: Final = litellm.completion(
+        model="echo-handler/any-model",
+        messages=[{"role": "user", "content": "hello"}],
+        vector_store_ids=["vs_abc"],
+        vector_store_id="vs_abc",
+    )
+
+    received_params: Final = json.loads(response.choices[0].message.content)
+    assert received_params.items() >= {"vector_store_ids": ["vs_abc"], "vector_store_id": "vs_abc"}.items()
+
+
 @pytest.mark.parametrize("vector_store_params", ({"vector_store_ids": ["vs_abc"]}, {"vector_store_id": "vs_abc"}))
 def test_embedding_passes_only_vector_store_params_to_custom_handler_named_like_an_openai_compatible_provider(
     monkeypatch: pytest.MonkeyPatch, vector_store_params: Mapping[str, object]
 ) -> None:
-    _register_handler(monkeypatch, "deepseek", OptionalParamsEchoHandler())
+    _register_handlers(monkeypatch, ("deepseek", OptionalParamsEchoHandler()))
 
     response: Final = litellm.embedding(
         model="deepseek/any-model",
@@ -2382,7 +2411,7 @@ def test_completion_keeps_vector_store_params_out_when_only_a_video_handler_shar
     provider_url: str,
     provider_response: dict[str, object],
 ) -> None:
-    _register_handler(monkeypatch, model.split("/")[0], OpenAIVideoConfig())
+    _register_handlers(monkeypatch, (model.split("/")[0], OpenAIVideoConfig()))
     route: Final = respx_mock.post(provider_url)
     route.return_value = httpx.Response(200, json=provider_response)
 
