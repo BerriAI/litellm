@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { CellTooltip, DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
+import { Badge } from "@/components/ui/badge";
 import i18n from "@/i18n/i18n";
 import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
 
@@ -343,7 +344,7 @@ export const getRequestLogsTableColumns = (
                   <span key={model}>{model}</span>
                 ))}
                 {log.session_models_truncated === true && (
-                  <span className="text-muted-foreground">More models not shown</span>
+                  <span className="text-muted-foreground">{t("logs.request.columns.moreModelsNotShown")}</span>
                 )}
               </div>
             }
@@ -361,9 +362,9 @@ export const getRequestLogsTableColumns = (
                 )}
                 <span className="max-w-[22ch] truncate">{latestModel}</span>
                 {otherModels.length > 0 && (
-                  <span className="shrink-0 rounded-full border border-border px-1 text-[10px] leading-4 text-muted-foreground">
+                  <Badge variant="outline" className="text-muted-foreground">
                     +{otherModels.length}
-                  </span>
+                  </Badge>
                 )}
               </span>
             }
