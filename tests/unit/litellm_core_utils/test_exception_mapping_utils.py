@@ -3221,3 +3221,33 @@ def test_fallback_403_response_does_not_carry_the_upstream_request(provider: str
     assert str(stub_request.url) == "https://litellm.ai"
     assert "authorization" not in stub_request.headers
     assert b"body-secret" not in stub_request.content
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "huggingface"])
+def test_provider_403_response_does_not_carry_upstream_request_credentials(provider: str) -> None:
+    """A 403 whose response still holds the upstream request must not leak its credentials"""
+    sent_request: Final = httpx.Request(
+        "POST",
+        "https://upstream.example/v1/chat?key=query-secret",
+        headers={"Authorization": "Bearer sk-upstream-secret"},
+        content=b'{"api_key": "body-secret"}',
+    )
+    upstream: Final = httpx.Response(403, content=b'{"error":"forbidden"}', request=sent_request)
+
+    class _SDK403(Exception):
+        status_code = 403
+        message = "forbidden"
+        response = upstream
+
+    with pytest.raises(litellm.PermissionDeniedError) as excinfo:
+        exception_type(model="some-model", original_exception=_SDK403("forbidden"), custom_llm_provider=provider)
+
+    error_request: Final = excinfo.value.response.request
+    assert error_request.headers.get("authorization") is None
+    assert "query-secret" not in str(error_request.url)
+    assert b"body-secret" not in error_request.content
+    assert "sk-upstream-secret" not in str(excinfo.value)
+    assert "query-secret" not in str(excinfo.value)
+    assert "body-secret" not in str(excinfo.value)
+    assert "sk-upstream-secret" not in str(excinfo.value.response.request.headers)
+    assert "body-secret" not in excinfo.value.response.text

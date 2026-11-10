@@ -1696,7 +1696,7 @@ def _map_huggingface_exception(
                 message=original_exception.message,
                 custom_llm_provider="huggingface",
                 exception_provider="HuggingfaceException",
-                response=getattr(original_exception, "response", None),
+                response=_without_credentials(getattr(original_exception, "response", None)),
                 extra_information=extra_information,
             )
         elif original_exception.status_code == 400:
@@ -2367,7 +2367,7 @@ def _map_openrouter_exception(
                 message=error_str,
                 custom_llm_provider=custom_llm_provider,
                 exception_provider=exception_provider,
-                response=getattr(original_exception, "response", None),
+                response=_without_credentials(getattr(original_exception, "response", None)),
                 extra_information=extra_information,
             )
         elif original_exception.status_code == 404:
