@@ -13,7 +13,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
@@ -5578,6 +5578,41 @@ async def test_auth_still_rejects_other_blocked_fields_on_the_upload_and_batch_c
             request_data={"s3_bucket_name": "team-b-bucket", "api_base": "https://attacker.example"},
             route="/v1/batches",
         )
+
+
+@pytest.mark.parametrize(
+    "role,stored,sent,refused",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, None, ["any-bucket"], False),
+        (LitellmUserRoles.INTERNAL_USER, None, ["any-bucket"], True),
+        (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], ["team-a-bucket", "other"], True),
+        (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], None, True),
+        (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], ["team-a-bucket"], False),
+    ],
+)
+def test_only_proxy_admins_change_a_teams_s3_bucket_list(
+    role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
+) -> None:
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    existing: Final = None if stored is None else {"allowed_s3_buckets": stored, "project": "x"}
+    request: Final = UpdateTeamRequest(
+        team_id="t1", metadata={"project": "x"} if sent is None else {"allowed_s3_buckets": sent, "project": "x"}
+    )
+    caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
+
+    if not refused:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
+        )
+        return
+    with pytest.raises(HTTPException) as rejection:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
+        )
+    assert rejection.value.status_code == 403
+    assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
 
 
 def _request_with_content_length(content_length: int) -> Request:

@@ -1575,6 +1575,9 @@ class BatchLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
+_ADMIN_ONLY_METADATA_KEYS: Final = (*ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY)
+
+
 def enforce_batch_limits_are_admin_only(
     data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
@@ -1585,7 +1588,8 @@ def enforce_batch_limits_are_admin_only(
 
     Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
     may do with batches, so a holder-writable copy would let a caller lift their
-    own quota. Gated on the resulting value rather than on presence, so a form
+    own quota, and the S3 bucket list grants access to buckets with the proxy's
+    own credentials. Gated on the resulting value rather than on presence, so a form
     resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
@@ -1595,17 +1599,19 @@ def enforce_batch_limits_are_admin_only(
         (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
     )
     changed: Final = next(
-        (key for key in ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS if requested.get(key) != stored.get(key)),
+        (key for key in _ADMIN_ONLY_METADATA_KEYS if requested.get(key) != stored.get(key)),
         None,
     )
     if changed is None:
         return
+    reason: Final = (
+        "It lets the holder read and write those buckets with the proxy's AWS credentials."
+        if changed == TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
+        else "It limits what the holder can do with batches, so the holder cannot raise it."
+    )
     raise HTTPException(
         status_code=403,
-        detail={
-            "error": f"Only proxy admins can set {changed} on a {entity}. "
-            "It limits what the holder can do with batches, so the holder cannot raise it."
-        },
+        detail={"error": f"Only proxy admins can set {changed} on a {entity}. {reason}"},
     )
 
 
