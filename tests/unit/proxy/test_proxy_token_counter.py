@@ -4954,12 +4954,14 @@ async def test_framed_stand_in_counts_a_prompt_like_the_same_text_sent_as_a_user
 
 
 @pytest.mark.asyncio
-async def test_call_endpoint_counts_a_prompt_locally_on_a_provider_without_a_count_api(
+@pytest.mark.parametrize(
+    "model", ["fireworks_ai/accounts/fireworks/models/glm-5", "deepseek/deepseek-v4-flash"], ids=["plain", "framed"]
+)
+async def test_call_endpoint_counts_a_prompt_locally_on_a_provider_without_a_count_api_like_a_user_message(
+    model: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _route_to_one_deployment(
-        {"model": "fireworks_ai/accounts/fireworks/models/glm-5", "api_key": "test-key"}, monkeypatch
-    )
+    _route_to_one_deployment({"model": model, "api_key": "test-key"}, monkeypatch)
     sent: Final[list[httpx.Request]] = []  # mutable-ok: collects what the mock peer receives
 
     def count_api(request: httpx.Request) -> httpx.Response:
@@ -4967,12 +4969,13 @@ async def test_call_endpoint_counts_a_prompt_locally_on_a_provider_without_a_cou
         return httpx.Response(200, json={"input_tokens": 41}, request=request)
 
     with _count_apis_answering(count_api):
-        with_endpoint: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
-    local: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=False)
+        from_prompt: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+        from_message: Final = await token_counter(request=_FOX_AS_MESSAGE, call_endpoint=True)
+    local_prompt: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=False)
 
     assert sent == []
-    assert with_endpoint.count_source == "local_estimate"
-    assert with_endpoint.total_tokens == local.total_tokens > 0
+    assert (from_prompt.count_source, from_prompt.error) == ("local_estimate", False)
+    assert from_prompt.total_tokens == from_message.total_tokens > local_prompt.total_tokens
 
 
 _PINNED_COUNTS: Final = MappingProxyType({"deployment-a.test": 11, "deployment-b.test": 22})
