@@ -8,7 +8,6 @@
   "LICENSE": "Repository license consumed by hosting and package builds.",
   "Makefile": "Root entry points for workspace development and testing.",
   "README.md": "Repository overview consumed by hosting and package builds.",
-  "gateway": "Top-level supervisor supports worker imports without loading the SDK.",
   "litellm": "Python SDK and consolidated project sources.",
   "model_prices_and_context_window.json": "Published model metadata consumed by the SDK and external readers.",
   "policy_templates.json": "Published policy templates retained at their existing root URL.",
