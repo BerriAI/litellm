@@ -144,13 +144,18 @@ impl NativeModelCostMap {
     fn install(&self, py: Python<'_>, body: &[u8], etag: Option<String>) -> PyResult<Py<PyAny>> {
         match crate::logger::capture(py).scope(|| CostMap::read(body, etag, self.limits)) {
             Ok(cost_map) => self.install_document(py, cost_map),
-            Err(error) => {
-                let rejected = NativeRejected {
-                    reason: litellm_error::Report::new(&error).to_string(),
-                    integrity: error.is_integrity(),
-                };
-                Ok(Py::new(py, rejected)?.into_any())
-            }
+            Err(error) => rejected(py, &error),
+        }
+    }
+
+    /// A caller's document as a table, read without size limits and installed nowhere
+    #[staticmethod]
+    fn finalize(py: Python<'_>, body: &[u8]) -> PyResult<Py<PyAny>> {
+        match crate::logger::capture(py)
+            .scope(|| CostMap::read(body, None, IntegrityLimits::UNCHECKED))
+        {
+            Ok(cost_map) => Ok(Py::new(py, built(py, &cost_map)?)?.into_any()),
+            Err(error) => rejected(py, &error),
         }
     }
 
@@ -280,19 +285,10 @@ impl NativeModelCostMap {
     }
 
     fn install_document(&self, py: Python<'_>, cost_map: CostMap) -> PyResult<Py<PyAny>> {
-        let rows = table::build(py, &cost_map)?;
-        let fallback_generalizations = match cost_map.fallback_generalizations() {
-            Some(block) => to_py(py, block)?,
-            None => py.None(),
-        };
+        let installed = built(py, &cost_map)?;
         self.write_inputs().cost_map = cost_map;
         *self.index.write().unwrap_or_else(PoisonError::into_inner) =
-            Some(Arc::new(Store::new(LiveDict::new(&rows))));
-        let installed = NativeInstalled {
-            model_count: rows.len(),
-            rows: rows.unbind(),
-            fallback_generalizations,
-        };
+            Some(Arc::new(Store::new(LiveDict::new(installed.rows.bind(py)))));
         Ok(Py::new(py, installed)?.into_any())
     }
 
@@ -379,6 +375,27 @@ impl<'py> RegistrationTable for PublishedTable<'_, 'py> {
             matched_builtin: landing.matched_builtin,
         }))
     }
+}
+
+fn built(py: Python<'_>, cost_map: &CostMap) -> PyResult<NativeInstalled> {
+    let rows = table::build(py, cost_map)?;
+    let fallback_generalizations = match cost_map.fallback_generalizations() {
+        Some(block) => to_py(py, block)?,
+        None => py.None(),
+    };
+    Ok(NativeInstalled {
+        model_count: rows.len(),
+        rows: rows.unbind(),
+        fallback_generalizations,
+    })
+}
+
+fn rejected(py: Python<'_>, error: &litellm_model_catalog::Error) -> PyResult<Py<PyAny>> {
+    let rejected = NativeRejected {
+        reason: litellm_error::Report::new(error).to_string(),
+        integrity: error.is_integrity(),
+    };
+    Ok(Py::new(py, rejected)?.into_any())
 }
 
 fn into_py<'py>(py: Python<'py>, pass: Pass<'_, Bound<'py, PyAny>>) -> PyResult<Py<PyAny>> {

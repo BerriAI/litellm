@@ -178,7 +178,7 @@ class ModelCostMapReloaded:
     @property
     def model_cost_map(self) -> dict[str, dict[str, object]]:
         """Compat for main's callers. Use ``GetModelCostMap.loaded_model_cost_map()``."""
-        return {key: dict(row) for key, row in GetModelCostMap.loaded_model_cost_map().items()}
+        return model_cost_inputs.loaded()
 
     @property
     def revision(self) -> str:
@@ -475,7 +475,7 @@ def _finalize_model_cost_map(  # pyright: ignore[reportUnusedFunction]  # main's
     model_cost: dict,  # mutable-ok: main's signature, pops the rules block
 ) -> dict:
     """Compat for main's callers. Use ``model_cost_inputs.install``."""
-    match model_cost_inputs.install(json.dumps(model_cost).encode()):
+    match NativeModelCostMap.finalize(json.dumps(model_cost).encode()):
         case NativeRejected(reason=reason):
             raise ValueError(reason)
         case installed:

@@ -830,4 +830,21 @@ asyncio.run(exercise())
                 .expect("async route contract should hold");
         });
     }
+
+    #[rstest]
+    fn an_isolated_run_joins_blocking_work_it_left_running_before_returning() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&finished);
+        let output = run_isolated(async move {
+            drop(tokio::task::spawn_blocking(move || {
+                thread::sleep(Duration::from_millis(50));
+                flag.store(true, Ordering::SeqCst);
+            }));
+            7
+        })
+        .unwrap();
+
+        assert_eq!(output, 7);
+        assert!(finished.load(Ordering::SeqCst));
+    }
 }

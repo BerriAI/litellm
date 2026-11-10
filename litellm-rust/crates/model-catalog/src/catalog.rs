@@ -112,6 +112,11 @@ impl Rows for CatalogRows {
 }
 
 impl IntegrityLimits {
+    pub const UNCHECKED: Self = Self {
+        min_model_count: 0,
+        min_reference_ratio: 0.0,
+    };
+
     pub fn new(min_model_count: usize, min_reference_ratio: f64) -> Option<Self> {
         (0.0..=1.0).contains(&min_reference_ratio).then_some(Self {
             min_model_count,

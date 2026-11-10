@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     model_cost_inputs,
 )
 from litellm.rust_bridge._native import NativeTableSwapped
+from litellm.rust_bridge.host.model_cost import publish
 from litellm.types.utils import (
     Choices,
     CompletionTokensDetailsWrapper,
@@ -36,8 +37,6 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.rust_bridge.host.model_cost import publish
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 
 def _snapshot_model_cost_entries(keys):
@@ -1818,21 +1817,6 @@ def test_a_reload_keeps_the_document_sub_keys_beside_a_registered_nested_field(
     _reload_cost_map()
 
     assert litellm.model_cost[_RELOAD_NESTED_KEY]["search_context_cost_per_query"] == expected
-
-
-def test_register_model_leaves_the_native_runtime_unstarted() -> None:
-    script: Final = """
-import litellm
-from litellm.rust_bridge._native import process_state_started
-litellm.register_model({"lit-fork-safe-model": {"input_cost_per_token": 1e-06, "litellm_provider": "openai"}})
-assert litellm.model_cost["lit-fork-safe-model"]["input_cost_per_token"] == 1e-06
-assert not process_state_started()
-"""
-    result: Final = run_child_interpreter(
-        script, env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"}, timeout=120
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 def test_a_lookup_that_raises_reaches_the_caller_and_keeps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:

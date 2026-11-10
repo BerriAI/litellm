@@ -71,7 +71,6 @@ pub(crate) fn kept<'py>(
     Ok(call(registration.py(), "kept", (previous, registration))?.cast_into::<PyDict>()?)
 }
 
-/// The table published as `litellm.model_cost` now
 pub(crate) fn published(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     Ok(call(py, "published", ())?.cast_into::<PyDict>()?)
 }

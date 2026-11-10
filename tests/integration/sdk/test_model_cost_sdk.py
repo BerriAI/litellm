@@ -173,6 +173,11 @@ _FINETUNE_BUG: Final = pytest.mark.xfail(
         ("table_swapped_then_helper_cache_cleared", [_charged(_P1), _charged(_P2)]),
         ("contents_replaced_then_invalidate", [_charged(_P1), _charged(_P2)]),
         ("finalized_snapshot_replaces_contents", [_charged(_P2)]),
+        (
+            "alias_registration_after_an_adopted_reload",
+            [True, _charged(_custom_input(_P2)), _charged(_custom_input(_P2))],
+        ),
+        ("small_map_finalizes_and_leaves_the_live_map", [True, _charged(_P1)]),
         ("popped_row_then_registered", [_charged(_P1), _charged(_P3)]),
     ],
     ids=lambda value: value if isinstance(value, str) else "",

@@ -158,6 +158,17 @@ def finalized_snapshot_replaces_contents() -> list[object]:
     return [bill(MODEL)]
 
 
+def alias_registration_after_an_adopted_reload() -> list[object]:
+    reloaded: Final = reload("p2.json")
+    litellm.register_model({ALIAS: {"input_cost_per_token": CUSTOM_INPUT}})
+    return [reloaded, bill(MODEL), bill(ALIAS)]
+
+
+def small_map_finalizes_and_leaves_the_live_map() -> list[object]:
+    finalized: Final = _finalize_model_cost_map({ADDED: row(3.0)})
+    return [list(finalized) == [ADDED], bill(MODEL)]
+
+
 def popped_row_then_registered() -> list[object]:
     before: Final = bill(MODEL)
     litellm.model_cost.pop(MODEL)
@@ -182,6 +193,8 @@ CASES: Final[dict[str, Callable[[], list[object]]]] = {
         table_swapped_then_helper_cache_cleared,
         contents_replaced_then_invalidate,
         finalized_snapshot_replaces_contents,
+        alias_registration_after_an_adopted_reload,
+        small_map_finalizes_and_leaves_the_live_map,
         popped_row_then_registered,
     )
 }
