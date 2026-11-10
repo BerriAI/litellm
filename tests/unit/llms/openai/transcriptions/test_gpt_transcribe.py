@@ -885,7 +885,7 @@ async def _spend_for_one_second_wav(
 
 
 @pytest.mark.asyncio
-async def test_custom_named_gpt_transcribe_deployment_bills_the_measured_upload_over_reported_seconds(
+async def test_custom_named_gpt_transcribe_deployment_bills_the_reported_seconds_over_the_measured_upload(
     local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     router: Final = litellm.Router(
@@ -902,7 +902,7 @@ async def test_custom_named_gpt_transcribe_deployment_bills_the_measured_upload_
         monkeypatch, {"text": "hello", "usage": {"type": "duration", "seconds": 2}}, router
     )
 
-    assert spend.cost == pytest.approx(_gpt_transcribe_cost_per_second())
+    assert spend.cost == pytest.approx(2 * _gpt_transcribe_cost_per_second())
 
 
 @pytest.mark.asyncio

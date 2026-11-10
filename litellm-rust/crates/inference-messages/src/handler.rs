@@ -26,10 +26,10 @@ use litellm_llms_types::formats::messages::{
 };
 use litellm_secrets::source::Secrets;
 use litellm_tracing::ByteChunk;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{
-    Error, MessagesCall, MessagesCallResponse, MessagesRoute,
+    Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::MESSAGES_TIMEOUT_SECS,
     route::Messages,
@@ -85,7 +85,10 @@ pub(super) async fn execute(
         ),
     };
     let reported = match &output {
-        MessagesCallResponse::Complete(response) => provider.config().reported_cost(response),
+        MessagesCallResponse::Complete(response) => match response {
+            MessagesBody::Message(message) => provider.config().reported_cost(message),
+            MessagesBody::Unchecked(_) => None,
+        },
         MessagesCallResponse::Stream { .. } => None,
     };
     context
@@ -130,9 +133,10 @@ async fn provider_call(
     )?;
     let transform_context =
         MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params);
-    let filtered = requested_optional_params(sanitized, provider, &transform_context)?;
-    let trimmed =
-        without_additional_drop_params(filtered, &shaping.settings.additional_drop_params)?;
+    let without_listed =
+        without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
+    let trimmed = requested_optional_params(without_listed, provider, &transform_context)?;
+    let requested_params = serde_json::to_value(&trimmed.params).map_err(serialize_failure)?;
 
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
@@ -173,7 +177,7 @@ async fn provider_call(
     let request_context = RequestContext {
         model: body.model.clone(),
         custom_llm_provider: provider.as_str().to_string(),
-        optional_params: serde_json::to_value(&body.params).map_err(serialize_failure)?,
+        optional_params: requested_params,
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
     };
@@ -346,8 +350,7 @@ async fn call_provider(
         // body it cannot parse, and the public mapping classifies it by that status.
         return Err(litellm_http::Error::upstream(status, text).into());
     }
-    decode_response(config, &identity.model, &text)
-        .map(|message| MessagesCallResponse::Complete(Box::new(message)))
+    decode_response(config, &identity.model, &text).map(MessagesCallResponse::Complete)
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
@@ -383,13 +386,20 @@ fn timed_chunks(
     response: reqwest::Response,
     timeout: Duration,
 ) -> impl futures_util::Stream<Item = Result<Bytes, litellm_http::Error>> + Send + 'static {
-    futures_util::stream::try_unfold(response, move |mut response| async move {
-        let chunk = tokio::time::timeout(timeout, response.chunk())
-            .await
-            .map_err(litellm_http::Error::body_read_timeout)?
-            .map_err(litellm_http::Error::from)?;
-        Ok(chunk.map(|chunk| (chunk, response)))
-    })
+    let expected = response.content_length();
+    futures_util::stream::try_unfold(
+        (response, 0_u64),
+        move |(mut response, received)| async move {
+            let chunk = tokio::time::timeout(timeout, response.chunk())
+                .await
+                .map_err(litellm_http::Error::body_read_timeout)?
+                .map_err(|error| litellm_http::Error::body_read(error, received, expected))?;
+            Ok(chunk.map(|chunk| {
+                let received = received + chunk.len() as u64;
+                (chunk, (response, received))
+            }))
+        },
+    )
 }
 
 /// The provider's error, its body read under `timeout`: a stream has no overall deadline once
@@ -411,15 +421,23 @@ fn decode_response(
     config: &dyn BaseMessagesConfig,
     model: &str,
     text: &str,
-) -> Result<MessagesResponse, Error> {
-    let response = serde_json::from_str(text).map_err(|err| {
-        Error::invalid_response(litellm_llms::ErrorDetail::invalid(
-            "messages response JSON",
-            err,
-        ))
-    })?;
+) -> Result<MessagesBody, Error> {
+    let response = match serde_json::from_str::<MessagesResponse>(text) {
+        Ok(response) => response,
+        Err(err) => {
+            let Ok(mut body) = serde_json::from_str::<Map<String, Value>>(text) else {
+                return Err(Error::invalid_response(litellm_llms::ErrorDetail::invalid(
+                    "messages response JSON",
+                    err,
+                )));
+            };
+            body.entry("stop_sequence").or_insert(Value::Null);
+            return Ok(MessagesBody::Unchecked(body));
+        }
+    };
     config
         .transform_anthropic_messages_response(model, response)
+        .map(|message| MessagesBody::Message(Box::new(message)))
         .map_err(Error::from)
         .map_err(Error::after_send)
 }

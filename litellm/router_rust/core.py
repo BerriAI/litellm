@@ -104,6 +104,7 @@ from litellm.router_rust.invoke.endpoints import (
     generic_plan,
     log_refused_call,
     log_refused_call_sync,
+    pinned_vector_store_file_deployment,
     pinned_video_deployment,
     plan_for,
     reports_own_success,
@@ -112,7 +113,7 @@ from litellm.router_rust.invoke.endpoints import (
     stamp_error,
     unrouted_fields,
 )
-from litellm.router_rust.invoke.shaping import Shaping
+from litellm.router_rust.invoke.shaping import Shaping, non_stream_timeout
 from litellm.router_rust.invoke.slots import enter_deployment_slot, max_parallel_requests_limit
 from litellm.router_rust.invoke.streaming import (
     StreamAttempt,
@@ -124,6 +125,7 @@ from litellm.router_rust.invoke.streaming import (
     shape_attempt_kwargs,
 )
 from litellm.router_rust.invoke.walk import FallbackOutcomes, WalkMetadata, await_all, log_retry_into
+from litellm.router_rust.invoke.websocket import turns_counted_their_requests
 from litellm.router_rust.routing_stores import RoutingStores
 from litellm.router_rust.steps.access import caller_fields, selection_refusal
 from litellm.router_rust.steps.callbacks import OptionalChecks, RustOptionalChecks
@@ -1590,6 +1592,9 @@ class RustCore(
     def _shaping(self) -> Shaping:
         return self._endpoints.shaping(self._resolved)
 
+    def _core_deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object:
+        return non_stream_timeout(self._shaping, MappingProxyType({}), litellm_params)
+
     # -- building --------------------------------------------------------------------------------
 
     def _new_handle(self, model_list: Sequence[object]) -> "RouterCoreHandle":
@@ -1813,13 +1818,14 @@ class RustCore(
     def _rebuild(self) -> None:
         """A new Rust core for changed static settings, over the same deployments and the
         providers the old one's builds resolved for them."""
-        old: Final = self._handle
-        model_list: Final = list(self._hosted._core_model_list)  # pyright: ignore[reportPrivateUsage]  # see __init__
-        self._handle = self._new_handle(model_list)
-        self._handle.adopt_providers(old)
-        old.retire()
-        # The live list and indexes read the new handle's (the same entries, kept as the same objects).
-        self._hosted.refresh()
+        with self._hosted._deployment_index_lock:  # pyright: ignore[reportPrivateUsage]  # the registry's lock, held across the swap and the read back
+            old: Final = self._handle
+            model_list: Final = list(self._hosted._core_model_list)  # pyright: ignore[reportPrivateUsage]  # see __init__
+            self._handle = self._new_handle(model_list)
+            self._handle.adopt_providers(old)
+            old.retire()
+            # The live list and indexes read the new handle's (the same entries, kept as the same objects).
+            self._hosted.refresh()
         # The new handle builds its indexes from the deployments: written ones are handed again.
         self._index_sent = None
 
@@ -2007,6 +2013,7 @@ class RustCore(
     def retire(self) -> None:
         """``_core_discard``: only the router's global registrations go; it keeps serving calls."""
         untrack_live_registry(self._hosted)
+        self._hosted.retire_shared_capabilities()
         self._retire_callbacks()
         if self._hosted.strategies is not None:
             self._hosted.strategies.retire()
@@ -2700,6 +2707,7 @@ class RustCore(
         fields: dict[str, object] = {"model": model}  # mutable-ok: built up below, later keys win  # rebind-ok: same
         fields.update(self._routing_fields(prepared, plan.pick_input(prepared)[0]))
         fields.update(pinned_video_deployment(plan, request))
+        fields.update(pinned_vector_store_file_deployment(plan, request))
         fields.update(unrouted_fields(plan))
         fields.update(failover_fields(plan))
         fields.update(scoped_fallback_fields(plan, request))
@@ -5078,8 +5086,11 @@ class _Driver:
     def _tracks_usage(self, call: "AttemptCall", response: object, deferred: bool) -> bool:
         """Whether the attempt counts against its deployment's usage (``_deployment_tracks_usage``). A
         ``None`` response counts nothing (``increment_deployment_usage_for_response``), and an attempt
-        that reports no success then is a realtime session, which logs none to count it either."""
+        that reports no success then is a realtime session, which logs none to count it either. A
+        Responses socket whose finished turns each counted their own request adds none at close."""
         if deferred and response is None:
+            return False
+        if turns_counted_their_requests(call.kwargs):
             return False
         model: Final = call.kwargs.get("model")
         return self._core.deployment_tracks_usage(

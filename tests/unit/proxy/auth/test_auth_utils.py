@@ -4,7 +4,8 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import SimpleNamespace
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
@@ -12,7 +13,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
@@ -33,7 +34,9 @@ from litellm.proxy.auth.auth_utils import (
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
     get_request_route_template,
+    enforce_team_s3_bucket_allowlist,
     is_request_body_safe,
+    pre_db_read_auth_checks,
 )
 from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
@@ -5427,6 +5430,189 @@ def test_other_blocked_fields_do_not_point_at_the_storage_allowlist() -> None:
         _batches_body_is_safe({"api_base": "https://attacker.example"}, _BUCKET_ALLOWLIST)
 
     assert "allowed_client_side" not in str(error.value)
+
+
+_TEAM_A_METADATA: Final = {"allowed_s3_buckets": ["team-a-bucket"]}
+
+
+def _enforce_for_team(
+    body: Mapping[str, object], team_metadata: Mapping[str, object] | None, **general_settings: object
+) -> None:
+    enforce_team_s3_bucket_allowlist(
+        request_body=body,
+        general_settings=general_settings,
+        llm_router=None,
+        team_metadata=team_metadata,
+    )
+
+
+def _rejection_for_team(body: Mapping[str, object], team_metadata: Mapping[str, object] | None) -> HTTPException:
+    with pytest.raises(HTTPException) as rejection:
+        _enforce_for_team(body, team_metadata)
+    assert rejection.value.status_code == 401, rejection.value.detail
+    return rejection.value
+
+
+@pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
+def test_team_allowlist_admits_its_own_bucket_and_rejects_another_teams(field: str) -> None:
+    _enforce_for_team({field: "team-a-bucket"}, _TEAM_A_METADATA)
+    rejection: Final = _rejection_for_team({field: "team-b-bucket"}, _TEAM_A_METADATA)
+    assert f"{field} is not allowed in request body" in str(rejection.detail)
+    assert "metadata.allowed_s3_buckets" in str(rejection.detail)
+
+
+@pytest.mark.parametrize(
+    "team_metadata",
+    [None, {}, {"allowed_s3_buckets": None}, {"allowed_s3_buckets": "team-a-bucket"}, {"allowed_s3_buckets": [1]}],
+)
+def test_team_without_a_usable_allowlist_cannot_pick_a_bucket(team_metadata: Mapping[str, object] | None) -> None:
+    _rejection_for_team({"s3_bucket_name": "team-a-bucket"}, team_metadata)
+
+
+def _team_bucket_admitted(
+    body: Mapping[str, object], team_metadata: Mapping[str, object] | None, **general_settings: object
+) -> bool:
+    try:
+        _enforce_for_team(body, team_metadata, **general_settings)
+    except HTTPException:
+        return False
+    return True
+
+
+def test_proxy_wide_allowlist_still_applies_alongside_the_team_allowlist() -> None:
+    assert _team_bucket_admitted(
+        {"s3_bucket_name": "team-a-bucket", "s3_output_bucket_name": "shared-bucket"},
+        _TEAM_A_METADATA,
+        allowed_client_side_s3_buckets=["shared-bucket"],
+    )
+    assert not _team_bucket_admitted({"s3_output_bucket_name": "shared-bucket"}, _TEAM_A_METADATA)
+
+
+def test_team_allowlist_is_checked_for_buckets_nested_in_the_body() -> None:
+    _enforce_for_team({"extra_body": {"s3_bucket_name": "team-a-bucket"}}, _TEAM_A_METADATA)
+    _rejection_for_team({"litellm_metadata": {"s3_bucket_name": "team-b-bucket"}}, _TEAM_A_METADATA)
+
+
+def test_team_allowlist_admits_no_other_blocked_field() -> None:
+    rejection: Final = _rejection_for_team({"s3_endpoint_url": "team-a-bucket"}, _TEAM_A_METADATA)
+    assert "s3_endpoint_url" in str(rejection.detail)
+
+
+def _routed_request(method: str, route_template: str | None, path: str) -> Request:
+    scope: Final[dict[str, object]] = {"type": "http", "method": method, "path": path, "headers": [], "query_string": b""}
+    return Request(scope if route_template is None else {**scope, "route": SimpleNamespace(path=route_template)})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route_template,path",
+    [
+        ("/v1/files", "/v1/files"),
+        ("/files", "/files"),
+        ("/{provider}/v1/files", "/bedrock/v1/files"),
+        ("/v1/batches", "/v1/batches"),
+        ("/batches", "/batches"),
+        ("/{provider}/v1/batches", "/bedrock/v1/batches"),
+    ],
+)
+async def test_auth_leaves_request_buckets_to_the_upload_and_batch_create_handlers(
+    route_template: str, path: str
+) -> None:
+    assert await _auth_admits(
+        _routed_request("POST", route_template, path),
+        {"s3_bucket_name": "team-b-bucket", "s3_output_bucket_name": "team-b-bucket"},
+        path,
+    )
+
+
+async def _auth_admits(request: Request, request_data: dict[str, object], route: str) -> bool:
+    try:
+        await pre_db_read_auth_checks(request=request, request_data=request_data, route=route)
+    except ValueError:
+        return False
+    return True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,route_template,path",
+    [
+        ("GET", "/v1/files", "/v1/files"),
+        ("POST", "/v1/files/{file_id}/content", "/v1/files/file-1/content"),
+        ("POST", "/v1/chat/completions", "/v1/chat/completions"),
+        ("POST", None, "/v1/batches"),
+    ],
+)
+async def test_auth_still_rejects_request_buckets_on_every_other_route(
+    method: str, route_template: str | None, path: str
+) -> None:
+    with pytest.raises(ValueError, match="s3_bucket_name is not allowed"):
+        await pre_db_read_auth_checks(
+            request=_routed_request(method, route_template, path),
+            request_data={"s3_bucket_name": "team-b-bucket"},
+            route=path,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_caller_can_never_send_the_stored_bucket_param() -> None:
+    with pytest.raises(ValueError, match="stored_s3_bucket_name is not allowed"):
+        await pre_db_read_auth_checks(
+            request=_routed_request("POST", "/v1/batches", "/v1/batches"),
+            request_data={"stored_s3_bucket_name": "team-b-bucket"},
+            route="/v1/batches",
+        )
+    rejection: Final = _rejection_for_team(
+        {"stored_s3_bucket_name": "team-a-bucket"}, {"allowed_s3_buckets": ["team-a-bucket"]}
+    )
+    assert "stored_s3_bucket_name" in str(rejection.detail)
+    with pytest.raises(ValueError, match="stored_s3_bucket_name"):
+        _batches_body_is_safe({"stored_s3_bucket_name": "team-a-bucket"}, _BUCKET_ALLOWLIST)
+
+
+@pytest.mark.asyncio
+async def test_auth_still_rejects_other_blocked_fields_on_the_upload_and_batch_create_routes() -> None:
+    with pytest.raises(ValueError, match="api_base"):
+        await pre_db_read_auth_checks(
+            request=_routed_request("POST", "/v1/batches", "/v1/batches"),
+            request_data={"s3_bucket_name": "team-b-bucket", "api_base": "https://attacker.example"},
+            route="/v1/batches",
+        )
+
+
+@pytest.mark.parametrize(
+    "role,stored,sent,refused",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, None, ["any-bucket"], False),
+        (LitellmUserRoles.INTERNAL_USER, None, ["any-bucket"], True),
+        (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], ["team-a-bucket", "other"], True),
+        (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], None, True),
+        (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], ["team-a-bucket"], False),
+    ],
+)
+def test_only_proxy_admins_change_a_teams_s3_bucket_list(
+    role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
+) -> None:
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    existing: Final = None if stored is None else {"allowed_s3_buckets": stored, "project": "x"}
+    request: Final = UpdateTeamRequest(
+        team_id="t1", metadata={"project": "x"} if sent is None else {"allowed_s3_buckets": sent, "project": "x"}
+    )
+    caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
+
+    if not refused:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
+        )
+        return
+    with pytest.raises(HTTPException) as rejection:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
+        )
+    assert rejection.value.status_code == 403
+    assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
 
 
 def _request_with_content_length(content_length: int) -> Request:

@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import copy
 import datetime
+import time
 import gzip
 import json
 from collections.abc import AsyncIterable, Awaitable, Coroutine, Mapping
@@ -5447,6 +5448,29 @@ class TestHandleLLMApiExceptionFramingHeaders:
         assert proxy_exc.headers["x-request-id"] == "abc-123"
 
 
+class _FakeClock:
+    """Hand-advanced stand-in for time.perf_counter, so the hook's cost is exact and no real time passes."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _TimeWithFakeClock:
+    """The module's `time` with perf_counter swapped for the fake clock, everything else untouched."""
+
+    def __init__(self, clock: _FakeClock) -> None:
+        self.perf_counter = clock
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(time, name)
+
+
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""
 
@@ -5513,6 +5537,62 @@ class TestAsyncStreamingDataGeneratorFastPath:
 
         assert len(out) == 1
         hook_spy.assert_awaited_once()
+
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_slow_path_records_first_chunk_work_on_the_logging_object(self, monkeypatch: pytest.MonkeyPatch):
+        """The overhead header is stamped before any chunk is read, so the time the proxy spends in
+        the hook on the first chunk is recorded on the logging object for the success callback to add.
+        Later chunks are not summed, a 20 ms hook on 3 chunks delays the client by 20 ms, not 60, and a
+        keepalive ping that arrives before any provider output is not the first chunk."""
+        import litellm.proxy.common_request_processing as common_request_processing_module
+
+        clock: Final = _FakeClock()
+        monkeypatch.setattr(common_request_processing_module, "time", _TimeWithFakeClock(clock))
+
+        class _SlowStreamingCb(CustomLogger):
+            async def async_post_call_streaming_hook(
+                self, user_api_key_dict: UserAPIKeyAuth, response: object
+            ) -> object:
+                clock.advance(0.5 if response == STREAM_SSE_KEEPALIVE_PING_BYTES else 0.02)
+                return response
+
+        monkeypatch.setattr(litellm, "callbacks", [_SlowStreamingCb()])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        logging_obj = Logging(
+            model="claude-x",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="call-stream",
+            function_id="fn",
+        )
+        chunks = [
+            STREAM_SSE_KEEPALIVE_PING_BYTES,
+            *(
+                ModelResponseStream(choices=[StreamingChoices(delta=Delta(content=word))])
+                for word in ("Hello", " world", " more")
+            ),
+        ]
+
+        out = [
+            c
+            async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=self._aiter(chunks),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data={"model": "claude-x", "litellm_logging_obj": logging_obj},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+                serialize_error=lambda e: "data: error\n\n",
+            )
+        ]
+
+        assert len(out) == len(chunks)
+        assert logging_obj.first_chunk_overhead_ms == pytest.approx(20.0)
 
         ProxyLogging._callback_capabilities_cache.clear()
 

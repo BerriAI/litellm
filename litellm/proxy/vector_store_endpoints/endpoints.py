@@ -15,7 +15,12 @@ from litellm.constants import VECTOR_STORE_CALLER_METADATA_KWARG
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
-from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    decoded_json_object,
+    require_attributes,
+)
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -26,6 +31,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
+    with_managed_search_file_ids,
 )
 from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.utils import LlmProviders
@@ -198,7 +204,7 @@ async def vector_store_search(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        search_response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -215,6 +221,12 @@ async def vector_store_search(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+        )
+        search_page: Final = as_str_mapping(search_response)
+        if search_page is None:
+            return search_response
+        return await with_managed_search_file_ids(
+            search_page, proxy_logging_obj.get_proxy_hook("managed_files"), user_api_key_dict
         )
     except Exception as e:
         raise await processor.handle_llm_api_exception(

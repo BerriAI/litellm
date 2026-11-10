@@ -500,6 +500,7 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
+                    replay_tool_search=True,
                 )
             )
             if replays_empty_user_turns and output_messages:
@@ -538,6 +539,7 @@ class ResponsesSessionHandler:
                 item_cache_control=item_cache_control,
                 tool_call_provider_fields=tool_call_provider_fields,
                 only_since_compaction=True,
+                replay_tool_search=True,
             )
         if not isinstance(stored_response, dict) or not stored_response:
             return ()

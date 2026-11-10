@@ -1,7 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use futures_util::TryStreamExt;
-use litellm_inference_messages::{Error, MessagesCall, MessagesCallResponse, MessagesShaping};
+use litellm_inference_messages::{
+    Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesShaping,
+};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use litellm_llms_types::formats::messages::{MessagesRequest, MessagesResponse};
 use rstest::{fixture, rstest};
@@ -74,7 +76,10 @@ async fn run(call: MessagesCall) -> Result<MessagesCallResponse, Error> {
 
 async fn run_message(call: MessagesCall) -> MessagesResponse {
     match run(call).await.unwrap() {
-        MessagesCallResponse::Complete(message) => *message,
+        MessagesCallResponse::Complete(message) => match message {
+            MessagesBody::Message(message) => *message,
+            MessagesBody::Unchecked(_) => panic!("expected a message"),
+        },
         MessagesCallResponse::Stream { .. } => panic!("expected a completed message"),
     }
 }

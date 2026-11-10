@@ -1418,12 +1418,7 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_plus_reasoning_routes_to
     assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
-    """
-    Azure gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables
-    reasoning by default for gpt-5.4+, and Chat Completions rejects function tools
-    whenever reasoning is on.
-    """
+def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_stays_chat():
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
@@ -1436,15 +1431,10 @@ def test_responses_api_bridge_check_azure_gpt_5_4_tools_with_default_reasoning_r
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") != "responses"
 
 
-def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_to_responses():
-    """
-    gpt-5.4 with tools and UNSET reasoning_effort must bridge: OpenAI enables reasoning
-    by default for gpt-5.4+, and Chat Completions rejects function tools whenever
-    reasoning is on ("use /v1/responses or set reasoning_effort to 'none'").
-    """
+def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_stays_chat():
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
@@ -1457,7 +1447,7 @@ def test_responses_api_bridge_check_gpt_5_4_tools_with_default_reasoning_routes_
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") != "responses"
 
 
 @pytest.mark.parametrize("region", ("us", "eu"))
@@ -1972,8 +1962,7 @@ def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_r
     assert model_info.get("mode") == "responses"
 
 
-def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes():
-    """Azure OpenAI always sets api_base and does enforce the constraint; keep bridging."""
+def test_responses_api_bridge_check_azure_gpt_5_4_with_api_base_and_unset_effort_stays_chat():
     from litellm.main import responses_api_bridge_check
 
     with patch("litellm.responses.bridge_check.get_model_info_helper") as mock_get_model_info:
@@ -1987,7 +1976,7 @@ def test_responses_api_bridge_check_azure_with_api_base_and_unset_effort_routes(
         )
 
     assert model == "gpt-5.4"
-    assert model_info.get("mode") == "responses"
+    assert model_info.get("mode") != "responses"
 
 
 _FOUNDRY_API_BASE: Final = "https://myproject.services.ai.azure.com"
@@ -5572,21 +5561,14 @@ def _priced_at(prompt_tokens, completion_tokens):
 @pytest.fixture
 def local_cost_map(monkeypatch):
     """The prices these tests assert are the checked-in ones. Setting the environment
-    variable alone does not reload the map, so pin the map itself.
-
-    Prices are read through two separate lru_caches, so pinning ``model_cost`` is not
-    enough on its own: an entry warmed against the network-fetched map keeps its old
-    prices and billing reads those while the assertions read the pinned map.
-    ``_invalidate_model_cost_lowercase_map`` clears both caches, where
-    ``get_model_info.cache_clear`` reaches only one. Invalidate on the way in and out
-    so entries never leak across tests in either direction."""
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    variable alone does not reload the map, so pin the map itself."""
+    from litellm.rust_bridge.host.model_cost import publish
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     yield
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_map):
