@@ -238,12 +238,19 @@ impl<P: StreamCachable> CallCache<P> {
         identity: &ProviderIdentity,
         wire: &WireRequest,
     ) -> Self {
+        Self::new(
+            cache,
+            policy,
+            CacheRequest::from_wire(identity.clone(), Some(wire)),
+        )
+    }
+
+    pub fn new(cache: Option<&ScopedCache>, policy: CachePolicy, request: CacheRequest) -> Self {
         let session = cache.and_then(|cache| {
             if !policy.enabled() {
                 return None;
             }
             let options = cache.options(Some(policy));
-            let request = CacheRequest::from_wire(identity.clone(), Some(wire));
             Some(CacheSession {
                 request: options.request(
                     &cache.service.config().namespace,
