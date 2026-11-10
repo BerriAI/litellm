@@ -306,6 +306,7 @@ def test_roster_entry_without_id_or_email_pins_the_500(gateway: Gateway, record_
         record_property("state_after", state)
         assert response.status_code == 500, f"{response.status_code} {response.text}; {state}"
         assert "Internal server error" in response.text, response.text
+        assert response.headers.get("cache-control") == "no-store", dict(response.headers)
         assert len(present) == 1, state
         assert tombstones == [], state
         assert after == before, f"membership rows changed: before={sorted(before)} after={sorted(after)}"
