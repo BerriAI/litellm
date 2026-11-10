@@ -246,7 +246,7 @@ def test_mythos_5_2_on_vertex_bills_like_fable_5_2(local_model_cost_map, mythos_
 
 @pytest.mark.parametrize("model", [row for row, _ in MYTHOS_5_2_VERTEX_ROWS])
 def test_mythos_5_2_on_vertex_applies_regional_uplift(local_model_cost_map, model: str) -> None:
-    uplift: Final = _load_root_cost_map()[model]["regional_uplift_multiplier"]
+    uplift: Final = _load_root_cost_map()[model]["regional_endpoint_uplift_multiplier"]
     global_cost: Final = litellm.cost_per_token(
         model=model,
         custom_llm_provider="vertex_ai",
