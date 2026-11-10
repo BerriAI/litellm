@@ -25,6 +25,9 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.constants import PRE_CALL_EXECUTED_GUARDRAILS_KEY
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.chat_completion_agentic_loop import refuse_a_call_the_choice_excludes
+from litellm.litellm_core_utils.get_litellm_params import AGENTIC_LOOP_TOOL_CHOICE_KEY
 from litellm.proxy.guardrails.guardrail_hooks.compresr.compresr import (
     COMPRESR_RETRIEVE_TOOL_NAME,
     CompresrGuardrail,
@@ -33,7 +36,14 @@ from litellm.proxy.guardrails.guardrail_hooks.compresr.compresr import (
     _scoped_store_key,
     has_compresr_retrieve_tool,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    Choices,
+    Function,
+    GenericGuardrailAPIInputs,
+    Message,
+    ModelResponse,
+)
 
 FAKE_API_BASE = "https://compresr.example.com"
 FAKE_API_KEY = "cmp_test-key"
@@ -2151,3 +2161,37 @@ async def test_warns_once_per_interval_when_recovery_skipped_without_scope():
                 logging_obj=logging_obj,
             )
             assert len(_no_scope_warnings(mock_log)) == 2
+
+
+def _model_response_calling(tool_name: str) -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_1", type="function", function=Function(name=tool_name, arguments="{}")
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+
+
+def test_allowed_tools_choice_lets_the_retrieve_call_run_and_still_refuses_a_client_tool_it_excludes():
+    weather_only = {
+        AGENTIC_LOOP_TOOL_CHOICE_KEY: {
+            "type": "allowed_tools",
+            "mode": "auto",
+            "tools": [{"type": "function", "name": "get_weather"}],
+        }
+    }
+    callbacks = [_make_guardrail()]
+
+    refuse_a_call_the_choice_excludes(
+        _model_response_calling(COMPRESR_RETRIEVE_TOOL_NAME), weather_only, callbacks, "gpt-5.6"
+    )
+    with pytest.raises(BadRequestError, match="get_time"):
+        refuse_a_call_the_choice_excludes(_model_response_calling("get_time"), weather_only, callbacks, "gpt-5.6")
