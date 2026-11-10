@@ -16113,7 +16113,7 @@ async def _routed_count_deployment(
 def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
     if llm_router is None:
         return litellm_params
-    return {**litellm_params, "timeout": llm_router.deployment_call_timeout(litellm_params)}
+    return {**litellm_params, "timeout": llm_router.settings().timeout_for(litellm_params)}
 
 
 async def _count_request_tokens(

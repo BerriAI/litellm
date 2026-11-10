@@ -1070,6 +1070,9 @@ class RustSettings(RouterSettings):
             return super().as_dict()
         return router.settings_dict()
 
+    def timeout_for(self, litellm_params: Mapping[str, object]) -> object:
+        return self._owner("timeout_for").deployment_call_timeout(litellm_params)
+
 
 class _SettingsSource:
     def settings_dict(self) -> Mapping[str, object]:
