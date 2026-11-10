@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from opentelemetry.trace import Status, StatusCode
+from pydantic_core import to_jsonable_python
 from typing_extensions import override
 
 from litellm._logging import verbose_logger
@@ -63,7 +65,7 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
     def set_messages(span: Span, kwargs: Mapping[str, object]):
         """Set input messages as span attributes using OpenInference conventions."""
 
-        messages: Final = kwargs.get("messages") or ()
+        messages: Final = kwargs.get("messages") or []
         optional_params: Final = kwargs.get("optional_params") or _NO_FIELDS
 
         prompt: Final = {"messages": messages}
@@ -73,7 +75,9 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
             prompt["functions"] = functions
         if tools is not None:
             prompt["tools"] = tools
-        safe_set_attribute(span, OpenInferenceSpanAttributes.INPUT_VALUE, safe_dumps(prompt))
+        safe_set_attribute(
+            span, OpenInferenceSpanAttributes.INPUT_VALUE, json.dumps(prompt, default=to_jsonable_python)
+        )
 
 
 def _set_weave_specific_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):

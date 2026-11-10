@@ -235,3 +235,14 @@ def test_weave_span_keeps_input_and_token_usage_when_messages_are_litellm_messag
         OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_COMPLETION: 3,
         OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_TOTAL: 10,
     }
+
+
+def test_weave_span_input_keeps_dict_message_content_exactly_as_sent() -> None:
+    span: Final = _TRACER.start_span("litellm_request")
+    messages: Final = ({"role": "user", "content": "before\x00after", "metadata": {1: "one"}},)
+
+    set_weave_otel_attributes(span, {"messages": messages, "standard_logging_object": {}}, ModelResponse(model="gpt-4o"))
+
+    assert json.loads(str((span.attributes or {})[OpenInferenceSpanAttributes.INPUT_VALUE])) == {
+        "messages": [{"role": "user", "content": "before\x00after", "metadata": {"1": "one"}}]
+    }

@@ -32,7 +32,9 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import Choices, Message, ModelResponse, StandardCallbackDynamicParams
 
 CHAT_MESSAGE_DICTS: Final = ({"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi back"})
-CHAT_MESSAGE_OBJECTS: Final = tuple(Message(role=message["role"], content=message["content"]) for message in CHAT_MESSAGE_DICTS)
+CHAT_MESSAGE_OBJECTS: Final = tuple(
+    Message(role=message["role"], content=message["content"]) for message in CHAT_MESSAGE_DICTS
+)
 GENERATION_USAGE_AND_PARAM_KEYS: Final = (
     SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
     SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
@@ -174,8 +176,8 @@ class TestLangfuseOtelIntegration:
             response,
         )
 
-        attributes: Final = dict(span.attributes or {})
-        assert json.loads(str(attributes.pop("langfuse.observation.input"))) == expected_input
+        attributes: Final = span.attributes or {}
+        assert json.loads(str(attributes["langfuse.observation.input"])) == expected_input
         assert {key: attributes.get(key) for key in GENERATION_USAGE_AND_PARAM_KEYS} == {
             SpanAttributes.LLM_TOKEN_COUNT_PROMPT: 7,
             SpanAttributes.LLM_TOKEN_COUNT_COMPLETION: 3,

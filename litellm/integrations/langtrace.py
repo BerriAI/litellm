@@ -1,6 +1,8 @@
 import json
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic_core import to_jsonable_python
+
 from litellm.types.integrations.otel_span_attributes import SpanAttributes
 
 if TYPE_CHECKING:
@@ -60,7 +62,7 @@ class LangtraceAttributes:
         if prompts:
             span.add_event(
                 name="gen_ai.content.prompt",
-                attributes={SpanAttributes.LLM_PROMPTS.value: json.dumps(prompts)},
+                attributes={SpanAttributes.LLM_PROMPTS.value: json.dumps(prompts, default=to_jsonable_python)},
             )
 
         self.set_span_attributes(span, span_attributes)
