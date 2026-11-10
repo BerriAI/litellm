@@ -10524,6 +10524,35 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
     )
 
 
+@pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
+@pytest.mark.parametrize(
+    "counted_marker",
+    ["_litellm_router_usage_counted_tokens", "_litellm_usage_based_routing_counted_tokens"],
+)
+def test_passthrough_client_cannot_mark_its_tokens_as_already_counted(
+    client_metadata_key: str, counted_marker: str
+) -> None:
+    from litellm.router_utils.router_callbacks.track_deployment_metrics import get_counted_usage_tokens
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = httpx.URL("http://0.0.0.0:4000/openai/v1/responses")
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={client_metadata_key: {counted_marker: 1_000_000, "client_key": "kept"}},
+        litellm_call_id="counted-marker-call-id",
+    )
+
+    assert get_counted_usage_tokens(kwargs["litellm_params"], counted_marker) is None
+    assert kwargs["litellm_params"]["metadata"]["client_key"] == "kept"
+
+
 async def _billed_metadata(gate: WebsocketFrameModelGate) -> Mapping[str, object]:
     served: Final = await _relay_client_frames(
         [json.dumps({"type": "response.create", "model": "gpt-5.4-mini"})],
