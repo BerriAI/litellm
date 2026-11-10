@@ -11,7 +11,7 @@ use crate::{
     Error,
     anthropic::common_utils::{
         flatten_unencrypted_web_search_results, sanitize_tool_use_ids, strip_empty_content_blocks,
-        strip_provider_specific_fields,
+        strip_encrypted_reasoning_blocks, strip_provider_specific_fields,
     },
 };
 
@@ -37,7 +37,9 @@ pub fn shape_anthropic_messages_request(
 
 fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
     strip_provider_specific_fields(flatten_unencrypted_web_search_results(
-        sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
+        sanitize_tool_use_ids(strip_empty_content_blocks(
+            strip_encrypted_reasoning_blocks(messages),
+        )),
     ))
 }
 
@@ -190,6 +192,16 @@ mod tests {
             ]},
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"}]}
         ]),
+    )]
+    #[case::gemini_empty_signed_carrier_strips_sibling_unsigned_thinking_before_empty_check(
+        json!([{"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "streamed thought", "signature": ""},
+            {"type": "thinking", "thinking": "", "signature": "litellm_thought_signature:EvkFCvY"},
+            {"type": "text", "text": "Answer."}
+        ]}]),
+        json!([{"role": "assistant", "content": [
+            {"type": "text", "text": "Answer."}
+        ]}]),
     )]
     fn sanitize_anthropic_messages_cleans_replayed_history(
         #[case] history: Value,

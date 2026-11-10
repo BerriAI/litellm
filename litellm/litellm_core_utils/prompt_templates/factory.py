@@ -70,7 +70,6 @@ from .common_utils import (
     convert_content_list_to_str,
     has_blank_redacted_data,
     infer_content_type_from_url_and_content,
-    is_encrypted_reasoning_block,
     is_non_content_values_set,
     is_unsignable_thinking_block,
     native_redacted_thinking_data,
@@ -78,6 +77,7 @@ from .common_utils import (
     salvage_concatenated_tool_arguments,
 )
 from .image_handling import convert_url_to_base64, is_pdf_media_type
+from .reasoning_utils import DUMMY_GEMINI_THOUGHT_SIGNATURE, is_bridge_reasoning_block
 
 
 def default_pt(messages):
@@ -1342,8 +1342,7 @@ def get_dummy_thought_signature() -> str:
     https://ai.google.dev/gemini-api/docs/thought-signatures#faqs
     https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/thinking/thought-signatures
     """
-    dummy_data: Final = b"skip_thought_signature_validator"
-    return base64.b64encode(dummy_data).decode("utf-8")
+    return DUMMY_GEMINI_THOUGHT_SIGNATURE
 
 
 def convert_to_gemini_tool_call_invoke(
@@ -5333,7 +5332,7 @@ class BedrockConverseMessagesProcessor:
                 )
             )
             for thinking_block in thinking_blocks
-            if not (to_claude and is_encrypted_reasoning_block(thinking_block))
+            if not is_bridge_reasoning_block(thinking_block)
             and not (drop_signed and BedrockConverseMessagesProcessor._is_signed(thinking_block))
         ]
 

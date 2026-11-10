@@ -4907,3 +4907,41 @@ def test_a_masked_replayed_hosted_web_call_serializes_before_its_openai_model_wa
     assert [call["action"] for call in hosted] == [
         {"type": "search", "query": "deploy token [REDACTED]", "queries": ["deploy token [REDACTED]"]}
     ]
+
+
+@pytest.mark.parametrize(
+    ("keep_gemini", "expected_types"),
+    [
+        (False, ["thinking", "text"]),
+        (True, ["thinking", "thinking", "redacted_thinking", "thinking", "text"]),
+    ],
+    ids=["strip-for-claude", "keep-for-gemini"],
+)
+def test_strip_encrypted_reasoning_blocks_handles_gemini_bridge_and_sibling_unsigned_thinking(
+    keep_gemini: bool, expected_types: list[str]
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+        encrypted_reasoning_signature,
+        gemini_thought_signature,
+    )
+    from litellm.llms.anthropic.common_utils import strip_encrypted_reasoning_blocks_from_anthropic_messages
+
+    messages: Final = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "unsigned gemini stream", "signature": ""},
+                {"type": "thinking", "thinking": "gemini plan", "signature": gemini_thought_signature("EoUMCoIM==")},
+                {"type": "redacted_thinking", "data": gemini_thought_signature("EscLCsQL==")},
+                {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_openai")},
+                {"type": "thinking", "thinking": "claude plan", "signature": "EqQBCkYI_claude"},
+                {"type": "text", "text": "Final answer."},
+            ],
+        }
+    ]
+    sanitized: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(
+        messages, keep_gemini_thought_signatures=keep_gemini
+    )
+    assert [block["type"] for block in sanitized[0]["content"]] == expected_types
+    if not keep_gemini:
+        assert sanitized[0]["content"][0]["signature"] == "EqQBCkYI_claude"

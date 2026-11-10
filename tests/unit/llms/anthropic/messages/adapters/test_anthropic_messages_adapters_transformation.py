@@ -21,7 +21,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    DUMMY_GEMINI_THOUGHT_SIGNATURE,
+    GEMINI_THOUGHT_SIGNATURE_PREFIX,
     encrypted_reasoning_signature,
+    gemini_thought_signature,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
@@ -1528,13 +1531,17 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     adapter = LiteLLMAnthropicMessagesAdapter()
     result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
 
-    assert len(result) == 1
-    assert result[0]["type"] == "tool_use"
-    assert result[0]["id"] == base
-    assert THOUGHT_SIGNATURE_SEPARATOR not in result[0]["id"]
-    assert result[0]["name"] == "get_weather"
-    assert result[0]["input"] == {"location": "Boston"}
-    assert result[0]["provider_specific_fields"] == {"signature": sig}
+    assert len(result) == 2
+    assert result[0] == {
+        "type": "redacted_thinking",
+        "data": f"litellm_thought_signature:{sig}",
+    }
+    assert result[1]["type"] == "tool_use"
+    assert result[1]["id"] == base
+    assert THOUGHT_SIGNATURE_SEPARATOR not in result[1]["id"]
+    assert result[1]["name"] == "get_weather"
+    assert result[1]["input"] == {"location": "Boston"}
+    assert result[1]["provider_specific_fields"] == {"signature": sig}
 
 
 def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():
@@ -6293,3 +6300,416 @@ async def test_streamed_reasoning_summaries_stay_with_their_own_encrypted_item(
         ("thinking", "Check the forecast.", encrypted_reasoning_signature("gAAA_second")),
         ("text", "", None),
     ]
+
+
+_GEMINI_RAW_SIG: Final = "EoUMCoIMAWkUfRNAt6WiTWGx73C1cgarbMkd0STsaBTv0DSrICGKWeyBN9og=="
+_GEMINI_RAW_SIG_2: Final = "EscLCsQLAWkUfRP4jtXWjNAugx5FeAwxasL/kKzH9gXUHHB2cTK13h4C8C6t=="
+_GEMINI_TOOLS: Final = [
+    {
+        "name": "get_weather",
+        "description": "Get weather",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+    }
+]
+
+
+def _client_echoed_blocks(blocks: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    return [{k: v for k, v in block.items() if k != "provider_specific_fields"} for block in blocks]
+
+
+def _gemini_sse_bytes(chunks: Sequence[Mapping[str, object]]) -> bytes:
+    return b"".join(f"data: {json.dumps(chunk)}\n\n".encode() for chunk in chunks)
+
+
+@pytest.fixture
+def _local_vertex_credentials():
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    payload: Final = json.dumps({"access_token": "fake-vertex-token", "expires_in": 3600}).encode()
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args: object) -> None:
+            return None
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    key_pem: Final = (
+        rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        .decode()
+    )
+    yield json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "test-project",
+            "private_key_id": "k1",
+            "private_key": key_pem,
+            "client_email": "sa@test-project.iam.gserviceaccount.com",
+            "token_uri": f"http://127.0.0.1:{server.server_port}/token",
+        }
+    )
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize(
+    ("model", "url_pattern", "use_vertex"),
+    [
+        (
+            "gemini/gemini-3.8-flash",
+            r".*generativelanguage\.googleapis\.com/.*/models/gemini-3\.8-flash:generateContent.*",
+            False,
+        ),
+        (
+            "vertex_ai/gemini-3.8-flash",
+            r".*aiplatform\.googleapis\.com/.*/models/gemini-3\.8-flash:generateContent.*",
+            True,
+        ),
+    ],
+    ids=["ai-studio", "vertex-ai"],
+)
+@pytest.mark.parametrize("embed_in_id", [True, False], ids=["embed-id-default", "psf-only"])
+@pytest.mark.parametrize("visible_thought", [True, False], ids=["visible-thinking", "hidden-thinking"])
+async def test_gemini_messages_round_trip_thought_signature_without_provider_specific_fields(
+    respx_mock: respx.MockRouter,
+    _local_vertex_credentials: str,
+    model: str,
+    url_pattern: str,
+    use_vertex: bool,
+    embed_in_id: bool,
+    visible_thought: bool,
+) -> None:
+    resolved_kwargs: Final[Mapping[str, object]] = (
+        {
+            "vertex_project": "test-project",
+            "vertex_location": "global",
+            "vertex_credentials": _local_vertex_credentials,
+        }
+        if use_vertex
+        else {"api_key": "fake-key"}
+    )
+    turn1_parts: Final = [
+        *([{"thought": True, "text": "Check Tokyo and Osaka."}] if visible_thought else []),
+        {
+            "functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}},
+            "thoughtSignature": _GEMINI_RAW_SIG,
+        },
+        {"functionCall": {"name": "get_weather", "args": {"city": "Osaka"}}},
+    ]
+    turn1_body: Final = {
+        "candidates": [{"content": {"role": "model", "parts": turn1_parts}, "finishReason": "STOP", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 12, "totalTokenCount": 32},
+    }
+    turn2_body: Final = {
+        "candidates": [
+            {"content": {"role": "model", "parts": [{"text": "22C and 20C."}]}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 40, "candidatesTokenCount": 6, "totalTokenCount": 46},
+    }
+    route: Final = respx_mock.post(url__regex=url_pattern).mock(
+        side_effect=[httpx.Response(200, json=turn1_body), httpx.Response(200, json=turn2_body)]
+    )
+
+    turn1_resp: Final = await litellm.anthropic.messages.acreate(
+        model=model,
+        max_tokens=512,
+        thinking={"type": "enabled", "budget_tokens": 256},
+        tools=_GEMINI_TOOLS,
+        messages=[{"role": "user", "content": "Weather in Tokyo and Osaka?"}],
+        thought_signature_in_tool_call_id=embed_in_id,
+        **resolved_kwargs,
+    )
+
+    echoed: Final = _client_echoed_blocks(turn1_resp["content"])
+    expected_first_type: Final = "thinking" if visible_thought else "redacted_thinking"
+    assert [b["type"] for b in echoed] == [expected_first_type, "tool_use", "tool_use"]
+    carrier_field: Final = "signature" if visible_thought else "data"
+    assert echoed[0][carrier_field] == f"{GEMINI_THOUGHT_SIGNATURE_PREFIX}{_GEMINI_RAW_SIG}"
+    assert len(str(echoed[1]["id"])) <= 64
+    assert len(str(echoed[2]["id"])) <= 64
+    assert "__thought__" not in str(echoed[1]["id"])
+
+    await litellm.anthropic.messages.acreate(
+        model=model,
+        max_tokens=512,
+        thinking={"type": "enabled", "budget_tokens": 256},
+        tools=_GEMINI_TOOLS,
+        messages=[
+            {"role": "user", "content": "Weather in Tokyo and Osaka?"},
+            {"role": "assistant", "content": echoed},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": echoed[1]["id"], "content": "22C"},
+                    {"type": "tool_result", "tool_use_id": echoed[2]["id"], "content": "20C"},
+                ],
+            },
+        ],
+        thought_signature_in_tool_call_id=embed_in_id,
+        **resolved_kwargs,
+    )
+
+    assert route.call_count == 2
+    sent_turn2: Final = json.loads(route.calls[1].request.read())
+    model_parts: Final = sent_turn2["contents"][1]["parts"]
+    fc_parts: Final = [part for part in model_parts if "functionCall" in part or "function_call" in part]
+    assert len(fc_parts) == 2
+    assert fc_parts[0]["thoughtSignature"] == _GEMINI_RAW_SIG
+    assert fc_parts[0]["thoughtSignature"] != DUMMY_GEMINI_THOUGHT_SIGNATURE
+    assert "thoughtSignature" not in fc_parts[1]
+    thought_parts: Final = [part for part in model_parts if part.get("thought") is True]
+    assert len(thought_parts) == (1 if visible_thought else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_gemini_messages_streaming_round_trips_thought_signature_over_sse(
+    respx_mock: respx.MockRouter,
+) -> None:
+    sse_payload: Final = _gemini_sse_bytes(
+        [
+            {"candidates": [{"content": {"role": "model", "parts": [{"thought": True, "text": "Plan."}]}, "index": 0}]},
+            {
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "functionCall": {"name": "get_weather", "args": {"city": "Tokyo"}},
+                                    "thoughtSignature": _GEMINI_RAW_SIG,
+                                }
+                            ],
+                        },
+                        "finishReason": "STOP",
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 15, "candidatesTokenCount": 8, "totalTokenCount": 23},
+            },
+        ]
+    )
+    stream_route: Final = respx_mock.post(
+        url__regex=r".*generativelanguage\.googleapis\.com/.*/models/gemini-3\.8-flash:streamGenerateContent.*"
+    ).mock(return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_payload))
+    unary_route: Final = respx_mock.post(
+        url__regex=r".*generativelanguage\.googleapis\.com/.*/models/gemini-3\.8-flash:generateContent.*"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 25, "candidatesTokenCount": 4, "totalTokenCount": 29},
+            },
+        )
+    )
+
+    stream: Final = await litellm.anthropic.messages.acreate(
+        model="gemini/gemini-3.8-flash",
+        api_key="fake-key",
+        max_tokens=256,
+        thinking={"type": "enabled", "budget_tokens": 128},
+        tools=_GEMINI_TOOLS,
+        stream=True,
+        messages=[{"role": "user", "content": "Tokyo weather?"}],
+    )
+    frames: Final = b"".join([chunk async for chunk in stream]).decode()
+    events: Final = tuple(
+        json.loads(line.removeprefix("data: ")) for line in frames.splitlines() if line.startswith("data: ")
+    )
+    tool_start: Final = next(
+        event["content_block"]
+        for event in events
+        if event["type"] == "content_block_start" and event["content_block"]["type"] == "tool_use"
+    )
+    assert _streamed_blocks(frames) == [
+        ("thinking", "Plan.", gemini_thought_signature(_GEMINI_RAW_SIG)),
+        ("tool_use", "", None),
+    ]
+    assert len(str(tool_start["id"])) <= 64
+
+    await litellm.anthropic.messages.acreate(
+        model="gemini/gemini-3.8-flash",
+        api_key="fake-key",
+        max_tokens=256,
+        tools=_GEMINI_TOOLS,
+        messages=[
+            {"role": "user", "content": "Tokyo weather?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Plan.",
+                        "signature": gemini_thought_signature(_GEMINI_RAW_SIG),
+                    },
+                    {"type": "tool_use", "id": tool_start["id"], "name": "get_weather", "input": {"city": "Tokyo"}},
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_start["id"], "content": "22C"}]},
+        ],
+    )
+
+    assert stream_route.call_count == 1
+    assert unary_route.call_count == 1
+    sent_turn2: Final = json.loads(unary_route.calls[0].request.read())
+    fc_part: Final = next(
+        part for part in sent_turn2["contents"][1]["parts"] if "functionCall" in part or "function_call" in part
+    )
+    assert fc_part["thoughtSignature"] == _GEMINI_RAW_SIG
+
+
+def test_gemini_tool_call_signature_takes_precedence_over_earlier_server_tool_signature() -> None:
+    message: Final = Message(
+        role="assistant",
+        content=None,
+        reasoning_content="Search first, then call weather.",
+        tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"city": "Tokyo"}',
+                },
+                "provider_specific_fields": {"thought_signature": _GEMINI_RAW_SIG_2},
+            }
+        ],
+        provider_specific_fields={
+            "thought_signatures": [_GEMINI_RAW_SIG, _GEMINI_RAW_SIG_2, "EtrailingNonToolSignature=="]
+        },
+    )
+    response: Final = ModelResponse(
+        model="gemini-3.8-flash",
+        choices=[Choices(index=0, message=message, finish_reason="tool_calls")],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    translated: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert translated["content"][0]["signature"] == gemini_thought_signature(_GEMINI_RAW_SIG_2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_switching_from_gemini_to_bedrock_converse_claude_strips_gemini_thinking_and_bridge_blocks(
+    respx_mock: respx.MockRouter,
+) -> None:
+    converse_route: Final = respx_mock.post(
+        url__regex=r".*bedrock-runtime\.us-east-1\.amazonaws\.com/model/.*/converse$"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "output": {"message": {"role": "assistant", "content": [{"text": "Tokyo is 22C."}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 30, "outputTokens": 6, "totalTokens": 36},
+            },
+        )
+    )
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        aws_access_key_id="fake-ak",
+        aws_secret_access_key="fake-sk",
+        aws_region_name="us-east-1",
+        max_tokens=512,
+        thinking={"type": "enabled", "budget_tokens": 256},
+        tools=_GEMINI_TOOLS,
+        messages=[
+            {"role": "user", "content": "Weather in Tokyo?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Streamed Gemini thought", "signature": ""},
+                    {
+                        "type": "thinking",
+                        "thinking": "Signed Gemini thought",
+                        "signature": gemini_thought_signature(_GEMINI_RAW_SIG),
+                    },
+                    {"type": "redacted_thinking", "data": gemini_thought_signature(_GEMINI_RAW_SIG_2)},
+                    {"type": "tool_use", "id": "call_tokyo", "name": "get_weather", "input": {"city": "Tokyo"}},
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_tokyo", "content": "22C"}]},
+        ],
+    )
+
+    assert converse_route.call_count == 1
+    sent_converse: Final = json.loads(converse_route.calls[0].request.read())
+    assistant_blocks: Final = sent_converse["messages"][1]["content"]
+    assert assistant_blocks == [{"toolUse": {"toolUseId": "call_tokyo", "name": "get_weather", "input": {"city": "Tokyo"}}}]
+    assert [b["text"] for b in response["content"] if b["type"] == "text"] == ["Tokyo is 22C."]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_switching_from_gemini_to_openai_responses_strips_gemini_bridge_blocks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+    route: Final = respx_mock.post(url__regex=r".*openai-thinking\.example/v1/responses").mock(
+        return_value=httpx.Response(200, json=_RETRY_REPLY)
+    )
+
+    await litellm.anthropic.messages.acreate(
+        model="openai/gpt-5.4-nano",
+        api_base="https://openai-thinking.example/v1",
+        api_key="fake-key",
+        max_tokens=2048,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        tools=_GEMINI_TOOLS,
+        messages=[
+            {"role": "user", "content": "Weather in Tokyo?"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Gemini internal thought",
+                        "signature": gemini_thought_signature(_GEMINI_RAW_SIG),
+                    },
+                    {"type": "redacted_thinking", "data": gemini_thought_signature(_GEMINI_RAW_SIG_2)},
+                    {"type": "tool_use", "id": "call_tokyo", "name": "get_weather", "input": {"city": "Tokyo"}},
+                ],
+            },
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_tokyo", "content": "22C"}]},
+        ],
+    )
+
+    assert route.call_count == 1
+    sent: Final = json.loads(route.calls[0].request.read())
+    assert [item for item in sent["input"] if item.get("type") == "reasoning"] == []
+
+
+@pytest.mark.parametrize("target_model", ["openai/gpt-5.4-nano", None], ids=["non-gemini-model", "unspecified-model"])
+def test_standalone_gemini_carrier_block_does_not_emit_empty_assistant_message_on_non_gemini_route(
+    target_model: str | None,
+) -> None:
+    messages: Final = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "assistant",
+                "content": [{"type": "redacted_thinking", "data": gemini_thought_signature(_GEMINI_RAW_SIG)}],
+            },
+            {"role": "user", "content": "Continue"},
+        ],
+        model=target_model,
+    )
+
+    assert [m["role"] for m in messages] == ["user", "user"]

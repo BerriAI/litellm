@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_items,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
@@ -37,14 +42,6 @@ def _as_string_mapping(value: object) -> Mapping[str, object] | None:
     if isinstance(value, Mapping):
         return value
     return None
-
-
-def _thought_signature(provider_specific_fields: object) -> str | None:
-    fields: Final = _as_string_mapping(provider_specific_fields)
-    if fields is None:
-        return None
-    signature: Final = fields.get("thought_signature")
-    return signature if isinstance(signature, str) else None
 
 
 def _object_sequence(value: object) -> Sequence[object] | None:
@@ -153,8 +150,12 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    gemini_thought_signature,
+    is_real_gemini_thought_signature,
     reasoning_content_from_thinking_blocks,
     thinking_blocks_with_encrypted_reasoning,
+    thought_signature_of_block,
+    tool_call_thought_signature,
 )
 from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
     parse_tool_call_arguments,
@@ -317,6 +318,20 @@ def _keeps_encrypted_reasoning_for_responses(
     )
 
 
+def _keeps_gemini_thought_signatures(
+    model: str | None,
+    custom_llm_provider: str | None,
+) -> bool:
+    provider: Final = (
+        custom_llm_provider if custom_llm_provider is not None else (_inferred_provider(model) if model else None)
+    )
+    if provider == "gemini":
+        return True
+    if provider in ("vertex_ai", "vertex_ai_beta"):
+        return bool(model and "gemini" in model.lower())
+    return False
+
+
 def _anthropic_thinking_blocks(source: object) -> tuple[Mapping[str, object], ...]:
     return thinking_blocks_with_encrypted_reasoning(
         getattr(source, "thinking_blocks", None),
@@ -326,6 +341,134 @@ def _anthropic_thinking_blocks(source: object) -> tuple[Mapping[str, object], ..
 
 def _streamed_thinking_blocks(delta: object) -> tuple[Mapping[str, object], ...]:
     return tuple(block for item in attribute_items(delta, "thinking_blocks") if (block := as_str_mapping(item)))
+
+
+def _last_real_gemini_signature(signatures: object) -> str | None:
+    items: Final = as_object_list(signatures)
+    if items is None:
+        return None
+    return next(
+        (sig for sig in reversed(items) if isinstance(sig, str) and is_real_gemini_thought_signature(sig)),
+        None,
+    )
+
+
+def _with_thought_signature_on_first_tool_call(
+    tool_calls: Sequence[ChatCompletionAssistantToolCall],
+    thought_signature: str,
+) -> list[ChatCompletionAssistantToolCall]:  # mutable-ok: ChatCompletionAssistantMessage.tool_calls expects list
+    if not tool_calls or tool_call_thought_signature(tool_calls[0], id_separator=THOUGHT_SIGNATURE_SEPARATOR):
+        return list(tool_calls)
+    first: Final = tool_calls[0]
+    existing_fields: Final = _as_string_mapping(first["function"].get("provider_specific_fields")) or {}
+    updated_function: Final[ChatCompletionToolCallFunctionChunk] = {
+        **first["function"],
+        "provider_specific_fields": {**existing_fields, "thought_signature": thought_signature},
+    }
+    updated_first: Final[ChatCompletionAssistantToolCall] = {
+        **first,
+        "function": updated_function,
+    }
+    return [updated_first, *tool_calls[1:]]
+
+
+def _render_single_anthropic_thinking_block(
+    thinking_block: Mapping[str, object],
+    *,
+    raw_gemini_signature: str | None,
+    override_signature: str | None = None,
+) -> dict[str, object] | None:  # mutable-ok: Anthropic content block dict
+    block_type: Final = thinking_block.get("type")
+    if block_type == "thinking":
+        thinking_value: Final = thinking_block.get("thinking", "")
+        raw_sig_value: Final = thinking_block.get("signature", "")
+        sig_str: Final = str(raw_sig_value) if raw_sig_value is not None else None
+        resolved_signature: Final = (
+            override_signature
+            if override_signature is not None
+            else gemini_thought_signature(sig_str)
+            if sig_str is not None and raw_gemini_signature is not None and sig_str == raw_gemini_signature
+            else sig_str
+        )
+        return AnthropicResponseContentBlockThinking(
+            type="thinking",
+            thinking=(str(thinking_value) if thinking_value is not None else ""),
+            signature=resolved_signature,
+        ).model_dump()
+    if block_type == "redacted_thinking":
+        data_value: Final = thinking_block.get("data", "")
+        return AnthropicResponseContentBlockRedactedThinking(
+            type="redacted_thinking",
+            data=str(data_value) if data_value is not None else "",
+        ).model_dump()
+    return None
+
+
+def _render_anthropic_thinking_blocks(
+    signed_thinking_blocks: Sequence[Mapping[str, object]],
+    reasoning_content: object,
+    raw_gemini_signature: str | None,
+    *,
+    has_tool_calls: bool,
+) -> tuple[dict[str, object], ...]:  # mutable-ok: Anthropic content block dicts
+    wrapped_gemini_sig: Final = (
+        gemini_thought_signature(raw_gemini_signature) if raw_gemini_signature is not None else None
+    )
+    kept_blocks: Final = tuple(block for block in signed_thinking_blocks if not is_empty_unsigned_thinking_block(block))
+    if kept_blocks:
+        already_carries_gemini: Final = wrapped_gemini_sig is not None and any(
+            block.get("type") == "thinking" and block.get("signature") in (raw_gemini_signature, wrapped_gemini_sig)
+            for block in kept_blocks
+        )
+        last_thinking_idx: Final = (
+            next(
+                (idx for idx in range(len(kept_blocks) - 1, -1, -1) if kept_blocks[idx].get("type") == "thinking"),
+                None,
+            )
+            if wrapped_gemini_sig is not None and not already_carries_gemini
+            else None
+        )
+        rendered: Final = tuple(
+            rendered_block
+            for idx, block in enumerate(kept_blocks)
+            if (
+                rendered_block := _render_single_anthropic_thinking_block(
+                    block,
+                    raw_gemini_signature=raw_gemini_signature,
+                    override_signature=wrapped_gemini_sig if idx == last_thinking_idx else None,
+                )
+            )
+            is not None
+        )
+        if (
+            wrapped_gemini_sig is not None
+            and not already_carries_gemini
+            and last_thinking_idx is None
+            and has_tool_calls
+        ):
+            return (
+                *rendered,
+                AnthropicResponseContentBlockRedactedThinking(
+                    type="redacted_thinking", data=wrapped_gemini_sig
+                ).model_dump(),
+            )
+        return rendered
+    if isinstance(reasoning_content, str) and reasoning_content:
+        return (
+            AnthropicResponseContentBlockThinking(
+                type="thinking",
+                thinking=reasoning_content,
+                signature=wrapped_gemini_sig,
+            ).model_dump(),
+        )
+    if wrapped_gemini_sig is not None and has_tool_calls:
+        return (
+            AnthropicResponseContentBlockRedactedThinking(
+                type="redacted_thinking",
+                data=wrapped_gemini_sig,
+            ).model_dump(),
+        )
+    return ()
 
 
 def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
@@ -494,15 +637,7 @@ class LiteLLMAnthropicMessagesAdapter:
         Extract signature from a tool call's provider_specific_fields.
         Only checks provider_specific_fields, not thinking blocks.
         """
-        fields: Final = _optional_attr(tool_call, "provider_specific_fields")
-        if fields:
-            return _thought_signature(fields)
-
-        function_fields: Final = _optional_attr(_optional_attr(tool_call, "function"), "provider_specific_fields")
-        if function_fields:
-            return _thought_signature(function_fields)
-
-        return None
+        return tool_call_thought_signature(tool_call, require_real=False)
 
     def _streamed_tool_call_signature(self, tool_call_id: str, tool_call: object) -> str | None:
         id_parts: Final = tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
@@ -603,10 +738,13 @@ class LiteLLMAnthropicMessagesAdapter:
         route: ChatRouteInputs = _NO_ROUTE_INPUTS,
     ) -> list[AllMessageValues]:
         new_messages: Final[list[AllMessageValues]] = []
-        replayable_messages: Final = (
-            messages
-            if _keeps_encrypted_reasoning_for_responses(model, custom_llm_provider, deployment_model_info, route)
-            else strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        keeps_gemini: Final = _keeps_gemini_thought_signatures(model, custom_llm_provider)
+        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(
+            messages,
+            keep_encrypted_reasoning=_keeps_encrypted_reasoning_for_responses(
+                model, custom_llm_provider, deployment_model_info, route
+            ),
+            keep_gemini_thought_signatures=keeps_gemini,
         )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
@@ -685,11 +823,15 @@ class LiteLLMAnthropicMessagesAdapter:
             has_cache_control_in_text = False
             tool_calls: list[ChatCompletionAssistantToolCall] = []
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] = []
+            recovered_thought_signatures: list[str] = []  # mutable-ok: collected per assistant message
             if m["role"] == "assistant":
                 if isinstance(m.get("content"), str):
                     assistant_message_str = str(m.get("content", ""))
                 elif isinstance(m.get("content"), list):
-                    for content in cast(list, m.get("content", [])):  # cast-ok: untrusted client payload
+                    content_items = cast(  # cast-ok: untrusted client payload
+                        list[str | dict[str, object]], m.get("content", [])
+                    )
+                    for content in content_items:
                         if isinstance(content, str):
                             assistant_message_str = str(content)
                         elif isinstance(content, dict):
@@ -709,8 +851,10 @@ class LiteLLMAnthropicMessagesAdapter:
                                     "name": tool_name,
                                     "arguments": json.dumps(content.get("input", {})),
                                 }
-                                signature = self._extract_signature_from_tool_use_content(
-                                    cast(dict[str, object], content)
+                                signature = (
+                                    self._extract_signature_from_tool_use_content(content)
+                                    if keeps_gemini or (model is None and custom_llm_provider is None)
+                                    else None
                                 )
 
                                 if signature:
@@ -721,7 +865,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                     function_chunk["provider_specific_fields"] = provider_specific_fields
 
                                 tool_call = ChatCompletionAssistantToolCall(
-                                    id=content.get("id", ""),
+                                    id=str(content.get("id", "")),
                                     type="function",
                                     function=function_chunk,
                                 )
@@ -732,18 +876,32 @@ class LiteLLMAnthropicMessagesAdapter:
                                 # redacted_thinking blocks, and anthropic_messages_pt replays
                                 # these verbatim at content[0], so carrying one here (or
                                 # inventing an empty one) is a guaranteed 400 on the way back.
-                                thinking_block = ChatCompletionThinkingBlock(
-                                    type="thinking",
-                                    thinking=content.get("thinking") or "",
-                                    signature=content.get("signature") or "",
-                                )
-                                thinking_blocks.append(thinking_block)
+                                raw_thinking = content.get("thinking")
+                                thinking_text = str(raw_thinking) if raw_thinking is not None else ""
+                                gemini_sig = thought_signature_of_block(content) if keeps_gemini else None
+                                if gemini_sig is not None:
+                                    recovered_thought_signatures.append(gemini_sig)
+                                if gemini_sig is None or thinking_text:
+                                    raw_signature = content.get("signature")
+                                    thinking_blocks.append(
+                                        ChatCompletionThinkingBlock(
+                                            type="thinking",
+                                            thinking=thinking_text,
+                                            signature=str(raw_signature) if raw_signature is not None else "",
+                                        )
+                                    )
                             elif content.get("type") == "redacted_thinking":
-                                redacted_thinking_block = ChatCompletionRedactedThinkingBlock(
-                                    type="redacted_thinking",
-                                    data=content.get("data") or "",
-                                )
-                                thinking_blocks.append(redacted_thinking_block)
+                                gemini_redacted_sig = thought_signature_of_block(content) if keeps_gemini else None
+                                if gemini_redacted_sig is not None:
+                                    recovered_thought_signatures.append(gemini_redacted_sig)
+                                else:
+                                    raw_data = content.get("data")
+                                    thinking_blocks.append(
+                                        ChatCompletionRedactedThinkingBlock(
+                                            type="redacted_thinking",
+                                            data=str(raw_data) if raw_data is not None else "",
+                                        )
+                                    )
 
             if (
                 assistant_message_str is not None
@@ -766,7 +924,15 @@ class LiteLLMAnthropicMessagesAdapter:
                     thinking_blocks=(thinking_blocks if len(thinking_blocks) > 0 else None),
                 )
                 if len(tool_calls) > 0:
-                    assistant_message["tool_calls"] = tool_calls
+                    assistant_message["tool_calls"] = (
+                        _with_thought_signature_on_first_tool_call(tool_calls, recovered_thought_signatures[-1])
+                        if recovered_thought_signatures
+                        else tool_calls
+                    )
+                elif recovered_thought_signatures:
+                    assistant_message["provider_specific_fields"] = {
+                        "thought_signatures": list(recovered_thought_signatures),
+                    }
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks
                 reasoning_content = reasoning_content_from_thinking_blocks(thinking_blocks)
@@ -1548,6 +1714,14 @@ class LiteLLMAnthropicMessagesAdapter:
             return None
         return ChatCompletionImageObject(type="image_url", image_url=ChatCompletionImageUrlObject(url=openai_image_url))
 
+    def _gemini_thought_signature_from_message(self, message: object) -> str | None:
+        for tool_call in _object_sequence(_optional_attr(message, "tool_calls")) or ():
+            sig = tool_call_thought_signature(tool_call, id_separator=THOUGHT_SIGNATURE_SEPARATOR)
+            if sig is not None:
+                return sig
+        fields: Final = _as_string_mapping(_optional_attr(message, "provider_specific_fields"))
+        return _last_real_gemini_signature(fields.get("thought_signatures")) if fields is not None else None
+
     def _translate_openai_content_to_anthropic(
         self,
         choices: list[Choices],
@@ -1559,38 +1733,14 @@ class LiteLLMAnthropicMessagesAdapter:
             for choice in choices
         ):
             new_content.extend(dict(_COMPACTION_BLOCK.validate_python(block)) for block in compaction_blocks)
-            signed_thinking_blocks = _anthropic_thinking_blocks(choice.message)
-            if signed_thinking_blocks:
-                for thinking_block in signed_thinking_blocks:
-                    if thinking_block.get("type") == "thinking":
-                        if is_empty_unsigned_thinking_block(thinking_block):
-                            continue
-                        thinking_value = thinking_block.get("thinking", "")
-                        signature_value = thinking_block.get("signature", "")
-                        new_content.append(
-                            AnthropicResponseContentBlockThinking(
-                                type="thinking",
-                                thinking=(str(thinking_value) if thinking_value is not None else ""),
-                                signature=(str(signature_value) if signature_value is not None else None),
-                            ).model_dump()
-                        )
-                    elif thinking_block.get("type") == "redacted_thinking":
-                        data_value = thinking_block.get("data", "")
-                        new_content.append(
-                            AnthropicResponseContentBlockRedactedThinking(
-                                type="redacted_thinking",
-                                data=str(data_value) if data_value is not None else "",
-                            ).model_dump()
-                        )
-            # Handle reasoning_content when thinking_blocks is not present
-            elif hasattr(choice.message, "reasoning_content") and choice.message.reasoning_content:
-                new_content.append(
-                    AnthropicResponseContentBlockThinking(
-                        type="thinking",
-                        thinking=str(choice.message.reasoning_content),
-                        signature=None,
-                    ).model_dump()
+            new_content.extend(
+                _render_anthropic_thinking_blocks(
+                    _anthropic_thinking_blocks(choice.message),
+                    _optional_attr(choice.message, "reasoning_content"),
+                    self._gemini_thought_signature_from_message(choice.message),
+                    has_tool_calls=bool(choice.message.tool_calls),
                 )
+            )
 
             new_content.extend(dict(block) for block in _server_tool_blocks(choice.message))
             # Handle text content

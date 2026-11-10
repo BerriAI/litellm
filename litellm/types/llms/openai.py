@@ -935,6 +935,7 @@ class ChatCompletionAssistantMessage(OpenAIChatCompletionAssistantMessage, total
     cache_control: ChatCompletionCachedContent
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None
     reasoning_items: list[ChatCompletionReasoningItem] | None
+    provider_specific_fields: Mapping[str, object] | None  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 class ChatCompletionToolReferenceObject(TypedDict):

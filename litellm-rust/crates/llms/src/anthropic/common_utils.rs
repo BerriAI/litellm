@@ -28,6 +28,7 @@ use crate::{
 pub const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
 pub const ANTHROPIC_AUTH_TOKEN_ENV: &str = "ANTHROPIC_AUTH_TOKEN";
 pub const ENCRYPTED_REASONING_SIGNATURE_PREFIX: &str = "litellm_encrypted_reasoning:";
+pub const GEMINI_THOUGHT_SIGNATURE_PREFIX: &str = "litellm_thought_signature:";
 const THOUGHT_SIGNATURE_SEPARATOR: &str = "__thought__";
 pub const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
@@ -417,6 +418,20 @@ pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
     field.is_some_and(|value| value.starts_with(ENCRYPTED_REASONING_SIGNATURE_PREFIX))
 }
 
+pub fn is_gemini_thought_signature_block(block: &ContentBlock) -> bool {
+    let field = match block.block_type.as_ref() {
+        Some(ContentBlockType::Thinking) => block.signature.as_deref(),
+        Some(ContentBlockType::RedactedThinking) => block.data.as_deref(),
+        _ => None,
+    };
+    field.is_some_and(|value| value.starts_with(GEMINI_THOUGHT_SIGNATURE_PREFIX))
+}
+
+fn is_unsigned_thinking_block(block: &ContentBlock) -> bool {
+    block.is_type(ContentBlockType::Thinking)
+        && block.signature.as_deref().is_none_or(str::is_empty)
+}
+
 const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
 
 fn is_billing_header_block(block: &ContentBlock) -> bool {
@@ -445,7 +460,28 @@ pub fn filter_billing_headers_from_system(system: SystemPrompt) -> Option<System
 }
 
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
-    retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
+    messages
+        .into_iter()
+        .filter_map(|message| match message.content {
+            MessageContent::Text(_) => Some(message),
+            MessageContent::Blocks(ref blocks) => {
+                let has_gemini_sig = blocks.iter().any(is_gemini_thought_signature_block);
+                let kept: Vec<ContentBlock> = blocks
+                    .iter()
+                    .filter(|block| {
+                        !is_encrypted_reasoning_block(block)
+                            && !is_gemini_thought_signature_block(block)
+                            && !(has_gemini_sig && is_unsigned_thinking_block(block))
+                    })
+                    .cloned()
+                    .collect();
+                if kept.len() == blocks.len() {
+                    return Some(message);
+                }
+                (!kept.is_empty()).then(|| message.with_blocks(kept))
+            }
+        })
+        .collect()
 }
 
 fn is_advisor_use(block: &ContentBlock) -> bool {
@@ -769,6 +805,10 @@ mod tests {
         format!("{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted}")
     }
 
+    fn gemini_tagged(signature: &str) -> String {
+        format!("{GEMINI_THOUGHT_SIGNATURE_PREFIX}{signature}")
+    }
+
     fn tiers(
         minimal: bool,
         low: bool,
@@ -1069,6 +1109,41 @@ mod tests {
             {"role": "user", "content": "Solve it."},
             {"role": "assistant", "content": [{"type": "text", "text": "The answer."}]},
             {"role": "user", "content": "And the next one?"}
+        ])
+    )]
+    #[case::gemini_thought_signature_blocks_and_sibling_unsigned_thinking_are_stripped(
+        json!([
+            {"role": "user", "content": "Check validation."},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "gemini plan", "signature": gemini_tagged("EoUMCoIM_1")},
+                {"type": "tool_use", "id": "call_1", "name": "read_file", "input": {"path": "a.py"}}
+            ]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "ok"}]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "streamed thought", "signature": ""},
+                {"type": "text", "text": "Checking next."},
+                {"type": "redacted_thinking", "data": gemini_tagged("EoUMCoIM_2")},
+                {"type": "tool_use", "id": "call_2", "name": "read_file", "input": {"path": "b.py"}}
+            ]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "claude plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                {"type": "text", "text": "Done."}
+            ]}
+        ]),
+        json!([
+            {"role": "user", "content": "Check validation."},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "call_1", "name": "read_file", "input": {"path": "a.py"}}
+            ]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "ok"}]},
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "Checking next."},
+                {"type": "tool_use", "id": "call_2", "name": "read_file", "input": {"path": "b.py"}}
+            ]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "claude plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+                {"type": "text", "text": "Done."}
+            ]}
         ])
     )]
     fn strip_encrypted_reasoning_blocks_rewrites(#[case] input: Value, #[case] expected: Value) {
