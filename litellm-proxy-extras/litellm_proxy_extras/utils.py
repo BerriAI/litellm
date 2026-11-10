@@ -1,5 +1,4 @@
 import glob
-import importlib
 import os
 import random
 import re
@@ -19,7 +18,7 @@ from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras._redaction import _redact_credentials
 from litellm_proxy_extras.migration_dry_run import dry_run
 from litellm_proxy_extras.migration_dry_run import report as dry_run_report
-from litellm_proxy_extras.migration_lock import held_migration_lock
+from litellm_proxy_extras.migration_lock import held_migration_lock, psycopg_import_error
 from litellm_proxy_extras.prisma_toolchain import (
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,
     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR,
@@ -1501,13 +1500,12 @@ class ProxyExtrasDBManager:
         database_url: Final = os.environ.get("DATABASE_URL")
         if not database_url:
             return True
-        try:
-            importlib.import_module("psycopg")
-        except ImportError as exc:
+        import_error: Final = psycopg_import_error()
+        if import_error is not None:
             logger.warning(
                 "psycopg could not be imported (%s); skipping the request-log index build until a run where it loads. "
                 "The litellm[extra_proxy] extra provides psycopg, and PSYCOPG_IMPL=python also needs a system libpq.",
-                exc,
+                import_error,
             )
             return True
         direct_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(

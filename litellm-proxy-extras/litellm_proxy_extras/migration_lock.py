@@ -1,3 +1,4 @@
+import importlib
 import random
 import re
 import time
@@ -41,6 +42,16 @@ if TYPE_CHECKING:
     import psycopg
 
 
+def psycopg_import_error() -> "ImportError | None":
+    """Why `import psycopg` fails on this node, or None when it loads. PSYCOPG_IMPL=python
+    without a system libpq raises a plain ImportError, so a rerun cannot change the answer."""
+    try:
+        importlib.import_module("psycopg")
+    except ImportError as exc:
+        return exc
+    return None
+
+
 def _migration_url(database_url: str, direct_url: "str | None") -> str:
     if not direct_url:
         return database_url
@@ -51,10 +62,14 @@ def _migration_url(database_url: str, direct_url: "str | None") -> str:
 
 
 def migration_environment(environment: Mapping[str, str]) -> Mapping[str, str]:
+    """Prisma's own session advisory lock is disabled only while `prisma_migration_lock` can hold
+    Prisma's key on a pinned connection; without psycopg Prisma keeps its own lock."""
     database_url: Final = environment.get("DATABASE_URL")
     if not database_url:
         return environment
     migration_url: Final = _migration_url(database_url, environment.get("DIRECT_URL"))
+    if psycopg_import_error() is not None:
+        return {**environment, "DATABASE_URL": migration_url}
     return {**environment, "DATABASE_URL": migration_url, "PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK": "1"}
 
 
@@ -123,6 +138,12 @@ def migration_lock(
     database_url: str,
     lock: AdvisoryLock = COORDINATOR_LOCK,
 ) -> Generator[MigrationCoordinator, None, None]:
+    import_error: Final = psycopg_import_error()
+    if import_error is not None:
+        raise RuntimeError(
+            f"The {lock.name} needs psycopg, which could not be imported ({import_error}). "
+            "The litellm[extra_proxy] extra provides psycopg, and PSYCOPG_IMPL=python also needs a system libpq."
+        )
     import psycopg
 
     wait_seconds: Final = migration_lock_timeout()
@@ -156,7 +177,19 @@ def migration_lock(
 def prisma_migration_lock(database_url: str) -> Generator[None, None, None]:
     """Hold only Prisma's key as an xact lock on a pinned connection with Prisma's session lock disabled.
 
-    This keeps deploy independent of the coordinator key held by request-log index builds."""
+    This keeps deploy independent of the coordinator key held by request-log index builds. Without
+    psycopg there is no pinned connection, so deploy runs under Prisma's own session lock instead
+    (see `migration_environment`) and the cause is logged."""
+    import_error: Final = psycopg_import_error()
+    if import_error is not None:
+        logger.warning(
+            "psycopg could not be imported (%s); running prisma migrate deploy under Prisma's own advisory lock "
+            "instead of the pinned coordinator connection. The litellm[extra_proxy] extra provides psycopg, and "
+            "PSYCOPG_IMPL=python also needs a system libpq.",
+            import_error,
+        )
+        yield
+        return
     with migration_lock(database_url, PRISMA_LOCK) as coordinator:
         coordinator.release_statement_snapshot()
         yield

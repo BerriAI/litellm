@@ -2403,3 +2403,44 @@ class TestMigrateDeployRunsUnderTheCoordinatorLock:
 
         assert ProxyExtrasDBManager._run_database_v2(True, deploy_lock=self._recording_lock(events)) is True
         assert events == ["lock", "deploy", "unlock", "lock", "rollback", "unlock", "lock", "deploy", "unlock"]
+
+
+class TestMigrateDeployWhenPsycopgCannotLoad:
+    """On a node whose psycopg cannot load libpq the v2 resolver still runs `prisma migrate
+    deploy`, under Prisma's own advisory lock since nothing can hold the pinned one, and a
+    recovery that needs the coordinator reports the cause instead of dying on the import."""
+
+    def test_deploy_runs_under_prismas_own_lock_with_the_cause_logged(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import litellm_proxy_extras.utils as utils_module
+
+        database_url: Final = "postgresql://u:p@localhost:9/x"
+        harness: Final = _MigrateDeployHarness(monkeypatch, tmp_path, ["ok"], prisma_env={"DATABASE_URL": database_url})
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _make_psycopg_unimportable(monkeypatch)
+        deploy_environments: Final[list[Mapping[str, str]]] = []
+        original_run: Final = harness._fake_run
+
+        def run_and_record(cmd: Sequence[str], *, timeout: float, env: Mapping[str, str]) -> _FakeCompleted:
+            if cmd[1:] == ["migrate", "deploy"]:
+                deploy_environments.append(env)
+            return original_run(cmd, timeout=timeout, env=env)
+
+        monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", run_and_record)
+
+        with caplog.at_level(logging.WARNING, logger="litellm_proxy_extras"):
+            assert ProxyExtrasDBManager._setup_database_v2(use_migrate=True) is True
+
+        assert [env.get("PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK") for env in deploy_environments] == [None]
+        assert [record.levelname for record in caplog.records if "psycopg could not be imported" in record.message] == [
+            "WARNING"
+        ]
+
+    def test_a_recovery_that_needs_the_coordinator_reports_the_cause(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm_proxy_extras.migration_lock import migration_lock
+
+        _make_psycopg_unimportable(monkeypatch)
+
+        with pytest.raises(RuntimeError, match="libpq library not found"), migration_lock("postgresql://u:p@localhost:9/x"):
+            pass
