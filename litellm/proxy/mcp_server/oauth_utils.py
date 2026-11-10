@@ -146,7 +146,7 @@ def grant_covers_scopes(
     return parts <= known and all(scope in granted or scope in parts for scope in requested)
 
 
-_PUBLISHED_SCOPES: Final = TypeAdapter(tuple[str, ...] | None)
+_PUBLISHED_SCOPES: Final = TypeAdapter[tuple[str, ...] | None](tuple[str, ...] | None)
 
 
 def server_scope_names(server: "MCPServer | None") -> frozenset[str]:
