@@ -24,7 +24,7 @@ export interface PaginatedModelInfoResponse {
   size: number;
 }
 
-const modelKeys = createQueryKeys("models");
+export const modelKeys = createQueryKeys("models");
 const modelHubKeys = createQueryKeys("modelHub");
 const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
@@ -109,6 +109,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     model?: string | null;
     base_model?: string | null;
     custom_llm_provider?: string | null;
+    switchyard_router_config?: unknown;
     complexity_router_config?: unknown;
     complexity_router_default_model?: string | null;
     auto_router_config?: unknown;

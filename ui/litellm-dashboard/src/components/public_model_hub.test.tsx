@@ -327,6 +327,33 @@ describe("PublicModelHub", () => {
     expect(example).toHaveTextContent('model="gpt-4"');
   });
 
+  it("shows each deployment's full pricing in the model details", async () => {
+    respondWith([
+      model({
+        model_group: "gpt-4",
+        input_cost_per_token: 2.5e-6,
+        deployment_pricing: [
+          {
+            provider: "openai",
+            costs: { input_cost_per_token: 2.5e-6, cache_read_input_token_cost_above_272k_tokens_priority: 1e-6 },
+            tiered_pricing: [{ range: [0, 256_000], costs: { input_cost_per_token: 5e-8 } }],
+          },
+        ],
+      }),
+    ]);
+    renderHub();
+
+    fireEvent.click(await screen.findByRole("button", { name: "gpt-4" }));
+
+    const openai = await screen.findByRole("region", { name: "OpenAI pricing" });
+    const aboveThreshold = within(openai).getByRole("rowgroup", { name: "Above 272K tokens" });
+    expect(within(aboveThreshold).getByRole("row", { name: /Cache read/ })).toHaveTextContent(
+      "Cache read / 1M tokens$1.00",
+    );
+    expect(within(openai).getByText("0–256K tokens: $0.05 input")).toBeInTheDocument();
+    expect(within(screen.getByRole("dialog")).getByText("$2.5000")).toBeInTheDocument();
+  });
+
   it("filters by several providers at once, and returns to the first page", async () => {
     const user = userEvent.setup();
     respondWith(DEFAULT_MODELS, 300);

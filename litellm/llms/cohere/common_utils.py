@@ -1,6 +1,8 @@
 import json
 from typing import Final, Literal
 
+from pydantic import TypeAdapter
+
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.cohere import CohereV2StreamedToolCall
@@ -11,6 +13,8 @@ from litellm.types.utils import (
     GenericStreamingChunk,
     ProviderSpecificModelInfo,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CohereError(BaseLLMException):
@@ -190,8 +194,10 @@ class ModelResponseIterator:
             if index != -1:
                 str_line = str_line[index:]
 
-        data_json: Final = json.loads(str_line)
-        return self.chunk_parser(chunk=data_json)
+        data_json: Final = _DECODED_JSON.validate_python(json.loads(str_line))
+        if isinstance(data_json, dict):
+            return self.chunk_parser(chunk=data_json)
+        raise AttributeError(f"{type(data_json).__name__!r} object has no attribute 'get'", name="get", obj=data_json)
 
     # Async iterator
     def __aiter__(self):

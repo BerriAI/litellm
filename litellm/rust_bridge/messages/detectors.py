@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Final
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.anthropic_beta_headers_manager import is_foundry_api_base
+from litellm.litellm_core_utils.core_helpers import (
+    drops_unsupported_params,
+    proxy_request_headers,
+    stream_cost_injection_requested,
+)
 from litellm.llms.opencode.common_utils import is_opencode_api_base
 from litellm.rust_bridge.detectors import api_base, overridden, present, streaming
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
@@ -13,6 +18,12 @@ from litellm.rust_bridge.public_call import NativeCall, optional_mapping, option
 
 def provider_affinity(request: NativeCall) -> bool:
     return is_opencode_api_base(api_base(request))
+
+
+def foundry_beta_row(request: NativeCall) -> bool:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    return is_foundry_api_base(AnthropicModelInfo.get_api_base(api_base(request)))
 
 
 def anthropic_workload_identity(request: NativeCall) -> bool:
@@ -57,8 +68,8 @@ def strict_tools_retry(request: NativeCall) -> bool:
 
 
 def stream_cost_injection(request: NativeCall) -> bool:
-    """Python adds response cost to streaming usage when the global setting is truthy."""
-    return streaming(request) and bool(litellm.include_cost_in_streaming_usage)
+    """Python adds response cost to streaming usage when the global setting or the request header asks for it."""
+    return streaming(request) and stream_cost_injection_requested(proxy_request_headers(request.resolved))
 
 
 def pre_request_hook(_request: NativeCall) -> bool:

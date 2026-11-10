@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from litellm.exceptions import UnsupportedParamsError
 
 import litellm
 import litellm.llms.fal_ai.videos.transformation as fal_video_module
@@ -22,6 +23,14 @@ from litellm.utils import ProviderConfigManager
 MODEL = "bytedance/seedance-2.5/text-to-video"
 H3_TEXT_MODEL = "minimax/h3/text-to-video"
 H3_REFERENCE_MODEL = "minimax/h3/reference-to-video"
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+def test_native_video_parameters_keep_precedence(drop_params: bool) -> None:
+    params: Final = {"aspect_ratio": "1:1", "seed": 0, "duration": 6}
+    assert FalAIVideoConfig().map_openai_params({"seconds": "5", "size": "1280x720", **params}, MODEL, drop_params) == {
+        "resolution": "720p", **params,
+    }
 
 
 class TestFalAIVideoTransformation:
@@ -695,3 +704,11 @@ class TestFalAIVideoTransformation:
             )
             == 5 * row["output_cost_per_second_768p"]
         )
+
+
+@pytest.mark.parametrize("field", ["frame_images", "input_references"])
+def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
+    config: Final = FalAIVideoConfig()
+    with pytest.raises(UnsupportedParamsError, match=field):
+        config.map_openai_params({field: 1}, "video-model", False)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)

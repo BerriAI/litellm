@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { ExternalLink, ChevronDown } from "lucide-react";
+import i18n from "@/i18n/i18n";
 
 interface DocMenuItem {
   label: string;
@@ -12,7 +13,7 @@ interface DocsMenuProps {
   className?: string;
 }
 
-export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", className = "" }) => {
+export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = i18n.t("docsMenu.trigger"), className = "" }) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 

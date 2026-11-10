@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -112,6 +112,9 @@ class OpenCodeGoMessagesChatConfig(_GoReportedCostMixin, AnthropicConfig):
     def custom_llm_provider(self) -> str:
         return "opencode_go"
 
+    def translates_prompt_cache_breakpoint(self, model: str) -> bool:
+        return "claude" in model.lower()
+
     def get_complete_url(
         self,
         api_base: str | None,
@@ -159,6 +162,7 @@ class OpenCodeGoMessagesChatConfig(_GoReportedCostMixin, AnthropicConfig):
 
 class OpenCodeGoGeminiChatConfig(_GoReportedCostMixin, GoogleAIStudioGeminiConfig):
     go_usage_key: str = "usageMetadata"
+    _route: ClassVar[str] = "opencode_go"
 
     @property
     def supports_stream_param_in_request_body(self) -> bool:

@@ -726,6 +726,33 @@ async def test_create_dispatches_each_row_with_the_key_team_and_project_tags_as_
     assert inherited == [("key-tag", "shared", "&region:eu", "project-tag")] * 2
 
 
+@pytest.mark.parametrize(
+    ("key_metadata", "team_metadata", "stored"),
+    [
+        ({"store_prompts_in_spend_logs": False}, {}, False),
+        ({}, {"store_prompts_in_spend_logs": False}, False),
+        ({}, {}, True),
+    ],
+)
+async def test_create_dispatches_rows_that_keep_the_key_and_team_prompt_storage_policy(
+    monkeypatch: pytest.MonkeyPatch, key_metadata: dict[str, object], team_metadata: dict[str, object], stored: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import should_store_prompts_and_responses_in_spend_logs
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    harness: Final = make_runner(
+        user=UserAPIKeyAuth(api_key="sk-batch-key", metadata=key_metadata, team_metadata=team_metadata)
+    )
+    await harness.create_and_finish()
+
+    decisions: Final = [
+        should_store_prompts_and_responses_in_spend_logs(call.kwargs["metadata"])
+        for call in harness.router.acompletion.await_args_list
+    ]
+    assert decisions == [stored] * 2
+
+
 async def test_create_dispatches_cli_session_rows_under_the_per_user_alias_not_the_login_token() -> None:
     session = UserAPIKeyAuth(
         api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",

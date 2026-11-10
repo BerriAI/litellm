@@ -2,6 +2,7 @@ import { observeResponseHeaders, type ResponseHeadersListener } from "@/lib/http
 import openai from "openai";
 import { getGatewayBaseUrl } from "@/components/networking";
 import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 
 export async function makeOpenAIAudioTranscriptionRequest(
@@ -50,7 +51,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
     // The response is a transcription object with a text field
     if (response && response.text) {
       updateUI(response.text, selectedModel);
-      toast.success(`Audio transcribed successfully`);
+      toast.success(i18n.t("playground.llmCalls.audioTranscriptions.success"));
     } else {
       throw new Error("No transcription text in response");
     }
@@ -59,7 +60,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
 
     if (signal?.aborted) {
     } else {
-      let errorMessage = "Failed to transcribe audio";
+      let errorMessage = i18n.t("playground.llmCalls.audioTranscriptions.defaultError");
 
       if (error?.error?.message) {
         errorMessage = error.error.message;
@@ -67,7 +68,7 @@ export async function makeOpenAIAudioTranscriptionRequest(
         errorMessage = error.message;
       }
 
-      toast.fromError(`Audio transcription failed: ${errorMessage}`);
+      toast.fromError(i18n.t("playground.llmCalls.audioTranscriptions.failed", { message: String(errorMessage) }));
     }
     throw error; // Re-throw to allow the caller to handle the error
   }

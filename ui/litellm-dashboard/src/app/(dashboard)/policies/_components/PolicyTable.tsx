@@ -6,16 +6,18 @@ import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { DataTable } from "@/components/shared/DataTable";
+import i18n from "@/i18n/i18n";
 import { Policy } from "@/components/policies/types";
 
 import { getPolicyTableColumns, PolicyRow } from "./PolicyTableColumns";
 
 /** One row per DB policy name plus one row per config policy, so a config policy never hides same-named DB versions; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
 function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
+  const unnamed = i18n.t("policies.policyTable.unnamed");
   const dbPolicies = policies.filter((policy) => policy.definition_location !== "config");
-  const names = Array.from(new Set(dbPolicies.map((policy) => policy.policy_name || "(unnamed)")));
+  const names = Array.from(new Set(dbPolicies.map((policy) => policy.policy_name || unnamed)));
   const dbRows = names.map((policyName) => {
-    const versions = dbPolicies.filter((policy) => (policy.policy_name || "(unnamed)") === policyName);
+    const versions = dbPolicies.filter((policy) => (policy.policy_name || unnamed) === policyName);
     const primary =
       versions.find((version) => version.version_status === "production") ??
       [...versions].sort((a, b) => (b.version_number ?? 0) - (a.version_number ?? 0))[0];
@@ -23,7 +25,7 @@ function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
   });
   const configRows = policies
     .filter((policy) => policy.definition_location === "config")
-    .map((policy) => ({ policy_name: policy.policy_name || "(unnamed)", primaryPolicy: policy, versionCount: 1 }));
+    .map((policy) => ({ policy_name: policy.policy_name || unnamed, primaryPolicy: policy, versionCount: 1 }));
   return [...dbRows, ...configRows];
 }
 

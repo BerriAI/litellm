@@ -1,14 +1,14 @@
 "use client";
 
+import type { ParseKeys, TFunction } from "i18next";
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 import { useBudgetOptions } from "@/app/(dashboard)/hooks/budgets/useBudgetOptions";
 import type { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 
-export const END_USER_BUDGET_HINT =
-  "Reusable budget applied to every new customer (end user) this key creates via `user` or x-litellm-end-user-id. " +
-  "Overrides the proxy-wide max_end_user_budget_id; customers that already have their own budget keep it.";
+export const END_USER_BUDGET_HINT: ParseKeys = "keyTeamHelpers.endUserBudgetSelect.hint";
 
 interface EndUserBudgetSelectProps {
   readonly id?: string;
@@ -18,10 +18,12 @@ interface EndUserBudgetSelectProps {
   readonly canEdit: boolean;
 }
 
-const budgetSublabel = (budget: budgetItem): string | undefined => {
+const budgetSublabel = (budget: budgetItem, t: TFunction): string | undefined => {
   const parts = [
     budget.max_budget != null ? `$${budget.max_budget}` : null,
-    budget.budget_duration ? `resets ${budget.budget_duration}` : null,
+    budget.budget_duration
+      ? t("keyTeamHelpers.endUserBudgetSelect.resets", { duration: budget.budget_duration })
+      : null,
   ].filter((part): part is string => part !== null);
   return parts.length > 0 ? parts.join(", ") : undefined;
 };
@@ -33,19 +35,20 @@ export const EndUserBudgetSelect: React.FC<EndUserBudgetSelectProps> = ({
   onChange,
   canEdit,
 }) => {
+  const { t } = useTranslation();
   const { data: budgets } = useBudgetOptions(accessToken, canEdit);
   const options: SearchSelectOption[] = (budgets ?? []).map((budget) => ({
     label: budget.budget_id,
     value: budget.budget_id,
-    sublabel: budgetSublabel(budget),
+    sublabel: budgetSublabel(budget, t),
   }));
 
   return (
     <SearchSelect
       inputId={id}
-      aria-label="Default Customer Budget"
-      placeholder="No default budget"
-      emptyText="No budgets found. Create one under Budgets."
+      aria-label={t("keyTeamHelpers.endUserBudgetSelect.ariaLabel")}
+      placeholder={t("keyTeamHelpers.endUserBudgetSelect.placeholder")}
+      emptyText={t("keyTeamHelpers.endUserBudgetSelect.empty")}
       options={options}
       value={value}
       onValueChange={onChange}

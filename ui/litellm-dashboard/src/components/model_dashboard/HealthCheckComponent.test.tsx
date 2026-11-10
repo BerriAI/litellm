@@ -3,7 +3,7 @@ import type { PaginationState } from "@tanstack/react-table";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import HealthCheckComponent from "./HealthCheckComponent";
 
@@ -64,6 +64,28 @@ const renderHealthCheck = async (props: HarnessProps) => {
     await new Promise((r) => setTimeout(r, 0));
   });
 };
+
+const numericDateTime: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "numeric",
+  minute: "numeric",
+  second: "numeric",
+};
+const germanDateTime = new Intl.DateTimeFormat("de-DE", numericDateTime);
+
+const germanLocaleString = function (this: Date): string {
+  return germanDateTime.format(this);
+};
+
+const rowIds = (): string[] =>
+  screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => row.querySelector('[data-testid^="datatable-select-row-"]'))
+    .filter((node): node is Element => node !== null)
+    .map((node) => (node.getAttribute("data-testid") ?? "").replace("datatable-select-row-", ""));
 
 describe("HealthCheckComponent", () => {
   beforeEach(() => {
@@ -250,6 +272,91 @@ describe("HealthCheckComponent", () => {
 
       expect(screen.queryByText("healthy")).not.toBeInTheDocument();
       expect(screen.getByText("none")).toBeInTheDocument();
+    });
+
+    it("does not count a failed stored check as the last success", async () => {
+      const checkedAt = "2024-01-15T10:05:00Z";
+      mockLatestHealthChecksCall.mockResolvedValue({
+        latest_health_checks: {
+          "id-alpha": { status: "unhealthy", checked_at: checkedAt, error_message: "Connection failed" },
+        },
+      });
+
+      await renderHealthCheck({ modelData: { data: [makeModel("id-alpha")] }, allModelsOnProxy: ["id-alpha"] });
+
+      expect(screen.getAllByText(new Date(checkedAt).toLocaleString())).toHaveLength(1);
+    });
+  });
+
+  describe("check times on a German-locale browser", () => {
+    const twoModels = { data: [makeModel("id-alpha", "alpha"), makeModel("id-beta", "beta")] };
+    const bothIds = ["id-alpha", "id-beta"];
+    const isoLikeLocaleString = vi.mocked(Date.prototype.toLocaleString).getMockImplementation();
+
+    beforeEach(() => {
+      vi.mocked(Date.prototype.toLocaleString).mockImplementation(germanLocaleString);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      if (isoLikeLocaleString) {
+        vi.mocked(Date.prototype.toLocaleString).mockImplementation(isoLikeLocaleString);
+      }
+    });
+
+    it("sorts stored checks most-recent-first and shows them in the browser's format", async () => {
+      const march = "2024-03-02T10:00:00Z";
+      const june = "2024-06-01T10:00:00Z";
+      mockLatestHealthChecksCall.mockResolvedValue({
+        latest_health_checks: {
+          "id-alpha": { status: "healthy", checked_at: march, error_message: null },
+          "id-beta": { status: "healthy", checked_at: june, error_message: null },
+        },
+      });
+      await renderHealthCheck({ modelData: twoModels, allModelsOnProxy: bothIds, rowCount: 2 });
+      const user = userEvent.setup();
+
+      expect(await screen.findAllByText(germanLocaleString.call(new Date(june)))).toHaveLength(2);
+
+      await user.click(screen.getByTestId("sort-header-last_check"));
+
+      expect(rowIds()).toEqual(["id-beta", "id-alpha"]);
+    });
+
+    const runBetaAlone = {
+      "a single-model check": async (user: ReturnType<typeof userEvent.setup>) => {
+        await user.click(screen.getAllByTestId("run-health-check-btn")[1]);
+      },
+      "a bulk run of the selected model": async (user: ReturnType<typeof userEvent.setup>) => {
+        await user.click(screen.getByTestId("datatable-select-row-id-beta"));
+        await user.click(screen.getByTestId("run-health-checks"));
+      },
+    };
+
+    describe.each(Object.entries(runBetaAlone))("after %s", (_trigger, runCheck) => {
+      it.each([
+        ["succeeds", () => mockIndividualModelHealthCheckCall.mockResolvedValue({ unhealthy_count: 0 })],
+        ["fails", () => mockIndividualModelHealthCheckCall.mockRejectedValue(new Error("upstream down"))],
+      ])("that %s, sorts the fresh check above an older stored one", async (_outcome, arrangeCheck) => {
+        const now = new Date("2026-01-20T12:00:00Z");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(now);
+        arrangeCheck();
+        mockLatestHealthChecksCall.mockResolvedValue({
+          latest_health_checks: {
+            "id-alpha": { status: "healthy", checked_at: "2024-06-01T10:00:00Z", error_message: null },
+          },
+        });
+        await renderHealthCheck({ modelData: twoModels, allModelsOnProxy: bothIds, rowCount: 2 });
+        const user = userEvent.setup();
+
+        await runCheck(user);
+        expect((await screen.findAllByText(germanLocaleString.call(now))).length).toBeGreaterThan(0);
+
+        await user.click(screen.getByTestId("sort-header-last_check"));
+
+        expect(rowIds()).toEqual(["id-beta", "id-alpha"]);
+      });
     });
   });
 });

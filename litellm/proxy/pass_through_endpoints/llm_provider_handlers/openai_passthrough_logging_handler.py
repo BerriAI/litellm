@@ -131,6 +131,7 @@ def _responses_sub_route(path: str) -> tuple[str, ...] | None:
 
 
 _STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _AgentConfig(BaseModel):
@@ -550,8 +551,11 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             ) = None
             handler_instance: Final = OpenAIPassthroughLoggingHandler()
 
+            logged_custom_llm_provider: Final = _DECODED_JSON.validate_python(
+                logging_obj.model_call_details.get("custom_llm_provider", "openai")
+            )
             custom_llm_provider: Final = TypeAdapter(str).validate_python(
-                kwargs.get("custom_llm_provider", logging_obj.model_call_details.get("custom_llm_provider", "openai"))
+                kwargs.get("custom_llm_provider", logged_custom_llm_provider)
             )
 
             if is_chat_completions:

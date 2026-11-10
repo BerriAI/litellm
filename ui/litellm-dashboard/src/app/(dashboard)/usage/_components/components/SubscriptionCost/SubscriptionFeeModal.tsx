@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { formatDate } from "@/components/networking";
 import { FormField } from "@/components/shared/form/FormField";
@@ -15,20 +16,25 @@ import {
 } from "@/components/ui/dialog";
 import { FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import i18n from "@/i18n/i18n";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import type { SubscriptionAccountUsage, SubscriptionFeeFormValues } from "./types";
 
 const feeShape = {
   monthly_fee: z
     .string()
-    .min(1, "Enter a monthly fee")
-    .refine((value) => Number(value) > 0, "Monthly fee must be greater than 0"),
+    .min(1, { error: () => i18n.t("usage.subscriptionCost.feeModal.errors.feeRequired") })
+    .refine((value) => Number(value) > 0, {
+      error: () => i18n.t("usage.subscriptionCost.feeModal.errors.feePositive"),
+    }),
   currency: z
     .string()
     .trim()
     .toUpperCase()
-    .regex(/^[A-Z]{3}$/, "Currency must be a three-letter code"),
-  billing_period_start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a billing period start date"),
+    .regex(/^[A-Z]{3}$/, { error: () => i18n.t("usage.subscriptionCost.feeModal.errors.currencyCode") }),
+  billing_period_start: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, { error: () => i18n.t("usage.subscriptionCost.feeModal.errors.periodStart") }),
   label: z.string().trim(),
 };
 
@@ -51,6 +57,7 @@ interface SubscriptionFeeModalProps {
 }
 
 const SubscriptionFeeModal: React.FC<SubscriptionFeeModalProps> = ({ visible, account, onCancel, onSubmit }) => {
+  const { t } = useTranslation();
   const form = useZodForm(feeSchema, { defaultValues: formInputFor(account) });
   const { reset } = form;
 
@@ -77,32 +84,53 @@ const SubscriptionFeeModal: React.FC<SubscriptionFeeModalProps> = ({ visible, ac
     <Dialog open={visible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
-          <DialogTitle>{account?.fee ? "Edit monthly fee" : "Set monthly fee"}</DialogTitle>
+          <DialogTitle>
+            {account?.fee
+              ? t("usage.subscriptionCost.feeModal.editTitle")
+              : t("usage.subscriptionCost.feeModal.setTitle")}
+          </DialogTitle>
           <DialogDescription>
-            {account ? `${account.custom_llm_provider} account ${account.account_id ?? ""}` : ""}
+            {account
+              ? t("usage.subscriptionCost.feeModal.description", {
+                  provider: account.custom_llm_provider,
+                  accountId: account.account_id ?? "",
+                })
+              : ""}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={form.handleSubmit(handleFinish)} noValidate>
           <FieldGroup>
-            <FormField control={form.control} name="monthly_fee" label="Monthly fee">
+            <FormField
+              control={form.control}
+              name="monthly_fee"
+              label={t("usage.subscriptionCost.feeModal.fields.monthlyFee")}
+            >
               {({ ref, ...field }) => <Input {...field} ref={ref} type="number" step={0.01} min={0.01} />}
             </FormField>
-            <FormField control={form.control} name="currency" label="Currency">
+            <FormField
+              control={form.control}
+              name="currency"
+              label={t("usage.subscriptionCost.feeModal.fields.currency")}
+            >
               {({ ref, ...field }) => <Input {...field} ref={ref} maxLength={3} />}
             </FormField>
-            <FormField control={form.control} name="billing_period_start" label="Billing period start">
+            <FormField
+              control={form.control}
+              name="billing_period_start"
+              label={t("usage.subscriptionCost.feeModal.fields.billingPeriodStart")}
+            >
               {({ ref, ...field }) => <Input {...field} ref={ref} type="date" />}
             </FormField>
-            <FormField control={form.control} name="label" label="Label (optional)">
+            <FormField control={form.control} name="label" label={t("usage.subscriptionCost.feeModal.fields.label")}>
               {({ ref, ...field }) => <Input {...field} ref={ref} />}
             </FormField>
           </FieldGroup>
           <DialogFooter className="mt-4">
             <Button type="button" variant="outline" onClick={handleCancel}>
-              Cancel
+              {t("usage.subscriptionCost.feeModal.cancel")}
             </Button>
             <Button type="submit" disabled={form.formState.isSubmitting}>
-              Save
+              {t("usage.subscriptionCost.feeModal.save")}
             </Button>
           </DialogFooter>
         </form>

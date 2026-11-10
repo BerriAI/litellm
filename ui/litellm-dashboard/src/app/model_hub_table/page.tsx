@@ -1,36 +1,27 @@
 "use client";
-import React, { Suspense, useEffect, useState } from "react";
+
 import { useSearchParams } from "next/navigation";
-import ModelHubTable from "@/components/AIHub/ModelHubTable";
+import { Suspense } from "react";
+import { useTranslation } from "react-i18next";
 
-function PublicModelHubTableContent() {
-  const searchParams = useSearchParams()!;
-  const key = searchParams.get("key");
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+import PublicAiHub from "@/components/publicModelHub/PublicAiHub";
 
-  useEffect(() => {
-    if (!key) {
-      return;
-    }
-    setAccessToken(key);
-  }, [key]);
-
-  return (
-    <ModelHubTable
-      accessToken={accessToken}
-      publicPage={true}
-      premiumUser={false}
-      userRole={null}
-      canOpenPlayground={false}
-      canAddModels={false}
-    />
-  );
+function PublicAiHubPage() {
+  const accessToken = useSearchParams()?.get("key") ?? null;
+  return <PublicAiHub accessToken={accessToken} />;
 }
 
 export default function PublicModelHubTable() {
+  const { t } = useTranslation();
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
-      <PublicModelHubTableContent />
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center">
+          {t("publicModelHub.modelHubTablePage.loading")}
+        </div>
+      }
+    >
+      <PublicAiHubPage />
     </Suspense>
   );
 }

@@ -9,6 +9,7 @@ import httpx
 from httpx._types import FileContent, FileTypes, RequestFiles
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
@@ -66,9 +67,16 @@ class OpenAIVideoConfig(BaseVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """No mapping applied since inputs are in OpenAI spec already"""
-        return dict(video_create_optional_params)
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "openai",
+            drop_params,
+            frozenset({"seed", "duration", "aspect_ratio", "generate_audio"}),
+        )
+        return {key: value for key, value in video_create_optional_params.items() if key not in unsupported}
 
     def validate_environment(
         self,

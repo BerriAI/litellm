@@ -29,11 +29,11 @@ describe("en.json", () => {
     expect(entries.filter(([, value]) => typeof value !== "string" || value === "").map(([key]) => key)).toEqual([]);
   });
 
-  it("only uses placeholders named like identifiers", () => {
+  it("only uses placeholders named like identifiers, with an optional lowercase format", () => {
     expect(entries.some(([, value]) => String(value).includes("{{"))).toBe(true);
     const malformed = entries.filter(([, value]) => {
       const text = String(value);
-      const wellFormed = text.match(/\{\{[A-Za-z_][A-Za-z0-9_]*\}\}/g)?.length ?? 0;
+      const wellFormed = text.match(/\{\{[A-Za-z_][A-Za-z0-9_]*(?:, [a-z]+)?\}\}/g)?.length ?? 0;
       return text.split("{{").length - 1 !== wellFormed || text.split("}}").length - 1 !== wellFormed;
     });
     expect(malformed.map(([key]) => key)).toEqual([]);

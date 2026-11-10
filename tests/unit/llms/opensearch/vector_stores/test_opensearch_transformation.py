@@ -4,6 +4,7 @@ import re
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -12,7 +13,7 @@ import openai
 import pytest
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
-from botocore.credentials import Credentials
+from botocore.credentials import Credentials, RefreshableCredentials
 from botocore.exceptions import CredentialRetrievalError
 
 import litellm
@@ -20,6 +21,12 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.opensearch.vector_stores.index_passthrough import (
+    IndexPath,
+    IndexRefusal,
+    index_operation,
+    prepare_index_request,
+)
 from litellm.llms.opensearch.vector_stores.transformation import OpenSearchVectorStoreConfig
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.router import GenericLiteLLMParams
@@ -286,6 +293,17 @@ _AMBIENT_AWS_ENV: Final = (
 )
 
 
+
+def _isolate_from_ambient_aws(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    for name in _AMBIENT_AWS_ENV:
+        monkeypatch.delenv(name, raising=False)
+    for name in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "BOTO_CONFIG"):
+        config_file: Path = tmp_path / name
+        config_file.write_text("")
+        monkeypatch.setenv(name, str(config_file))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize(
     "credentials,env",
@@ -313,13 +331,7 @@ async def test_missing_aws_credentials_are_a_401_before_embedding_or_any_request
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    for name in _AMBIENT_AWS_ENV:
-        monkeypatch.delenv(name, raising=False)
-    for name in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "BOTO_CONFIG"):
-        config_file: Path = tmp_path / name
-        config_file.write_text("")
-        monkeypatch.setenv(name, str(config_file))
-    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    _isolate_from_ambient_aws(monkeypatch, tmp_path)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     executor: Final = RecordingEmbeddingExecutor()
@@ -351,6 +363,107 @@ def test_failing_credential_source_is_a_401_that_keeps_its_output_out_of_the_rep
 
     assert error.value.status_code == 401
     assert CREDENTIAL_SOURCE_OUTPUT not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "sign",
+    [
+        pytest.param(
+            lambda config: config.validate_environment({}, GenericLiteLLMParams(api_base=SERVERLESS)),
+            id="vector-store-search",
+        ),
+        pytest.param(
+            lambda config: config.sign_http_request(
+                "GET", f"{SERVERLESS}/docs/_mapping", b"", "application/json", {"api_base": SERVERLESS}
+            ),
+            id="index-pass-through",
+        ),
+    ],
+)
+def test_a_missing_container_credentials_token_file_is_a_500(
+    sign: Callable[[OpenSearchVectorStoreConfig], object], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _isolate_from_ambient_aws(monkeypatch, tmp_path)
+    monkeypatch.setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", "http://127.0.0.1:9/v1/credentials")
+    monkeypatch.setenv("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", str(tmp_path / "missing-token"))
+
+    with pytest.raises(litellm.InternalServerError, match="could not load or refresh the AWS credentials") as error:
+        sign(OpenSearchVectorStoreConfig())
+
+    assert error.value.status_code == 500
+
+
+EXPIRED_METADATA: Final = MappingProxyType(
+    {"access_key": "AKIDEXAMPLE", "secret_key": "secret", "token": "token", "expiry_time": "2020-01-01T00:00:00Z"}
+)
+
+
+def _refresh_returning_expired_credentials() -> dict[str, str]:
+    return dict(EXPIRED_METADATA)
+
+
+def _refresh_after_the_token_file_is_gone() -> dict[str, str]:
+    raise CredentialRetrievalError(provider="container-role", error_msg=CREDENTIAL_SOURCE_OUTPUT)
+
+
+class _CredentialSourceThatCannotRefresh(BaseAWSLLM):
+    def __init__(self, refresh: Callable[[], dict[str, str]]) -> None:
+        super().__init__()
+        self._refresh = refresh
+
+    def resolve_credentials(self, auth_params: AwsAuthParams, aws_region_name: str | None) -> Credentials:
+        return RefreshableCredentials.create_from_metadata(
+            metadata=dict(EXPIRED_METADATA), refresh_using=self._refresh, method="container-role"
+        )
+
+
+@pytest.mark.parametrize(
+    "refresh", [_refresh_returning_expired_credentials, _refresh_after_the_token_file_is_gone]
+)
+@pytest.mark.parametrize(
+    "sign",
+    [
+        pytest.param(
+            lambda config: config.validate_environment({}, GenericLiteLLMParams(api_base=SERVERLESS)),
+            id="vector-store-search",
+        ),
+        pytest.param(
+            lambda config: config.sign_http_request(
+                "GET", f"{SERVERLESS}/docs/_mapping", b"", "application/json", {"api_base": SERVERLESS}
+            ),
+            id="index-pass-through",
+        ),
+    ],
+)
+def test_credentials_that_fail_to_refresh_at_signing_are_a_500(
+    sign: Callable[[OpenSearchVectorStoreConfig], object], refresh: Callable[[], dict[str, str]]
+) -> None:
+    config: Final = OpenSearchVectorStoreConfig(aws=_CredentialSourceThatCannotRefresh(refresh))
+
+    with pytest.raises(litellm.InternalServerError, match="could not load or refresh the AWS credentials") as error:
+        sign(config)
+
+    assert error.value.status_code == 500
+    assert CREDENTIAL_SOURCE_OUTPUT not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_the_index_pass_through_answers_500_when_credentials_fail_to_refresh() -> None:
+    refused: Final = await prepare_index_request(
+        config=OpenSearchVectorStoreConfig(aws=_CredentialSourceThatCannotRefresh(_refresh_after_the_token_file_is_gone)),
+        method="GET",
+        path=IndexPath(index_name="docs", api=("_mapping",)),
+        operation=index_operation("GET", ("_mapping",)),
+        provider_index="prod-docs",
+        content_type=None,
+        query=(),
+        body=b"",
+        store_params={"api_base": SERVERLESS},
+        can_read=True,
+    )
+
+    assert isinstance(refused, IndexRefusal)
+    assert (refused.status_code, CREDENTIAL_SOURCE_OUTPUT in refused.message) == (500, False)
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

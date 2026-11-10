@@ -87,6 +87,10 @@ IGNORE_FUNCTIONS = [
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
     "_merge_session_fields",  # max depth set (_SESSION_MERGE_MAX_DEPTH); deeper mappings are replaced wholesale by the later session.update.
+    "_json",  # router_rust index views: max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by raising ValueError at the cap.
+    "to_wire",  # router_rust model info: bounded by the nesting depth of a stored deployment or cost-map entry (finite JSON trees: pydantic refuses a cycle when it dumps a deployment).
+    "from_wire",  # router_rust model info: walks only what router-core merged from to_wire's output, so it never goes deeper than to_wire did.
+    "_valid_frontmatter_node",  # max depth 32, manifest size capped at 1 MiB, and YAML aliases rejected before traversal.
 ]
 
 

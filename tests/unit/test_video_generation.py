@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.videos.main import VideoObject, VideoResponse
 from litellm.videos import main as videos_main
 from litellm.videos.main import (
@@ -2232,7 +2233,7 @@ def video_proxy_test_client():
 
     app = FastAPI()
     app.include_router(video_router)
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-9876")
     return TestClient(app)
 
 

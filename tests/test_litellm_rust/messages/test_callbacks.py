@@ -10,19 +10,18 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.integrations.argilla import ArgillaLogger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.utils import ModelResponse, StandardLoggingPayload
-from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, call
+from tests.test_litellm_rust.messages.data import BAD_REQUEST, MESSAGES_RESPONSE, RATE_LIMITED, REQUEST, call
 from tests.test_litellm_rust.support.callback_recorder import HookRecorder, RecordingLogger, request_body
-from tests.test_litellm_rust.support.gaps import gap
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
 from tests.test_litellm_rust.support.results import response_id, with_id
-from tests.test_litellm_rust.support.routing import assert_served_natively
+from tests.test_litellm_rust.support.routing import CALL_ID, assert_served_natively
 
 pytestmark = pytest.mark.requires_rust_extension
 
-SYNC_HANDLERS_ON_ASYNC_CALLS: Final = gap("native async calls also run the sync success and failure handlers")
 _OBJECT: Final = TypeAdapter(dict[str, object])
 _HEADERS: Final = TypeAdapter(dict[str, str])
 
@@ -113,6 +112,33 @@ async def test_pre_api_call_sees_the_wire_body(server: RecordingServer) -> None:
 
 
 @pytest.mark.asyncio
+async def test_pre_api_call_of_a_retried_call_keeps_the_provider_out_of_the_litellm_params(
+    server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+    logging_obj: Final = Logging(
+        model=REQUEST["model"],
+        messages=[],
+        stream=False,
+        start_time=datetime.now(),
+        call_type="anthropic_messages",
+        litellm_call_id=CALL_ID,
+        function_id=CALL_ID,
+        dynamic_input_callbacks=[recorder],
+    )
+
+    await call(server, litellm_logging_obj=logging_obj)
+    await call(server, litellm_logging_obj=logging_obj)
+
+    pre_calls: Final = recorder.wait_for("log_pre_api_call", count=2)
+
+    assert_served_natively(server, count=2)
+    for pre_call in pre_calls:
+        assert isinstance(pre_call.kwargs, dict)
+        assert "custom_llm_provider" not in _OBJECT.validate_python(pre_call.kwargs["litellm_params"])
+
+
+@pytest.mark.asyncio
 async def test_pre_api_call_edits_reach_the_provider(server: RecordingServer) -> None:
     class Edit(CustomLogger):
         def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
@@ -140,6 +166,47 @@ async def test_pre_api_call_sees_the_shaped_optional_params(server: RecordingSer
     assert isinstance(optional_params, dict)
     assert not {"model", "messages", "temperature", "top_k"} & optional_params.keys()
     assert optional_params["max_tokens"] == sent["max_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_success_event_logs_the_requested_reasoning_effort_not_its_translation(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [recorder]):
+        response: Final = await call(server, reasoning_effort="low")
+        success: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert_served_natively(server, response)
+    sent: Final = server.requests[0].body
+    assert isinstance(sent, dict)
+    assert sent["output_config"] == {"effort": "low"}
+    assert isinstance(success[0].kwargs, dict)
+    logged: Final = _OBJECT.validate_python(success[0].kwargs["standard_logging_object"])
+    assert logged["model_parameters"] == {"max_tokens": 64, "stream": False, "reasoning_effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_success_event_logs_the_sent_messages_and_the_callers_params(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+    tool_use: Final = {"type": "tool_use", "id": "functions.Bash:0", "name": "bash", "input": {"command": "ls"}}
+    messages: Final = [
+        {"role": "user", "content": "List /tmp"},
+        {"role": "assistant", "content": [{"type": "text", "text": " \n"}, tool_use]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "a"}]},
+    ]
+
+    with rebound(litellm, "callbacks", [recorder]):
+        response: Final = await call(server, messages=messages, temperature=1)
+        success: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert_served_natively(server, response)
+    sent: Final = server.requests[0].body
+    assert isinstance(sent, dict)
+    assert sent["messages"][1]["content"] == [{**tool_use, "id": "functions_Bash_0"}]
+    assert isinstance(success[0].kwargs, dict)
+    logged: Final = _OBJECT.validate_python(success[0].kwargs["standard_logging_object"])
+    assert logged["messages"] == sent["messages"]
+    assert repr(_OBJECT.validate_python(logged["model_parameters"])["temperature"]) == "1"
 
 
 @pytest.mark.asyncio
@@ -211,10 +278,27 @@ async def test_pre_call_deployment_rejection_logs_failure_without_provider_io(se
         failures: Final = await recorder.wait_for_async("async_log_failure_event")
 
     assert raised.value is rejection
-    assert server.requests == []
+    assert not server.requests
     assert len(failures) == 1
     assert _OBJECT.validate_python(failures[0].kwargs)["exception"] is raised.value
     assert not {"log_pre_api_call", "log_success_event", "async_log_success_event"} & set(recorder.names)
+
+
+@pytest.mark.asyncio
+async def test_non_string_header_is_a_bad_request_refused_before_the_provider_call(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [recorder]):
+        with pytest.raises(
+            litellm.BadRequestError, match=r"invalid extra_headers: header x-org must be a string, got int"
+        ) as raised:
+            await call(server, extra_headers={"x-org": 12345})
+        failures: Final = await recorder.wait_for_async("async_log_failure_event")
+
+    assert raised.value.status_code == 400
+    assert not server.requests
+    assert "log_pre_api_call" not in recorder.names
+    assert _OBJECT.validate_python(failures[0].kwargs)["exception"] is raised.value
 
 
 @pytest.mark.asyncio
@@ -341,8 +425,8 @@ async def test_a_failing_logger_does_not_fail_the_call(server: RecordingServer) 
         pytest.param("input", False, False, 1, id="global-input"),
         pytest.param("success", True, False, 1, id="global-async-success"),
         pytest.param("success", True, True, 1, id="request-async-success"),
-        pytest.param("success", False, False, 0, id="global-sync-success", marks=SYNC_HANDLERS_ON_ASYNC_CALLS),
-        pytest.param("success", False, True, 0, id="request-sync-success", marks=SYNC_HANDLERS_ON_ASYNC_CALLS),
+        pytest.param("success", False, False, 0, id="global-sync-success"),
+        pytest.param("success", False, True, 0, id="request-sync-success"),
         pytest.param("failure", True, False, 1, id="global-async-failure"),
         pytest.param("failure", False, False, 1, id="global-sync-failure"),
         pytest.param("failure", False, True, 1, id="request-sync-failure"),
@@ -384,12 +468,11 @@ async def test_pre_call_rule_rejects_before_provider_io(server: RecordingServer)
         checked.append(text)
         return False
 
-    with rebound(litellm, "pre_call_rules", [reject]):
-        with pytest.raises(litellm.APIResponseValidationError):
-            await call(server)
+    with rebound(litellm, "pre_call_rules", [reject]), pytest.raises(litellm.APIResponseValidationError):
+        await call(server)
 
     assert checked == ["Hello"]
-    assert server.requests == []
+    assert not server.requests
 
 
 @pytest.mark.asyncio
@@ -419,11 +502,11 @@ async def test_dataset_hook_returning_none_drops_the_record_from_the_success_sin
 
 
 @pytest.mark.asyncio
-async def test_sync_call_returns_the_provider_message(server: RecordingServer) -> None:
+async def test_sync_call_raises_like_python_without_logging(server: RecordingServer) -> None:
     recorder: Final = RecordingLogger()
 
-    response: Final = await call(server, asynchronous=False, callbacks=[recorder])
+    with pytest.raises(ValueError, match="anthropic_messages_handler is not implemented for sync calls"):
+        await call(server, asynchronous=False, callbacks=[recorder])
 
-    assert_served_natively(server, response)
-    assert response_id(response) == MESSAGES_RESPONSE["id"]
-    assert len(await recorder.wait_for_async("log_success_event")) == 1
+    assert not server.requests
+    assert not recorder.names

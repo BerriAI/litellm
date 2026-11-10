@@ -12,6 +12,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation, log_redis_failure
 from litellm.constants import DEFAULT_REDIS_SYNC_INTERVAL
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 
 
 class BaseRoutingStrategy(ABC):
@@ -116,7 +117,7 @@ class BaseRoutingStrategy(ABC):
             self._schedule_flush_after_retire()
         return result
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def periodic_sync_in_memory_spend_with_redis(self, default_sync_interval: float | None):
         """
         Handler that triggers sync_in_memory_spend_with_redis every DEFAULT_REDIS_SYNC_INTERVAL seconds
@@ -136,7 +137,7 @@ class BaseRoutingStrategy(ABC):
                     default_sync_interval
                 )  # Still wait DEFAULT_REDIS_SYNC_INTERVAL seconds on error before retrying
 
-    @with_service_target("router_usage")
+    @with_service_target(ROUTER_USAGE_TARGET)
     async def _push_in_memory_increments_to_redis(self):
         """
         How this works:

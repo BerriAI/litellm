@@ -137,7 +137,7 @@ describe("Chat Models page", () => {
     const user = userEvent.setup();
     renderWithProviders(<ChatModelsPage />);
 
-    expect(screen.getByRole("heading", { name: "Models", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Models", level: 2 })).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: /^research-private/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^image-studio/ })).toBeInTheDocument();
 

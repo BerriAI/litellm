@@ -56,8 +56,8 @@ If `db.useStackgresOperator` is used (not yet implemented):
 
 | `billingMetrics.enabled`    | Enable enterprise billable-request metering. Requires an enterprise license.                                                                                                                                                                  | `false`                   |
 | `billingMetrics.endpoint`   | Collector that the billable-request counter is pushed to.                                                                                                                                                                                    | `https://telemetry.litellm.ai` |
-| `billingMetrics.secretName` | Name of an existing Secret holding the mTLS client certificate, under the keys `tls.crt` and `tls.key`.                                                                                                                                       | `litellm-billing-metrics-mtls` |
-| `billingMetrics.caSecretName` | Name of an existing Secret holding a CA bundle under the key `ca.crt`. Only needed for a private or test collector whose server certificate is not on the public web PKI.                                                                    | `""`                      |
+| `billingMetrics.tokenUrl`   | Cognito OAuth2 client-credentials token endpoint.                                                                                                                                                                                               | `https://litellm-prod.auth.us-west-1.amazoncognito.com/oauth2/token` |
+| `billingMetrics.secretName` | Name of an existing Secret with `client-id` and `client-secret` keys.                                                                                                                                                                           | `litellm-billing-metrics` |
 | `billingMetrics.exportIntervalMs` | How often the counter is pushed, in milliseconds. The proxy defaults to `60000` when unset.                                                                                                                                             | `""`                      |
 
 #### Example `proxy_config` ConfigMap from values (default):
@@ -109,10 +109,10 @@ type: Opaque
 
 #### Enterprise billable-request metering
 
-Enterprise licenses meter billable requests by pushing a counter to LiteLLM's collector over mutual TLS. The chart does not create the client certificate; it mounts one you already hold, read-only, so the private key is never exposed through the environment. Create the Secret under the name the chart expects, then turn the block on:
+Enterprise licenses meter billable requests by pushing a counter to LiteLLM's collector with Cognito bearer authentication. Create a Secret with `client-id` and `client-secret` keys, then enable the chart values:
 
 ```
-kubectl create secret tls litellm-billing-metrics-mtls --cert=client.crt --key=client.key
+kubectl create secret generic litellm-billing-metrics --from-literal=client-id=... --from-literal=client-secret=...
 ```
 
 ```
@@ -120,7 +120,8 @@ billingMetrics:
   enabled: true
 ```
 
-Set `billingMetrics.caSecretName` only when the collector is a private or test one whose server certificate is not on the public web PKI; the production collector needs no CA override. The chart fails the render rather than deploying a proxy that silently never exports, so a missing `secretName` or an emptied `endpoint` surfaces at `helm install` time.
+The endpoint and token URL must use HTTPS. The chart requires both URLs and
+the Secret name when billing metrics are enabled
 
 ### Database Settings
 

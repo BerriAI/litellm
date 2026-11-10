@@ -520,6 +520,39 @@ def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
             model.model_validate(payload)
 
 
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", ["true", "false", 1, 0, None])
+def test_mcp_metadata_rejects_a_non_boolean_skip_tool_output_validation(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: object
+) -> None:
+    payload: Final = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"skip_tool_output_validation": value},
+    }
+
+    with pytest.raises(ValidationError):
+        request_model.model_validate(payload)
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [True, False])
+def test_mcp_metadata_accepts_a_boolean_skip_tool_output_validation(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: bool
+) -> None:
+    parsed: Final = request_model.model_validate(
+        {
+            "server_id": "test",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"skip_tool_output_validation": value},
+        }
+    )
+
+    assert parsed.mcp_info == {"skip_tool_output_validation": value}
+
+
 MCP_SERVER_REQUESTS = (NewMCPServerRequest, UpdateMCPServerRequest)
 STDIO_SERVER_FIELDS = {"server_id": "stdio-1", "transport": "stdio", "command": "python", "args": ["server.py"]}
 

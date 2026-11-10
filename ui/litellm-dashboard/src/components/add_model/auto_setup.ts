@@ -1,6 +1,8 @@
+import type { ParseKeys, TFunction } from "i18next";
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { isAutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
+import i18n from "@/i18n/i18n";
 import { type WildcardDeployment, type WildcardRoute, wildcardRoutes } from "@/lib/wildcard_routes";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
@@ -12,7 +14,11 @@ export const ROUTER_FAMILIES = {
   glm: "GLM",
   deepseek: "DeepSeek",
 } as const;
-export const ROUTER_GOALS = { cheapest: "Cheapest", balanced: "Balanced", quality: "Best quality" } as const;
+export const ROUTER_GOALS = {
+  cheapest: "addModel.autoSetup.goals.cheapest",
+  balanced: "addModel.autoSetup.goals.balanced",
+  quality: "addModel.autoSetup.goals.quality",
+} as const satisfies Record<string, ParseKeys>;
 export type RouterFamily = keyof typeof ROUTER_FAMILIES;
 export type RouterGoal = keyof typeof ROUTER_GOALS;
 export type FamilyPreference = RouterFamily | "auto";
@@ -219,6 +225,7 @@ export const recommendSolverPair = (
   models: readonly SolverModel[],
   goal: RouterGoal,
   family: FamilyPreference,
+  t: TFunction = i18n.t.bind(i18n),
 ): SolverPair | null => {
   const recognized = models.filter((model): model is RouterModel => model.family !== undefined);
   const latest = latestLines(recognized);
@@ -245,8 +252,8 @@ export const recommendSolverPair = (
   if (!chosen) return null;
   const mixed = chosen.everyday.family !== chosen.hard.family;
   const substituted = chosen.everyday.rank !== low || chosen.hard.rank !== high;
-  const mixedNotice = mixed ? "A complete pair is unavailable in one family. Using two model families." : null;
-  const substituteNotice = substituted ? "Using the closest available pair in this family." : null;
+  const mixedNotice = mixed ? t("addModel.autoSetup.mixedFamiliesNotice") : null;
+  const substituteNotice = substituted ? t("addModel.autoSetup.closestPairNotice") : null;
   return { ...chosen, notice: mixedNotice ?? substituteNotice };
 };
 
@@ -262,10 +269,10 @@ export const simpleSetupError = (
   everyday?: SolverModel,
   hard?: SolverModel,
 ): string | null => {
-  if (loading) return "Loading deployed models";
-  if (failed) return "Could not verify deployed models";
-  if (!everyday || !hard) return "Select two different deployed models";
-  if (everyday.name === hard.name) return "Select two different deployed models";
+  if (loading) return i18n.t("addModel.autoSetup.loadingModels");
+  if (failed) return i18n.t("addModel.autoSetup.couldNotVerifyModels");
+  if (!everyday || !hard) return i18n.t("addModel.autoSetup.selectTwoModels");
+  if (everyday.name === hard.name) return i18n.t("addModel.autoSetup.selectTwoModels");
   return null;
 };
 

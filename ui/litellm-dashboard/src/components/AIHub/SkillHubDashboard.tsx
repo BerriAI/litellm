@@ -1,14 +1,21 @@
 import React, { useMemo, useState } from "react";
-import { SortingState } from "@tanstack/react-table";
-import { Inbox, Search, X } from "lucide-react";
+import { Inbox } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import { DataTable } from "@/components/shared/DataTable";
 import { getSkillHubTableColumns } from "@/components/AIHub/SkillHubTableColumns";
-import SkillDetail from "@/components/claude_code_plugins/skill_detail";
-import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import SkillDetail, { legacySkillDetail } from "@/components/claude_code_plugins/skill_detail";
+import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
+import {
+  useSkillFilters,
+  matchesSkillFilters,
+  skillTags,
+  SKILL_SORT_FIELDS,
+} from "@/components/claude_code_plugins/skillCatalog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const ALL_DOMAINS = "__all_domains__";
+const DASHBOARD_SORT_FIELDS = [...SKILL_SORT_FIELDS, "category", "domain", "enabled"];
 
 interface SkillHubDashboardProps {
   skills: Plugin[];
@@ -20,16 +27,21 @@ interface SkillHubDashboardProps {
 }
 
 function SkillsEmptyState({ filtered }: { filtered: boolean }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <Inbox className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">{filtered ? "No matching skills" : "No skills yet"}</div>
+      <div className="text-sm font-medium text-foreground">
+        {filtered
+          ? t("aiHub.skillHubDashboard.emptyState.noMatchTitle")
+          : t("aiHub.skillHubDashboard.emptyState.noneTitle")}
+      </div>
       <div className="text-sm text-muted-foreground">
         {filtered
-          ? "Adjust the search or domain filter to see more skills."
-          : "Skills added here will appear for developers."}
+          ? t("aiHub.skillHubDashboard.emptyState.noMatchBody")
+          : t("aiHub.skillHubDashboard.emptyState.noneBody")}
       </div>
     </div>
   );
@@ -43,10 +55,10 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   publicPage = false,
   onPublishSuccess,
 }) => {
-  const [search, setSearch] = useState("");
+  const { t } = useTranslation();
+  const filters = useSkillFilters(DASHBOARD_SORT_FIELDS);
   const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
   const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
-  const [sorting, setSorting] = useState<SortingState>([{ id: "name", desc: false }]);
 
   // Derived stats
   const totalSkills = skills.length;
@@ -62,33 +74,27 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
     if (domainFilter) {
       result = result.filter((s) => (s.domain || "General") === domainFilter);
     }
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter(
-        (s) =>
-          s.name.toLowerCase().includes(q) ||
-          s.description?.toLowerCase().includes(q) ||
-          s.domain?.toLowerCase().includes(q) ||
-          s.namespace?.toLowerCase().includes(q) ||
-          s.keywords?.some((k) => k.toLowerCase().includes(q)),
-      );
-    }
-    return result;
-  }, [skills, search, domainFilter]);
+    return result.filter((skill) =>
+      matchesSkillFilters(skill, { search: filters.search, tag: filters.tag, scan: filters.scan }),
+    );
+  }, [skills, filters.search, filters.tag, filters.scan, domainFilter]);
 
   const columns = useMemo(() => getSkillHubTableColumns({ onSkillClick: setSelectedSkill }), []);
 
   const domainItems = useMemo(
-    () => [{ value: ALL_DOMAINS, label: "All Domains" }, ...domains.map((d) => ({ value: d, label: d }))],
-    [domains],
+    () => [
+      { value: ALL_DOMAINS, label: t("aiHub.skillHubDashboard.allDomains") },
+      ...domains.map((d) => ({ value: d, label: d })),
+    ],
+    [domains, t],
   );
 
-  const hasActiveFilter = search.trim().length > 0 || domainFilter != null;
+  const hasActiveFilter = filters.active || domainFilter != null;
 
   if (selectedSkill) {
     return (
       <SkillDetail
-        skill={selectedSkill}
+        skill={legacySkillDetail(selectedSkill)}
         onBack={() => setSelectedSkill(null)}
         isAdmin={isAdmin}
         accessToken={accessToken}
@@ -102,15 +108,15 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
       {/* Stats row */}
       <div className="grid grid-cols-3 gap-4">
         <div className="border border-border rounded-lg p-4">
-          <div className="text-xs text-muted-foreground mb-1">Total Skills</div>
+          <div className="text-xs text-muted-foreground mb-1">{t("aiHub.skillHubDashboard.totalSkills")}</div>
           <div className="text-2xl font-semibold text-foreground">{totalSkills}</div>
         </div>
         <div className="border border-border rounded-lg p-4">
-          <div className="text-xs text-muted-foreground mb-1">Namespaces</div>
+          <div className="text-xs text-muted-foreground mb-1">{t("aiHub.skillHubDashboard.namespaces")}</div>
           <div className="text-2xl font-semibold text-foreground">{namespaces.length}</div>
         </div>
         <div className="border border-border rounded-lg p-4">
-          <div className="text-xs text-muted-foreground mb-1">Domains</div>
+          <div className="text-xs text-muted-foreground mb-1">{t("aiHub.skillHubDashboard.domains")}</div>
           <div className="text-2xl font-semibold text-foreground">{domains.length}</div>
         </div>
       </div>
@@ -118,8 +124,10 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
       {/* Search + filters + table */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-foreground">All {publicPage ? "Public " : ""}Skills</h3>
-          <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-foreground">
+            {publicPage ? t("aiHub.skillHubDashboard.allPublicSkills") : t("aiHub.skillHubDashboard.allSkills")}
+          </h3>
+          <div className="flex flex-wrap items-center gap-2">
             <Select
               items={domainItems}
               value={domainFilter ?? ALL_DOMAINS}
@@ -136,28 +144,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
                 ))}
               </SelectContent>
             </Select>
-            <InputGroup className="w-[280px]">
-              <InputGroupAddon>
-                <Search className="size-4 text-muted-foreground" />
-              </InputGroupAddon>
-              <InputGroupInput
-                placeholder="Search by name, namespace, or tag…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              {search !== "" && (
-                <InputGroupAddon align="inline-end">
-                  <InputGroupButton
-                    size="icon-xs"
-                    variant="ghost"
-                    aria-label="Clear search"
-                    onClick={() => setSearch("")}
-                  >
-                    <X className="size-3.5" />
-                  </InputGroupButton>
-                </InputGroupAddon>
-              )}
-            </InputGroup>
+            <SkillFilters {...filters} tags={skillTags(skills)} />
           </div>
         </div>
         <DataTable
@@ -166,16 +153,16 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           columns={columns}
           getRowId={(skill, index) => skill.id || String(index)}
           sortingMode="client"
-          sorting={sorting}
-          onSortingChange={setSorting}
+          sorting={filters.sorting}
+          onSortingChange={filters.onSortingChange}
           isLoading={isLoading}
-          loadingMessage="Loading skills…"
+          loadingMessage={t("aiHub.skillHubDashboard.loading")}
           noDataMessage={<SkillsEmptyState filtered={hasActiveFilter} />}
           size="compact"
         />
         <div className="mt-3 text-center">
           <p className="text-sm text-muted-foreground">
-            Showing {filteredSkills.length} of {totalSkills} skill{totalSkills !== 1 ? "s" : ""}
+            {t("aiHub.skillHubDashboard.showing", { shown: filteredSkills.length, count: totalSkills })}
           </p>
         </div>
       </div>

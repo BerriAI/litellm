@@ -38,6 +38,7 @@ from litellm.proxy.hooks.rate_limiter_utils import (
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
+from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET, CounterIncrement, RateLimitCounter, RateLimitScope
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
@@ -102,8 +103,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     async def _get_saturation_value_from_cache(
         self,
-        counter_key: str,
-    ) -> str | None:
+        counter: RateLimitCounter,
+    ) -> int | float | str | None:
         """
         Get saturation value with configurable local cache TTL.
 
@@ -111,19 +112,15 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         TTL is configurable via litellm.priority_reservation_settings.saturation_check_cache_ttl
 
         Args:
-            counter_key: The cache key for the saturation counter
+            counter: The saturation counter
 
         Returns:
-            Counter value as string, or None if not found
+            Counter value, or None if not found
         """
-        local_cache_ttl: Final = self._get_saturation_check_cache_ttl()
-
-        return await self.internal_usage_cache.async_get_cache(
-            key=counter_key,
-            litellm_parent_otel_span=None,
-            local_only=False,
-            ttl=local_cache_ttl,
+        value: Final = await self.v3_limiter.rate_limits.get(
+            counter, backfill_ttl=self._get_saturation_check_cache_ttl()
         )
+        return None if isinstance(value, dict) else value
 
     def _get_priority_weight(self, priority: str | None, model_info: ModelGroupInfo | None = None) -> float:
         """Get the weight for a given priority from litellm.priority_reservation"""
@@ -250,14 +247,10 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             # Query RPM saturation - always read from Redis for multi-node consistency
             if model_group_info.rpm is not None and model_group_info.rpm > 0:
                 # Use v3 limiter's key format: {key:value}:rate_limit_type
-                counter_key = self.v3_limiter.create_rate_limit_keys(
-                    key="model_saturation_check",
-                    value=model,
-                    rate_limit_type="requests",
-                )
-
                 # Query Redis directly for current counter value (skip local cache for consistency)
-                counter_value = await self._get_saturation_value_from_cache(counter_key=counter_key)
+                counter_value = await self._get_saturation_value_from_cache(
+                    RateLimitScope("model_saturation_check", model).counter("requests")
+                )
 
                 if counter_value is not None:
                     current_requests: Final = int(counter_value)
@@ -270,13 +263,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             # Query TPM saturation
             if model_group_info.tpm is not None and model_group_info.tpm > 0:
-                counter_key = self.v3_limiter.create_rate_limit_keys(
-                    key="model_saturation_check",
-                    value=model,
-                    rate_limit_type="tokens",
+                counter_value = await self._get_saturation_value_from_cache(
+                    RateLimitScope("model_saturation_check", model).counter("tokens")
                 )
-
-                counter_value = await self._get_saturation_value_from_cache(counter_key=counter_key)
 
                 if counter_value is not None:
                     current_tokens: Final = float(counter_value)
@@ -417,7 +406,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         Raises:
             HTTPException: If any limit is exceeded
         """
-        import json
 
         saturation_threshold: Final = _get_priority_settings().saturation_threshold
         should_enforce_priority: Final = saturation >= saturation_threshold
@@ -464,9 +452,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
-        verbose_proxy_logger.debug(
-            "Atomic check+increment response: %s", json.dumps(atomic_response, indent=2, default=list)
-        )
+        verbose_proxy_logger.debug("Atomic check+increment response: %s", atomic_response)
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)
@@ -571,7 +557,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         else:
             get_or_create_request_stash().rate_limit_response = atomic_response
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -659,7 +645,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
         return None
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
     ) -> LLMResponseTypes:
@@ -691,7 +677,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             verbose_proxy_logger.exception("Error in dynamic rate limiter v3 post-call hook: %s", e)
             return response
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Update token usage for priority-based rate limiting after successful API calls.
@@ -706,7 +692,6 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
-        from litellm.types.caching import RedisPipelineIncrementOperation
         from litellm.types.utils import Usage
 
         try:
@@ -745,21 +730,11 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             if total_tokens == 0:
                 return
 
-            # Create pipeline operations for token increments
-            pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
-
             # Model-wide token tracking (model_saturation_check)
-            model_token_key: Final = self.v3_limiter.create_rate_limit_keys(
-                key="model_saturation_check",
-                value=model_group,
-                rate_limit_type="tokens",
-            )
-            pipeline_operations.append(
-                RedisPipelineIncrementOperation(
-                    key=model_token_key,
-                    increment_value=total_tokens,
-                    ttl=self.v3_limiter.window_size,
-                )
+            model_tokens: Final = CounterIncrement(
+                counter=RateLimitScope("model_saturation_check", model_group).counter("tokens"),
+                amount=total_tokens,
+                ttl=self.v3_limiter.window_size,
             )
 
             # Priority-specific token tracking (priority_model)
@@ -775,17 +750,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             else:
                 priority_key = f"{model_group}:default_pool"
 
-            priority_token_key: Final = self.v3_limiter.create_rate_limit_keys(
-                key="priority_model",
-                value=priority_key,
-                rate_limit_type="tokens",
-            )
-            pipeline_operations.append(
-                RedisPipelineIncrementOperation(
-                    key=priority_token_key,
-                    increment_value=total_tokens,
+            pipeline_operations: Final = (
+                model_tokens,
+                CounterIncrement(
+                    counter=RateLimitScope("priority_model", priority_key).counter("tokens"),
+                    amount=total_tokens,
                     ttl=self.v3_limiter.window_size,
-                )
+                ),
             )
 
             # Execute token increments with TTL preservation

@@ -1,8 +1,10 @@
-import { userListCall, UserInfo, UserListResponse } from "@/components/networking";
+import { userGetInfoV2, userListCall } from "@/components/networking";
+import type { UserInfoV2Response, UserListResponse } from "@/components/networking";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { canListUsers } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { ApiError } from "@/lib/http/client";
 
 const infiniteUsersKeys = createQueryKeys("infiniteUsers");
 const userLookupKeys = createQueryKeys("userLookup");
@@ -58,11 +60,16 @@ export const useUserEmailLookup = (userIds: readonly string[]) => {
 
 export const useUserLookup = (userId: string | null) => {
   const { accessToken, userRole } = useAuthorized();
-  return useQuery<UserInfo | null>({
+  return useQuery<UserInfoV2Response | null>({
     queryKey: userLookupKeys.detail(userId ?? ""),
     queryFn: async () => {
-      const response = await userListCall(accessToken!, [userId!], 1, 1);
-      return response.users.find((user) => user.user_id === userId) ?? null;
+      try {
+        const user = await userGetInfoV2(accessToken!, userId!);
+        return user.user_id === userId ? user : null;
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
     },
     enabled: Boolean(accessToken) && Boolean(userId) && canListUsers(userRole),
   });

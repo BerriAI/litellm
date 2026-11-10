@@ -1,5 +1,6 @@
 "use client";
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { useOnboardingCredentials, useClaimOnboardingToken } from "@/app/(dashboard)/hooks/onboarding/useOnboarding";
@@ -14,6 +15,7 @@ type OnboardingFormProps = {
 };
 
 export function OnboardingForm({ variant }: OnboardingFormProps) {
+  const { t } = useTranslation();
   const searchParams = useSearchParams()!;
   const inviteId = searchParams.get("invitation_id");
   const [claimError, setClaimError] = React.useState<string | null>(null);
@@ -41,7 +43,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
       {
         onSuccess: (data: { token?: string }) => {
           if (!data?.token) {
-            setClaimError("Failed to start session. Please try again.");
+            setClaimError(t("onboarding.form.errors.sessionFailed"));
             return;
           }
           // Invite signup is a principal-change boundary — the prior admin's
@@ -56,7 +58,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
           );
         },
         onError: (error: Error) => {
-          setClaimError(error.message || "Failed to submit. Please try again.");
+          setClaimError(error.message || t("onboarding.form.errors.submitFailed"));
         },
       },
     );

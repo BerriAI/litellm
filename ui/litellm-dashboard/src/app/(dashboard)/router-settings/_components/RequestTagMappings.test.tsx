@@ -5,8 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { RequestTagMapping, RequestTagMappingsEditor, requestTagMappingsAreValid } from "./RequestTagMappings";
 
-const exact: RequestTagMapping = { header: "baggage", key: "entrypoint", value: "a", tag: "support" };
-const variable: RequestTagMapping = { header: "baggage", key: "entrypoint", tag_prefix: "usecase:" };
+const exact: RequestTagMapping = { header: "baggage", key: "service", value: "a", tag: "support" };
+const variable: RequestTagMapping = { header: "baggage", key: "service", tag_prefix: "app:" };
 
 function Editor({
   initial,
@@ -47,20 +47,20 @@ describe("RequestTagMappingsEditor", () => {
     expect(screen.getByRole("combobox", { name: "Mapping 2 mode" })).toHaveTextContent("Any value");
     expect(screen.getByLabelText("Mapping 1 match value")).toHaveValue("a");
     expect(screen.getByLabelText("Mapping 1 tag")).toHaveValue("support");
-    expect(screen.getByLabelText("Mapping 2 tag prefix")).toHaveValue("usecase:");
-    expect(screen.getByText("entrypoint=a → support")).toBeInTheDocument();
-    expect(screen.getByText("entrypoint=x → usecase:x")).toBeInTheDocument();
+    expect(screen.getByLabelText("Mapping 2 tag prefix")).toHaveValue("app:");
+    expect(screen.getByText("service=a → support")).toBeInTheDocument();
+    expect(screen.getByText("service=x → app:x")).toBeInTheDocument();
   });
 
   it("adds and edits a new exact value mapping", async () => {
     const changed = vi.fn();
     render(<Editor initial={[]} changed={changed} />);
     await userEvent.click(screen.getByRole("button", { name: "Add mapping" }));
-    fireEvent.change(screen.getByLabelText("Mapping 1 baggage key"), { target: { value: "entrypoint" } });
+    fireEvent.change(screen.getByLabelText("Mapping 1 baggage key"), { target: { value: "service" } });
     fireEvent.change(screen.getByLabelText("Mapping 1 match value"), { target: { value: "b" } });
     fireEvent.change(screen.getByLabelText("Mapping 1 tag"), { target: { value: "sales" } });
-    expect(screen.getByText("entrypoint=b → sales")).toBeInTheDocument();
-    expect(changed).toHaveBeenLastCalledWith([{ header: "baggage", key: "entrypoint", value: "b", tag: "sales" }]);
+    expect(screen.getByText("service=b → sales")).toBeInTheDocument();
+    expect(changed).toHaveBeenLastCalledWith([{ header: "baggage", key: "service", value: "b", tag: "sales" }]);
   });
 
   it("changes an exact mapping to any-value mode and removes its exact match fields", async () => {
@@ -70,7 +70,7 @@ describe("RequestTagMappingsEditor", () => {
     await userEvent.click(await screen.findByRole("option", { name: "Any value" }));
     expect(screen.queryByLabelText("Mapping 1 match value")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Mapping 1 tag prefix")).toHaveValue("");
-    expect(screen.getByLabelText("Mapping 1 tag prefix")).toHaveAttribute("placeholder", "usecase:");
+    expect(screen.getByLabelText("Mapping 1 tag prefix")).toHaveAttribute("placeholder", "app:");
     expect(changed).toHaveBeenLastCalledWith([
       expect.objectContaining({ value: undefined, tag: undefined, tag_prefix: "" }),
     ]);
@@ -81,9 +81,9 @@ describe("RequestTagMappingsEditor", () => {
     render(<Editor initial={[]} changed={vi.fn()} saved={saved} />);
     await userEvent.click(screen.getByRole("button", { name: "Add mapping" }));
     expect(screen.getByLabelText("Mapping 1 baggage key")).toHaveValue("");
-    expect(screen.getByLabelText("Mapping 1 baggage key")).toHaveAttribute("placeholder", "entrypoint");
+    expect(screen.getByLabelText("Mapping 1 baggage key")).toHaveAttribute("placeholder", "service");
     expect(screen.getByText("Enter a baggage key")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Mapping 1 baggage key"), { target: { value: "entrypoint" } });
+    fireEvent.change(screen.getByLabelText("Mapping 1 baggage key"), { target: { value: "service" } });
     expect(screen.getByText("Enter a match value")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Update" }));
     fireEvent.change(screen.getByLabelText("Mapping 1 match value"), { target: { value: "b" } });
@@ -93,7 +93,7 @@ describe("RequestTagMappingsEditor", () => {
     fireEvent.change(screen.getByLabelText("Mapping 1 tag"), { target: { value: "sales" } });
     expect(screen.queryByText(/^Enter a/)).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Update" }));
-    expect(saved).toHaveBeenCalledWith([{ header: "baggage", key: "entrypoint", value: "b", tag: "sales" }]);
+    expect(saved).toHaveBeenCalledWith([{ header: "baggage", key: "service", value: "b", tag: "sales" }]);
   });
 
   it("blocks saving an any-value mapping until the admin types a tag prefix", async () => {
@@ -105,7 +105,7 @@ describe("RequestTagMappingsEditor", () => {
     expect(screen.getByRole("button", { name: "Update" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Mapping 1 tag prefix"), { target: { value: "team:" } });
     await userEvent.click(screen.getByRole("button", { name: "Update" }));
-    expect(saved).toHaveBeenCalledWith([expect.objectContaining({ key: "entrypoint", tag_prefix: "team:" })]);
+    expect(saved).toHaveBeenCalledWith([expect.objectContaining({ key: "service", tag_prefix: "team:" })]);
   });
 
   it("blocks saving a baggage key that is empty or not a header token", async () => {
@@ -139,7 +139,7 @@ describe("RequestTagMappingsEditor", () => {
     const changed = vi.fn();
     render(<Editor initial={[exact, variable]} changed={changed} />);
     await userEvent.click(screen.getByRole("button", { name: "Delete mapping 1" }));
-    expect(screen.getByLabelText("Mapping 1 tag prefix")).toHaveValue("usecase:");
+    expect(screen.getByLabelText("Mapping 1 tag prefix")).toHaveValue("app:");
     expect(changed).toHaveBeenLastCalledWith([variable]);
   });
 });

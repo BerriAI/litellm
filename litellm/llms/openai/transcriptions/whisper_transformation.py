@@ -141,7 +141,4 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if any(key in raw_response_json for key in TranscriptionResponse.model_fields):
             return TranscriptionResponse(**raw_response_json)
         else:
-            raise ValueError(
-                "Invalid response format. Received response does not match the expected format. Got: ",
-                raw_response_json,
-            )
+            raise ValueError("Invalid response format. Received response does not match the expected format.")

@@ -5,7 +5,8 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge import catalog, configuration
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+from litellm.rust_bridge import catalog, configuration, detectors
 from litellm.rust_bridge.catalog import (
     Feature,
     Route,
@@ -15,6 +16,32 @@ from litellm.rust_bridge.catalog import (
     Target,
 )
 from litellm.rust_bridge.configuration import Decision, Rollout
+from litellm.rust_bridge.public_call import NativeCall
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    (
+        ("anthropic/claude-opus-latest", Rollout.PYTHON_ONLY),
+        (f"anthropic/{get_model_latest_aliases()['anthropic']['claude-opus-latest']}", Rollout.RUST_OPT_IN),
+    ),
+)
+def test_latest_alias_messages_falls_back_without_changing_the_pinned_model_rollout(
+    model: str,
+    expected: Rollout,
+) -> None:
+    request: Final = NativeCall(args=(), kwargs={"model": model}, base={})
+    context: Final = RouteContext(
+        Route.MESSAGES,
+        provider="anthropic",
+        model=model,
+        features=detectors.detected(detectors.COMMON, request),
+    )
+    rules: Final = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=catalog.MESSAGES_PYTHON_FEATURES),
+        RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
+    )
+    assert catalog.rollout(context, rules) is expected
 
 
 @pytest.fixture(autouse=True)

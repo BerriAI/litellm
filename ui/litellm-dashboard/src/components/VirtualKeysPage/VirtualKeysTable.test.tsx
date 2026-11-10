@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
-import { vi, it, expect, beforeEach, describe, Mock, MockedFunction } from "vitest";
+import { vi, it, expect, beforeEach, afterEach, describe, Mock, MockedFunction } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
@@ -582,6 +582,27 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
 
   await waitFor(() => {
     expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
+  });
+});
+
+describe("Budget Reset column", () => {
+  const originalTimezone: string | undefined = process.env.TZ;
+
+  afterEach(() => {
+    if (originalTimezone === undefined) {
+      delete process.env.TZ;
+      return;
+    }
+    process.env.TZ = originalTimezone;
+  });
+
+  it("shows the reset time in UTC with a UTC label for a viewer in another timezone", async () => {
+    process.env.TZ = "America/Los_Angeles";
+    mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, budget_reset_at: "2026-11-01T00:00:00Z" }]));
+
+    renderWithProviders(<VirtualKeysTable />);
+
+    expect(await screen.findByText("Nov 1, 00:00:00 UTC")).toBeInTheDocument();
   });
 });
 

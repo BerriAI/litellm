@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import type { DailyData } from "@/components/UsagePage/types";
 import { StackedUsageChart, type StackedUsageScale } from "@/components/shared/charts";
 import { cn } from "@/lib/cva.config";
@@ -17,15 +19,19 @@ import {
 } from "./overviewData";
 import { ChartSkeleton, Panel, PANEL_INSET_X, Segmented } from "./Primitives";
 
-const METRIC_NOUN: Record<UsageMetric, string> = { spend: "spend", tokens: "tokens", requests: "requests" };
+const METRIC_NOUN: Record<UsageMetric, ParseKeys> = {
+  spend: "usage.breakdownChart.metricNoun.spend",
+  tokens: "usage.breakdownChart.metricNoun.tokens",
+  requests: "usage.breakdownChart.metricNoun.requests",
+};
 const GRANULARITY_OPTIONS = [
-  { value: "day", label: "Daily" },
-  { value: "week", label: "Weekly" },
-] as const satisfies readonly { value: Granularity; label: string }[];
+  { value: "day", labelKey: "usage.breakdownChart.granularityOptions.day" },
+  { value: "week", labelKey: "usage.breakdownChart.granularityOptions.week" },
+] as const satisfies readonly { value: Granularity; labelKey: ParseKeys }[];
 const SCALE_OPTIONS = [
-  { value: "linear", label: "Linear" },
-  { value: "log", label: "Log" },
-] as const satisfies readonly { value: StackedUsageScale; label: string }[];
+  { value: "linear", labelKey: "usage.breakdownChart.scaleOptions.linear" },
+  { value: "log", labelKey: "usage.breakdownChart.scaleOptions.log" },
+] as const satisfies readonly { value: StackedUsageScale; labelKey: ParseKeys }[];
 
 interface UsageBreakdownChartProps {
   results: readonly DailyData[];
@@ -42,6 +48,7 @@ export default function UsageBreakdownChart({
   colorByModel,
   dimension = "model_groups",
 }: UsageBreakdownChartProps) {
+  const { t } = useTranslation();
   const [metric, setMetric] = useState<UsageMetric>("spend");
   const state: BreakdownState = { metric, dimension };
   const [granularity, setGranularity] = useState<Granularity>("day");
@@ -54,13 +61,34 @@ export default function UsageBreakdownChart({
 
   return (
     <Panel
-      title={`${granularity === "day" ? "Daily" : "Weekly"} usage`}
-      subtitle={`${granularity === "day" ? "Daily" : "Weekly"} ${METRIC_NOUN[state.metric]} by model (top 8, rest grouped as Other)`}
+      title={t("usage.breakdownChart.title", {
+        granularity:
+          granularity === "day"
+            ? t("usage.breakdownChart.granularity.daily")
+            : t("usage.breakdownChart.granularity.weekly"),
+      })}
+      subtitle={t("usage.breakdownChart.subtitle", {
+        granularity:
+          granularity === "day"
+            ? t("usage.breakdownChart.granularity.daily")
+            : t("usage.breakdownChart.granularity.weekly"),
+        metric: t(METRIC_NOUN[state.metric]),
+      })}
       action={
         <>
           <BreakdownControls state={state} onChange={(next) => setMetric(next.metric)} showDimension={false} />
-          <Segmented label="Bucket size" value={granularity} options={GRANULARITY_OPTIONS} onChange={setGranularity} />
-          <Segmented label="Scale" value={scale} options={SCALE_OPTIONS} onChange={setScale} />
+          <Segmented
+            label={t("usage.breakdownChart.bucketSize")}
+            value={granularity}
+            options={GRANULARITY_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+            onChange={setGranularity}
+          />
+          <Segmented
+            label={t("usage.breakdownChart.scaleLabel")}
+            value={scale}
+            options={SCALE_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+            onChange={setScale}
+          />
         </>
       }
       bodyClassName="px-0 pt-4 pb-0"
@@ -84,9 +112,9 @@ export default function UsageBreakdownChart({
         )}
       </div>
       <div className={cn("border-t pt-3 pb-2", PANEL_INSET_X)}>
-        <h4 className="text-sm leading-5 font-medium text-foreground">Top models</h4>
+        <h4 className="text-sm leading-5 font-medium text-foreground">{t("usage.breakdownChart.topModels")}</h4>
         {loading ? (
-          <div role="status" aria-label="Loading top models">
+          <div role="status" aria-label={t("usage.breakdownChart.loadingTopModels")}>
             <ChartSkeleton className="my-2 h-20" />
           </div>
         ) : (

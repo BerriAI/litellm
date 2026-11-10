@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 from collections.abc import Iterable
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -19,7 +20,14 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
+    UserApiKeyCache,
+    budget_windows_absent_cache_key,
+)
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.redis.stores.auth_cache_double import shared_cache
 
 
 class _RecordingRedisClient(Redis):
@@ -244,6 +252,51 @@ async def test_subscriber_deletes_key_object_partition_entry_on_message() -> Non
 
 
 @pytest.mark.asyncio
+async def test_subscriber_evicts_a_user_whose_id_looks_like_a_no_window_marker_along_with_the_marker() -> None:
+    user_id: Final = budget_windows_absent_cache_key("key", "alice")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(user_id, {"user_id": user_id, "models": ["gpt-4o"]})
+    cache.budget_windows_absent_cache.set_cache(key=user_id, value=True)
+
+    pubsub: Final = _QueuePubSub(initial_messages=[_invalidation_message(user_id)])
+    subscriber: Final = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=cache,
+    )
+    subscriber.start()
+    try:
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
+    finally:
+        await subscriber.stop()
+
+    assert cache.get_cache(user_id) is None
+    assert cache.budget_windows_absent_cache.get_cache(key=user_id) is None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_drops_the_shared_auth_cache_copy_so_the_next_read_refills_from_redis() -> None:
+    """With enable_redis_auth_cache the keyspace's memory tier is native; the Python subscriber forwards each
+    eviction broadcast to it, and the next read takes the other worker's write from Redis."""
+    cache, store = shared_cache()
+    await cache.async_set_cache("team_id:t-1", {"team_id": "t-1", "models": ["old"]})
+    store.redis["team_id:t-1"] = {"team_id": "t-1", "models": ["new"]}
+
+    pubsub = _QueuePubSub(initial_messages=[_invalidation_message("team_id:t-1")])
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=cache,
+    )
+    subscriber.start()
+    try:
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
+    finally:
+        await subscriber.stop()
+
+    assert cache.get_local("team_id:t-1") is None
+    assert await cache.async_get_cache("team_id:t-1") == {"team_id": "t-1", "models": ["new"]}
+
+
+@pytest.mark.asyncio
 async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() -> None:
     """
     The spend-counter half of the same cross-worker gap: a remote worker's own
@@ -269,6 +322,36 @@ async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() 
         await subscriber.stop()
 
     assert spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is None
+
+
+@pytest.mark.asyncio
+async def test_subscriber_writes_and_drops_the_native_spend_counter_copies_a_broadcast_names() -> None:
+    """The spend counters' memory tier lives in the native store, not in a Python InMemoryCache, so a broadcast
+    has to reach it there: a SET carries the reset value into it, a delete drops it, and keys outside the spend
+    counter keyspace leave it alone."""
+    store = SpendCounterStore(connect(None).spend_counters())
+    store.set_local("spend:team_member:u-1:t-1", 999.0)
+    store.set_local("spend:key:k-1", 7.0)
+    pubsub = _QueuePubSub(
+        initial_messages=[
+            _invalidation_message("spend:team_member:u-1:t-1"),
+            {"type": "message", "data": json.dumps({"cache_key": "spend:key:k-1", "new_value": 0.0, "ttl": 60})},
+            {"type": "message", "data": json.dumps({"cache_key": "spend_db_floor:spend:key:k-1", "new_value": 3.0})},
+            {"type": "message", "data": json.dumps({"cache_key": "spend:unknown:x", "new_value": 3.0})},
+        ]
+    )
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=UserApiKeyCache(),
+        spend_counters=store,
+    )
+    subscriber.start()
+    try:
+        assert await asyncio.wait_for(pubsub.drained.wait(), timeout=5)
+    finally:
+        await subscriber.stop()
+
+    assert store.snapshot() == {"spend:key:k-1": 0.0}
 
 
 @pytest.mark.asyncio

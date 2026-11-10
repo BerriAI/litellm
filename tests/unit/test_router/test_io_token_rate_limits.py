@@ -3,12 +3,15 @@ Tests for separate ITPM/OTPM deployment rate limits (enforce_model_rate_limits).
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+import contextvars
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 from fakeredis import FakeRedis, FakeServer
 from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
 
@@ -18,6 +21,8 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+from litellm.litellm_core_utils.attempt_settlement import routed_attempt
+from litellm.litellm_core_utils.internal_call_metadata import IO_TOKEN_RESERVATION_ID_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
@@ -510,6 +515,36 @@ class TestModelRateLimitingCheckIOTokens:
         assert request_kwargs["metadata"][OTPM_RESERVED_KEY] == model_max_output
 
     @pytest.mark.asyncio
+    async def test_otpm_reservation_uses_each_deployments_output_limit(self) -> None:
+        backend_model: Final = "openai/gpt-4o-mini"
+        catalog_max_output: Final = litellm.get_model_info(model=backend_model)["max_output_tokens"]
+        assert isinstance(catalog_max_output, int)
+        otpm_limit: Final = int(max(catalog_max_output, 987) / NO_MAX_TOKENS_TPM_RESERVATION_FRACTION) + 1
+        check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
+
+        async def _reserved(deployment_id: str, model_info: dict[str, object]) -> int:
+            metadata: Final[dict[str, object]] = {}
+            request_kwargs: Final[dict[str, object]] = {
+                "messages": [{"role": "user", "content": "hello"}],
+                "metadata": metadata,
+            }
+            set_io_token_rate_limit_request_kwargs(request_kwargs, metadata_channel="metadata")
+            deployment: Final = {
+                "litellm_params": {"model": backend_model, "otpm": otpm_limit},
+                "model_info": {"id": deployment_id, **model_info},
+            }
+            await check.async_pre_call_check(deployment)
+            reservation: Final = metadata.get(OTPM_RESERVED_KEY)
+            assert isinstance(reservation, int)
+            return reservation
+
+        plain: Final = await _reserved("io-plain-gpt-4o-mini", {})
+        override: Final = await _reserved("io-overridden-gpt-4o-mini", {"max_output_tokens": 987})
+
+        assert plain == catalog_max_output
+        assert override == 987
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("use_sync_check", [False, True])
     async def test_base_model_does_not_change_the_default_otpm_reservation(self, use_sync_check: bool):
         check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
@@ -920,11 +955,8 @@ class TestModelRateLimitingCheckIOTokens:
             usage=Usage(prompt_tokens=3, completion_tokens=0, total_tokens=3),
         )
 
-        with pytest.raises(RuntimeError):
-            await async_io_token_reconcile_success(dual_cache, kwargs, response)
+        await async_io_token_reconcile_success(dual_cache, kwargs, response)
 
-        # The stash is cleared even though reconciliation raised, so a duplicate
-        # success event can't re-process it.
         assert ITPM_RESERVED_KEY not in metadata
         assert ITPM_CACHE_KEY not in metadata
 
@@ -1446,7 +1478,6 @@ class TestRouterIOTokenIntegration:
 
         assert await _io_counters_since(router, first_minute) == (0, 0)
 
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("call", "original_function", "mock_error"),
@@ -1518,41 +1549,6 @@ class TestContextSlotRetention:
 
         set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=False, metadata_channel="metadata")
         assert get_io_token_rate_limit_request_kwargs() is None
-
-    @pytest.mark.asyncio
-    async def test_router_does_not_pin_kwargs_without_io_limits(self):
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "plain",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
-                }
-            ]
-        )
-        set_io_token_rate_limit_request_kwargs(None, metadata_channel="metadata")
-        kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
-        deployment = router.get_deployment_by_model_group_name("plain")
-        assert deployment is not None
-        router._update_kwargs_with_deployment(deployment=deployment.model_dump(), kwargs=kwargs)
-        assert get_io_token_rate_limit_request_kwargs() is None
-
-    @pytest.mark.asyncio
-    async def test_router_pins_kwargs_for_io_limited_deployment(self):
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "limited",
-                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test", "itpm": 100},
-                }
-            ],
-            optional_pre_call_checks=["enforce_model_rate_limits"],
-        )
-        set_io_token_rate_limit_request_kwargs(None, metadata_channel="metadata")
-        kwargs = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
-        deployment = router.get_deployment_by_model_group_name("limited")
-        assert deployment is not None
-        router._update_kwargs_with_deployment(deployment=deployment.model_dump(), kwargs=kwargs)
-        assert get_io_token_rate_limit_request_kwargs() is kwargs
 
 
 @pytest.mark.asyncio
@@ -1859,3 +1855,332 @@ async def test_a_later_turn_is_admitted_on_this_instance_s_count_when_the_shared
     admitted: Final = await async_admit_io_token_turn(dual_cache, _turn_deployment(kind), _TURN_AT)
 
     assert admitted[ITPM_CACHE_KEY if kind == "itpm" else OTPM_CACHE_KEY] == _turn_key(kind)
+
+
+_HELD_DEPLOYMENT: Final = {
+    "litellm_params": {"model": ROUTER_IO_MODEL, "itpm": 50000, "otpm": 50000},
+    "model_info": {"id": "held-id"},
+    "model_name": "limited",
+}
+
+
+def _held_keys() -> tuple[str, str]:
+    minute: Final = _current_minute()
+    return (
+        f"global_router:held-id:{ROUTER_IO_MODEL}:itpm:{minute}",
+        f"global_router:held-id:{ROUTER_IO_MODEL}:otpm:{minute}",
+    )
+
+
+class _HeldIncrement(DualCache):
+    """Holds the first increment matching ``holds`` until ``release`` is set."""
+
+    def __init__(self, holds: Callable[[str, int], bool]) -> None:
+        super().__init__()
+        self._holds: Final = holds
+        self.holding: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+
+    async def async_increment_cache(self, key: str, value: float, **kwargs: object) -> float | None:
+        if not self.holding.is_set() and self._holds(key, int(value)):
+            self.holding.set()
+            await self.release.wait()
+        return await super().async_increment_cache(key=key, value=value, **kwargs)
+
+
+async def _counts(cache: DualCache) -> tuple[int, int]:
+    for _ in range(10):
+        await asyncio.sleep(0)
+    itpm_key, otpm_key = _held_keys()
+    itpm: Final[object] = await cache.async_get_cache(key=itpm_key)
+    otpm: Final[object] = await cache.async_get_cache(key=otpm_key)
+    return (itpm if isinstance(itpm, int) else 0), (otpm if isinstance(otpm, int) else 0)
+
+
+async def _cancel_twice_while_held(cache: _HeldIncrement, held: "asyncio.Task[object]") -> None:
+    await cache.holding.wait()
+    held.cancel()
+    held.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await held
+    cache.release.set()
+
+
+@pytest.mark.asyncio
+async def test_a_request_cancelled_mid_reservation_hands_back_what_it_reserved() -> None:
+    cache: Final = _HeldIncrement(lambda key, value: ":otpm:" in key and value > 0)
+    request: Final[dict[str, object]] = {"messages": PROXY_MESSAGES, "max_tokens": 100, "metadata": {}}
+
+    async def reserve() -> object:
+        set_io_token_rate_limit_request_kwargs(request, metadata_channel="metadata")
+        return await async_io_token_pre_call_check(cache, dict(_HELD_DEPLOYMENT))
+
+    await _cancel_twice_while_held(cache, asyncio.create_task(reserve()))
+
+    assert await _counts(cache) == (0, 0)
+    assert ITPM_RESERVED_KEY not in request["metadata"]
+
+
+def _stashed(itpm_reserved: int, otpm_reserved: int) -> dict[str, object]:
+    itpm_key, otpm_key = _held_keys()
+    return {
+        "metadata": {
+            ITPM_RESERVED_KEY: itpm_reserved,
+            OTPM_RESERVED_KEY: otpm_reserved,
+            ITPM_CACHE_KEY: itpm_key,
+            OTPM_CACHE_KEY: otpm_key,
+        }
+    }
+
+
+async def _reserved(cache: DualCache, itpm_reserved: int, otpm_reserved: int) -> dict[str, object]:
+    itpm_key, otpm_key = _held_keys()
+    await cache.async_increment_cache(key=itpm_key, value=itpm_reserved)
+    await cache.async_increment_cache(key=otpm_key, value=otpm_reserved)
+    return _stashed(itpm_reserved, otpm_reserved)
+
+
+@pytest.mark.asyncio
+async def test_a_refund_cancelled_between_its_decrements_still_hands_back_both() -> None:
+    cache: Final = _HeldIncrement(lambda key, value: ":itpm:" in key and value < 0)
+    kwargs: Final = await _reserved(cache, 9, 100)
+
+    await _cancel_twice_while_held(
+        cache, asyncio.create_task(ModelRateLimitingCheck(cache).async_log_failure_event(kwargs, None, None, None))
+    )
+
+    assert await _counts(cache) == (0, 0)
+
+
+class _YieldingIncrement(DualCache):
+    async def async_increment_cache(self, key: str, value: float, **kwargs: object) -> float | None:
+        await asyncio.sleep(0)
+        return await super().async_increment_cache(key=key, value=value, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_competing_failure_callbacks_hand_a_reservation_back_once() -> None:
+    cache: Final = _YieldingIncrement()
+    kwargs: Final = await _reserved(cache, 9, 100)
+    check: Final = ModelRateLimitingCheck(cache)
+
+    await asyncio.gather(*(check.async_log_failure_event(kwargs, None, None, None) for _ in range(2)))
+
+    assert await _counts(cache) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_late_failure_callback_of_one_attempt_leaves_the_next_attempts_reservation_held() -> None:
+    cache: Final = DualCache()
+    check: Final = ModelRateLimitingCheck(cache)
+    request: Final[dict[str, object]] = {"messages": PROXY_MESSAGES, "max_tokens": 100, "metadata": {}}
+
+    async def attempt() -> contextvars.Context:
+        with routed_attempt():
+            set_io_token_rate_limit_request_kwargs(request, metadata_channel="metadata")
+            await async_io_token_pre_call_check(cache, dict(_HELD_DEPLOYMENT))
+            return contextvars.copy_context()
+
+    def failure_logged_in(context: contextvars.Context) -> "asyncio.Task[None]":
+        return context.run(asyncio.create_task, check.async_log_failure_event(request, None, None, None))
+
+    first: Final = await attempt()
+    await failure_logged_in(first)
+    _ = await attempt()
+    held_by_second: Final = await _counts(cache)
+
+    await failure_logged_in(first)
+
+    assert held_by_second[1] == 100
+    assert await _counts(cache) == held_by_second
+
+
+def _anthropic_reply() -> dict[str, object]:
+    return {
+        "id": "msg_held",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-5-5",
+        "content": [{"type": "text", "text": "done"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+
+
+@pytest.mark.parametrize(
+    "attempts",
+    [("hang",), ("503", "hang")],
+    ids=["cancelled_while_waiting_on_the_provider", "cancelled_on_its_retry"],
+)
+@pytest.mark.asyncio
+async def test_a_cancelled_request_sharing_one_logging_object_hands_back_every_reservation(
+    attempts: tuple[str, ...], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    waiting_on_provider: Final = asyncio.Event()
+    script: Final = iter((*attempts, "ok"))
+
+    async def upstream(_: httpx.Request) -> httpx.Response:
+        match next(script):
+            case "503":
+                return httpx.Response(
+                    503, json={"type": "error", "error": {"type": "overloaded_error", "message": "x"}}
+                )
+            case "hang":
+                waiting_on_provider.set()
+                await asyncio.Event().wait()
+        return httpx.Response(200, json=_anthropic_reply())
+
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=upstream)
+    router: Final = _router_with_io_limits()
+    first_minute: Final = _current_minute()
+    call: Final["asyncio.Task[object]"] = asyncio.create_task(
+        router.acompletion(
+            model="limited",
+            messages=PROXY_MESSAGES,
+            max_tokens=100,
+            metadata={"user_api_key_hash": "hashed-key"},
+            litellm_call_id="proxy-call",
+            litellm_logging_obj=_logging_obj_shared_across_attempts("acompletion"),
+        )
+    )
+    await waiting_on_provider.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert await _io_counters_since(router, first_minute) == (0, 0)
+    assert await _proxy_chat(router, "hi") == await _io_counters_since(router, first_minute)
+
+
+@pytest.mark.asyncio
+async def test_a_reservation_refunded_through_a_logged_copy_of_its_metadata_is_refunded_once() -> None:
+    cache: Final = DualCache()
+    check: Final = ModelRateLimitingCheck(cache)
+    request: Final[dict[str, object]] = {"messages": PROXY_MESSAGES, "max_tokens": 100, "litellm_metadata": {}}
+
+    async def cancelled_attempt() -> None:
+        with routed_attempt():
+            set_io_token_rate_limit_request_kwargs(request, metadata_channel="litellm_metadata")
+            await async_io_token_pre_call_check(cache, dict(_HELD_DEPLOYMENT))
+            logged.update({"litellm_params": {"litellm_metadata": dict(request["litellm_metadata"])}})  # pyright: ignore[reportArgumentType]  # the stashed metadata dict
+            await check.async_log_failure_event(request, None, None, None)
+
+    logged: Final[dict[str, object]] = {}
+    await asyncio.create_task(cancelled_attempt())
+
+    await check.async_log_failure_event(logged, None, None, None)
+
+    assert await _counts(cache) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_retry_refunds_the_reservation_its_previous_attempt_left_behind() -> None:
+    cache: Final = DualCache()
+    request: Final[dict[str, object]] = {"messages": PROXY_MESSAGES, "max_tokens": 100, "metadata": {}}
+
+    async def first_attempt() -> None:
+        with routed_attempt():
+            set_io_token_rate_limit_request_kwargs(request, metadata_channel="metadata")
+            await async_io_token_pre_call_check(cache, dict(_HELD_DEPLOYMENT))
+
+    def retry() -> None:
+        with routed_attempt():
+            refund_stale_reservation_before_retry(cache, request)
+
+    await asyncio.create_task(first_attempt())
+    contextvars.copy_context().run(retry)
+
+    assert await _counts(cache) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_request_cancelled_after_its_provider_answered_keeps_the_tokens_it_spent_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    answered: Final = asyncio.Event()
+
+    class SlowSuccessHook(CustomLogger):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            answered.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(litellm, "callbacks", [*litellm.callbacks, SlowSuccessHook()])
+    router: Final = _router_with_io_limits()
+    first_minute: Final = _current_minute()
+    call: Final["asyncio.Task[tuple[int, int]]"] = asyncio.create_task(_proxy_chat(router, "hi"))
+    await answered.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    _, otpm = await _io_counters_since(router, first_minute)
+    assert otpm == 100
+
+
+def _stashed_as(reservation_id: str, itpm_reserved: int, otpm_reserved: int) -> dict[str, object]:
+    stashed: Final = _stashed(itpm_reserved, otpm_reserved)
+    return {"metadata": {**stashed["metadata"], IO_TOKEN_RESERVATION_ID_KEY: reservation_id}}  # pyright: ignore[reportGeneralTypeIssues]  # the stash is a dict
+
+
+@pytest.mark.asyncio
+async def test_a_settled_reservation_stays_settled_however_many_others_settle_after_it() -> None:
+    cache: Final = DualCache()
+    check: Final = ModelRateLimitingCheck(cache)
+    itpm_key, otpm_key = _held_keys()
+    await cache.async_increment_cache(key=itpm_key, value=9)
+    await cache.async_increment_cache(key=otpm_key, value=100)
+    first: Final = _stashed_as("first-reservation", 9, 100)
+    logged_copy: Final = {"litellm_params": {"metadata": dict(first["metadata"])}}  # pyright: ignore[reportArgumentType]  # the stash is a dict
+    await check.async_log_failure_event(first, None, None, None)
+    for n in range(10_001):
+        io_token_refund_failure(cache, _stashed_as(f"later-reservation-{n}", 0, 0))
+
+    await check.async_log_failure_event(logged_copy, None, None, None)
+
+    assert await _counts(cache) == (0, 0)
+
+
+class _FirstChunkNeverArrives(httpx.AsyncByteStream):
+    def __init__(self, reading: asyncio.Event) -> None:
+        self._reading: Final = reading
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        self._reading.set()
+        await asyncio.Event().wait()
+        yield b""
+
+
+@pytest.mark.asyncio
+async def test_a_stream_cancelled_before_its_first_chunk_hands_back_its_reservation(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    reading_first_chunk: Final = asyncio.Event()
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, stream=_FirstChunkNeverArrives(reading_first_chunk)
+        )
+    )
+    router: Final = _router_with_io_limits()
+    first_minute: Final = _current_minute()
+    call: Final["asyncio.Task[object]"] = asyncio.create_task(
+        router.acompletion(
+            model="limited",
+            messages=PROXY_MESSAGES,
+            max_tokens=100,
+            stream=True,
+            metadata={"user_api_key_hash": "hashed-key"},
+        )
+    )
+    await reading_first_chunk.wait()
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    assert await _io_counters_since(router, first_minute) == (0, 0)

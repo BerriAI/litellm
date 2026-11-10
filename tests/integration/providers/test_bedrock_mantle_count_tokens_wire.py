@@ -1061,7 +1061,7 @@ def test_messages_count_tokens_repeated_request_lifts_the_leading_system_each_ti
         assert _mantle_bodies(mantle) == (_MANTLE_LIFTED,) * 2
 
 
-def test_messages_count_tokens_surfaces_the_counting_error_for_a_leading_system_without_content(
+def test_messages_count_tokens_answers_400_for_a_leading_system_without_content(
     counting_proxy: OwnedProxy, mantle_port: int
 ) -> None:
     gateway: Final = counting_proxy.gateway
@@ -1073,7 +1073,11 @@ def test_messages_count_tokens_surfaces_the_counting_error_for_a_leading_system_
         model: Final = _fallback_deployment(scenario, runtime.url)
         body: Final[dict[str, JsonValue]] = {"model": model, "messages": [{"role": "system"}, USER]}
         response: Final = _count(gateway, body)
-        assert 500 <= response.status_code < 600, response.text
+        assert response.status_code == 400, response.text
+        assert _JSON_OBJECT.validate_json(response.content) == {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": "Message 0 must have a 'content' field"},
+        }, response.text
         assert "input_tokens" not in response.text, response.text
         assert mantle.drain() == ()
         follow_up: Final = _count(gateway, count_request(model, STRING_CASE))

@@ -8,6 +8,8 @@ import { usesClassifierContext } from "../add_model/classifier_types";
 export type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
 import { getForecastConfigError, isForecastClassifier } from "../add_model/forecast_classifier_config";
 import React, { useEffect, useMemo, useState } from "react";
+import SwitchyardRouterForm from "../add_model/SwitchyardRouterForm";
+import { useTranslation } from "react-i18next";
 import {
   complexityRouterSchema,
   semanticRouterSchema,
@@ -276,7 +278,7 @@ const EditClassifierTabs = ({
   );
 };
 
-const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
+const ExistingEditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   isVisible,
   onCancel,
   onSuccess,
@@ -285,6 +287,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   userRole,
   isMemberManaged = false,
 }) => {
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
@@ -335,7 +338,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         ? getCustomTierRowsError(complexityRouterConfig.custom_tier_set) ??
           getMissingTiersError(activeTierRows(complexityRouterConfig))
         : (Object.values(complexityRouterConfig.tiers).every((models) => models.length === 0)
-            ? "Please select at least one model for a complexity tier"
+            ? t("editAutoRouter.editAutoRouterModal.selectTierModel")
             : null) ?? getTierLabelsError(complexityRouterConfig.tier_labels)) ??
       getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
       getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
@@ -457,7 +460,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       form.reset(routerFormValues);
     } catch (error) {
       console.error("Error parsing auto router config:", error);
-      toast.fromError("Error loading auto router configuration");
+      toast.fromError(t("editAutoRouter.editAutoRouterModal.loadFailed"));
     }
   };
 
@@ -472,7 +475,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       const builtInTiersEmpty = Object.values(tiers).every((models) => models.length === 0);
       const tierSetError = custom_tier_set
         ? getCustomTierRowsError(custom_tier_set) ?? getMissingTiersError(rows)
-        : builtInTiersEmpty && "Please select at least one model for a complexity tier";
+        : builtInTiersEmpty && t("editAutoRouter.editAutoRouterModal.selectTierModel");
       if (tierSetError) {
         setShowValidationErrors(true);
         toast.fromError(tierSetError);
@@ -527,9 +530,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       const defaultModel = resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model);
       if (!defaultModel) {
         setShowValidationErrors(true);
-        toast.fromError(
-          "Add a model to the Simple or Medium tier, or pin a default model, so requests have somewhere to route.",
-        );
+        toast.fromError(t("editAutoRouter.editAutoRouterModal.noDefaultDestination"));
         return;
       }
 
@@ -583,7 +584,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         modelData.model_info.id,
       );
 
-      toast.success("Auto router configuration updated successfully");
+      toast.success(t("editAutoRouter.editAutoRouterModal.updated"));
       const updatedModelData = {
         ...modelData,
         model_name: values.auto_router_name,
@@ -624,7 +625,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       model_info: updatedModelInfo,
     };
 
-    toast.success("Auto router configuration updated successfully");
+    toast.success(t("editAutoRouter.editAutoRouterModal.updated"));
     onSuccess(updatedModelData);
     onCancel();
   };
@@ -633,7 +634,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
     try {
       setLoading(true);
       await form.handleSubmit(saveValues, () => {
-        toast.fromError("Failed to update auto router configuration");
+        toast.fromError(t("editAutoRouter.editAutoRouterModal.updateFailed"));
       })();
     } catch (error) {
       console.error("Error updating auto router:", error);
@@ -645,13 +646,22 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
   const modelChoices: ModelChoice[] = [
     ...modelInfo.map((model) => ({ value: model.model_group, label: model.model_group })),
-    { value: "custom", label: "Enter custom model name" },
+    { value: "custom", label: t("editAutoRouter.editAutoRouterModal.customModelName") },
   ];
 
   const routerNameField = (
-    <FormField control={form.control} name="auto_router_name" label="Auto Router Name">
+    <FormField
+      control={form.control}
+      name="auto_router_name"
+      label={t("editAutoRouter.editAutoRouterModal.routerName")}
+    >
       {({ ref, ...field }) => (
-        <Input {...field} ref={ref} readOnly={isMemberManaged} placeholder="e.g., auto_router_1, smart_routing" />
+        <Input
+          {...field}
+          ref={ref}
+          readOnly={isMemberManaged}
+          placeholder={t("editAutoRouter.editAutoRouterModal.routerNamePlaceholder")}
+        />
       )}
     </FormField>
   );
@@ -662,10 +672,8 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
           <TooltipProvider>
             <DialogHeader>
-              <DialogTitle>Edit Auto Router Configuration</DialogTitle>
-              <DialogDescription>
-                Edit the auto router configuration including routing logic, default models, and access settings.
-              </DialogDescription>
+              <DialogTitle>{t("editAutoRouter.editAutoRouterModal.title")}</DialogTitle>
+              <DialogDescription>{t("editAutoRouter.editAutoRouterModal.description")}</DialogDescription>
             </DialogHeader>
 
             <form onSubmit={(event) => event.preventDefault()} noValidate>
@@ -726,28 +734,36 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                       />
                     </div>
 
-                    <FormField control={form.control} name="auto_router_default_model" label="Default Model">
+                    <FormField
+                      control={form.control}
+                      name="auto_router_default_model"
+                      label={t("editAutoRouter.editAutoRouterModal.defaultModel")}
+                    >
                       {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
                         <ModelChoiceCombobox
                           id={id}
                           value={value}
                           onChange={onChange}
                           choices={modelChoices}
-                          placeholder="Select a default model"
+                          placeholder={t("editAutoRouter.editAutoRouterModal.defaultModelPlaceholder")}
                           ariaInvalid={ariaInvalid}
                           ariaDescribedBy={ariaDescribedBy}
                         />
                       )}
                     </FormField>
 
-                    <FormField control={form.control} name="auto_router_embedding_model" label="Embedding Model">
+                    <FormField
+                      control={form.control}
+                      name="auto_router_embedding_model"
+                      label={t("editAutoRouter.editAutoRouterModal.embeddingModel")}
+                    >
                       {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
                         <ModelChoiceCombobox
                           id={id}
                           value={value}
                           onChange={onChange}
                           choices={modelChoices}
-                          placeholder="Select an embedding model"
+                          placeholder={t("editAutoRouter.editAutoRouterModal.embeddingModelPlaceholder")}
                           ariaInvalid={ariaInvalid}
                           ariaDescribedBy={ariaDescribedBy}
                         />
@@ -760,7 +776,10 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
                   <FormField
                     control={form.control}
                     name="model_access_group"
-                    label={labelWithHint("Model Access Groups", "Control who can access this auto router")}
+                    label={labelWithHint(
+                      t("editAutoRouter.editAutoRouterModal.modelAccessGroups"),
+                      t("editAutoRouter.editAutoRouterModal.modelAccessGroupsHint"),
+                    )}
                   >
                     {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
                       <AccessGroupTagsCombobox
@@ -779,19 +798,19 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
             <DialogFooter>
               <Button variant="outline" onClick={onCancel}>
-                Cancel
+                {t("editAutoRouter.editAutoRouterModal.cancel")}
               </Button>
               {submitBlockedReason === null ? (
                 <Button disabled={loading} onClick={handleSubmit}>
                   {loading && <UiLoadingSpinner className="size-4" />}
-                  Save Changes
+                  {t("editAutoRouter.editAutoRouterModal.saveChanges")}
                 </Button>
               ) : (
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <Button disabled onClick={handleSubmit}>
-                        Save Changes
+                        {t("editAutoRouter.editAutoRouterModal.saveChanges")}
                       </Button>
                     }
                   />
@@ -804,6 +823,47 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       </Dialog>
     </AutoRouterAvailabilityContext.Provider>
   );
+};
+
+const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = (props) => {
+  const { t } = useTranslation();
+  if (props.modelData?.litellm_params?.model?.startsWith("auto_router/switchyard")) {
+    return (
+      <Dialog
+        open={props.isVisible}
+        onOpenChange={(open) => {
+          if (!open) props.onCancel();
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t("editAutoRouter.editAutoRouterModal.switchyardTitle")}</DialogTitle>
+          </DialogHeader>
+          <SwitchyardRouterForm
+            key={props.modelData.model_info.id}
+            accessToken={props.accessToken}
+            onSuccess={(saved) => {
+              props.onSuccess({
+                ...props.modelData,
+                model_name: saved.model_name,
+                litellm_params: {
+                  ...props.modelData.litellm_params,
+                  switchyard_router_config: saved.switchyard_router_config,
+                },
+              });
+              props.onCancel();
+            }}
+            initial={{
+              name: props.modelData.model_name,
+              modelId: props.modelData.model_info.id,
+              config: props.modelData.litellm_params.switchyard_router_config,
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+    );
+  }
+  return <ExistingEditAutoRouterModal {...props} />;
 };
 
 export default EditAutoRouterModal;

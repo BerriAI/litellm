@@ -3,14 +3,14 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from functools import partial
-from typing import TYPE_CHECKING, Final, Literal, NoReturn
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 from urllib.parse import quote, urlsplit
 
 import httpx
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.exceptions import AuthenticationError, BadRequestError
+from litellm.exceptions import AuthenticationError, BadRequestError, InternalServerError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -18,7 +18,12 @@ from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
     VectorStoreEmbeddingExecutor,
 )
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS, sign_aws_json_post
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS, sign_aws_request
+from litellm.llms.bedrock.web_identity_session_policy import (
+    OPENSEARCH_INDEX_SESSION_POLICY,
+    OPENSEARCH_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.router import GenericLiteLLMParams
@@ -34,6 +39,7 @@ from litellm.types.vector_stores import (
 )
 
 if TYPE_CHECKING:
+    from botocore.awsrequest import AWSPreparedRequest
     from botocore.credentials import Credentials
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -75,6 +81,16 @@ def _bad_request(message: str) -> BadRequestError:
 def _unauthenticated(reason: str) -> AuthenticationError:
     return AuthenticationError(
         message=f"No usable AWS credentials to sign the OpenSearch request ({reason}). {_CREDENTIALS_HINT}",
+        llm_provider="opensearch",
+        model=None,
+    )
+
+
+def _unavailable_credentials(error: Exception) -> InternalServerError:
+    verbose_logger.warning("OpenSearch vector store AWS credentials could not be loaded or refreshed: %s", error)
+    return InternalServerError(
+        message="LiteLLM could not load or refresh the AWS credentials that sign the OpenSearch request, "
+        "see the LiteLLM logs.",
         llm_provider="opensearch",
         model=None,
     )
@@ -208,9 +224,17 @@ def _search_result(hit: _Hit, params: _OpenSearchParams) -> VectorStoreSearchRes
     )
 
 
+class _OpenSearchAWS(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = OPENSEARCH_SESSION_POLICY
+
+
+class OpenSearchIndexAWS(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = OPENSEARCH_INDEX_SESSION_POLICY
+
+
 class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequestsWithAWS):
     def __init__(self, aws: BaseAWSLLM | None = None) -> None:
-        self._aws: Final = aws if aws is not None else BaseAWSLLM()
+        self._aws: Final = aws if aws is not None else _OpenSearchAWS()
 
     def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         return BaseVectorStoreAuthCredentials()
@@ -238,6 +262,7 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         if bool(auth.aws_access_key_id) != bool(auth.aws_secret_access_key):
             raise _unauthenticated("aws_access_key_id and aws_secret_access_key must be set together")
         ensure_optional_import("botocore")
+        from botocore.credentials import Credentials
         from botocore.exceptions import (
             CredentialRetrievalError,
             NoCredentialsError,
@@ -246,12 +271,21 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         )
 
         try:
-            return _usable_credentials(self._aws.resolve_credentials(auth, region))
+            credentials: Final = _usable_credentials(self._aws.resolve_credentials(auth, region))
         except CredentialRetrievalError as error:
             verbose_logger.warning("OpenSearch vector store AWS credential source failed: %s", error)
             raise _unauthenticated("the AWS credential source failed, see the LiteLLM logs") from None
+        except OSError as error:
+            raise _unavailable_credentials(error) from None
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as error:
             raise _unauthenticated(str(error)) from None
+        try:
+            frozen: Final = credentials.get_frozen_credentials()
+        except (CredentialRetrievalError, OSError, RuntimeError) as error:
+            raise _unavailable_credentials(error) from None
+        if frozen.access_key is None or frozen.secret_key is None:
+            raise _unauthenticated("none were found")
+        return Credentials(frozen.access_key, frozen.secret_key, frozen.token, account_id=frozen.account_id)
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         parsed: Final = urlsplit(api_base or "")
@@ -363,25 +397,28 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         api_base: str,
         api_key: str | None = None,
     ) -> tuple[dict[str, str], bytes]:  # mutable-ok: the shared HTTP handler requires writable headers
-        region: Final = self._signing_region(optional_params, api_base)
-        body: Final = json.dumps(request_data)
-        signed: Final = sign_aws_json_post(
-            get_credentials=partial(self._signing_credentials, optional_params, region),
-            service_name=aws_signing_target(api_base)[0],
-            aws_region_name=region,
-            url=api_base,
-            body=body,
-            headers={
-                "Content-Type": "application/json",
-                "x-amz-content-sha256": hashlib.sha256(body.encode()).hexdigest(),
-            },
-        )
+        body: Final = json.dumps(request_data).encode()
+        signed: Final = self.sign_http_request("POST", api_base, body, "application/json", optional_params)
         signed_headers: Final = dict(signed.headers.items())
         signed_names: Final = frozenset(name.lower() for name in signed_headers)
         return {
             **{name: value for name, value in headers.items() if name.lower() not in signed_names},
             **signed_headers,
-        }, body.encode()
+        }, body
+
+    def sign_http_request(
+        self, method: str, url: str, body: bytes, content_type: str, litellm_params: Mapping[str, object]
+    ) -> "AWSPreparedRequest":
+        region: Final = self._signing_region(litellm_params, url)
+        return sign_aws_request(
+            method=method,
+            get_credentials=partial(self._signing_credentials, litellm_params, region),
+            service_name=aws_signing_target(url)[0],
+            aws_region_name=region,
+            url=url,
+            body=body,
+            headers={"Content-Type": content_type, "x-amz-content-sha256": hashlib.sha256(body).hexdigest()},
+        )
 
     def transform_search_vector_store_response(
         self, response: httpx.Response, litellm_logging_obj: "LiteLLMLoggingObj"

@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 
 export type BedrockGuardrailAction = "NONE" | "GUARDRAIL_INTERVENED";
 
@@ -114,7 +116,8 @@ const chip = (text: React.ReactNode, tone: ChipTone = "slate") => {
   return <span className={`px-2 py-1 rounded-md text-xs font-medium inline-block ${map[tone]}`}>{text}</span>;
 };
 
-const boolPill = (b?: boolean) => (b ? chip("detected", "red") : chip("not detected", "slate"));
+const boolPill = (b?: boolean) =>
+  b ? chip(i18n.t("logs.detail.bedrock.detected"), "red") : chip(i18n.t("logs.detail.bedrock.notDetected"), "slate");
 
 interface SectionProps {
   title: string;
@@ -169,6 +172,7 @@ const Divider: React.FC = () => <div className="my-3 border-t" />;
 
 /** ====== Main component ====== */
 export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailResponse }> = ({ response }) => {
+  const { t } = useTranslation();
   if (!response) return null;
 
   const outputs: BedrockOutputContent[] = (response.outputs ?? response.output ?? []) as BedrockOutputContent[];
@@ -179,12 +183,18 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
     <div className="flex flex-wrap gap-2">
       {response.guardrailCoverage?.textCharacters &&
         chip(
-          `text guarded ${response.guardrailCoverage.textCharacters.guarded ?? 0}/${response.guardrailCoverage.textCharacters.total ?? 0}`,
+          t("logs.detail.bedrock.textGuarded", {
+            guarded: response.guardrailCoverage.textCharacters.guarded ?? 0,
+            total: response.guardrailCoverage.textCharacters.total ?? 0,
+          }),
           "blue",
         )}
       {response.guardrailCoverage?.images &&
         chip(
-          `images guarded ${response.guardrailCoverage.images.guarded ?? 0}/${response.guardrailCoverage.images.total ?? 0}`,
+          t("logs.detail.bedrock.imagesGuarded", {
+            guarded: response.guardrailCoverage.images.guarded ?? 0,
+            total: response.guardrailCoverage.images.total ?? 0,
+          }),
           "blue",
         )}
     </div>
@@ -208,17 +218,19 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
       <div className="border rounded-lg p-4">
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <KV label="Action:">{chip(response.action ?? "N/A", actionTone)}</KV>
-            {response.actionReason && <KV label="Action Reason:">{response.actionReason}</KV>}
+            <KV label={t("logs.detail.bedrock.action")}>
+              {chip(response.action ?? t("logs.detail.bedrock.notAvailable"), actionTone)}
+            </KV>
+            {response.actionReason && <KV label={t("logs.detail.bedrock.actionReason")}>{response.actionReason}</KV>}
             {response.blockedResponse && (
-              <KV label="Blocked Response:">
+              <KV label={t("logs.detail.bedrock.blockedResponse")}>
                 <span className="italic">{response.blockedResponse}</span>
               </KV>
             )}
           </div>
           <div className="space-y-2">
-            <KV label="Coverage:">{coverageChips}</KV>
-            <KV label="Usage:">{usagePills}</KV>
+            <KV label={t("logs.detail.bedrock.coverage")}>{coverageChips}</KV>
+            <KV label={t("logs.detail.bedrock.usage")}>{usagePills}</KV>
           </div>
         </div>
 
@@ -226,11 +238,13 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
         {outputs.length > 0 && (
           <>
             <Divider />
-            <h4 className="font-medium mb-2">Outputs</h4>
+            <h4 className="font-medium mb-2">{t("logs.detail.bedrock.outputs")}</h4>
             <div className="space-y-2">
               {outputs.map((o, i) => (
                 <div key={i} className="p-3 bg-muted rounded-md">
-                  <div className="text-sm whitespace-pre-wrap">{o.text ?? <em>(non-text output)</em>}</div>
+                  <div className="text-sm whitespace-pre-wrap">
+                    {o.text ?? <em>{t("logs.detail.bedrock.nonTextOutput")}</em>}
+                  </div>
                 </div>
               ))}
             </div>
@@ -244,24 +258,32 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
           {response.assessments.map((assess, idx) => {
             const policyBadges = (
               <div className="flex flex-wrap gap-1">
-                {assess.wordPolicy && chip("word", "slate")}
-                {assess.contentPolicy && chip("content", "slate")}
-                {assess.topicPolicy && chip("topic", "slate")}
-                {assess.sensitiveInformationPolicy && chip("sensitive-info", "slate")}
-                {assess.contextualGroundingPolicy && chip("contextual-grounding", "slate")}
-                {assess.automatedReasoningPolicy && chip("automated-reasoning", "slate")}
+                {assess.wordPolicy && chip(t("logs.detail.bedrock.policyChips.word"), "slate")}
+                {assess.contentPolicy && chip(t("logs.detail.bedrock.policyChips.content"), "slate")}
+                {assess.topicPolicy && chip(t("logs.detail.bedrock.policyChips.topic"), "slate")}
+                {assess.sensitiveInformationPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.sensitiveInformation"), "slate")}
+                {assess.contextualGroundingPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.contextualGrounding"), "slate")}
+                {assess.automatedReasoningPolicy &&
+                  chip(t("logs.detail.bedrock.policyChips.automatedReasoning"), "slate")}
               </div>
             );
 
             return (
               <Section
                 key={idx}
-                title={`Assessment #${idx + 1}`}
+                title={t("logs.detail.bedrock.assessment", { index: idx + 1 })}
                 defaultOpen
                 right={
                   <div className="flex items-center gap-3">
                     {assess.invocationMetrics?.guardrailProcessingLatency != null &&
-                      chip(`${assess.invocationMetrics.guardrailProcessingLatency} ms`, "amber")}
+                      chip(
+                        t("logs.detail.bedrock.latencyMs", {
+                          value: assess.invocationMetrics.guardrailProcessingLatency,
+                        }),
+                        "amber",
+                      )}
                     {policyBadges}
                   </div>
                 }
@@ -269,14 +291,14 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                 {/* Word policy */}
                 {assess.wordPolicy && (
                   <div className="mb-3">
-                    <h6 className="font-medium mb-2">Word Policy</h6>
+                    <h6 className="font-medium mb-2">{t("logs.detail.bedrock.wordPolicy")}</h6>
                     {(assess.wordPolicy.customWords?.length ?? 0) > 0 && (
-                      <Section title="Custom Words" defaultOpen>
+                      <Section title={t("logs.detail.bedrock.customWords")} defaultOpen>
                         <div className="space-y-2">
                           {assess.wordPolicy.customWords!.map((w, i) => (
                             <div key={i} className="flex justify-between items-center p-2 bg-muted rounded-sm">
                               <div className="flex items-center gap-2">
-                                {chip(w.action ?? "N/A", w.detected ? "red" : "slate")}
+                                {chip(w.action ?? t("logs.detail.bedrock.notAvailable"), w.detected ? "red" : "slate")}
                                 <span className="font-mono text-sm break-all">{w.match}</span>
                               </div>
                               {boolPill(w.detected)}
@@ -286,12 +308,12 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       </Section>
                     )}
                     {(assess.wordPolicy.managedWordLists?.length ?? 0) > 0 && (
-                      <Section title="Managed Word Lists" defaultOpen={false}>
+                      <Section title={t("logs.detail.bedrock.managedWordLists")} defaultOpen={false}>
                         <div className="space-y-2">
                           {assess.wordPolicy.managedWordLists!.map((w, i) => (
                             <div key={i} className="flex justify-between items-center p-2 bg-muted rounded-sm">
                               <div className="flex items-center gap-2">
-                                {chip(w.action ?? "N/A", w.detected ? "red" : "slate")}
+                                {chip(w.action ?? t("logs.detail.bedrock.notAvailable"), w.detected ? "red" : "slate")}
                                 <span className="font-mono text-sm break-all">{w.match}</span>
                                 {w.type && chip(w.type, "slate")}
                               </div>
@@ -307,16 +329,16 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                 {/* Content policy */}
                 {assess.contentPolicy?.filters?.length ? (
                   <div className="mb-3">
-                    <h6 className="font-medium mb-2">Content Policy</h6>
+                    <h6 className="font-medium mb-2">{t("logs.detail.bedrock.contentPolicy")}</h6>
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
                         <thead>
                           <tr className="text-left text-muted-foreground">
-                            <th className="py-1 pr-4">Type</th>
-                            <th className="py-1 pr-4">Action</th>
-                            <th className="py-1 pr-4">Detected</th>
-                            <th className="py-1 pr-4">Strength</th>
-                            <th className="py-1 pr-4">Confidence</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.type")}</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.action")}</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.detected")}</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.strength")}</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.confidence")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -338,16 +360,16 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                 {/* Contextual grounding */}
                 {assess.contextualGroundingPolicy?.filters?.length ? (
                   <div className="mb-3">
-                    <h6 className="font-medium mb-2">Contextual Grounding</h6>
+                    <h6 className="font-medium mb-2">{t("logs.detail.bedrock.contextualGrounding")}</h6>
                     <div className="overflow-x-auto">
                       <table className="min-w-full text-sm">
                         <thead>
                           <tr className="text-left text-muted-foreground">
-                            <th className="py-1 pr-4">Type</th>
-                            <th className="py-1 pr-4">Action</th>
-                            <th className="py-1 pr-4">Detected</th>
-                            <th className="py-1 pr-4">Score</th>
-                            <th className="py-1 pr-4">Threshold</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.type")}</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.action")}</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.detected")}</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.score")}</th>
+                            <th className="py-1 pr-4">{t("logs.detail.bedrock.columns.threshold")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -369,14 +391,14 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                 {/* Sensitive Information */}
                 {assess.sensitiveInformationPolicy && (
                   <div className="mb-3">
-                    <h6 className="font-medium mb-2">Sensitive Information</h6>
+                    <h6 className="font-medium mb-2">{t("logs.detail.bedrock.sensitiveInformation")}</h6>
                     {(assess.sensitiveInformationPolicy.piiEntities?.length ?? 0) > 0 && (
-                      <Section title="PII Entities" defaultOpen>
+                      <Section title={t("logs.detail.bedrock.piiEntities")} defaultOpen>
                         <div className="space-y-2">
                           {assess.sensitiveInformationPolicy.piiEntities!.map((p, i) => (
                             <div key={i} className="flex justify-between items-center p-2 bg-muted rounded-sm">
                               <div className="flex items-center gap-2">
-                                {chip(p.action ?? "N/A", p.detected ? "red" : "slate")}
+                                {chip(p.action ?? t("logs.detail.bedrock.notAvailable"), p.detected ? "red" : "slate")}
                                 {p.type && chip(p.type, "slate")}
                                 <span className="font-mono text-xs break-all">{p.match}</span>
                               </div>
@@ -387,7 +409,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                       </Section>
                     )}
                     {(assess.sensitiveInformationPolicy.regexes?.length ?? 0) > 0 && (
-                      <Section title="Custom Regexes" defaultOpen={false}>
+                      <Section title={t("logs.detail.bedrock.customRegexes")} defaultOpen={false}>
                         <div className="space-y-2">
                           {assess.sensitiveInformationPolicy.regexes!.map((r, i) => (
                             <div
@@ -395,8 +417,8 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                               className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-2 bg-muted rounded-sm gap-1"
                             >
                               <div className="flex items-center gap-2">
-                                {chip(r.action ?? "N/A", r.detected ? "red" : "slate")}
-                                <span className="font-medium">{r.name ?? "regex"}</span>
+                                {chip(r.action ?? t("logs.detail.bedrock.notAvailable"), r.detected ? "red" : "slate")}
+                                <span className="font-medium">{r.name ?? t("logs.detail.bedrock.unnamedRegex")}</span>
                                 <span className="font-mono text-xs break-all">{r.regex}</span>
                               </div>
                               <div className="flex items-center gap-2">
@@ -414,13 +436,13 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
                 {/* Topic policy */}
                 {assess.topicPolicy?.topics?.length ? (
                   <div className="mb-3">
-                    <h6 className="font-medium mb-2">Topic Policy</h6>
+                    <h6 className="font-medium mb-2">{t("logs.detail.bedrock.topicPolicy")}</h6>
                     <div className="flex flex-wrap gap-2">
                       {assess.topicPolicy.topics!.map((t, i) => (
                         <div key={i} className="px-3 py-1.5 bg-muted rounded-md text-xs">
                           <div className="flex items-center gap-2">
-                            {chip(t.action ?? "N/A", t.detected ? "red" : "slate")}
-                            <span className="font-medium">{t.name ?? "topic"}</span>
+                            {chip(t.action ?? i18n.t("logs.detail.bedrock.notAvailable"), t.detected ? "red" : "slate")}
+                            <span className="font-medium">{t.name ?? i18n.t("logs.detail.bedrock.unnamedTopic")}</span>
                             {t.type && chip(t.type, "slate")}
                             {boolPill(t.detected)}
                           </div>
@@ -432,31 +454,35 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
 
                 {/* Invocation metrics */}
                 {assess.invocationMetrics && (
-                  <Section title="Invocation Metrics" defaultOpen={false}>
+                  <Section title={t("logs.detail.bedrock.invocationMetrics")} defaultOpen={false}>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <KV label="Latency (ms)">{assess.invocationMetrics.guardrailProcessingLatency ?? "—"}</KV>
-                        <KV label="Coverage:">
+                        <KV label={t("logs.detail.bedrock.latency")}>
+                          {assess.invocationMetrics.guardrailProcessingLatency ?? "—"}
+                        </KV>
+                        <KV label={t("logs.detail.bedrock.coverage")}>
                           <div className="flex flex-wrap gap-2">
                             {assess.invocationMetrics.guardrailCoverage?.textCharacters &&
                               chip(
-                                `text ${assess.invocationMetrics.guardrailCoverage.textCharacters.guarded ?? 0}/${
-                                  assess.invocationMetrics.guardrailCoverage.textCharacters.total ?? 0
-                                }`,
+                                t("logs.detail.bedrock.textCoverage", {
+                                  guarded: assess.invocationMetrics.guardrailCoverage.textCharacters.guarded ?? 0,
+                                  total: assess.invocationMetrics.guardrailCoverage.textCharacters.total ?? 0,
+                                }),
                                 "blue",
                               )}
                             {assess.invocationMetrics.guardrailCoverage?.images &&
                               chip(
-                                `images ${assess.invocationMetrics.guardrailCoverage.images.guarded ?? 0}/${
-                                  assess.invocationMetrics.guardrailCoverage.images.total ?? 0
-                                }`,
+                                t("logs.detail.bedrock.imagesCoverage", {
+                                  guarded: assess.invocationMetrics.guardrailCoverage.images.guarded ?? 0,
+                                  total: assess.invocationMetrics.guardrailCoverage.images.total ?? 0,
+                                }),
                                 "blue",
                               )}
                           </div>
                         </KV>
                       </div>
                       <div className="space-y-2">
-                        <KV label="Usage:">
+                        <KV label={t("logs.detail.bedrock.usage")}>
                           <div className="flex flex-wrap gap-2">
                             {assess.invocationMetrics.usage &&
                               Object.entries(assess.invocationMetrics.usage).map(([k, v]) =>
@@ -478,7 +504,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
 
                 {/* Automated reasoning (fallback render) */}
                 {assess.automatedReasoningPolicy?.findings?.length ? (
-                  <Section title="Automated Reasoning Findings" defaultOpen={false}>
+                  <Section title={t("logs.detail.bedrock.automatedReasoningFindings")} defaultOpen={false}>
                     <div className="space-y-2">
                       {assess.automatedReasoningPolicy.findings!.map((f, i) => (
                         <pre key={i} className="bg-muted rounded-sm p-2 text-xs overflow-x-auto">
@@ -495,7 +521,7 @@ export const BedrockGuardrailDetails: React.FC<{ response: BedrockGuardrailRespo
       ) : null}
 
       {/* Raw JSON (for debugging / completeness) */}
-      <Section title="Raw Bedrock Guardrail Response" defaultOpen={false}>
+      <Section title={t("logs.detail.bedrock.rawResponse")} defaultOpen={false}>
         <pre className="bg-muted rounded-sm p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
       </Section>
     </div>

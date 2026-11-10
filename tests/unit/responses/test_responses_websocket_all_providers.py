@@ -1595,6 +1595,9 @@ class TestWebSocketProjectQuotaEnforcement:
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
 
 
+_TURN_USAGE: Final = {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35}
+
+
 def _turn_frames() -> tuple[str, str, str]:
     return tuple(json.dumps({"type": "response.create", "input": word}) for word in ("one", "two", "three"))
 
@@ -1928,8 +1931,138 @@ def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
     return [(frame.get("status"), frame["error"]) for frame in websocket.sent if frame.get("type") == "error"]
 
 
+class _BackendSending:
+    """A provider socket that sends these events, then closes."""
+
+    def __init__(self, *events: Mapping[str, object]) -> None:
+        self.events: Final = list(events)
+
+    async def recv(self, decode: bool = False) -> str:
+        import websockets.exceptions
+
+        if not self.events:
+            raise websockets.exceptions.ConnectionClosed(None, None)
+        return json.dumps(self.events.pop(0))
+
+
+def _turn_logged_on_deployment(deployment_id: str) -> MagicMock:
+    logging_obj: Final = MagicMock()
+    logging_obj.litellm_params = {"litellm_metadata": {"model_info": {"id": deployment_id}}}
+    logging_obj.copy_for_new_call.return_value = logging_obj
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+    return logging_obj
+
+
+def _logged_event_types(logging_obj: MagicMock) -> list[list[object]]:
+    return [[event["type"] for event in call.args[0]] for call in logging_obj.dispatch_success_handlers.call_args_list]
+
+
 class TestWebSocketTurnAdmission:
     """A turn after the connection's first is admitted by the deployment again before it reaches the provider."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("terminal_event", "counted_before_it_reaches_the_client"),
+        [
+            ({"type": "response.completed", "response": {"usage": _TURN_USAGE}}, [("ws-dep", 35)]),
+            ({"type": "response.incomplete", "response": {"usage": _TURN_USAGE}}, [("ws-dep", 35)]),
+            ({"type": "response.failed", "response": {"usage": _TURN_USAGE, "error": {"code": "server_error"}}}, []),
+        ],
+    )
+    async def test_native_relay_counts_a_finished_turn_before_forwarding_its_terminal_event(
+        self, terminal_event: dict[str, object], counted_before_it_reaches_the_client: list[tuple[object, int]]
+    ):
+        counted: Final[list[tuple[object, int]]] = []
+
+        async def record_turn_usage(turn_litellm_params: Mapping[str, object], total_tokens: int) -> None:
+            await asyncio.sleep(0)
+            metadata: Final = turn_litellm_params["litellm_metadata"]
+            assert isinstance(metadata, dict)
+            counted.append((metadata["model_info"]["id"], total_tokens))
+
+        class Client:
+            def __init__(self) -> None:
+                self.seen: Final[list[tuple[object, list[tuple[object, int]]]]] = []
+
+            async def send_text(self, data: str) -> None:
+                self.seen.append((json.loads(data)["type"], list(counted)))
+
+        client: Final = Client()
+        handler: Final = _make_streaming(
+            websocket=client,
+            backend_ws=_BackendSending({"type": "response.created", "response": {}}, terminal_event),
+            logging_obj=_turn_logged_on_deployment("ws-dep"),
+            turn_usage_recorder=record_turn_usage,
+        )
+
+        await handler.backend_to_client()
+
+        assert client.seen == [
+            ("response.created", []),
+            (terminal_event["type"], counted_before_it_reaches_the_client),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_native_relay_forwards_and_logs_a_finished_turn_whose_usage_it_cannot_read(self):
+        recorded: Final[list[int]] = []
+
+        async def record_turn_usage(turn_litellm_params: Mapping[str, object], total_tokens: int) -> None:
+            recorded.append(total_tokens)
+
+        unreadable_usage: Final = {"input_tokens": None, "output_tokens": 3, "total_tokens": 3}
+        client: Final = _ClientSocket()
+        logging_obj: Final = _turn_logged_on_deployment("ws-dep")
+        handler: Final = _make_streaming(
+            websocket=client,
+            backend_ws=_BackendSending(
+                {"type": "response.created", "response": {}},
+                {"type": "response.completed", "response": {"usage": unreadable_usage}},
+            ),
+            logging_obj=logging_obj,
+            turn_usage_recorder=record_turn_usage,
+        )
+
+        await handler.backend_to_client()
+
+        assert [event["type"] for event in client.sent] == ["response.created", "response.completed"]
+        assert _logged_event_types(logging_obj) == [["response.created", "response.completed"]]
+        assert recorded == []
+
+    @pytest.mark.asyncio
+    async def test_native_relay_finishes_counting_a_turn_before_logging_it_when_the_client_leaves(self):
+        counting: Final = asyncio.Event()
+        count_written: Final = asyncio.Event()
+        counted: Final[list[int]] = []
+
+        async def record_turn_usage_slowly(turn_litellm_params: Mapping[str, object], total_tokens: int) -> None:
+            counting.set()
+            await count_written.wait()
+            counted.append(total_tokens)
+
+        logging_obj: Final = _turn_logged_on_deployment("ws-dep")
+        handler: Final = _make_streaming(
+            websocket=_ClientSocket(),
+            backend_ws=_BackendSending(
+                {"type": "response.created", "response": {}},
+                {"type": "response.completed", "response": {"usage": _TURN_USAGE}},
+            ),
+            logging_obj=logging_obj,
+            turn_usage_recorder=record_turn_usage_slowly,
+        )
+        relay: Final = asyncio.create_task(handler.backend_to_client())
+        await asyncio.wait_for(counting.wait(), timeout=5)
+
+        relay.cancel()
+        _ = await asyncio.wait((relay,), timeout=0.1)
+        logged_while_counting: Final = _logged_event_types(logging_obj)
+        count_written.set()
+        with pytest.raises(asyncio.CancelledError):
+            await relay
+
+        assert logged_while_counting == []
+        assert counted == [35]
+        assert _logged_event_types(logging_obj) == [["response.created", "response.completed"]]
 
     @pytest.mark.asyncio
     async def test_native_relay_drops_a_later_turn_the_deployment_refuses(self):

@@ -1,5 +1,6 @@
 import { CircleAlert } from "lucide-react";
 import React, { useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -24,6 +25,7 @@ const AgentKillSwitchDangerZone: React.FC<AgentKillSwitchDangerZoneProps> = ({
   accessToken,
   isAdmin,
 }) => {
+  const { t } = useTranslation();
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
   const [confirmationInput, setConfirmationInput] = useState("");
   const [isFiring, setIsFiring] = useState(false);
@@ -44,9 +46,9 @@ const AgentKillSwitchDangerZone: React.FC<AgentKillSwitchDangerZoneProps> = ({
       const result = await triggerAgentKillSwitchCall(accessToken, agentId);
       setLastResult(result);
       setIsConfirmOpen(false);
-      toast.success(`Kill switch fired (HTTP ${result.status_code})`);
+      toast.success(t("agents.dangerZone.toasts.fired", { status: result.status_code }));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to fire kill switch");
+      toast.error(error instanceof Error ? error.message : t("agents.dangerZone.toasts.fireFailed"));
     } finally {
       setIsFiring(false);
     }
@@ -55,38 +57,33 @@ const AgentKillSwitchDangerZone: React.FC<AgentKillSwitchDangerZoneProps> = ({
   return (
     <section aria-labelledby="agent-danger-zone-heading" className="mt-6">
       <h3 id="agent-danger-zone-heading" className="text-lg font-medium text-destructive">
-        Danger Zone
+        {t("agents.dangerZone.title")}
       </h3>
       <div className="mt-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 space-y-1 text-sm">
-            <p className="font-medium text-foreground">Kill switch</p>
+            <p className="font-medium text-foreground">{t("agents.dangerZone.killSwitch")}</p>
             {killSwitch ? (
               <>
-                <p className="text-muted-foreground">
-                  Calls the configured webhook to stop this agent&apos;s upstream runtime. This can cause an outage for
-                  everyone using the agent and cannot be undone from LiteLLM
-                </p>
+                <p className="text-muted-foreground">{t("agents.dangerZone.configuredDescription")}</p>
                 <p className="font-mono break-all text-foreground">
                   {killSwitch.method ?? "POST"} {killSwitch.url}
                 </p>
               </>
             ) : (
-              <p className="text-muted-foreground">
-                Not configured. Add a kill switch webhook under Settings to enable this action
-              </p>
+              <p className="text-muted-foreground">{t("agents.dangerZone.notConfigured")}</p>
             )}
           </div>
           {killSwitch && (
             <Button type="button" variant="destructive" onClick={openConfirm} disabled={isFiring} aria-busy={isFiring}>
               {isFiring && <UiLoadingSpinner className="size-4" />}
-              Fire Kill Switch
+              {t("agents.dangerZone.fire")}
             </Button>
           )}
         </div>
         {lastResult && (
           <p className="mt-3 text-sm text-muted-foreground" role="status">
-            Last result: HTTP {lastResult.status_code}
+            {t("agents.dangerZone.lastResult", { status: lastResult.status_code })}
             {lastResult.response_body ? ` ${lastResult.response_body}` : ""}
           </p>
         )}
@@ -95,27 +92,32 @@ const AgentKillSwitchDangerZone: React.FC<AgentKillSwitchDangerZoneProps> = ({
       <Dialog open={isConfirmOpen} onOpenChange={(open) => !open && !isFiring && setIsConfirmOpen(false)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Fire kill switch for {agentName}?</DialogTitle>
+            <DialogTitle>{t("agents.dangerZone.confirm.title", { name: agentName })}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <Alert variant="error">
               <CircleAlert />
-              <AlertTitle>This can cause an outage</AlertTitle>
+              <AlertTitle>{t("agents.dangerZone.confirm.outageTitle")}</AlertTitle>
               <AlertDescription>
-                LiteLLM will call {killSwitch?.method ?? "POST"} {killSwitch?.url} immediately. Whatever that webhook
-                does to the agent is outside LiteLLM&apos;s control and cannot be reverted here
+                {t("agents.dangerZone.confirm.outageDescription", {
+                  method: killSwitch?.method ?? "POST",
+                  url: killSwitch?.url,
+                })}
               </AlertDescription>
             </Alert>
             <div>
               <p className="mb-2 text-base font-medium text-foreground">
-                Type <span className="font-semibold text-destructive">{agentName}</span> to confirm:
+                <Trans
+                  i18nKey="agents.dangerZone.confirm.typeToConfirm"
+                  components={{ name: <span className="font-semibold text-destructive">{agentName}</span> }}
+                />
               </p>
               <InputGroup className="rounded-md">
                 <InputGroupAddon>
                   <CircleAlert className="size-3.5 text-destructive" />
                 </InputGroupAddon>
                 <InputGroupInput
-                  aria-label="Confirm agent name"
+                  aria-label={t("agents.dangerZone.confirm.inputLabel")}
                   value={confirmationInput}
                   onChange={(e) => setConfirmationInput(e.target.value)}
                   placeholder={agentName}
@@ -126,7 +128,7 @@ const AgentKillSwitchDangerZone: React.FC<AgentKillSwitchDangerZoneProps> = ({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsConfirmOpen(false)} disabled={isFiring}>
-              Cancel
+              {t("agents.dangerZone.confirm.cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -135,7 +137,7 @@ const AgentKillSwitchDangerZone: React.FC<AgentKillSwitchDangerZoneProps> = ({
               aria-busy={isFiring}
             >
               {isFiring && <UiLoadingSpinner className="size-4" />}
-              {isFiring ? "Firing..." : "Fire Kill Switch"}
+              {isFiring ? t("agents.dangerZone.confirm.firing") : t("agents.dangerZone.fire")}
             </Button>
           </DialogFooter>
         </DialogContent>

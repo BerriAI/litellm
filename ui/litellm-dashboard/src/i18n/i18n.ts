@@ -1,6 +1,7 @@
 import i18n, { type InitOptions } from "i18next";
 import { initReactI18next } from "react-i18next";
 
+import { registerFormats } from "./formats";
 import en from "./locales/en.json";
 
 declare module "i18next" {
@@ -19,5 +20,7 @@ const options: InitOptions = {
 };
 
 void i18n.use(initReactI18next).init(options);
+
+if (i18n.services.formatter) registerFormats(i18n.services.formatter);
 
 export default i18n;

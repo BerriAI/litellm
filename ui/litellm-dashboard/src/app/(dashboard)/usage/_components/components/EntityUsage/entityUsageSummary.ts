@@ -1,3 +1,5 @@
+import type { ParseKeys, TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export interface SummaryTile {
@@ -18,17 +20,25 @@ interface SpendSummaryMetadata {
   total_tokens: number;
 }
 
-export const TOTAL_COST_TOOLTIP =
-  "Request cost plus flat cost for reserved capacity. Select this tile to see the breakdown.";
+export const SUMMARY_TILE_LABELS: Readonly<Record<string, ParseKeys>> = {
+  "PTU Hours": "usage.entitySummary.titles.ptuHours",
+  "Total Cost": "usage.entitySummary.titles.totalCost",
+  "Total Spend": "usage.entitySummary.titles.totalSpend",
+  "Total Requests": "usage.entitySummary.titles.totalRequests",
+  "Successful Requests": "usage.entitySummary.titles.successfulRequests",
+  "Failed Requests": "usage.entitySummary.titles.failedRequests",
+  "Total Tokens": "usage.entitySummary.titles.totalTokens",
+  "Request Cost": "usage.entitySummary.titles.requestCost",
+  "Flat Cost": "usage.entitySummary.titles.flatCost",
+};
 
-export const REQUEST_COST_TOOLTIP =
-  "Usage-based cost of the requests this entity sent during the selected period, priced per token.";
+export const TOTAL_COST_TOOLTIP: ParseKeys = "usage.entitySummary.tooltips.totalCost";
 
-export const FLAT_COST_TOOLTIP =
-  "Reserved provisioned throughput, billed per hour whether or not requests are sent. Reported here only; it does not count toward team, key, user, or organization budgets.";
+export const REQUEST_COST_TOOLTIP: ParseKeys = "usage.entitySummary.tooltips.requestCost";
 
-export const PTU_HOURS_TOOLTIP =
-  "Provisioned throughput consumed, in PTU-hours: the tokens sent to PTU deployments converted through the Azure sizing table for each model. Divide it by the PTUs reserved times the hours in the period to see how much of the reservation was used.";
+export const FLAT_COST_TOOLTIP: ParseKeys = "usage.entitySummary.tooltips.flatCost";
+
+export const PTU_HOURS_TOOLTIP: ParseKeys = "usage.entitySummary.tooltips.ptuHours";
 
 export const hasFlatCost = (metadata: SpendSummaryMetadata): boolean => (metadata.total_flat_cost ?? 0) > 0;
 
@@ -38,6 +48,7 @@ export const buildSummaryTiles = (
   metadata: SpendSummaryMetadata,
   showFlatCost: boolean,
   showPtuHours: boolean = false,
+  t: TFunction = i18n.t.bind(i18n),
 ): SummaryTile[] => {
   const flatCost = metadata.total_flat_cost ?? 0;
   const ptuHoursTile: SummaryTile[] = showPtuHours
@@ -45,7 +56,7 @@ export const buildSummaryTiles = (
         {
           title: "PTU Hours",
           value: formatNumberWithCommas(metadata.total_ptu_hours ?? 0, 2),
-          tooltip: PTU_HOURS_TOOLTIP,
+          tooltip: t(PTU_HOURS_TOOLTIP),
         },
       ]
     : [];
@@ -54,7 +65,7 @@ export const buildSummaryTiles = (
       ? {
           title: "Total Cost",
           value: `$${formatNumberWithCommas(metadata.total_spend + flatCost, 2)}`,
-          tooltip: TOTAL_COST_TOOLTIP,
+          tooltip: t(TOTAL_COST_TOOLTIP),
           expandable: true,
         }
       : { title: "Total Spend", value: `$${formatNumberWithCommas(metadata.total_spend, 2)}` },
@@ -70,17 +81,20 @@ export const buildSummaryTiles = (
   ];
 };
 
-export const buildCostBreakdownTiles = (metadata: SpendSummaryMetadata): SummaryTile[] => [
+export const buildCostBreakdownTiles = (
+  metadata: SpendSummaryMetadata,
+  t: TFunction = i18n.t.bind(i18n),
+): SummaryTile[] => [
   {
     title: "Request Cost",
     value: `$${formatNumberWithCommas(metadata.total_spend, 2)}`,
     className: "text-info",
-    tooltip: REQUEST_COST_TOOLTIP,
+    tooltip: t(REQUEST_COST_TOOLTIP),
   },
   {
     title: "Flat Cost",
     value: `$${formatNumberWithCommas(metadata.total_flat_cost ?? 0, 2)}`,
     className: "text-violet-600",
-    tooltip: FLAT_COST_TOOLTIP,
+    tooltip: t(FLAT_COST_TOOLTIP),
   },
 ];

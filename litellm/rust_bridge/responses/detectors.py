@@ -67,7 +67,7 @@ def _tools(request: NativeCall) -> Sequence[object]:
 
 def managed_resource_ids(request: NativeCall) -> bool:
     """Python replaces managed file IDs in Responses input and tools with provider IDs."""
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
         update_responses_tools_with_model_file_ids,
     )

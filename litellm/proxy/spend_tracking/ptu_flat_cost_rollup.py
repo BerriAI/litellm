@@ -33,6 +33,7 @@ from litellm.constants import (
     PTU_ROLLUP_MAX_BACKFILL_DAYS,
     PTU_SENTINEL_API_KEY,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
@@ -77,6 +78,10 @@ class _SentinelBatchManager(Protocol):
     async def __aenter__(self) -> _SentinelBatch: ...
 
     async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 def _sentinel_batch(prisma_client: "PrismaClient") -> _SentinelBatchManager:
@@ -171,7 +176,7 @@ class _PTUDeployment:
     model_info: Mapping[str, object]
 
 
-def _router_deployment(deployment: Mapping[str, object]) -> _PTUDeployment | None:
+def _router_deployment(deployment: _SupportsGet) -> _PTUDeployment | None:
     """A router ``model_list`` entry in the shape the parser reads, else None.
 
     An id is required rather than defaulted because it keys the sentinel row: every
@@ -421,8 +426,8 @@ def _config_deployments(router: "Router | None", *, owned_by_db: frozenset[str])
     credential clone carries ``original_model_id`` and reuses its source's PTU config under
     a fresh id, so pricing it would bill one reservation once per distinct client key.
     """
-    entries: Final = tuple((router.registry().all() if router is not None else None) or ())
-    records: Final = tuple(_router_deployment(entry) for entry in entries)
+    entries: Final[tuple[object, ...]] = tuple((router.registry().all() if router is not None else None) or ())
+    records: Final = tuple(_router_deployment(require_attributes(entry, _SupportsGet, "get")) for entry in entries)
     return tuple(
         record
         for record in records

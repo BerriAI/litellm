@@ -1,6 +1,8 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MoreHorizontal, Trash2 } from "lucide-react";
 
@@ -14,6 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import i18n from "@/i18n/i18n";
 import { cn } from "@/lib/cva.config";
 
 import { AutoRouterRow } from "./autoRouterRows";
@@ -71,10 +74,11 @@ function AutoRouterRowActions({
   row: AutoRouterRow;
   onDeleteClick: (row: AutoRouterRow) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        aria-label={`Open actions for ${row.name}`}
+        aria-label={t("modelsAndEndpoints.autoRoutersTableColumns.openActions", { name: row.name })}
         data-testid={`auto-router-actions-${row.id}`}
         className={cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "text-muted-foreground")}
       >
@@ -87,7 +91,7 @@ function AutoRouterRowActions({
           onClick={() => onDeleteClick(row)}
         >
           <Trash2 />
-          Delete auto router
+          {t("modelsAndEndpoints.autoRoutersTableColumns.deleteAutoRouter")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -100,16 +104,17 @@ interface AutoRoutersTableColumnsDeps {
   onDeleteClick: (row: AutoRouterRow) => void;
 }
 
-export const getAutoRoutersTableColumns = ({
-  canModify,
-  onRouterClick,
-  onDeleteClick,
-}: AutoRoutersTableColumnsDeps): ColumnDef<AutoRouterRow>[] => [
+export const getAutoRoutersTableColumns = (
+  { canModify, onRouterClick, onDeleteClick }: AutoRoutersTableColumnsDeps,
+  t: TFunction = i18n.t.bind(i18n),
+): ColumnDef<AutoRouterRow>[] => [
   {
     id: "name",
     accessorKey: "name",
-    meta: { title: "Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Name" />,
+    meta: { title: t("modelsAndEndpoints.autoRoutersTableColumns.name") },
+    header: ({ column }) => (
+      <DataTableSortHeader column={column} title={t("modelsAndEndpoints.autoRoutersTableColumns.name")} />
+    ),
     size: 260,
     enableSorting: true,
     cell: ({ row }) => <IdentityCell title={row.original.name || "-"} onClick={() => onRouterClick(row.original)} />,
@@ -117,16 +122,16 @@ export const getAutoRoutersTableColumns = ({
   {
     id: "kind",
     accessorKey: "kind",
-    meta: { title: "Type" },
-    header: "Type",
+    meta: { title: t("modelsAndEndpoints.autoRoutersTableColumns.type") },
+    header: t("modelsAndEndpoints.autoRoutersTableColumns.type"),
     size: 180,
     enableSorting: false,
     cell: ({ row }) => <TypeCell row={row.original} />,
   },
   {
     id: "targets",
-    meta: { title: "Routes to" },
-    header: "Routes to",
+    meta: { title: t("modelsAndEndpoints.autoRoutersTableColumns.routesTo") },
+    header: t("modelsAndEndpoints.autoRoutersTableColumns.routesTo"),
     size: 320,
     enableSorting: false,
     cell: ({ row }) => <TargetsCell targets={row.original.targets} />,
@@ -134,8 +139,8 @@ export const getAutoRoutersTableColumns = ({
   {
     id: "defaultModel",
     accessorKey: "defaultModel",
-    meta: { title: "Default model" },
-    header: "Default model",
+    meta: { title: t("modelsAndEndpoints.autoRoutersTableColumns.defaultModel") },
+    header: t("modelsAndEndpoints.autoRoutersTableColumns.defaultModel"),
     size: 200,
     enableSorting: false,
     cell: ({ row }) =>
@@ -150,8 +155,10 @@ export const getAutoRoutersTableColumns = ({
   {
     id: "createdAt",
     accessorKey: "createdAt",
-    meta: { title: "Created" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Created" />,
+    meta: { title: t("modelsAndEndpoints.autoRoutersTableColumns.created") },
+    header: ({ column }) => (
+      <DataTableSortHeader column={column} title={t("modelsAndEndpoints.autoRoutersTableColumns.created")} />
+    ),
     size: 150,
     enableSorting: true,
     sortingFn: "datetime",

@@ -22,6 +22,8 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, Field, SecretStr, ValidationError
 
+from litellm.proxy.common_utils.encrypt_decrypt_utils import derive_key_from_salt_key
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.mcp_server.outbound_credentials.session_token import (
     AsymmetricSessionKeys,
     OpenedSessionToken,
@@ -59,7 +61,14 @@ def session_keys_from_master_key(master_key: str) -> SessionKeys:
     into the other. The result is cached (the master key is fixed for a process); rotating
     ``master_key`` invalidates every outstanding session, which is the intended behavior
     for a signing-key change.
+
+    When general_settings.fips_mode is on, the key comes from :func:`derive_key_from_salt_key` with the master key as
+    context instead.
     """
+    if fips_mode_active():
+        return SessionKeys(
+            signing_key=SecretStr(derive_key_from_salt_key(_SESSION_SIGNING_KEY_DOMAIN, master_key.encode()))
+        )
     signing: Final = hashlib.scrypt(
         master_key.encode(),
         salt=_SESSION_SIGNING_KEY_DOMAIN,

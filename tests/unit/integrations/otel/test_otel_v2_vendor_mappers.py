@@ -174,6 +174,45 @@ def test_openinference_output_tool_calls_preserve_calls_in_attributes_and_value(
     ]
 
 
+def test_openinference_output_lists_claude_server_tool_calls_before_client_tool_calls():
+    data: Final = _llm_call(
+        choices_out=(
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_paris",
+                            "type": "function",
+                            "function": {"name": "lookup_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "server_tool_calls": [
+                            {
+                                "id": "srvtoolu_01Search",
+                                "type": "function",
+                                "function": {"name": "web_search", "arguments": '{"query": "paris weather"}'},
+                            }
+                        ]
+                    },
+                },
+            },
+        )
+    )
+    attrs: Final = OpenInferenceMapper().map(data)
+    assert {key: value for key, value in attrs.items() if ".tool_calls." in key} == {
+        "llm.output_messages.0.message.tool_calls.0.tool_call.id": "srvtoolu_01Search",
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.name": "web_search",
+        "llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments": '{"query": "paris weather"}',
+        "llm.output_messages.0.message.tool_calls.1.tool_call.id": "call_paris",
+        "llm.output_messages.0.message.tool_calls.1.tool_call.function.name": "lookup_weather",
+        "llm.output_messages.0.message.tool_calls.1.tool_call.function.arguments": '{"city": "Paris"}',
+    }
+
+
 def test_openinference_responses_tool_calls_are_emitted_as_output_attributes():
     data: Final = LLMCallSpanData.from_standard_logging_payload(
         _responses_payload(

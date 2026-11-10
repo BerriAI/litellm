@@ -1037,10 +1037,11 @@ class TestCodexModelSync:
         assert entry["supported_in_api"] is True
         assert entry["shell_type"] == "unified_exec"
         assert entry["supported_reasoning_levels"] == []
-        assert entry["truncation_policy"] == {"mode": "bytes", "limit": 10000}
+        assert entry["truncation_policy"] == {"mode": "tokens", "limit": 10000}
         assert entry["experimental_supported_tools"] == []
         assert entry["support_verbosity"] is False
         assert entry["supports_reasoning_summaries"] is False
+        assert "supports_reasoning_summary_parameter" not in entry
         assert entry["supports_parallel_tool_calls"] is False
         for nullable in ("description", "availability_nux", "upgrade", "default_verbosity", "apply_patch_tool_type"):
             assert nullable in entry and entry[nullable] is None

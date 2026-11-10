@@ -202,7 +202,7 @@ def response_total_token_count(response: object) -> int:
 
 def apply_remaining_usage_headers(
     additional_headers: dict[str, object],
-    remaining_usage: dict[str, int],
+    remaining_usage: Mapping[str, object],
 ) -> None:
     for header, value in remaining_usage.items():
         if value is not None and header not in additional_headers:

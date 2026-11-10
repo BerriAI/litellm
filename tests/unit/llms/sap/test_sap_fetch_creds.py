@@ -160,3 +160,15 @@ def test_credentials_without_authentication_mode(monkeypatch):
     # validate_credentials should raise because no authentication mode is provided
     with pytest.raises(ValueError, match="SAP AI Core credentials are incomplete"):
         sap_credentials.validate_credentials(**creds)
+
+
+@pytest.mark.parametrize("vcap_services", [["aicore"], "aicore"])
+def test_vcap_services_that_is_not_an_object_is_rejected(monkeypatch, vcap_services):
+    _prep_env(monkeypatch)
+    monkeypatch.setenv("VCAP_SERVICES", json.dumps(vcap_services))
+
+    with pytest.raises(
+        AttributeError,
+        match=f"^'{type(vcap_services).__name__}' object has no attribute 'values'$",
+    ):
+        sap_credentials.fetch_credentials()

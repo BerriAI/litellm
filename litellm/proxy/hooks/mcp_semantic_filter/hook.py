@@ -6,7 +6,7 @@ Reduces context window size and improves tool selection accuracy.
 """
 
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, Protocol
 
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
@@ -18,6 +18,7 @@ from litellm.constants import (
     DEFAULT_MCP_SEMANTIC_FILTER_TOP_K,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes
 from litellm.proxy.mcp_server.semantic_tool_filter import (
     SemanticToolFilterContextWindowError,
 )
@@ -48,6 +49,35 @@ def _truncate_csv_at_tool_name_boundary(tool_names_csv: str, max_length: int) ->
         return ""
 
     return head.rsplit(",", 1)[0]
+
+
+class _PydanticTool(Protocol):
+    def model_dump(self, *, exclude_none: bool) -> Mapping[str, object]: ...
+
+
+class _PydanticV1Tool(Protocol):
+    def dict(self, *, exclude_none: bool) -> Mapping[str, object]: ...
+
+
+def _tool_as_dict(tool: object) -> object:
+    if has_attributes(tool, _PydanticTool, "model_dump"):
+        tool_dict: Final = tool.model_dump(exclude_none=True)
+        verbose_proxy_logger.debug(
+            "Converted Pydantic tool to dict: %s -> dict with keys: %s",
+            type(tool).__name__,
+            list(tool_dict.keys()),
+        )
+        return tool_dict
+    if has_attributes(tool, _PydanticV1Tool, "dict"):
+        legacy_tool_dict: Final = tool.dict(exclude_none=True)
+        verbose_proxy_logger.debug("Converted Pydantic tool (v1) to dict: %s -> dict", type(tool).__name__)
+        return legacy_tool_dict
+    tool_mapping: Final = as_str_mapping(tool)
+    if tool_mapping is not None and isinstance(tool, dict):
+        verbose_proxy_logger.debug("Tool is already a dict with keys: %s", list(tool_mapping.keys()))
+        return tool_mapping
+    verbose_proxy_logger.warning("Tool is unknown type: %s, passing as-is", type(tool))
+    return tool
 
 
 class SemanticToolFilterHook(CustomLogger):
@@ -92,7 +122,7 @@ class SemanticToolFilterHook(CustomLogger):
         self,
         tools: Iterable[Mapping[str, object]],
         user_api_key_dict: "UserAPIKeyAuth",
-    ) -> list[dict[str, object]]:
+    ) -> list[object]:
         """
         Expand MCP references to actual tool definitions.
 
@@ -119,26 +149,7 @@ class SemanticToolFilterHook(CustomLogger):
         )
 
         # Convert Pydantic models to dicts for compatibility
-        openai_tools_as_dicts: Final[list[dict[str, object]]] = []
-        for tool in openai_tools:
-            if hasattr(tool, "model_dump"):
-                tool_dict = tool.model_dump(exclude_none=True)
-                verbose_proxy_logger.debug(
-                    "Converted Pydantic tool to dict: %s -> dict with keys: %s",
-                    type(tool).__name__,
-                    list(tool_dict.keys()),
-                )
-                openai_tools_as_dicts.append(tool_dict)
-            elif hasattr(tool, "dict"):
-                tool_dict = tool.dict(exclude_none=True)
-                verbose_proxy_logger.debug("Converted Pydantic tool (v1) to dict: %s -> dict", type(tool).__name__)
-                openai_tools_as_dicts.append(tool_dict)
-            elif isinstance(tool, dict):
-                verbose_proxy_logger.debug("Tool is already a dict with keys: %s", list(tool.keys()))
-                openai_tools_as_dicts.append(tool)
-            else:
-                verbose_proxy_logger.warning("Tool is unknown type: %s, passing as-is", type(tool))
-                openai_tools_as_dicts.append(tool)
+        openai_tools_as_dicts: Final = list(map(_tool_as_dict, openai_tools))
 
         verbose_proxy_logger.debug(
             "Expanded %s MCP reference(s) to %s tools (all as dicts)", len(mcp_tools), len(openai_tools_as_dicts)
@@ -149,8 +160,8 @@ class SemanticToolFilterHook(CustomLogger):
     async def _filter_expanded_tools(
         self,
         data: dict,
-        expanded_tools: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
+        expanded_tools: list[object],
+    ) -> list[object]:
         """
         Apply the semantic filter to expanded MCP tool definitions.
 

@@ -3,6 +3,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ParsedTool } from "./types";
 import { FormattedToolView } from "./FormattedToolView";
@@ -15,6 +16,7 @@ interface ToolExpandedContentProps {
 }
 
 export function ToolExpandedContent({ tool }: ToolExpandedContentProps) {
+  const { t } = useTranslation();
   const [viewMode, setViewMode] = useState<ViewMode>("formatted");
 
   return (
@@ -27,11 +29,11 @@ export function ToolExpandedContent({ tool }: ToolExpandedContentProps) {
           marginBottom: 12,
         }}
       >
-        <span className="text-xs text-muted-foreground">Description</span>
+        <span className="text-xs text-muted-foreground">{t("logs.detail.tools.description")}</span>
         <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as ViewMode)}>
           <TabsList>
-            <TabsTrigger value="formatted">Formatted</TabsTrigger>
-            <TabsTrigger value="json">JSON</TabsTrigger>
+            <TabsTrigger value="formatted">{t("logs.detail.tools.formatted")}</TabsTrigger>
+            <TabsTrigger value="json">{t("logs.detail.tools.json")}</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>

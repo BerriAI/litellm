@@ -1,4 +1,4 @@
-from typing import Final
+from typing import Final, NoReturn
 
 import pytest
 
@@ -50,14 +50,14 @@ async def test_is_model_authorized_for_token_follows_the_key_access_groups():
     assert await is_model_authorized_for_token(model="secret-model", valid_token=token, llm_router=router) is False
 
 
-class _RouterWithBrokenAccessGroupLookup(Router):
-    def get_model_access_groups(self, *args, **kwargs):
-        raise RuntimeError("access group store unavailable")
+def _broken_access_group_lookup(*args: object, **kwargs: object) -> NoReturn:
+    raise RuntimeError("access group store unavailable")
 
 
 @pytest.mark.asyncio
-async def test_is_model_authorized_for_token_fails_closed_when_the_lookup_breaks():
-    router = _RouterWithBrokenAccessGroupLookup(model_list=_router().model_list)
+async def test_is_model_authorized_for_token_fails_closed_when_the_lookup_breaks(monkeypatch: pytest.MonkeyPatch):
+    router = _router()
+    monkeypatch.setattr(type(router.registry()), "access_groups", _broken_access_group_lookup)
 
     assert (
         await is_model_authorized_for_token(

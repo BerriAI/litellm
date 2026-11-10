@@ -1,14 +1,16 @@
+import type { ParseKeys } from "i18next";
 import Papa from "papaparse";
 
 import type { TeamUserSpendResponse } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 
 export type TeamUserSpendRow = TeamUserSpendResponse["results"][number];
 
-export const NO_USER_LABEL = "(no user)";
+export const NO_USER_LABEL: ParseKeys = "usage.teamUserSpend.noUser";
 
 export const userLabel = (row: TeamUserSpendRow): string => {
   const identity = row.user_email || row.user_alias;
-  return identity || row.user_id || NO_USER_LABEL;
+  return identity || row.user_id || i18n.t(NO_USER_LABEL);
 };
 
 export const teamLabel = (row: TeamUserSpendRow): string => row.team_alias || row.team_id;

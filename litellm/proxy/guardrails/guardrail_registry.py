@@ -644,6 +644,9 @@ def _configure_callback_scoping(
         )
     logging_only_scope: Final = None if logging_only_scope_error is not None else litellm_params.logging_only_scope
     custom_guardrail_callback.logging_only_scope = logging_only_scope
+    custom_guardrail_callback.mcp_block_behavior = (  # rebind-ok: initialize provider-independent callback configuration
+        litellm_params.mcp_block_behavior
+    )
     custom_guardrail_callback.logging_only_continue_on_input_failure = (
         logging_only_continue_error is None
         and logging_only_scope is None

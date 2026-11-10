@@ -236,8 +236,10 @@ _RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(st
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
+    from litellm.proxy.utils import query_raw_rows
+
     async with db_span("auto_router_report_query", sql_relation(query)):
-        return _RAW_ROWS.validate_python(await prisma_client.db.query_raw(query, *args))
+        return _RAW_ROWS.validate_python(await query_raw_rows(prisma_client.db, query, *args))
 
 
 async def _execute_raw(prisma_client: "PrismaClient", query: str, *args: object) -> int:
@@ -939,7 +941,7 @@ def _idle_router_groups(
     zero: Final = _summed_agg_row(())
     idle: Final = frozenset(
         key
-        for key in (_strategy_router_key(deployment) for deployment in llm_router.registry().all() or ())
+        for key in map(_strategy_router_key, llm_router.registry().all() or ())
         if key is not None and key not in covered
     )
     return tuple(
@@ -1112,6 +1114,7 @@ def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) 
             router_registry.plugins("complexity"),
             router_registry.plugins("adaptive"),
             router_registry.plugins("quality"),
+            router_registry.plugins("switchyard"),
         )
     )
 

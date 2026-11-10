@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -304,6 +305,13 @@ class FalAIVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> _VideoParams:
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "fal_ai",
+            drop_params,
+            frozenset({"generate_audio", "aspect_ratio", "seed", "duration"}),
+        )
         supported_params: Final[frozenset[str]] = frozenset(self.get_supported_openai_params(model))
         input_reference: Final[object] = video_create_optional_params.get("input_reference")
         if "input_reference" in video_create_optional_params and not isinstance(input_reference, str):
@@ -338,7 +346,11 @@ class FalAIVideoConfig(BaseVideoConfig):
             **duration_params,
             **size_params,
             **user_params,
-            **{key: value for key, value in video_create_optional_params.items() if key not in supported_params},
+            **{
+                key: value
+                for key, value in video_create_optional_params.items()
+                if key not in supported_params and key not in unsupported
+            },
         }
         return mapped_params
 

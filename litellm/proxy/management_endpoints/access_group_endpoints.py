@@ -347,47 +347,45 @@ async def _cache_access_group_record(record: _AccessGroupRecord) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _sync_add_access_group_to_teams(tx: _AccessGroupTx, team_ids: list[str], access_group_id: str) -> None:
-    """Add access_group_id to each team's access_group_ids (idempotent)."""
-    for team_id in team_ids:
+async def _sync_access_group_on_teams(
+    tx: _AccessGroupTx, add: Sequence[str], remove: Sequence[str], access_group_id: str
+) -> None:
+    """Rows are locked in sorted team_id order, the order every spend writer locks team rows in, so this
+    cannot deadlock with them."""
+    to_add: Final = frozenset(add)
+    for team_id in sorted(to_add | frozenset(remove)):
         team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
-        if team is not None and access_group_id not in (team.access_group_ids or []):
+        if team is None:
+            continue
+        current = list(team.access_group_ids or [])
+        if team_id in to_add and access_group_id not in current:
+            await tx.litellm_teamtable.update(
+                where={"team_id": team_id}, data={"access_group_ids": [*current, access_group_id]}
+            )
+        elif team_id not in to_add and access_group_id in current:
             await tx.litellm_teamtable.update(
                 where={"team_id": team_id},
-                data={"access_group_ids": list(team.access_group_ids or []) + [access_group_id]},
+                data={"access_group_ids": list(_without_access_group(current, access_group_id))},
             )
 
 
-async def _sync_remove_access_group_from_teams(tx: _AccessGroupTx, team_ids: list[str], access_group_id: str) -> None:
-    """Remove access_group_id from each team's access_group_ids (idempotent)."""
-    for team_id in team_ids:
-        team = await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
-        if team is not None and access_group_id in (team.access_group_ids or []):
-            await tx.litellm_teamtable.update(
-                where={"team_id": team_id},
-                data={"access_group_ids": [ag for ag in (team.access_group_ids or ()) if ag != access_group_id]},
-            )
-
-
-async def _sync_add_access_group_to_keys(tx: _AccessGroupTx, key_tokens: list[str], access_group_id: str) -> None:
-    """Add access_group_id to each key's access_group_ids (idempotent)."""
-    for token in key_tokens:
+async def _sync_access_group_on_keys(
+    tx: _AccessGroupTx, add: Sequence[str], remove: Sequence[str], access_group_id: str
+) -> None:
+    """Rows are locked in sorted token order, the order every spend writer locks key rows in."""
+    to_add: Final = frozenset(add)
+    for token in sorted(to_add | frozenset(remove)):
         key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
-        if key is not None and access_group_id not in (key.access_group_ids or []):
+        if key is None:
+            continue
+        current = list(key.access_group_ids or [])
+        if token in to_add and access_group_id not in current:
             await tx.litellm_verificationtoken.update(
-                where={"token": token},
-                data={"access_group_ids": list(key.access_group_ids or []) + [access_group_id]},
+                where={"token": token}, data={"access_group_ids": [*current, access_group_id]}
             )
-
-
-async def _sync_remove_access_group_from_keys(tx: _AccessGroupTx, key_tokens: list[str], access_group_id: str) -> None:
-    """Remove access_group_id from each key's access_group_ids (idempotent)."""
-    for token in key_tokens:
-        key = await tx.litellm_verificationtoken.find_unique(where={"token": token})
-        if key is not None and access_group_id in (key.access_group_ids or []):
+        elif token not in to_add and access_group_id in current:
             await tx.litellm_verificationtoken.update(
-                where={"token": token},
-                data={"access_group_ids": [ag for ag in (key.access_group_ids or ()) if ag != access_group_id]},
+                where={"token": token}, data={"access_group_ids": list(_without_access_group(current, access_group_id))}
             )
 
 
@@ -582,8 +580,8 @@ async def create_access_group(
             )
 
             # Sync team and key tables to reference the new access group
-            await _sync_add_access_group_to_teams(tx, data.assigned_team_ids or [], record.access_group_id)
-            await _sync_add_access_group_to_keys(tx, data.assigned_key_ids or [], record.access_group_id)
+            await _sync_access_group_on_teams(tx, data.assigned_team_ids or [], (), record.access_group_id)
+            await _sync_access_group_on_keys(tx, data.assigned_key_ids or [], (), record.access_group_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -718,10 +716,8 @@ async def update_access_group(
                 data=update_data,
             )
 
-            await _sync_add_access_group_to_teams(tx, teams_to_add, access_group_id)
-            await _sync_remove_access_group_from_teams(tx, teams_to_remove, access_group_id)
-            await _sync_add_access_group_to_keys(tx, keys_to_add, access_group_id)
-            await _sync_remove_access_group_from_keys(tx, keys_to_remove, access_group_id)
+            await _sync_access_group_on_teams(tx, teams_to_add, teams_to_remove, access_group_id)
+            await _sync_access_group_on_keys(tx, keys_to_add, keys_to_remove, access_group_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -790,25 +786,8 @@ async def delete_access_group(
             )
             affected_key_tokens = list(all_affected_key_tokens)
 
-            # Update teams returned by find_many directly — we already have their data.
-            for team in teams_with_group:
-                await tx.litellm_teamtable.update(
-                    where={"team_id": team.team_id},
-                    data={"access_group_ids": [ag for ag in (team.access_group_ids or ()) if ag != access_group_id]},
-                )
-            # Use _sync_remove only for out-of-sync teams not found by the hasSome query.
-            out_of_sync_team_ids: Final = set(existing.assigned_team_ids or []) - {t.team_id for t in teams_with_group}
-            await _sync_remove_access_group_from_teams(tx, list(out_of_sync_team_ids), access_group_id)
-
-            # Update keys returned by find_many directly — we already have their data.
-            for key in keys_with_group:
-                await tx.litellm_verificationtoken.update(
-                    where={"token": key.token},
-                    data={"access_group_ids": [ag for ag in (key.access_group_ids or ()) if ag != access_group_id]},
-                )
-            # Use _sync_remove only for out-of-sync keys not found by the hasSome query.
-            out_of_sync_key_tokens: Final = set(existing.assigned_key_ids or []) - {k.token for k in keys_with_group}
-            await _sync_remove_access_group_from_keys(tx, list(out_of_sync_key_tokens), access_group_id)
+            await _sync_access_group_on_teams(tx, (), affected_team_ids, access_group_id)
+            await _sync_access_group_on_keys(tx, (), affected_key_tokens, access_group_id)
 
             detached_agent_ids: Final = await _detach_access_group_from_agents(tx, access_group_id)
 

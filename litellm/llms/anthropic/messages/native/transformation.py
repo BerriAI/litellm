@@ -471,7 +471,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
-        ``effort='none'`` clears both. Invalid efforts raise a 400. A mapped
+        ``effort='none'`` disables optional default thinking and clears effort. Invalid efforts raise a 400. A mapped
         thinking budget is capped below ``max_tokens`` and dropped when even
         the minimum budget cannot fit.
         """
@@ -485,6 +485,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not isinstance(reasoning_effort, str):
             return
 
+        if reasoning_effort == "none":
+            optional_params.pop("thinking", None)
+            optional_params.pop("output_config", None)
+
         try:
             mapped_thinking: Final = AnthropicConfig.map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
@@ -495,8 +499,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             raise AnthropicError(message=str(e.message), status_code=400)
 
         if mapped_thinking is None:
-            optional_params.pop("thinking", None)
-            optional_params.pop("output_config", None)
             return
 
         fitted_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
@@ -505,7 +507,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         optional_params.setdefault("thinking", fitted_thinking)
-        if AnthropicModelInfo.is_adaptive_thinking_model(model, custom_llm_provider):
+        if fitted_thinking.get("type") != "disabled" and AnthropicModelInfo.is_adaptive_thinking_model(
+            model, custom_llm_provider
+        ):
             mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
             if mapped_effort is None:
                 raise AnthropicError(

@@ -22,6 +22,7 @@ from opentelemetry.trace import Span
 import litellm
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL, REDACTED_BY_LITELLM
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+from litellm.integrations.langfuse.langfuse_otel_attributes import LangfuseLLMObsOTELAttributes
 from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.plumbing.context import set_request_destinations
@@ -1309,6 +1310,55 @@ class TestDerivedTraceFields:
 
         assert json.loads(str(attributes["langfuse.observation.output"])) == {"content": "hi"}
 
+    def test_server_tool_calls_lead_the_observation_output(self) -> None:
+        response_obj: Final = ModelResponse(
+            id="chatcmpl-server",
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=litellm.Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+                            }
+                        ],
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                                }
+                            ]
+                        },
+                    ),
+                )
+            ],
+        )
+        attributes: Final = _emitted({"call_type": "acompletion", "litellm_params": {"metadata": {}}}, response_obj)
+
+        assert json.loads(str(attributes["langfuse.observation.output"])) == [
+            {
+                "id": "chatcmpl-server",
+                "name": "web_search",
+                "call_id": "srvtoolu_01",
+                "type": "function_call",
+                "arguments": {"query": "persimmon"},
+            },
+            {
+                "id": "chatcmpl-server",
+                "name": "get_weather",
+                "call_id": "call_1",
+                "type": "function_call",
+                "arguments": {"city": "SF"},
+            },
+        ]
+
     def test_no_messages_leaves_trace_input_unset_but_emits_output(self) -> None:
         attributes: Final = _emitted(
             {"call_type": "acompletion", "litellm_params": {"metadata": {}}}, _chat_response("hi")
@@ -1587,3 +1637,31 @@ def test_a_request_without_a_langfuse_destination_still_exports_through_the_lega
     assert _spans_the_legacy_logger_exports((_LANGFUSE_DESTINATION.model_copy(update={"callback_name": "arize"}),)) == (
         logged
     )
+
+
+OBSERVATION_MESSAGES: Final = [{"role": "user", "content": "weather in SF?"}]
+OBSERVATION_TOOLS: Final = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+OBSERVATION_FUNCTIONS: Final = [{"name": "get_time", "parameters": {}}]
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "expected_input"),
+    [
+        (
+            {
+                "messages": OBSERVATION_MESSAGES,
+                "optional_params": {"tools": OBSERVATION_TOOLS, "functions": OBSERVATION_FUNCTIONS, "top_p": 0.5},
+            },
+            {"messages": OBSERVATION_MESSAGES, "functions": OBSERVATION_FUNCTIONS, "tools": OBSERVATION_TOOLS},
+        ),
+        ({"messages": OBSERVATION_MESSAGES}, {"messages": OBSERVATION_MESSAGES}),
+    ],
+)
+def test_observation_input_carries_the_request_functions_and_tools(
+    request_kwargs: Mapping[str, object], expected_input: Mapping[str, object]
+) -> None:
+    span: Final = _TRACER.start_span("litellm_request")
+
+    LangfuseLLMObsOTELAttributes.set_messages(span, request_kwargs)
+
+    assert json.loads(str(span.attributes["langfuse.observation.input"])) == expected_input

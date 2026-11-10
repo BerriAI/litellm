@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import type { components } from "@/lib/http/schema";
 
 export type AutoRouterBenchmarksResponse = components["schemas"]["AutoRouterBenchmarksResponse"];
@@ -22,10 +24,14 @@ export const groupLabel = (group: AutoRouterBenchmarkGroup, groups: readonly Aut
   return duplicated ? `${group.router_name} (${group.router_type})` : group.router_name;
 };
 
-export const viewFor = (data: AutoRouterBenchmarksResponse, selectedKey: string): BenchmarkView => {
+export const viewFor = (
+  data: AutoRouterBenchmarksResponse,
+  selectedKey: string,
+  t: TFunction = i18n.t.bind(i18n),
+): BenchmarkView => {
   const group = data.groups.find((g) => groupKey(g) === selectedKey);
   if (selectedKey === ALL_ROUTERS || !group) {
-    return { label: "All auto-routers", stats: data.totals };
+    return { label: t("costOptimization.autoRouter.allRouters"), stats: data.totals };
   }
   return { label: groupLabel(group, data.groups), stats: group };
 };
@@ -45,13 +51,13 @@ export const bucketTurnsTotal = (cache: AutoRouterCacheStats): number =>
 
 const sharePctOf = (turns: number, total: number): number => (total > 0 ? Math.round((100 * turns) / total) : 0);
 
-export const bucketRows = (cache: AutoRouterCacheStats): BucketRow[] => {
+export const bucketRows = (cache: AutoRouterCacheStats, t: TFunction = i18n.t.bind(i18n)): BucketRow[] => {
   const total = bucketTurnsTotal(cache);
   return [
     {
       key: "same_model",
-      label: "Same model",
-      sublabel: "previous turn → same tier",
+      label: t("costOptimization.autoRouter.buckets.sameModel.label"),
+      sublabel: t("costOptimization.autoRouter.buckets.sameModel.sublabel"),
       turns: cache.same_model.turns,
       sharePct: sharePctOf(cache.same_model.turns, total),
       hitRatePct: cache.same_model.hit_rate_pct,
@@ -59,8 +65,8 @@ export const bucketRows = (cache: AutoRouterCacheStats): BucketRow[] => {
     },
     {
       key: "first_visit",
-      label: "First visit",
-      sublabel: "previous turn → a tier not used yet",
+      label: t("costOptimization.autoRouter.buckets.firstVisit.label"),
+      sublabel: t("costOptimization.autoRouter.buckets.firstVisit.sublabel"),
       turns: cache.first_visit.turns,
       sharePct: sharePctOf(cache.first_visit.turns, total),
       hitRatePct: cache.first_visit.hit_rate_pct,
@@ -68,8 +74,8 @@ export const bucketRows = (cache: AutoRouterCacheStats): BucketRow[] => {
     },
     {
       key: "return_to_tier",
-      label: "Return to tier",
-      sublabel: "previous turn → a tier used earlier",
+      label: t("costOptimization.autoRouter.buckets.returnToTier.label"),
+      sublabel: t("costOptimization.autoRouter.buckets.returnToTier.sublabel"),
       turns: cache.return_to_tier.turns,
       sharePct: sharePctOf(cache.return_to_tier.turns, total),
       hitRatePct: cache.return_to_tier.hit_rate_pct,

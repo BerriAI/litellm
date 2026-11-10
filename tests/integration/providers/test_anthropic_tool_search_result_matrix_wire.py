@@ -66,6 +66,7 @@ from integration.providers._tool_search_support import (
     response_id,
     scripted_peer,
     search_result,
+    server_tool_call_ids,
     spend_row,
     target,
     target_path,
@@ -136,7 +137,8 @@ def test_tool_search_result_round_trips_on_every_anthropic_wire_provider(
     assert [target_path(request) for request in received] == [target(provider, stream)] * 2, received
     assert kept_results(assistant) == [SEARCH_RESULT], assistant
     assert "code_interpreter_results" not in provider_fields(assistant), assistant
-    assert tool_call_ids(assistant) == [SEARCH_ID, WEATHER_ID], assistant
+    assert server_tool_call_ids(assistant) == [SEARCH_ID], assistant
+    assert tool_call_ids(assistant) == [WEATHER_ID], assistant
     assert wire_assistant(received[1]) == list(SEARCH_TURN), received[1].body
     assert answered_ids(received[1]) == [WEATHER_ID], received[1].body
     for identity in (response_id(first, stream), response_id(second, stream)):
@@ -157,7 +159,8 @@ def test_snowflake_claude_keeps_the_tool_search_result_on_the_response(gateway: 
     assistant: Final = assistant_from(first, stream)
     assert [target_path(request) for request in received] == [target("snowflake", stream)], received
     assert kept_results(assistant) == [SEARCH_RESULT], assistant
-    assert tool_call_ids(assistant) == [SEARCH_ID, WEATHER_ID], assistant
+    assert server_tool_call_ids(assistant) == [SEARCH_ID], assistant
+    assert tool_call_ids(assistant) == [WEATHER_ID], assistant
     assert spend_row(response_id(first, stream))["model_group"] == model
 
 
@@ -482,15 +485,20 @@ def test_duplicated_search_result_blocks_rebuild_the_call_once(gateway: Gateway,
 
 
 @pytest.mark.parametrize(
-    ("status", "kind", "caller_status"),
+    ("status", "kind", "caller_status", "caller_error_type", "caller_error_code"),
     (
-        pytest.param(400, "invalid_request_error", 400, id="400"),
-        pytest.param(401, "authentication_error", 401, id="401"),
-        pytest.param(529, "overloaded_error", 500, id="529"),
+        pytest.param(400, "invalid_request_error", 400, None, None, id="400"),
+        pytest.param(401, "authentication_error", 401, None, None, id="401"),
+        pytest.param(529, "overloaded_error", 503, "service_unavailable_error", "server_is_overloaded", id="529"),
     ),
 )
 def test_provider_error_on_the_replay_reaches_the_caller(
-    gateway: Gateway, status: int, kind: str, caller_status: int
+    gateway: Gateway,
+    status: int,
+    kind: str,
+    caller_status: int,
+    caller_error_type: str | None,
+    caller_error_code: str | None,
 ) -> None:
     marker: Final = uuid.uuid4().hex
 
@@ -508,6 +516,11 @@ def test_provider_error_on_the_replay_reaches_the_caller(
         received: Final = wire.drain()
     assert second.status_code == caller_status, second.text
     assert f"scripted {kind} {marker}" in second.text, second.text
+    if caller_error_type is not None:
+        payload: Final = JSON_OBJECT.validate_json(second.content)
+        error: Final = JSON_OBJECT.validate_python(payload["error"])
+        assert error["type"] == caller_error_type, second.text
+        assert error["code"] == caller_error_code, second.text
     assert len(received) >= 2, received
     assert wire_assistant(received[1]) == list(SEARCH_TURN), received[1].body
     assert gateway.client.get("/health/liveliness").status_code == 200

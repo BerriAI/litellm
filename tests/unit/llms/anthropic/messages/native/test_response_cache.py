@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import Any, AsyncIterator, Dict, Final, List
 
 import pytest
@@ -136,9 +137,48 @@ async def test_cache_key_separates_anthropic_native_params(local_cache, request_
     assert len(fake_handler.calls) == 2
 
 
+TOOL_USE_WITHOUT_ARGUMENTS_EVENTS: Final[List[bytes]] = [
+    STREAM_EVENTS[0],
+    b'event: content_block_start\ndata: {"type": "content_block_start", "index": 0, '
+    b'"content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_time", "input": {}}}\n\n',
+    b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+    b'"delta": {"type": "input_json_delta", "partial_json": ""}}\n\n',
+    STREAM_EVENTS[3],
+    b'event: message_delta\ndata: {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, '
+    b'"usage": {"output_tokens": 3}}\n\n',
+    STREAM_EVENTS[5],
+]
+
+CRLF_STREAM_IN_ONE_CHUNK: Final[List[bytes]] = [b"".join(STREAM_EVENTS).replace(b"\n", b"\r\n")]
+
+LINE_SEPARATOR_TEXT_EVENTS: Final[List[bytes]] = [
+    *STREAM_EVENTS[:2],
+    b"event: content_block_delta\ndata: "
+    + json.dumps(
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "A B"}},
+        ensure_ascii=False,
+    ).encode()
+    + b"\n\n",
+    *STREAM_EVENTS[3:],
+]
+
+NON_JSON_DATA_LINE_EVENTS: Final[List[bytes]] = [STREAM_EVENTS[0], b"data: [DONE]\n\n", *STREAM_EVENTS[1:]]
+
+
 @pytest.mark.asyncio
-async def test_streaming_request_is_replayed_from_cache(local_cache, request_kwargs, monkeypatch):
-    fake_handler = _CountingHandler([_byte_stream(STREAM_EVENTS), _byte_stream([b"event: never_used\n\n"])])
+@pytest.mark.parametrize(
+    "events",
+    [
+        STREAM_EVENTS,
+        TOOL_USE_WITHOUT_ARGUMENTS_EVENTS,
+        CRLF_STREAM_IN_ONE_CHUNK,
+        LINE_SEPARATOR_TEXT_EVENTS,
+        NON_JSON_DATA_LINE_EVENTS,
+    ],
+    ids=["text", "tool-use-without-arguments", "crlf-in-one-chunk", "line-separator-in-text", "non-json-data-line"],
+)
+async def test_streaming_request_is_replayed_from_cache(local_cache, request_kwargs, monkeypatch, events):
+    fake_handler = _CountingHandler([_byte_stream(events), _byte_stream([b"event: never_used\n\n"])])
     monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
 
     first = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
@@ -147,8 +187,8 @@ async def test_streaming_request_is_replayed_from_cache(local_cache, request_kwa
     second = await _collect(second_stream)
 
     assert len(fake_handler.calls) == 1
-    assert first == STREAM_EVENTS
-    assert second == STREAM_EVENTS
+    assert first == events
+    assert second == events
     assert second_stream._hidden_params["cache_hit"] is True
 
 
@@ -165,8 +205,15 @@ async def test_streaming_cache_is_not_shared_with_non_streaming(local_cache, req
 
 
 @pytest.mark.asyncio
-async def test_stream_without_content_blocks_is_not_cached(local_cache, request_kwargs, monkeypatch):
-    empty_events = [STREAM_EVENTS[0], STREAM_EVENTS[4], STREAM_EVENTS[5]]
+@pytest.mark.parametrize(
+    "empty_events",
+    [
+        [STREAM_EVENTS[0], STREAM_EVENTS[4], STREAM_EVENTS[5]],
+        [STREAM_EVENTS[0], STREAM_EVENTS[1], STREAM_EVENTS[3], STREAM_EVENTS[4], STREAM_EVENTS[5]],
+    ],
+    ids=["no-blocks", "only-an-empty-text-block"],
+)
+async def test_stream_without_output_is_not_cached(local_cache, request_kwargs, monkeypatch, empty_events):
     fake_handler = _CountingHandler(
         [_byte_stream(empty_events), _byte_stream(STREAM_EVENTS), _byte_stream([b"event: never_used\n\n"])]
     )

@@ -715,3 +715,29 @@ def test_image_generation_uses_key_num_retries(monkeypatch: pytest.MonkeyPatch) 
     router: Final = proxy_server.llm_router
     assert router is not None
     assert get_deployment_failures_for_current_minute(router, "image-regression-failing") == 3
+
+
+def test_failed_image_generation_spend_row_records_aimage_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    spend_writer: Final = MagicMock(update_database=AsyncMock())
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    client, handler = _image_generation_client(monkeypatch, UserAPIKeyAuth(api_key="sk-test"))
+    try:
+        with client:
+            response: Final = client.post("/v1/images/generations", json={"model": "A", "prompt": "draw a tree"})
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert (response.status_code, handler.calls) == (429, ["failing"]), response.text
+    db_call: Final = spend_writer.update_database.call_args.kwargs
+    payload: Final = get_logging_payload(
+        kwargs=db_call["kwargs"],
+        response_obj=db_call["completion_response"],
+        start_time=db_call["start_time"],
+        end_time=db_call["end_time"],
+    )
+    assert (payload["status"], payload["call_type"]) == ("failure", "aimage_generation")

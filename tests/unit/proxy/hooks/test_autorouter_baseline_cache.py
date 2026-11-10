@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.prompt_cache_prediction import NativePredictionTarget, TokenCounter
 from litellm.proxy.hooks.autorouter_baseline_cache import AutoRouterBaselineCache, CapturedBaselineObservation
 from litellm.router import Router
+from litellm.router_rust.steps.prerouting import _record_routing_decision  # pyright: ignore[reportPrivateUsage]  # production trusted stamp owner
 from litellm.types.router import RetryPolicy
 from litellm.types.utils import CallTypes, StandardLoggingRoutingDecision
 
@@ -86,7 +87,7 @@ def _kwargs(logging_obj: Logging, trusted: bool = True, *, explicit_logging: boo
     context: Final = _OBJECTS.validate_json(
         '{"max_tokens":16,"litellm_metadata":{"user_api_key_hash":"test-caller-hash"}}'
     )
-    Router._record_routing_decision(  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]  # production trusted stamp owner
+    _record_routing_decision(
         context,
         StandardLoggingRoutingDecision(
             router_model_name="test-router",

@@ -8,7 +8,6 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
 from pydantic import TypeAdapter, ValidationError
 
@@ -766,7 +765,6 @@ class CheckBatchCost:
         credentials: Final = self.llm_router.registry().credentials(model_id, form="with_provider") or {}
         _file_content = await afile_content(
             file_id=cast(str, raw_output_file_id),
-            _litellm_internal_model_credentials=MappingProxyType(dict(credentials)),
             **cast(FileContentCallOptions, credentials),
         )
 
@@ -867,10 +865,7 @@ class CheckBatchCost:
         error_file_failed_requests: Final = await count_error_file_failed_requests(
             response,
             custom_llm_provider=batch_file_provider,
-            litellm_params={
-                **credentials,
-                "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
-            },
+            litellm_params=credentials,
         )
         batch_result: Final = (
             output_file_result
@@ -1029,11 +1024,7 @@ class CheckBatchCost:
                 custom_llm_provider=deployment_info.litellm_params.custom_llm_provider,
             )
             cost_provider: Final = cast(BatchFileProvider, llm_provider)
-            credentials: Final = self.llm_router.registry().credentials(model_id, form="with_provider") or {}
-            file_access: Final = {
-                **credentials,
-                "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
-            }
+            file_access: Final = self.llm_router.registry().credentials(model_id, form="with_provider") or {}
             output_content: Final = (
                 await fetch_batch_managed_file_content(
                     response.output_file_id, custom_llm_provider=cost_provider, litellm_params=file_access

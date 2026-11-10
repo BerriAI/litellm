@@ -1,3 +1,4 @@
+import i18n from "@/i18n/i18n";
 import { getSpendString } from "@/utils/dataUtils";
 
 import type { DailyActivityUserPageResponse, UserActivityRow } from "../dailyActivityApi";
@@ -9,7 +10,7 @@ export const userRowKey = (row: UserActivityRow): string =>
 
 export const userPrimaryLabel = (row: UserActivityRow): string => {
   const friendlyName = row.user_email || row.user_alias;
-  return friendlyName || row.user_id || "(no user)";
+  return friendlyName || row.user_id || i18n.t("usage.userActivity.noUser");
 };
 
 export const userSecondaryLabel = (row: UserActivityRow): string | null => {

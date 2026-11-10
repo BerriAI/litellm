@@ -1,3 +1,6 @@
+import type { ParseKeys } from "i18next";
+import i18n from "@/i18n/i18n";
+
 export interface RequestErrorDailyEntry {
   date: string;
   successful_requests: number;
@@ -30,36 +33,37 @@ export interface RequestErrorActivity {
 export const ERROR_ENTITY_KINDS = ["key", "team", "user", "model"] as const;
 export type ErrorEntityKind = (typeof ERROR_ENTITY_KINDS)[number];
 
-export const ERROR_ENTITY_LABEL: Record<ErrorEntityKind, { singular: string; plural: string }> = {
-  key: { singular: "Virtual key", plural: "Virtual keys" },
-  team: { singular: "Team", plural: "Teams" },
-  user: { singular: "User", plural: "Users" },
-  model: { singular: "Model", plural: "Models" },
+export const ERROR_ENTITY_LABEL: Record<ErrorEntityKind, { singular: ParseKeys; plural: ParseKeys }> = {
+  key: { singular: "usage.errors.entityLabels.key.singular", plural: "usage.errors.entityLabels.key.plural" },
+  team: { singular: "usage.errors.entityLabels.team.singular", plural: "usage.errors.entityLabels.team.plural" },
+  user: { singular: "usage.errors.entityLabels.user.singular", plural: "usage.errors.entityLabels.user.plural" },
+  model: { singular: "usage.errors.entityLabels.model.singular", plural: "usage.errors.entityLabels.model.plural" },
 };
 
-const STATUS_LABELS: Record<number, string> = {
-  400: "Bad Request",
-  401: "Unauthorized",
-  402: "Payment Required",
-  403: "Forbidden",
-  404: "Not Found",
-  408: "Request Timeout",
-  413: "Payload Too Large",
-  422: "Unprocessable Entity",
-  429: "Rate Limited",
-  500: "Internal Server Error",
-  502: "Bad Gateway",
-  503: "Service Unavailable",
-  504: "Gateway Timeout",
+const STATUS_LABELS: Record<number, ParseKeys> = {
+  400: "usage.errors.statusLabels.badRequest",
+  401: "usage.errors.statusLabels.unauthorized",
+  402: "usage.errors.statusLabels.paymentRequired",
+  403: "usage.errors.statusLabels.forbidden",
+  404: "usage.errors.statusLabels.notFound",
+  408: "usage.errors.statusLabels.requestTimeout",
+  413: "usage.errors.statusLabels.payloadTooLarge",
+  422: "usage.errors.statusLabels.unprocessableEntity",
+  429: "usage.errors.statusLabels.rateLimited",
+  500: "usage.errors.statusLabels.internalServerError",
+  502: "usage.errors.statusLabels.badGateway",
+  503: "usage.errors.statusLabels.serviceUnavailable",
+  504: "usage.errors.statusLabels.gatewayTimeout",
+  529: "usage.errors.statusLabels.overloaded",
 };
 
 export const statusCodeLabel = (code: number): string => {
-  if (code === 0) return "Not recorded";
+  if (code === 0) return i18n.t("usage.errors.statusLabels.notRecorded");
   const known = STATUS_LABELS[code];
-  if (known) return known;
-  if (code >= 500) return "Server Error";
-  if (code >= 400) return "Client Error";
-  return "Error";
+  if (known && Object.hasOwn(STATUS_LABELS, code)) return i18n.t(known);
+  if (code >= 500) return i18n.t("usage.errors.statusLabels.serverError");
+  if (code >= 400) return i18n.t("usage.errors.statusLabels.clientError");
+  return i18n.t("usage.errors.statusLabels.error");
 };
 
 export const errorRate = (failed: number, total: number): number | null => (total > 0 ? (failed / total) * 100 : null);
@@ -110,9 +114,9 @@ export interface ErrorSeries {
 }
 
 export const ERROR_SERIES_MAX_CODES = 6;
-export const ERROR_SERIES_OTHER = "Other";
+export const ERROR_SERIES_OTHER: ParseKeys = "usage.errors.series.other";
 
-const seriesKey = (code: number): string => (code === 0 ? "No status" : String(code));
+const seriesKey = (code: number): string => (code === 0 ? i18n.t("usage.errors.series.noStatus") : String(code));
 
 export const errorSeries = (activity: RequestErrorActivity): ErrorSeries => {
   const ranked = [...activity.by_status_code]
@@ -133,7 +137,7 @@ export const errorSeries = (activity: RequestErrorActivity): ErrorSeries => {
       );
       const recorded = Object.values(counts).reduce((sum, count) => sum + count, 0);
       const other: Record<string, number> = needsOther
-        ? { [ERROR_SERIES_OTHER]: Math.max(0, day.failed_requests - recorded) }
+        ? { [i18n.t(ERROR_SERIES_OTHER)]: Math.max(0, day.failed_requests - recorded) }
         : {};
       return {
         date: day.date,
@@ -144,14 +148,14 @@ export const errorSeries = (activity: RequestErrorActivity): ErrorSeries => {
         ...other,
       };
     });
-  return { rows, codes: needsOther ? [...codes, ERROR_SERIES_OTHER] : codes };
+  return { rows, codes: needsOther ? [...codes, i18n.t(ERROR_SERIES_OTHER)] : codes };
 };
 
 export type ErrorRateView = "total" | "status";
 
-export const ERROR_RATE_VIEW_OPTIONS: readonly { value: ErrorRateView; label: string }[] = [
-  { value: "total", label: "Total" },
-  { value: "status", label: "By status code" },
+export const ERROR_RATE_VIEW_OPTIONS: readonly { value: ErrorRateView; labelKey: ParseKeys }[] = [
+  { value: "total", labelKey: "usage.errors.rateViews.total" },
+  { value: "status", labelKey: "usage.errors.rateViews.status" },
 ];
 
 export const rateByStatusRows = (series: ErrorSeries): ErrorSeriesRow[] =>
@@ -213,6 +217,6 @@ export const entityRows = (activity: RequestErrorActivity, kind: ErrorEntityKind
     topStatus:
       entry.top_status_code === null
         ? null
-        : `${entry.top_status_code === 0 ? "No status" : entry.top_status_code} · ${entry.top_status_code_requests.toLocaleString()}`,
+        : `${entry.top_status_code === 0 ? i18n.t("usage.errors.series.noStatus") : entry.top_status_code} · ${entry.top_status_code_requests.toLocaleString()}`,
   }));
 };

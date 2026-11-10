@@ -5,11 +5,10 @@ use litellm_host::{
     call::{HostedCompletion, HostedMachine, hosted_call},
     protocol::Protocol,
 };
-use litellm_llms_types::formats::messages::MessagesResponse;
 
-use super::{Error, MessagesCall};
+use super::{Error, MessagesBody, MessagesCall};
 
-pub type MessagesOutput = HostedCompletion<Box<MessagesResponse>>;
+pub type MessagesOutput = HostedCompletion<MessagesBody>;
 
 /// The upstream response as the caller sees it at stream hand-off, before any chunk.
 pub struct MessagesStreamHead {
@@ -19,7 +18,7 @@ pub struct MessagesStreamHead {
 pub struct Messages;
 
 impl Protocol for Messages {
-    type Response = Box<MessagesResponse>;
+    type Response = MessagesBody;
     type Error = Error;
     type Request = MessagesCall;
     type HostCall = Infallible;

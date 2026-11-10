@@ -5,6 +5,9 @@ import ClassifierPrimarySettings from "./ClassifierPrimarySettings";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
 import { getForecastConfigError, isForecastClassifier } from "../add_model/forecast_classifier_config";
 import React, { useEffect, useState } from "react";
+import BlockedReasonTooltip from "./BlockedReasonTooltip";
+import { useSwitchyardOption } from "./SwitchyardRouterForm";
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
 import { z } from "zod";
@@ -66,6 +69,7 @@ import {
 } from "./build_auto_router_routing_test_request";
 import AutoRouterRoutingTest from "./AutoRouterRoutingTest";
 import { toast } from "@/lib/toast";
+import i18n from "@/i18n/i18n";
 import {
   getMissingModelsInPreset,
   getReferencedModelsError,
@@ -129,7 +133,7 @@ export const getSubmitBlockedReason = (
     getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
     getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
     (effectiveClassifierType(config) === "jev" && !config.jev_classifier_config?.deployment_name
-      ? "Please select a decision model"
+      ? i18n.t("addModel.addAutoRouterTab.decisionModelRequired")
       : null) ??
     getClassifierModelError(config) ??
     getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold) ??
@@ -143,11 +147,13 @@ export const getSubmitBlockedReason = (
 
 const autoRouterSchema = (requiresTeamScope: boolean) =>
   z.object({
-    auto_router_name: z.string().min(1, "Auto router name is required"),
+    auto_router_name: z.string().min(1, { error: () => i18n.t("addModel.addAutoRouterTab.nameRequired") }),
     team_id: z
       .string()
       .nullable()
-      .refine((teamId) => !requiresTeamScope || Boolean(teamId), "Please select a team to continue"),
+      .refine((teamId) => !requiresTeamScope || Boolean(teamId), {
+        error: () => i18n.t("addModel.addAutoRouterTab.teamRequired"),
+      }),
     model_access_group: z.array(z.string()).optional(),
   });
 
@@ -162,19 +168,6 @@ const EMPTY_FORM_VALUES: AddAutoRouterFormValues = {
 const teamScopePayload = (requiresTeamScope: boolean, teamId: string | null): { team_id?: string } =>
   requiresTeamScope && teamId ? { team_id: teamId } : {};
 
-const BlockedReasonTooltip: React.FC<{ reason: string | null; children: React.ReactElement }> = ({
-  reason,
-  children,
-}) =>
-  reason === null ? (
-    children
-  ) : (
-    <Tooltip>
-      <TooltipTrigger render={children} />
-      <TooltipContent>{reason}</TooltipContent>
-    </Tooltip>
-  );
-
 const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   handleOk,
   accessToken,
@@ -183,9 +176,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   createScope = "unscoped-ok",
   teams = null,
 }) => {
+  const { t } = useTranslation();
   const requiresTeamScope = createScope === "team-required";
   const form = useZodForm(autoRouterSchema(requiresTeamScope), { defaultValues: EMPTY_FORM_VALUES });
   const watchedName = useWatch({ control: form.control, name: "auto_router_name" });
+  const switchyard = useSwitchyardOption(accessToken, watchedName, isProxyAdminRole(userRole));
   const watchedTeamId = useWatch({ control: form.control, name: "team_id" });
   const actor = { userRole, userID: userId ?? null, isViewOnly: false };
   const isMemberManaged =
@@ -336,11 +331,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setAdvanced(true);
   };
 
-  // A preset's models can only be trusted against a successfully loaded list. Selection and the
-  // greyed-out state derive from this one function, so a preset that cannot be selected can never
-  // have been applied: while loading we withhold selection rather than let a caller pick a preset
-  // whose models we cannot yet verify, and a failed fetch leaves every preset unverifiable. This
-  // makes the load-race (pick during loading, then discover a missing model) unrepresentable.
+  // Withhold preset selection until its models are verified against a successfully loaded list.
+  // Reuse this check for application and disabled state to prevent load races.
   const presetAvailability = React.useCallback(
     (preset: AutoRouterPreset): PresetAvailability => {
       if (modelsLoading) return { kind: "loading" };
@@ -436,11 +428,18 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const simpleBlockedReason = advanced ? null : simpleSetupError(modelsLoading, inventoryUnavailable, everyday, hard);
   const saveBlockedReason =
     !advanced && requiresTeamScope && !watchedTeamId
-      ? "Select a team to see available models."
+      ? t("addModel.addAutoRouterTab.selectTeamToSeeModels")
       : simpleBlockedReason ?? submitBlockedReason ?? routerAvailability.saveBlockedReason;
   const handleClassifierChange = (config: ComplexityRouterConfigValue) => {
-    setSelectedPreset(undefined);
+    switchyard.deselect();
+    if (advanced || effectiveClassifierType(config) === effectiveClassifierType(complexityRouterConfig)) {
+      setSelectedPreset(undefined);
+      setComplexityRouterConfig(config);
+      return;
+    }
     setComplexityRouterConfig(config);
+    setPrefillAttempted(simpleConfig !== null);
+    setAdvanced(true);
   };
   const jevRequestParams =
     effectiveClassifierType(complexityRouterConfig) === "jev"
@@ -480,7 +479,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       : (["auto_router_name"] as const);
 
     if (!(await form.trigger(validatedFields))) {
-      toast.fromError("Please fill in all required fields");
+      toast.fromError(t("addModel.addAutoRouterTab.requiredFieldsMissing"));
       return;
     }
 
@@ -518,19 +517,36 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
   };
 
+  const submitSwitchyard = async (name: string) => {
+    if (requiresTeamScope && !(await form.trigger(["auto_router_name", "team_id"]))) {
+      toast.fromError(t("addModel.addAutoRouterTab.requiredFieldsMissing"));
+      return;
+    }
+    const accessGroups = isMemberManaged ? undefined : form.getValues("model_access_group");
+    await switchyard.submit(
+      name,
+      {
+        ...teamScopePayload(requiresTeamScope, form.getValues("team_id")),
+        ...(accessGroups?.length ? { access_groups: accessGroups } : {}),
+      },
+      () => form.reset(EMPTY_FORM_VALUES),
+      handleOk,
+    );
+  };
+
   const handleAutoRouterSubmit = async () => {
     if (isSubmitting) return;
     const name = form.getValues("auto_router_name");
     if (!name) {
       setShowValidationErrors(true);
       void form.trigger("auto_router_name");
-      toast.fromError("Please enter an Auto Router Name");
+      toast.fromError(t("addModel.addAutoRouterTab.enterRouterName"));
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await submitRecommendedRouter(name);
+      await (switchyard.selected ? submitSwitchyard(name) : submitRecommendedRouter(name));
     } finally {
       setIsSubmitting(false);
     }
@@ -551,10 +567,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           }
         : undefined,
     };
-    const targets = buildAutoRouterTestTargets(testTargetParams);
+    const targets = buildAutoRouterTestTargets(testTargetParams, t);
 
     if (targets.length === 0) {
-      toast.fromError("Please select at least one model for a complexity tier");
+      toast.fromError(t("addModel.addAutoRouterTab.selectTierModel"));
       return;
     }
 
@@ -612,10 +628,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 <FormField
                   control={form.control}
                   name="auto_router_name"
-                  label={labelWithHint("Auto Router Name", "Unique name for this auto router configuration")}
+                  label={labelWithHint(
+                    t("addModel.addAutoRouterTab.routerName"),
+                    t("addModel.addAutoRouterTab.routerNameHint"),
+                  )}
                 >
                   {({ ref, ...field }) => (
-                    <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />
+                    <Input {...field} ref={ref} placeholder={t("addModel.addAutoRouterTab.routerNamePlaceholder")} />
                   )}
                 </FormField>
               </div>
@@ -626,8 +645,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       control={form.control}
                       name="model_access_group"
                       label={labelWithHint(
-                        "Model Access Group",
-                        "Use model access groups to control who can access this auto router",
+                        t("addModel.addAutoRouterTab.modelAccessGroup"),
+                        t("addModel.addAutoRouterTab.modelAccessGroupHint"),
                       )}
                     >
                       {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
@@ -649,8 +668,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   control={form.control}
                   name="team_id"
                   label={labelWithHint(
-                    "Select Team",
-                    "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
+                    t("addModel.addAutoRouterTab.selectTeam"),
+                    t("addModel.addAutoRouterTab.selectTeamHint"),
                   )}
                 >
                   {({ id, value, onChange }) => (
@@ -664,89 +683,76 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 </FormField>
               )}
 
-              {!advanced && (
-                <AutoRouterSimpleSetup
-                  customized={Boolean(solverOverrides.everyday || solverOverrides.hard)}
-                  hasSuggestions={Boolean(recommended || recommendSolverPair(solverModels, goal, "auto"))}
-                  onReset={() => setSolverOverrides({})}
-                  goal={goal}
-                  family={family}
-                  models={solverModels}
-                  everyday={everyday}
-                  hard={hard}
-                  waitingForTeam={requiresTeamScope && !watchedTeamId}
-                  loading={modelsLoading}
-                  error={inventoryUnavailable}
-                  notice={
-                    Object.keys(solverOverrides).length > 0
-                      ? "Your model choices are kept."
-                      : recommended?.notice ?? null
-                  }
-                  onGoalChange={setGoal}
-                  onFamilyChange={(next) => {
-                    setFamily(next);
-                    setSolverOverrides({});
-                  }}
-                  onModelChange={(role, model) =>
-                    setSolverOverrides({ everyday: everyday?.name, hard: hard?.name, [role]: model })
-                  }
-                  onAdvanced={openAdvanced}
-                  onRetry={() => {
-                    void refetchModels();
-                    void refetchDeployments();
-                  }}
-                />
-              )}
-              {advanced && (
-                <AutoRouterClassifierTabs
-                  value={complexityRouterConfig}
-                  onChange={handleClassifierChange}
-                  decisionModel={
-                    <DecisionModelSelect
-                      value={complexityRouterConfig}
-                      onChange={setComplexityRouterConfig}
-                      modelInfo={modelInfo}
-                      deployments={deployments}
-                    />
-                  }
-                  judgeModel={
-                    <ClassifierPrimarySettings
-                      section="judge"
-                      value={complexityRouterConfig}
-                      onChange={setComplexityRouterConfig}
-                      modelOptions={modelInfo
-                        .filter((model) => model.mode !== "embedding")
-                        .map((model) => ({ value: model.model_group, label: model.model_group }))}
-                      showValidationErrors={showValidationErrors}
-                    />
-                  }
-                >
+              <AutoRouterClassifierTabs
+                switchyard={switchyard.option({ capable: hard?.name, efficient: everyday?.name })}
+                value={complexityRouterConfig}
+                onChange={handleClassifierChange}
+                decisionModel={
+                  <DecisionModelSelect
+                    value={complexityRouterConfig}
+                    onChange={setComplexityRouterConfig}
+                    modelInfo={modelInfo}
+                    deployments={deployments}
+                  />
+                }
+                judgeModel={
+                  <ClassifierPrimarySettings
+                    section="judge"
+                    value={complexityRouterConfig}
+                    onChange={setComplexityRouterConfig}
+                    modelOptions={modelInfo
+                      .filter((model) => model.mode !== "embedding")
+                      .map((model) => ({ value: model.model_group, label: model.model_group }))}
+                    showValidationErrors={showValidationErrors}
+                  />
+                }
+              >
+                {advanced ? (
                   <FieldGroup>
                     {modelsUnverifiable && (
                       <p className="text-sm text-destructive">
-                        Could not load available models.{" "}
+                        {t("addModel.addAutoRouterTab.modelsLoadFailed")}{" "}
                         <button type="button" className="underline" onClick={() => void refetchModels()}>
-                          Retry
+                          {t("addModel.addAutoRouterTab.retry")}
                         </button>
                       </p>
                     )}
                     {configurationForm}
                   </FieldGroup>
-                </AutoRouterClassifierTabs>
-              )}
-              {!advanced && routerAvailability.isError && (
-                <p className="mt-3 text-sm text-destructive" role="alert">
-                  Could not check availability.{" "}
-                  <Button type="button" variant="link" onClick={() => void routerAvailability.refetch()}>
-                    Retry
-                  </Button>
-                </p>
-              )}
-              {!advanced && routerAvailability.data?.error && (
-                <p className="mt-3 text-sm text-destructive" role="alert">
-                  {routerAvailability.data.error}
-                </p>
-              )}
+                ) : (
+                  <AutoRouterSimpleSetup
+                    customized={Boolean(solverOverrides.everyday || solverOverrides.hard)}
+                    hasSuggestions={Boolean(recommended || recommendSolverPair(solverModels, goal, "auto"))}
+                    onReset={() => setSolverOverrides({})}
+                    goal={goal}
+                    family={family}
+                    models={solverModels}
+                    everyday={everyday}
+                    hard={hard}
+                    waitingForTeam={requiresTeamScope && !watchedTeamId}
+                    loading={modelsLoading}
+                    error={inventoryUnavailable}
+                    notice={
+                      Object.keys(solverOverrides).length > 0
+                        ? t("addModel.addAutoRouterTab.choicesKept")
+                        : recommended?.notice ?? null
+                    }
+                    onGoalChange={setGoal}
+                    onFamilyChange={(next) => {
+                      setFamily(next);
+                      setSolverOverrides({});
+                    }}
+                    onModelChange={(role, model) =>
+                      setSolverOverrides({ everyday: everyday?.name, hard: hard?.name, [role]: model })
+                    }
+                    onAdvanced={openAdvanced}
+                    onRetry={() => {
+                      void refetchModels();
+                      void refetchDeployments();
+                    }}
+                  />
+                )}
+              </AutoRouterClassifierTabs>
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
                 <Tooltip>
                   <TooltipTrigger
@@ -755,11 +761,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                         href="https://github.com/BerriAI/litellm/issues"
                         className="text-sm text-primary underline-offset-4 hover:underline"
                       >
-                        Need Help?
+                        {t("addModel.addAutoRouterTab.needHelp")}
                       </a>
                     }
                   />
-                  <TooltipContent>Get help on our github</TooltipContent>
+                  <TooltipContent>{t("addModel.addAutoRouterTab.helpTooltip")}</TooltipContent>
                 </Tooltip>
                 <div className="flex flex-wrap gap-2">
                   <BlockedReasonTooltip reason={submitBlockedReason}>
@@ -767,31 +773,33 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       type="button"
                       variant="outline"
                       data-testid="auto-router-test-routing-btn"
+                      hidden={switchyard.selected}
                       disabled={submitBlockedReason !== null || isSubmitting}
                       onClick={() => setIsRoutingTestVisible(true)}
                     >
-                      Test Routing
+                      {t("addModel.addAutoRouterTab.testRouting")}
                     </Button>
                   </BlockedReasonTooltip>
                   <Button
                     type="button"
                     variant="outline"
                     data-testid="auto-router-test-connect-btn"
+                    hidden={switchyard.selected}
                     onClick={handleTestConnection}
                     disabled={isTestingConnection}
                   >
                     {isTestingConnection && <UiLoadingSpinner className="size-4" />}
-                    Test Connection
+                    {t("addModel.addAutoRouterTab.testConnection")}
                   </Button>
-                  <BlockedReasonTooltip reason={saveBlockedReason}>
+                  <BlockedReasonTooltip reason={switchyard.selected ? null : saveBlockedReason}>
                     <Button
                       type="button"
-                      disabled={saveBlockedReason !== null || isSubmitting}
+                      disabled={(!switchyard.selected && saveBlockedReason !== null) || isSubmitting}
                       onClick={() => {
                         void handleAutoRouterSubmit();
                       }}
                     >
-                      Add Auto Router
+                      {t("addModel.addAutoRouterTab.addAutoRouter")}
                     </Button>
                   </BlockedReasonTooltip>
                 </div>
@@ -803,7 +811,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         <Dialog open={isRoutingTestVisible} onOpenChange={(open) => !open && setIsRoutingTestVisible(false)}>
           <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[760px]">
             <DialogHeader>
-              <DialogTitle>Test Routing</DialogTitle>
+              <DialogTitle>{t("addModel.addAutoRouterTab.testRoutingTitle")}</DialogTitle>
             </DialogHeader>
             {isRoutingTestVisible && (
               <AutoRouterRoutingTest
@@ -820,7 +828,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             <DialogFooter>
               {" "}
               <Button variant="outline" onClick={() => setIsRoutingTestVisible(false)}>
-                Close
+                {t("addModel.addAutoRouterTab.close")}
               </Button>
             </DialogFooter>
           </DialogContent>

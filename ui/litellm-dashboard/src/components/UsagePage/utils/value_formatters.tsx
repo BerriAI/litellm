@@ -1,3 +1,5 @@
+import i18n from "@/i18n/i18n";
+
 export function valueFormatter(number: number) {
   if (number >= 1_000_000_000) {
     return (number / 1_000_000_000).toFixed(2) + "B";
@@ -18,8 +20,8 @@ export function averageResponseTimeMs(totalResponseTimeMs: number, timedRequests
 
 export function formatResponseTime(ms: number | null | undefined) {
   if (ms == null) return "-";
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(2)}s`;
+  if (ms < 1000) return i18n.t("usage.valueFormatters.milliseconds", { value: Math.round(ms) });
+  return i18n.t("usage.valueFormatters.seconds", { value: (ms / 1000).toFixed(2) });
 }
 
 export function valueFormatterSpend(number: number) {

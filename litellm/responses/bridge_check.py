@@ -4,7 +4,10 @@ from urllib.parse import urlsplit
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    get_llm_provider,
+    resolve_model_and_provider_for_metadata,
+)
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
@@ -291,3 +294,39 @@ def responses_api_bridge_check(
         model = model.replace("responses/", "")
 
     return model_info, model
+
+
+def chat_completion_ends_in_responses_api(
+    model: str | None,
+    custom_llm_provider: str | None,
+    deployment_model_info: Mapping[str, object] | None = None,
+    *,
+    tools: Sequence[Mapping[str, object]] | None = None,
+    reasoning_effort: str | Mapping[str, object] | None = None,
+    reasoning_summary: object | None = None,
+    api_base: str | None = None,
+) -> bool:
+    """Whether chat completion for this model is served by a Responses API.
+
+    Encrypted reasoning can be replayed only there. A normal chat provider cannot
+    verify the block, so the messages adapter strips it. ``chatgpt``, a ``responses/``
+    model, a deployment pinned to ``mode: responses``, and a request whose tools or
+    reasoning effort the bridge sends to Responses keep it.
+    """
+    if not model:
+        return False
+    try:
+        resolved_model, provider = resolve_model_and_provider_for_metadata(model, custom_llm_provider)
+    except Exception as error:  # noqa: BLE001  # unknown model names must not fail message translation
+        verbose_logger.debug("responses replay check failed for %s: %s", model, error)
+        return False
+    model_info, _resolved = responses_api_bridge_check(
+        model=resolved_model,
+        custom_llm_provider=provider,
+        tools=tools,
+        reasoning_effort=reasoning_effort,
+        reasoning_summary=reasoning_summary,
+        api_base=api_base,
+        deployment_model_info=deployment_model_info,
+    )
+    return model_info.get("mode") == "responses"

@@ -102,6 +102,14 @@ class SSRFError(ValueError):
     """Raised when a URL targets a blocked network."""
 
 
+def is_https_url_with_host(url: str) -> bool:
+    try:
+        parsed_url: Final = urlsplit(url)
+        return parsed_url.scheme == "https" and bool(parsed_url.hostname)
+    except ValueError:
+        return False
+
+
 def encode_url_path_segment(value: object, *, field_name: str = "path parameter") -> str:
     """Percent-encode one user-controlled URL path segment.
 

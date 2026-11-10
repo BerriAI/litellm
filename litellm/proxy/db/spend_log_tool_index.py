@@ -63,9 +63,24 @@ def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
     )
     return tuple(
         stripped
-        for name in chain(called_names, _auto_executed_mcp_tool_names(completion_response))
+        for name in chain(
+            _server_tool_call_names(completion_response),
+            called_names,
+            _auto_executed_mcp_tool_names(completion_response),
+        )
         if isinstance(name, str) and (stripped := name.strip())
     )
+
+
+def _server_tool_call_names(completion_response: object) -> tuple[str | None, ...]:
+    from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
+    from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+
+    server_tool_calls: Final = chain.from_iterable(
+        anthropic_server_tool_call_params(message_field(choice, "message"))
+        for choice in parts_of(message_field(completion_response, "choices"))
+    )
+    return tuple(server_tool_call["function"].get("name") for server_tool_call in server_tool_calls)
 
 
 class _ExecutedTool(BaseModel):

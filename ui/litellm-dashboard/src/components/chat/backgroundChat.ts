@@ -1,5 +1,7 @@
 import OpenAI from "openai";
 import type { Response } from "openai/resources/responses/responses";
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import { getGatewayBaseUrl } from "@/components/networking";
 import { parseUsageCost } from "@/components/llm_calls/usage_cost";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
@@ -15,7 +17,10 @@ type TimedResponse = Response & {
   };
 };
 
-export function backgroundResponseUpdate(response: TimedResponse): AssistantMessageUpdate {
+export function backgroundResponseUpdate(
+  response: TimedResponse,
+  t: TFunction = i18n.t.bind(i18n),
+): AssistantMessageUpdate {
   const output = response.output ?? [];
   const citations = Array.from(
     new Map(
@@ -67,8 +72,8 @@ export function backgroundResponseUpdate(response: TimedResponse): AssistantMess
   });
   const status = response.status ?? "in_progress";
   const errors: Partial<Record<ChatBackgroundRun["status"], string>> = {
-    failed: response.error?.message || "The background run failed.",
-    incomplete: "The run ended before completing its answer.",
+    failed: response.error?.message || t("chat.backgroundChat.failed"),
+    incomplete: t("chat.backgroundChat.incomplete"),
   };
   const backgroundError = errors[status];
   const cost = response.usage && "cost" in response.usage ? parseUsageCost(response.usage.cost) : undefined;
@@ -118,23 +123,26 @@ function waitForPoll(signal: AbortSignal): Promise<void> {
   });
 }
 
-export async function watchBackgroundChat({
-  accessToken,
-  responseId,
-  signal,
-  onUpdate,
-}: {
-  accessToken: string;
-  responseId: string;
-  signal: AbortSignal;
-  onUpdate: (update: AssistantMessageUpdate) => void;
-}): Promise<void> {
+export async function watchBackgroundChat(
+  {
+    accessToken,
+    responseId,
+    signal,
+    onUpdate,
+  }: {
+    accessToken: string;
+    responseId: string;
+    signal: AbortSignal;
+    onUpdate: (update: AssistantMessageUpdate) => void;
+  },
+  t: TFunction = i18n.t.bind(i18n),
+): Promise<void> {
   const client = backgroundClient(accessToken);
   while (!signal.aborted) {
     try {
       const response = await client.responses.retrieve(responseId, { stream: false }, { signal });
       if (signal.aborted) return;
-      onUpdate(backgroundResponseUpdate(response));
+      onUpdate(backgroundResponseUpdate(response, t));
       if (!isBackgroundRunPending({ id: response.id, status: response.status ?? "in_progress" })) return;
       await waitForPoll(signal);
     } catch (error) {
@@ -142,7 +150,7 @@ export async function watchBackgroundChat({
       if (error instanceof OpenAI.APIError && error.status === 404) {
         onUpdate({
           backgroundRun: { id: responseId, status: "expired" },
-          backgroundError: "This saved run is no longer available. Its result may have expired on the server.",
+          backgroundError: t("chat.backgroundChat.expired"),
         });
         return;
       }
@@ -151,7 +159,11 @@ export async function watchBackgroundChat({
   }
 }
 
-export async function cancelBackgroundChat(accessToken: string, responseId: string): Promise<AssistantMessageUpdate> {
+export async function cancelBackgroundChat(
+  accessToken: string,
+  responseId: string,
+  t: TFunction = i18n.t.bind(i18n),
+): Promise<AssistantMessageUpdate> {
   const response = await backgroundClient(accessToken).responses.cancel(responseId);
-  return backgroundResponseUpdate(response);
+  return backgroundResponseUpdate(response, t);
 }

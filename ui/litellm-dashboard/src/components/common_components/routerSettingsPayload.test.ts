@@ -101,7 +101,16 @@ describe("routerSettingsUpdate", () => {
       model_group_alias: null,
       enable_tag_filtering: null,
       routing_strategy_args: null,
+      weights: null,
     });
+  });
+
+  it("should replace stored weights with the edited ones, including clearing them", () => {
+    const stored = { weights: { "gpt-4": { "dep-a": 9, "dep-b": 1 } }, num_retries: 2 };
+    expect(routerSettingsUpdate({ num_retries: 2, weights: { "gpt-4": { "dep-a": 1 } } }, stored)).toMatchObject({
+      weights: { "gpt-4": { "dep-a": 1 } },
+    });
+    expect(routerSettingsUpdate({ num_retries: 2, weights: null }, stored)).toMatchObject({ weights: null });
   });
 
   it("should send the edited settings when the user configured something", () => {

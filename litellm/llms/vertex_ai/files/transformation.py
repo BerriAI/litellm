@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
 )
@@ -1299,7 +1299,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
     def _map_openai_to_vertex_params(
         self,
-        openai_request_body: dict[str, Any],
+        openai_request_body: dict[str, object],
         deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """

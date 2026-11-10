@@ -1,3 +1,5 @@
+import type { ParseKeys } from "i18next";
+
 /** A single MCP tool event emitted by the LiteLLM proxy during a Responses API turn. */
 export interface MCPEvent {
   type: string;
@@ -47,19 +49,19 @@ export const AUTH_TYPE = {
   OAUTH_DELEGATE: "oauth_delegate",
 };
 
-export const AUTH_TYPE_ITEMS = [
-  { value: AUTH_TYPE.NONE, label: "None" },
-  { value: AUTH_TYPE.API_KEY, label: "API Key" },
-  { value: AUTH_TYPE.BEARER_TOKEN, label: "Bearer Token" },
-  { value: AUTH_TYPE.TOKEN, label: "Token" },
-  { value: AUTH_TYPE.BASIC, label: "Basic Auth" },
-  { value: AUTH_TYPE.AUTHORIZATION, label: "Authorization (raw header)" },
-  { value: AUTH_TYPE.OAUTH2, label: "OAuth" },
-  { value: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, label: "OAuth Token Exchange (OBO)" },
-  { value: AUTH_TYPE.OAUTH2_ID_JAG, label: "ID-JAG (Okta Cross App Access)" },
-  { value: AUTH_TYPE.AWS_SIGV4, label: "AWS SigV4 (Bedrock AgentCore MCPs)" },
-  { value: AUTH_TYPE.TRUE_PASSTHROUGH, label: "True Passthrough (no LiteLLM auth)" },
-  { value: AUTH_TYPE.OAUTH_DELEGATE, label: "OAuth Delegate (client-supplied upstream token)" },
+export const AUTH_TYPE_ITEMS: { value: string; label: ParseKeys }[] = [
+  { value: AUTH_TYPE.NONE, label: "mcpTools.authTypes.none" },
+  { value: AUTH_TYPE.API_KEY, label: "mcpTools.authTypes.apiKey" },
+  { value: AUTH_TYPE.BEARER_TOKEN, label: "mcpTools.authTypes.bearerToken" },
+  { value: AUTH_TYPE.TOKEN, label: "mcpTools.authTypes.token" },
+  { value: AUTH_TYPE.BASIC, label: "mcpTools.authTypes.basic" },
+  { value: AUTH_TYPE.AUTHORIZATION, label: "mcpTools.authTypes.authorization" },
+  { value: AUTH_TYPE.OAUTH2, label: "mcpTools.authTypes.oauth2" },
+  { value: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, label: "mcpTools.authTypes.oauth2TokenExchange" },
+  { value: AUTH_TYPE.OAUTH2_ID_JAG, label: "mcpTools.authTypes.oauth2IdJag" },
+  { value: AUTH_TYPE.AWS_SIGV4, label: "mcpTools.authTypes.awsSigv4" },
+  { value: AUTH_TYPE.TRUE_PASSTHROUGH, label: "mcpTools.authTypes.truePassthrough" },
+  { value: AUTH_TYPE.OAUTH_DELEGATE, label: "mcpTools.authTypes.oauthDelegate" },
 ];
 
 // The two client-forwarded token modes: the caller supplies the upstream Authorization (forwarded
@@ -279,11 +281,11 @@ export const TRANSPORT = {
   OPENAPI: "openapi",
 };
 
-export const TRANSPORT_ITEMS = [
-  { value: TRANSPORT.HTTP, label: "Streamable HTTP (Recommended)" },
-  { value: TRANSPORT.SSE, label: "Server-Sent Events (SSE)" },
-  { value: TRANSPORT.STDIO, label: "Standard Input/Output (stdio)" },
-  { value: TRANSPORT.OPENAPI, label: "OpenAPI Spec" },
+export const TRANSPORT_ITEMS: { value: string; label: ParseKeys }[] = [
+  { value: TRANSPORT.HTTP, label: "mcpTools.transports.http" },
+  { value: TRANSPORT.SSE, label: "mcpTools.transports.sse" },
+  { value: TRANSPORT.STDIO, label: "mcpTools.transports.stdio" },
+  { value: TRANSPORT.OPENAPI, label: "mcpTools.transports.openapi" },
 ];
 
 export const handleTransport = (transport?: string | null, specPath?: string | null): string => {
@@ -422,7 +424,7 @@ export interface MCPToolsViewerProps {
   extraHeaders?: string[] | null;
 }
 
-export const MCP_REACHABLE_DESCRIPTION = "Server responded. Authentication and tools were not checked";
+export const MCP_REACHABLE_DESCRIPTION: ParseKeys = "mcpTools.reachableDescription";
 
 export interface MCPServer {
   server_id: string;

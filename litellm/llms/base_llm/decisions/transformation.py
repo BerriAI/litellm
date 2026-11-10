@@ -431,6 +431,10 @@ class DecisionsResponseValidationError(BaseLLMException):
     pass
 
 
+def _lacks_confidence(answer: DecisionsIRAnswer) -> bool:
+    return isinstance(answer, (DecisionsIRChoiceAnswer, DecisionsIRScoreAnswer)) and answer.confidence is None
+
+
 def parse_systemone_response(payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
     return systemone_response_to_ir(
         _SYSTEMONE_RESPONSE_ADAPTER.validate_python(_normalize_systemone_response(payload)), request
@@ -534,6 +538,8 @@ class BaseDecisionsConfig(ABC):
     max_total_image_bytes: int | None = None
     image_media_types: frozenset[str] | None = None
     inlines_remote_images: bool = False
+    openai_evidence_fields: frozenset[str] = frozenset()
+    confidence_optional: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
     )
@@ -682,13 +688,20 @@ class BaseDecisionsConfig(ABC):
     ) -> DecisionsIRResponse:
         try:
             payload: Final[object] = _PAYLOAD_ADAPTER.validate_json(raw_response.content)
-            return self.parse_response(payload, request)
+            response: Final = self.parse_response(payload, request)
         except ValidationError as error:
             raise DecisionsResponseValidationError(
                 status_code=500,
                 message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
                 f"{error.title} {_validation_summary(error)}",
             ) from error
+        if not self.confidence_optional and any(_lacks_confidence(answer) for answer in response.answers):
+            raise DecisionsResponseValidationError(
+                status_code=500,
+                message=f"Decisions provider '{custom_llm_provider}' returned an unexpected response: "
+                "a choice or score answer has no confidence",
+            )
+        return response
 
     def get_error_class(
         self,

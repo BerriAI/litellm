@@ -79,10 +79,7 @@ def test_initialize_deployment_for_pass_through_success(reusable_credentials):
     )
 
     # Test the initialization
-    router._initialize_deployment_for_pass_through(
-        deployment=deployment,
-        custom_llm_provider="vertex_ai",
-    )
+    router.add_deployment(deployment)
 
     # Verify the credentials were properly set
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -114,10 +111,7 @@ def test_initialize_deployment_for_pass_through_missing_params():
         ValueError,
         match="vertex_project, and vertex_location must be set in litellm_params for pass-through endpoints",
     ):
-        router._initialize_deployment_for_pass_through(
-            deployment=deployment,
-            custom_llm_provider="vertex_ai",
-        )
+        router.add_deployment(deployment)
 
 
 def test_initialize_deployment_when_pass_through_disabled():
@@ -133,10 +127,7 @@ def test_initialize_deployment_when_pass_through_disabled():
     )
 
     # This should exit without error, even with missing vertex parameters
-    router._initialize_deployment_for_pass_through(
-        deployment=deployment,
-        custom_llm_provider="vertex_ai",
-    )
+    router.add_deployment(deployment)
 
     # If we reach this point, the test passes as the method exited without raising any errors
     assert True

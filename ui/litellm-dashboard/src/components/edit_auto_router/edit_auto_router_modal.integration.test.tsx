@@ -1649,3 +1649,34 @@ describe("EditAutoRouterModal deployed decision classifier", () => {
     },
   );
 });
+
+describe("EditAutoRouterModal Switchyard", () => {
+  const SWITCHYARD_MODEL = {
+    model_name: "stage-router",
+    litellm_params: {
+      model: "auto_router/switchyard",
+      switchyard_router_config: {
+        algorithm: "stage_router",
+        models: { capable: "strong", efficient: "fast" },
+        options: { picker: "efficient_first" },
+      },
+    },
+    model_info: { id: "switchyard-1", access_groups: [] },
+  };
+
+  it("hands the saved router back to the caller and closes, so reopening shows the new values", async () => {
+    const onSuccess = vi.fn();
+    const onCancel = vi.fn();
+    renderModal({ modelData: SWITCHYARD_MODEL, onSuccess, onCancel });
+    const name = await screen.findByLabelText("Router name");
+    fireEvent.change(name, { target: { value: "renamed-router" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    const saved = onSuccess.mock.calls[0][0];
+    expect(saved.model_name).toBe("renamed-router");
+    expect(saved.model_info.id).toBe("switchyard-1");
+    expect(saved.litellm_params.switchyard_router_config.models).toEqual({ capable: "strong", efficient: "fast" });
+    expect(onCancel).toHaveBeenCalled();
+  });
+});

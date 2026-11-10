@@ -17,6 +17,45 @@ describe("PrettyMessagesView", () => {
     expect(screen.getByText("Hi there!")).toBeInTheDocument();
   });
 
+  it("shows Claude's server tool calls next to the client tool calls on chat completions", () => {
+    const serverToolCalls = [
+      { id: "srvtoolu_01", type: "function", function: { name: "web_search", arguments: '{"query": "persimmon"}' } },
+    ];
+    const weatherCall = {
+      id: "toolu_01",
+      type: "function",
+      function: { name: "get_weather", arguments: '{"city": "Paris"}' },
+    };
+    const request = {
+      messages: [
+        { role: "user", content: "Search, then get the weather" },
+        {
+          role: "assistant",
+          content: "Searching.",
+          tool_calls: [weatherCall],
+          provider_specific_fields: { server_tool_calls: serverToolCalls },
+        },
+        { role: "tool", tool_call_id: "toolu_01", content: "Sunny" },
+      ],
+    };
+    const response = {
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [weatherCall],
+            provider_specific_fields: { server_tool_calls: serverToolCalls },
+          },
+        },
+      ],
+    };
+
+    render(<PrettyMessagesView request={request} response={response} />);
+    expect(screen.getAllByText("web_search").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("get_weather").length).toBeGreaterThanOrEqual(2);
+  });
+
   it("renders input when request is a bare messages array (cold storage payload)", () => {
     const request = [{ role: "user", content: "Write me a poem" }];
     const response = {

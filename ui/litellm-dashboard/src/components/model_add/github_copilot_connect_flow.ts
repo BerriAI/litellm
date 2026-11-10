@@ -1,3 +1,5 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
 import type { UserConnectionPollResponse, UserConnectionStartResponse } from "@/components/networking";
 
 export const GITHUB_DEVICE_LOGIN_URL = "https://github.com/login/device";
@@ -101,15 +103,18 @@ export const connectFlowReducer = (state: ConnectFlowState, event: ConnectFlowEv
   }
 };
 
-export const failureMessage = (state: Extract<ConnectFlowState, { kind: "failed" }>): string => {
+export const failureMessage = (
+  state: Extract<ConnectFlowState, { kind: "failed" }>,
+  t: TFunction = i18n.t.bind(i18n),
+): string => {
   switch (state.reason) {
     case "expired":
-      return "The device code expired before it was approved. Start again to get a new code.";
+      return t("modelAdd.githubCopilotConnectFlow.expired");
     case "denied":
-      return "The request was denied on GitHub. Start again if this was a mistake.";
+      return t("modelAdd.githubCopilotConnectFlow.denied");
     case "no_copilot_seat":
-      return "This GitHub account does not have GitHub Copilot access, so nothing was saved.";
+      return t("modelAdd.githubCopilotConnectFlow.noCopilotSeat");
     case "error":
-      return state.message ?? "Something went wrong while connecting to GitHub.";
+      return state.message ?? t("modelAdd.githubCopilotConnectFlow.unknownError");
   }
 };

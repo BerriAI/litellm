@@ -1,5 +1,6 @@
 import { CircleMinus, Plus } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   useFieldArray,
   type Control,
@@ -11,6 +12,7 @@ import {
 import { z } from "zod";
 
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
+import i18n from "@/i18n/i18n";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,11 +25,20 @@ export interface MetadataPair {
 }
 
 export const metadataPairsSchema = z
-  .array(z.object({ key: z.string().min(1, "Missing key"), value: z.string().optional() }))
+  .array(
+    z.object({
+      key: z.string().min(1, { error: () => i18n.t("metadataKeyValueFields.errors.missingKey") }),
+      value: z.string().optional(),
+    }),
+  )
   .superRefine((pairs, ctx) => {
     pairs.forEach((pair, index) => {
       if (pair.key && pairs.filter((other) => other.key === pair.key).length > 1) {
-        ctx.addIssue({ code: "custom", message: "Duplicate key", path: [index, "key"] });
+        ctx.addIssue({
+          code: "custom",
+          message: i18n.t("metadataKeyValueFields.errors.duplicateKey"),
+          path: [index, "key"],
+        });
       }
     });
   });
@@ -96,11 +107,19 @@ const MetadataRow = <TFieldValues extends FieldValues>({
   schemaLabel,
   onRemove,
 }: MetadataRowProps<TFieldValues>) => {
+  const { t } = useTranslation();
   return (
     <div className="mb-2 flex items-start gap-2">
       {schemaLabel === undefined ? (
         <FormField control={control} name={`${name}.${index}.key` as FieldPath<TFieldValues>}>
-          {({ ref, value, ...rest }) => <Input {...rest} ref={ref} value={(value as string) ?? ""} placeholder="Key" />}
+          {({ ref, value, ...rest }) => (
+            <Input
+              {...rest}
+              ref={ref}
+              value={(value as string) ?? ""}
+              placeholder={t("metadataKeyValueFields.keyPlaceholder")}
+            />
+          )}
         </FormField>
       ) : (
         <Label
@@ -118,7 +137,7 @@ const MetadataRow = <TFieldValues extends FieldValues>({
             id={schemaLabel === undefined ? id : `${rowId}-value`}
             ref={ref}
             value={(value as string) ?? ""}
-            placeholder="Value"
+            placeholder={t("metadataKeyValueFields.valuePlaceholder")}
           />
         )}
       </FormField>
@@ -126,7 +145,7 @@ const MetadataRow = <TFieldValues extends FieldValues>({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Remove key-value pair"
+          aria-label={t("metadataKeyValueFields.removePair")}
           className="mt-1 text-destructive"
           onClick={onRemove}
         >
@@ -144,6 +163,7 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
   schemaFields = [],
   schemaLoading = false,
 }: MetadataKeyValueFieldsProps<TFieldValues>) => {
+  const { t } = useTranslation();
   const { fields, append, remove } = useFieldArray({ control, name });
   const seededRef = useRef(false);
   const schemaLabelsByKey = new Map(schemaFields.map((field) => [field.key, field.label || field.key]));
@@ -208,7 +228,7 @@ const MetadataKeyValueFields = <TFieldValues extends FieldValues>({
         onClick={() => append({ key: "", value: "" } as never, { shouldFocus: false })}
       >
         <Plus className="size-4" />
-        Add Key-Value Pair
+        {t("metadataKeyValueFields.addPair")}
       </Button>
     </>
   );

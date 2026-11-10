@@ -13,6 +13,8 @@ pub(crate) enum PythonSettings {
     UrlPolicy,
     #[strum(serialize = "provider_defaults")]
     ProviderDefaults,
+    #[strum(serialize = "router_tiers")]
+    RouterTiers,
     #[strum(serialize = "secret_manager")]
     SecretManager,
     #[strum(serialize = "secret_manager_binding")]
@@ -54,7 +56,7 @@ impl PythonSettings {
         }
     }
 
-    #[cfg(test)]
+    /// A snapshot of a value Python handed in, read with the same field rules as the accessor's
     pub(crate) fn snapshot(self, value: Bound<'_, PyAny>) -> Snapshot<'_> {
         Snapshot { group: self, value }
     }

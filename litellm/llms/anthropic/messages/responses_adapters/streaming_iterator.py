@@ -2,8 +2,8 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import asyncio
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Final
 
 import anyio
 from pydantic import ConfigDict, field_validator
@@ -12,7 +12,8 @@ from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import APIError, MidStreamFallbackError
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
 from litellm.llms.anthropic.messages.native.utils import (
@@ -126,7 +127,7 @@ class AnthropicResponsesStreamWrapper:
 
     def __init__(
         self,
-        responses_stream: Any,
+        responses_stream: object,
         model: str,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
@@ -141,6 +142,8 @@ class AnthropicResponsesStreamWrapper:
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
         self._unreported_failure: Exception | None = None
+        # The failure behind this stream's error frame, for a router that accounts for it.
+        self.stream_failure: Exception | None = None
         self._current_block_index: int = -1
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: dict[str, int] = {}
@@ -412,7 +415,9 @@ class AnthropicResponsesStreamWrapper:
             response_obj: Final = getattr(event, "response", None) or (
                 event.get("response") if isinstance(event, dict) else None
             )
-            output: Final = (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
+            output: Final[Iterable[object]] = (
+                (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
+            )
             refusal_text: Final = responses_output_refusal_text(output) or (self._refusal_text or None)
             status: Final = getattr(response_obj, "status", None) if response_obj is not None else None
             has_tool_call: Final = any(
@@ -467,6 +472,7 @@ class AnthropicResponsesStreamWrapper:
             llm_provider=getattr(self.responses_stream, "custom_llm_provider", None),
             model=self.model,
         )
+        self.stream_failure = self._unreported_failure
         self._chunk_queue.append(_anthropic_error_chunk(status_code, message))
 
     async def _report_unreported_failure(self) -> None:
@@ -505,14 +511,14 @@ class AnthropicResponsesStreamWrapper:
             return self._chunk_queue.popleft()
 
         try:
-            if hasattr(self.responses_stream, "__aiter__"):
+            if has_attributes(self.responses_stream, AsyncIterable[object], "__aiter__"):
                 async for event in self.responses_stream:
                     self._process_event(event)
                     if self._chunk_queue:
                         return self._chunk_queue.popleft()
             else:
                 if self._sync_responses_iterator is None:
-                    self._sync_responses_iterator = iter(self.responses_stream)
+                    self._sync_responses_iterator = iter(iter_items(self.responses_stream))
                 sync_iterator: Final = self._sync_responses_iterator
                 missing: Final = object()
                 while (event := await asyncio.to_thread(next, sync_iterator, missing)) is not missing:
@@ -577,6 +583,10 @@ class AnthropicResponsesSSEByteStream:
 
     async def aclose(self) -> None:
         await self._frames.aclose()
+
+    @property
+    def stream_failure(self) -> Exception | None:
+        return self._wrapper.stream_failure
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
         return self._wrapper.partial_response_on_disconnect()

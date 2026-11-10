@@ -1,5 +1,6 @@
 import React from "react";
 import { Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import EmptyState from "./EmptyState";
 import MessageBubble from "./MessageBubble";
 import { Message } from "./types";
@@ -12,6 +13,7 @@ interface MessageListProps {
 }
 
 const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, hasVariables, messagesEndRef }) => {
+  const { t } = useTranslation();
   return (
     <div className="flex-1 overflow-y-auto p-4 pb-0">
       {messages.length === 0 && <EmptyState hasVariables={hasVariables} />}
@@ -22,7 +24,10 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, hasVaria
 
       {isLoading && (
         <div className="flex justify-center items-center my-4">
-          <Loader2 className="size-6 animate-spin text-muted-foreground" aria-label="Loading response" />
+          <Loader2
+            className="size-6 animate-spin text-muted-foreground"
+            aria-label={t("prompts.conversation.list.loadingResponse")}
+          />
         </div>
       )}
       <div ref={messagesEndRef} style={{ height: "1px" }} />

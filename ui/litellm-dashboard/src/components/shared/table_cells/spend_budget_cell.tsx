@@ -1,7 +1,10 @@
 "use client";
 
+import { useTranslation } from "react-i18next";
+
 import { InheritedBudgetHint, type InheritedBudgetGate } from "@/components/shared/InheritedBudgetHint";
 import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
+import i18n from "@/i18n/i18n";
 import { formatNumberWithCommas, getSpendString } from "@/utils/dataUtils";
 
 interface SpendBudgetCellProps {
@@ -25,10 +28,14 @@ const getBudgetLabel = (
   memberSpendText: string,
   budgetDecimals: number,
 ): string => {
-  if (budget === null) return "· Unlimited";
+  if (budget === null) return i18n.t("shared.tableCells.spendBudgetCell.unlimited");
   const formattedBudget = formatNumberWithCommas(budget, budgetDecimals);
-  if (usesTeamMemberBudget) return `· ${memberSpendText} of $${formattedBudget} (team member)`;
-  return `of $${formattedBudget}`;
+  if (usesTeamMemberBudget)
+    return i18n.t("shared.tableCells.spendBudgetCell.memberBudget", {
+      spend: memberSpendText,
+      budget: formattedBudget,
+    });
+  return i18n.t("shared.tableCells.spendBudgetCell.ofBudget", { budget: formattedBudget });
 };
 
 const getMeterValueText = (
@@ -39,7 +46,7 @@ const getMeterValueText = (
 ): string => {
   if (!hasBudget || budget === null) return "";
   const formattedBudget = formatNumberWithCommas(budget, budgetDecimals);
-  return `${meterSpendText} of $${formattedBudget}`;
+  return i18n.t("shared.tableCells.spendBudgetCell.meterValue", { spend: meterSpendText, budget: formattedBudget });
 };
 
 export function SpendBudgetCell({
@@ -50,6 +57,7 @@ export function SpendBudgetCell({
   spendDecimals = 4,
   budgetDecimals = 0,
 }: SpendBudgetCellProps) {
+  const { t } = useTranslation();
   const spendValue = typeof spend === "number" && !Number.isNaN(spend) ? spend : 0;
   const ownBudget = maxBudget ?? null;
   const budget = ownBudget ?? teamMemberGate?.maxBudget ?? null;
@@ -63,7 +71,9 @@ export function SpendBudgetCell({
   const spendText = spendValue > 0 ? getSpendString(spendValue, spendDecimals) : "$0.00";
   const memberSpendText = memberSpendValue > 0 ? getSpendString(memberSpendValue, spendDecimals) : "$0.00";
   const budgetLabel = getBudgetLabel(budget, usesTeamMemberBudget, memberSpendText, budgetDecimals);
-  const meterSpendText = usesTeamMemberBudget ? `team member spend ${memberSpendText}` : spendText;
+  const meterSpendText = usesTeamMemberBudget
+    ? t("shared.tableCells.spendBudgetCell.memberSpend", { spend: memberSpendText })
+    : spendText;
   const meterValueText = getMeterValueText(hasBudget, budget, meterSpendText, budgetDecimals);
 
   return (

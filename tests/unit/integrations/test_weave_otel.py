@@ -1,13 +1,20 @@
+import json
 import os
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opentelemetry.sdk.trace import TracerProvider
 
+from litellm.integrations._types.open_inference import SpanAttributes as OpenInferenceSpanAttributes
 from litellm.integrations.weave.weave_otel import (
+    WeaveLLMObsOTELAttributes,
     _set_weave_specific_attributes,
     get_weave_otel_config,
 )
 from litellm.types.integrations.weave_otel import WeaveOtelConfig, WeaveSpanAttributes
+from litellm.types.utils import ModelResponse
 
 
 def test_get_weave_otel_config():
@@ -154,3 +161,47 @@ def test_set_weave_specific_attributes_thread_id_and_is_turn():
         mock_safe_set.assert_any_call(
             mock_span, WeaveSpanAttributes.IS_TURN.value, True
         )
+
+
+_TRACER: Final = TracerProvider().get_tracer("weave-otel-tests")
+WEAVE_MESSAGES: Final = [{"role": "user", "content": "weather in SF?"}]
+WEAVE_TOOLS: Final = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+WEAVE_FUNCTIONS: Final = [{"name": "get_time", "parameters": {}}]
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "expected_input"),
+    [
+        (
+            {
+                "messages": WEAVE_MESSAGES,
+                "optional_params": {"tools": WEAVE_TOOLS, "functions": WEAVE_FUNCTIONS, "top_p": 0.5},
+            },
+            {"messages": WEAVE_MESSAGES, "functions": WEAVE_FUNCTIONS, "tools": WEAVE_TOOLS},
+        ),
+        ({"messages": WEAVE_MESSAGES, "optional_params": None}, {"messages": WEAVE_MESSAGES}),
+    ],
+)
+def test_weave_input_value_carries_the_request_functions_and_tools(
+    request_kwargs: Mapping[str, object], expected_input: Mapping[str, object]
+) -> None:
+    span: Final = _TRACER.start_span("litellm_request")
+
+    WeaveLLMObsOTELAttributes.set_messages(span, request_kwargs)
+
+    assert json.loads(str(span.attributes[OpenInferenceSpanAttributes.INPUT_VALUE])) == expected_input
+
+
+def test_weave_output_value_is_the_dumped_model_response() -> None:
+    span: Final = _TRACER.start_span("litellm_request")
+    response: Final = ModelResponse(
+        id="chatcmpl-1",
+        model="gpt-4o",
+        choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Sunny."}}],
+    )
+
+    _set_weave_specific_attributes(span, {"model": "gpt-4o"}, response)
+
+    output: Final = json.loads(str(span.attributes[OpenInferenceSpanAttributes.OUTPUT_VALUE]))
+    assert output["id"] == "chatcmpl-1"
+    assert output["choices"][0]["message"]["content"] == "Sunny."

@@ -16,6 +16,7 @@ from litellm.llms.base_llm.videos.async_task_utils import (
     input_reference_url,
     polled_video_models,
     routed_video_models,
+    video_image_params,
 )
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -546,6 +547,9 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             "extra_headers",
             "content",
             "parameters",
+            "frame_images",
+            "input_references",
+            "aspect_ratio",
             *_CREATE_PASSTHROUGH_KEYS,
         ]
 
@@ -555,7 +559,19 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: BaseVideoConfig contract
-        requested: Final = _without(video_create_optional_params, _additional_drop_keys(video_create_optional_params))
+        requested: Final = video_image_params(
+            _without(video_create_optional_params, _additional_drop_keys(video_create_optional_params)),
+            model,
+            "volcengine",
+            drop_params,
+        )
+        if (
+            not drop_params
+            and requested.get("duration") is not None
+            and requested.get("seconds") is not None
+            and _duration_param(requested["duration"]) != _duration_param(requested["seconds"])
+        ):
+            raise _droppable(model, "duration and seconds must agree")
         unsupported: Final = next(
             (key for key, value in requested.items() if key in _UNSUPPORTED_BY_VOLCENGINE and value is not None),
             None,
@@ -563,13 +579,17 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         if unsupported is not None and not drop_params:
             raise _droppable(model, f"'{unsupported}' is not supported by Volcengine video generation")
         passthrough: Final = MappingProxyType(
-            {key: value for key, value in requested.items() if value is not None and key not in _MAPPED_ELSEWHERE}
+            {
+                key: value
+                for key, value in requested.items()
+                if value is not None and key not in _MAPPED_ELSEWHERE and key != "duration"
+            }
         )
         return {
             **_user_fields(requested.get("user"), model, drop_params),
             **_size_fields(requested.get("size"), model, drop_params),
-            **_duration_fields(requested.get("seconds"), model, drop_params),
             **passthrough,
+            **_duration_fields(requested.get("duration", requested.get("seconds")), model, drop_params),
             **_parameters_fields(requested.get("parameters"), model, drop_params),
         }
 

@@ -4,6 +4,7 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 
 import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from itertools import chain, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
@@ -12,22 +13,27 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_thinking
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
     should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    extract_reasoning_content,
     merge_consecutive_system_messages,
     strip_litellm_internal_message_fields,
     strip_name_from_message,
     strip_prefill_prefix_field,
 )
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    extract_reasoning_content,
+)
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
 )
+from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
@@ -65,7 +71,7 @@ from ...anthropic.chat.transformation import (
     tools_without_unsupported_tool_search,
 )
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-from ..common_utils import DatabricksBase, DatabricksException
+from ..common_utils import DATABRICKS_HOSTED_MODEL_PREFIXES, DatabricksBase, DatabricksException
 
 _RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
     Final[TypeAdapter[dict[str, object] | None]]
@@ -81,13 +87,137 @@ def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
     )
 
 
+_CONTENT_BLOCKS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _content_blocks(message: object) -> tuple[object, ...]:
+    match message.model_dump(exclude_none=True) if isinstance(message, BaseModel) else message:
+        case {"content": list() as content}:
+            return _CONTENT_BLOCKS.validate_python(content)
+        case _:
+            return ()
+
+
+def _plain_text(block: object) -> str | None:
+    match block:
+        case {"type": "text", "text": str() as text} if block == {"type": "text", "text": text}:
+            return text
+        case _:
+            return None
+
+
+def _plain_texts(message: Mapping[str, object]) -> tuple[str, ...]:
+    blocks: Final = _content_blocks(message)
+    texts: Final = tuple(text for block in blocks if (text := _plain_text(block)) is not None)
+    return texts if len(texts) == len(blocks) else ()
+
+
 def _collapse_single_text_block(message: Mapping[str, object]) -> Mapping[str, object]:
-    content: Final = message.get("content")
-    match content:
-        case [{"type": "text", "text": str() as text}] if content == [{"type": "text", "text": text}]:
+    match _plain_texts(message):
+        case (text,):
             return {**message, "content": text}
         case _:
             return message
+
+
+def _without_text_cache_control(block: object) -> object:
+    match block:
+        case {"type": "text", "text": str() as text, "cache_control": object() as cache_control} if block == {
+            "type": "text",
+            "text": text,
+            "cache_control": cache_control,
+        }:
+            return {"type": "text", "text": text}
+        case _:
+            return block
+
+
+def _without_cache_control(message: AllMessageValues) -> AllMessageValues:
+    uncached: Final = {key: value for key, value in message.items() if key != "cache_control"}
+    match content := uncached.get("content"):
+        case list():
+            blocks: Final = [_without_text_cache_control(block) for block in _CONTENT_BLOCKS.validate_python(content)]
+            return cast(AllMessageValues, {**uncached, "content": blocks})  # cast-ok: spread keeps the shape
+        case _:
+            return cast(AllMessageValues, uncached)  # cast-ok: only cache_control was left out
+
+
+def _has_string_content(message: Mapping[str, object]) -> bool:
+    return isinstance(message.get("content"), str)
+
+
+def _is_system(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system"
+
+
+def _json_mode_message(message: AllMessageValues, drop_params: bool) -> AllMessageValues:
+    candidate: Final = _without_cache_control(message) if drop_params else message
+    texts: Final = _plain_texts(candidate)
+    if "cache_control" in candidate or not (texts or _has_string_content(candidate)):
+        return message
+    if sum(1 for text in texts if text.strip()) < 2:
+        return candidate
+    return cast(AllMessageValues, {**candidate, "content": "".join(texts)})  # cast-ok: spread keeps the shape
+
+
+def _is_dropped_on_send(message: Mapping[str, object]) -> bool:
+    sanitized: Final = {**message}
+    _sanitize_empty_content(sanitized)
+    return _is_bare_assistant_message(sanitized)
+
+
+def _is_system_or_dropped(message: Mapping[str, object]) -> bool:
+    return _is_system(message) or _is_dropped_on_send(message)
+
+
+def _json_checked_start(messages: Sequence[AllMessageValues]) -> int:
+    trailing: Final = tuple(takewhile(_is_system_or_dropped, reversed(messages)))
+    last_sent_offset: Final = 0 if any(_is_system(message) for message in trailing) else 1
+    return max(len(messages) - len(trailing) - last_sent_offset, 0)
+
+
+def _json_object_ready_messages(
+    model: str,
+    messages: list[AllMessageValues],  # mutable-ok: inherited transform_request contract
+    response_format: object,
+    drop_params: bool,
+) -> list[AllMessageValues]:  # mutable-ok: inherited transform_request contract
+    match response_format:
+        case {"type": "json_object"} if "claude" not in model and model.startswith(DATABRICKS_HOSTED_MODEL_PREFIXES):
+            checked_start: Final = _json_checked_start(messages)
+            return [
+                *messages[:checked_start],
+                *(_json_mode_message(message, drop_params) for message in messages[checked_start:]),
+            ]
+        case _:
+            return messages
+
+
+def _is_empty_text_block(block: object) -> bool:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text", "text": object() as text}:
+            return not text
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
+
+
+def _non_string_text_type(block: object) -> str | None:
+    match block:
+        case {"type": "text", "text": str()}:
+            return None
+        case {"type": "text", "text": object() as text} if text:
+            return type(text).__name__
+        case _:
+            return None
+
+
+def _first_non_string_text_type(messages: Sequence[AllMessageValues]) -> str | None:
+    blocks: Final = chain.from_iterable(map(_content_blocks, messages))
+    return next((type_name for block in blocks if (type_name := _non_string_text_type(block))), None)
 
 
 def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
@@ -108,9 +238,7 @@ def _sanitize_empty_content(message_dict: dict[str, object]) -> None:
             message_dict.pop("content")
             return
         filtered: Final = [
-            block
-            for block in content
-            if not (isinstance(block, dict) and block.get("type") == "text" and not (block.get("text") or "").strip())
+            block for block in _CONTENT_BLOCKS.validate_python(content) if not _is_empty_text_block(block)
         ]
         if not filtered:
             message_dict.pop("content")
@@ -270,7 +398,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return "databricks"
 
     @classmethod
-    def get_config(cls, *, model: str | None = None):
+    def get_config(cls, *, model: str | None = None, configured_max_output_tokens: int | None = None):
         return super().get_config()
 
     def get_json_schema_from_pydantic_object(
@@ -343,7 +471,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         use_ai_gateway: Final = self.uses_ai_gateway(model)
         return join_api_base(self._get_api_base(api_base, use_ai_gateway=use_ai_gateway), "chat/completions")
 
-    def get_supported_openai_params(self, model: str | None = None) -> list:
+    def get_supported_openai_params(self, model: str | None = None) -> list[str]:
         return [
             "stream",
             "stop",
@@ -416,12 +544,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model: str,
         value: dict | None,
         optional_params: dict,
-        is_thinking_enabled: bool,
+        tool_is_forced: bool,
     ) -> DatabricksTool | None:
         if value is None:
             return None
 
-        tool: Final = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
+        tool: Final = self.map_response_format_to_anthropic_tool(value, optional_params, tool_is_forced)
 
         databricks_tool: Final = self.convert_anthropic_tool_to_databricks_tool(tool)
         return databricks_tool
@@ -449,8 +577,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
-        mapped_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        request_params: Final = (
+            tool_params_without_hosted_mcp(non_default_params, model=model, route="databricks", drop_params=drop_params)
+            if "claude" in model
+            else non_default_params
+        )
+        mapped_params: Final = super().map_openai_params(request_params, optional_params, model, drop_params)
         if "claude" in model:
             AnthropicConfig.translate_legacy_thinking_for_adaptive_model(
                 model=model, optional_params=mapped_params, custom_llm_provider="databricks", drop_params=drop_params
@@ -459,24 +591,27 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             mapped_params["tools"] = self._map_openai_to_dbrx_tool(
                 model=model, tools=mapped_params["tools"], drop_params=drop_params
             )
-        if "max_completion_tokens" in non_default_params and replace_max_completion_tokens_with_max_tokens:
-            mapped_params["max_tokens"] = non_default_params[
+        if "max_completion_tokens" in request_params and replace_max_completion_tokens_with_max_tokens:
+            mapped_params["max_tokens"] = request_params[
                 "max_completion_tokens"
             ]  # most openai-compatible providers support 'max_tokens' not 'max_completion_tokens'
             mapped_params.pop("max_completion_tokens", None)
 
-        if "response_format" in non_default_params and "claude" in model:
+        if "response_format" in request_params and "claude" in model:
+            tool_is_forced: Final = AnthropicConfig.response_format_tool_can_be_forced(
+                model, "databricks", REQUEST_PARAMS.validate_python(request_params)
+            )
             _tool: Final = self.map_response_format_to_databricks_tool(
                 model,
-                non_default_params["response_format"],
+                request_params["response_format"],
                 mapped_params,
-                is_thinking_enabled,
+                tool_is_forced,
             )
 
             if _tool is not None:
                 self._add_tools_to_optional_params(optional_params=optional_params, tools=[_tool])
                 optional_params["json_mode"] = True
-                if not is_thinking_enabled:
+                if tool_is_forced:
                     _tool_choice: Final = ChatCompletionToolChoiceObjectParam(
                         type="function",
                         function=ChatCompletionToolChoiceFunctionParam(name=RESPONSE_FORMAT_TOOL_NAME),
@@ -486,20 +621,22 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 "response_format", None
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
-        if "reasoning_effort" in non_default_params and self._uses_anthropic_thinking_param(model):
-            reasoning_effort_value: Final = non_default_params.get("reasoning_effort")
+        if "reasoning_effort" in request_params and self._uses_anthropic_thinking_param(model):
+            reasoning_effort_value: Final = request_params.get("reasoning_effort")
             mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort_value,
                 model=model,
                 custom_llm_provider="databricks",
                 llm_provider="databricks",
             )
-            if mapped_thinking is None:
+            if mapped_thinking is None or mapped_thinking.get("type") == "disabled":
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
-            else:
+            if mapped_thinking is not None:
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig._is_adaptive_thinking_model(model, "databricks"):
+                if mapped_thinking.get("type") != "disabled" and AnthropicConfig._is_adaptive_thinking_model(
+                    model, "databricks"
+                ):
                     mapped_effort: str | None = None
                     if isinstance(reasoning_effort_value, str):
                         mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort_value)
@@ -513,7 +650,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
-            non_default_params=non_default_params, optional_params=mapped_params
+            non_default_params=request_params, optional_params=mapped_params
         )
         gated_thinking: Final = strip_beta_gated_thinking(
             mapped_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # mapped_params is the base config's bare dict
@@ -534,6 +671,35 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             return True
 
         return False
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],  # mutable-ok: inherited contract
+        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        headers: dict[str, object],  # mutable-ok: inherited contract
+    ) -> dict[str, object]:  # mutable-ok: inherited contract
+        match _first_non_string_text_type(messages):
+            case str() as type_name:
+                raise DatabricksException(
+                    status_code=400,
+                    message=f"A text content block needs a string 'text', got {type_name}",
+                )
+            case None:
+                pass
+        return super().transform_request(
+            model=model,
+            messages=_json_object_ready_messages(
+                model,
+                messages,
+                optional_params.get("response_format"),
+                drop_params=drops_unsupported_params(litellm_params.get("drop_params")),
+            ),
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     @overload
     def _transform_messages(

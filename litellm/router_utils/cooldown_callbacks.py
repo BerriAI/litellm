@@ -37,10 +37,10 @@ async def router_cooldown_event_callback(
             deployment_id,
         )
         return
-    _litellm_params: Final = _deployment["litellm_params"]
+    _litellm_params: Final = _deployment.litellm_params
     temp_litellm_params = copy.deepcopy(_litellm_params)
     temp_litellm_params = dict(temp_litellm_params)
-    _model_name: Final = _deployment.get("model_name", None) or ""
+    _model_name: Final = _deployment.model_name or ""
     _api_base: Final = litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params) or ""
     model_info: Final = _deployment["model_info"]
     model_id: Final = model_info.id

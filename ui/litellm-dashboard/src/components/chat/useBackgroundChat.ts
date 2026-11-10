@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { cancelBackgroundChat, isBackgroundRunPending, watchBackgroundChat } from "./backgroundChat";
 import type { AssistantMessageUpdate, ChatBackgroundRun } from "./types";
 
@@ -8,6 +9,7 @@ export function useBackgroundChat(
   accessToken: string,
   updateMessage: (conversationId: string, update: AssistantMessageUpdate) => void,
 ) {
+  const { t } = useTranslation();
   const [failure, setFailure] = useState<{ responseId: string; retry: number; message: string } | null>(null);
   const [retry, setRetry] = useState(0);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
@@ -28,15 +30,15 @@ export function useBackgroundChat(
       signal: controller.signal,
       onUpdate: (update: AssistantMessageUpdate) => updateMessage(conversationId, update),
     };
-    void watchBackgroundChat(polling).catch(() => {
+    void watchBackgroundChat(polling, t).catch(() => {
       if (!controller.signal.aborted)
-        setFailure({ responseId, retry, message: "Connection lost. Your run may still be running on the server." });
+        setFailure({ responseId, retry, message: t("chat.useBackgroundChat.connectionLost") });
     });
     return () => {
       controller.abort();
       if (controllerRef.current === controller) controllerRef.current = null;
     };
-  }, [conversationId, responseId, pending, accessToken, updateMessage, retry]);
+  }, [conversationId, responseId, pending, accessToken, updateMessage, retry, t]);
 
   const reconnect = useCallback(() => setRetry((value) => value + 1), []);
 
@@ -46,17 +48,17 @@ export function useBackgroundChat(
     controller?.abort();
     setCancellingId(responseId);
     try {
-      const update = await cancelBackgroundChat(accessToken, responseId);
+      const update = await cancelBackgroundChat(accessToken, responseId, t);
       updateMessage(conversationId, update);
       if (controllerRef.current === controller) reconnect();
     } catch {
       if (controllerRef.current === controller) {
-        setFailure({ responseId, retry, message: "Could not stop the run. Reconnect and try Stop again." });
+        setFailure({ responseId, retry, message: t("chat.useBackgroundChat.stopFailed") });
       }
     } finally {
       setCancellingId(null);
     }
-  }, [conversationId, responseId, accessToken, cancelling, reconnect, retry, updateMessage]);
+  }, [conversationId, responseId, accessToken, cancelling, reconnect, retry, updateMessage, t]);
 
   return { pending, connectionError, cancelling, reconnect, cancel };
 }

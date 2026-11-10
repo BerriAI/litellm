@@ -4,7 +4,6 @@ from typing import Final
 
 import litellm
 import pytest
-from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.utils import calculate_max_parallel_requests
 
 
@@ -34,53 +33,6 @@ def test_scenario(
     )
 
     assert calculated == expected
-
-
-@pytest.mark.parametrize(
-    ("max_parallel_requests", "tpm", "rpm", "default_max_parallel_requests", "expected"),
-    [
-        pytest.param(10, 300_000, 30, 40, 10, id="explicit-limit"),
-        pytest.param(None, 300_000, 30, 40, 30, id="rpm"),
-        pytest.param(None, 300_000, None, 40, 1_800, id="tpm"),
-        pytest.param(None, 20, None, 40, 1, id="minimum-tpm-limit"),
-        pytest.param(None, None, None, 40, 40, id="router-default"),
-        pytest.param(None, None, None, None, None, id="unset"),
-    ],
-)
-def test_setting_mpr_limits_per_model(
-    max_parallel_requests: int | None,
-    tpm: int | None,
-    rpm: int | None,
-    default_max_parallel_requests: int | None,
-    expected: int | None,
-) -> None:
-    deployment: Final = {
-        "model_name": "limited",
-        "litellm_params": {
-            "model": "openai/gpt-4o-mini",
-            "api_key": "test-key",
-            "max_parallel_requests": max_parallel_requests,
-            "tpm": tpm,
-            "rpm": rpm,
-        },
-        "model_info": {"id": "limited-deployment"},
-    }
-    router: Final = litellm.Router(
-        model_list=[deployment],
-        default_max_parallel_requests=default_max_parallel_requests,
-    )
-    limit: Final = router._get_client(
-        deployment=deployment,
-        kwargs={},
-        client_type="max_parallel_requests",
-    )
-
-    if expected is None:
-        assert limit is None
-        return
-
-    assert isinstance(limit, MaxParallelRequestsLimit)
-    assert limit.max_parallel_requests == expected
 
 
 @pytest.mark.asyncio

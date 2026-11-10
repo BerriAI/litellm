@@ -23,7 +23,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning, terminal_text
-from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
     PgBouncerSettings,
@@ -264,6 +264,7 @@ WORKER_APP: Final = "litellm_cli.main:proxy_worker_app"
 WORKER_LOG_CONFIG_ENV: Final = "LITELLM_WORKER_LOG_CONFIG"
 _LOG_CONFIG: Final = TypeAdapter[str | Mapping[str, object]](str | Mapping[str, object])
 _LOG_CONFIG_FILE: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter[object](object)
 
 
 class ProxyInitializationHelpers:
@@ -409,6 +410,7 @@ class ProxyInitializationHelpers:
         log_config: str | None = None,
         keepalive_timeout: int | None = None,
         timeout_worker_healthcheck: int | None = None,
+        max_request_header_size: int | None = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
@@ -427,6 +429,9 @@ class ProxyInitializationHelpers:
             "port": port,
             "server_header": False,
             "timeout_graceful_shutdown": GracefulShutdownManager.get_timeout(),
+            "h11_max_incomplete_event_size": (
+                max_request_header_size if max_request_header_size is not None else DEFAULT_MAX_REQUEST_HEADER_SIZE
+            ),
         }
         if log_config is not None:
             print_startup_message(f"Using log_config: {log_config}")
@@ -680,6 +685,7 @@ class ProxyInitializationHelpers:
         ssl_keyfile_path: str,
         max_requests_before_restart: int | None = None,
         max_requests_before_restart_jitter: int | None = None,
+        max_request_header_size: int | None = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -754,7 +760,7 @@ class ProxyInitializationHelpers:
         gunicorn_options: Final = {
             "bind": f"{host}:{port}",
             "workers": num_workers,  # default is 1
-            "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout),
+            "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout, max_request_header_size),
             "graceful_timeout": math.ceil(graceful_shutdown_timeout) + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
             "preload": True,  # Add the preload flag,
             "accesslog": "-",  # Log to stdout
@@ -1109,6 +1115,18 @@ class ProxyInitializationHelpers:
     envvar="KEEPALIVE_TIMEOUT",
 )
 @click.option(
+    "--max_request_header_size",
+    default=None,
+    show_default=f"{DEFAULT_MAX_REQUEST_HEADER_SIZE} bytes with h11",
+    type=click.IntRange(min=1),
+    help=(
+        "Maximum bytes buffered for an incomplete HTTP request header block. "
+        "Applies when uvicorn or --run_gunicorn uses h11. Parser selection is unchanged; httptools ignores this setting. "
+        "Ignored under --run_hypercorn / --run_granian."
+    ),
+    envvar="MAX_REQUEST_HEADER_SIZE",
+)
+@click.option(
     "--timeout_worker_healthcheck",
     default=None,
     type=int,
@@ -1253,6 +1271,7 @@ def run_server(
     check_migrations_against_existing_data: bool,
     keepalive_timeout,
     timeout_worker_healthcheck,
+    max_request_header_size: int | None,
     max_requests_before_restart: int | None,
     max_requests_before_restart_jitter: int | None,
     limit_concurrency: int | None,
@@ -1314,8 +1333,7 @@ def run_server(
         ProxyInitializationHelpers.run_test_chat_completion(host, port, model, test)
         return
     else:
-        if headers:
-            headers = json.loads(headers)
+        worker_headers: Final = _DECODED_JSON.validate_python(json.loads(headers) if headers else headers)
         save_worker_config(
             model=model,
             alias=alias,
@@ -1329,7 +1347,7 @@ def run_server(
             max_budget=max_budget,
             drop_params=drop_params,
             add_function_to_prompt=add_function_to_prompt,
-            headers=headers,
+            headers=worker_headers,
             save=save,
             config=config,
             use_queue=use_queue,
@@ -1747,6 +1765,7 @@ def run_server(
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
             timeout_worker_healthcheck=(timeout_worker_healthcheck if running_uvicorn else None),
+            max_request_header_size=max_request_header_size,
         )
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:
@@ -1821,6 +1840,7 @@ def run_server(
                 ssl_keyfile_path=ssl_keyfile_path,
                 max_requests_before_restart=max_requests_before_restart,
                 max_requests_before_restart_jitter=max_requests_before_restart_jitter,
+                max_request_header_size=max_request_header_size,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers.init_hypercorn_server(

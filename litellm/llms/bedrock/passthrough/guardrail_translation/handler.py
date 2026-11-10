@@ -14,6 +14,7 @@ from pydantic import InstanceOf, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
@@ -60,6 +61,8 @@ if TYPE_CHECKING:
 
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _INVOKE_STREAM_ACTION: Final = "invoke-with-response-stream"
+_INVOKE_ACTIONS: Final = frozenset({"invoke", _INVOKE_STREAM_ACTION})
+_BLOCK_TYPES_THE_ANTHROPIC_HANDLER_DOES_NOT_SCAN: Final = frozenset({"document", "search_result"})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"
 _EVENT_STREAM_MEDIA_TYPE: Final = "application/vnd.amazon.eventstream"
 
@@ -71,6 +74,83 @@ def _is_converse_endpoint(endpoint: str) -> bool:
 
 def _is_invoke_stream_endpoint(endpoint: str) -> bool:
     return endpoint.rstrip("/").split("/")[-1] == _INVOKE_STREAM_ACTION
+
+
+def _anthropic_invoke_body(
+    data: Mapping[str, object],
+) -> dict[str, object] | None:  # mutable-ok: the body guardrails write back into
+    """The body of an InvokeModel call in Anthropic Messages format, which Bedrock requires to carry anthropic_version"""
+    endpoint: Final = data.get("endpoint")
+    body: Final = data.get("data")
+    if not isinstance(endpoint, str) or endpoint.rstrip("/").split("/")[-1] not in _INVOKE_ACTIONS:
+        return None
+    if not isinstance(body, dict):
+        return None
+    invoke_body: Final = _BODY_BY_REFERENCE.validate_python(body)
+    if not isinstance(invoke_body.get("anthropic_version"), str) or not isinstance(invoke_body.get("messages"), list):
+        return None
+    messages: Final = _ARRAY_BY_REFERENCE.validate_python(invoke_body["messages"])
+    if not all(_is_well_formed_message(message) for message in messages):
+        return None
+    blocks: Final = _anthropic_message_blocks(messages)
+    if any(block.get("type") in _BLOCK_TYPES_THE_ANTHROPIC_HANDLER_DOES_NOT_SCAN for block in blocks):
+        return None
+    return invoke_body
+
+
+def _body_level_request_data(
+    passthrough_request: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the request dict guardrails receive
+    """What `/v1/messages` hands a guardrail as `request_data`: the Anthropic body at the top level, with the proxy's own keys (model, metadata, headers) on top"""
+    body: Final = as_str_mapping(passthrough_request.get("data")) or {}
+    proxy_keys: Final = {key: value for key, value in passthrough_request.items() if key != "data"}
+    return {**body, **proxy_keys}
+
+
+def _is_well_formed_message(message: object) -> bool:
+    """Whether the Messages translation can read `message`, so a malformed body still reaches Bedrock to be rejected there"""
+    fields: Final = as_str_mapping(message)
+    if fields is None or not isinstance(fields.get("role"), str):
+        return False
+    content: Final = fields.get("content")
+    if isinstance(content, str):
+        return True
+    return isinstance(content, list) and all(
+        as_str_mapping(block) is not None for block in _ARRAY_BY_REFERENCE.validate_python(content)
+    )
+
+
+def _anthropic_message_blocks(messages: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    fields: Final = (as_str_mapping(message) for message in messages)
+    return tuple(chain.from_iterable(_anthropic_content_blocks(field.get("content")) for field in fields if field))
+
+
+def _anthropic_content_blocks(content: object) -> tuple[Mapping[str, object], ...]:
+    blocks: Final[list[Mapping[str, object]]] = []  # mutable-ok: collected while walking the content
+    pending: Final[list[object]] = [content]  # mutable-ok: content lists still to walk, nested tool results included
+    while pending:
+        current = pending.pop()
+        if not isinstance(current, list):
+            continue
+        for item in _ARRAY_BY_REFERENCE.validate_python(current):
+            block = as_str_mapping(item)
+            if block is None:
+                continue
+            blocks.append(block)
+            if block.get("type") == "tool_result":
+                pending.append(block.get("content"))
+    return tuple(blocks)
+
+
+def _anthropic_invoke_reply(
+    response: object,
+    request_data: object,
+) -> dict[str, object] | None:  # mutable-ok: the reply guardrails write back into
+    if not isinstance(response, dict) or not isinstance(request_data, dict):
+        return None
+    if _anthropic_invoke_body(_OBJECT_BY_REFERENCE.validate_python(request_data)) is None:
+        return None
+    return _BODY_BY_REFERENCE.validate_python(response)
 
 
 def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
@@ -769,6 +849,7 @@ class InvokeStreamFrame:
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 _Frame: Final = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
 
 
@@ -1218,7 +1299,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             texts: Sequence[tuple[_StreamGroupKey, str]] = ()
             if event_type == "contentBlockDelta":
                 try:
-                    payload_dict: dict[str, object] = json.loads(payload_bytes)
+                    payload_dict = decoded_json_object(_DECODED_JSON.validate_python(json.loads(payload_bytes)))
                     texts = _delta_frame_texts(payload_dict)
                 except Exception as e:
                     verbose_proxy_logger.debug(
@@ -1285,6 +1366,17 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         body: Final = data.get("data")
 
         if not _is_converse_endpoint(endpoint):
+            passthrough_request: Final = _BODY_BY_REFERENCE.validate_python(data)
+            anthropic_body: Final = _anthropic_invoke_body(passthrough_request)
+            if anthropic_body is not None:
+                await AnthropicMessagesHandler().process_input_messages(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    data=anthropic_body,
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=litellm_logging_obj,
+                    request_data=_body_level_request_data(passthrough_request),
+                    keep_cache_control=True,
+                )
+                return passthrough_request
             return await _generic_passthrough_handler().process_input_messages(
                 data=data,
                 guardrail_to_apply=guardrail_to_apply,
@@ -1410,6 +1502,15 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             and not _is_converse_endpoint(endpoint)
             and not _is_invoke_stream_endpoint(endpoint)
         ):
+            anthropic_reply: Final = _anthropic_invoke_reply(response, request_data)  # pyright: ignore[reportUnknownArgumentType]  # the base signature types request_data as a bare dict
+            if anthropic_reply is not None:
+                return await AnthropicMessagesHandler().process_output_response(  # pyright: ignore[reportUnknownMemberType]  # takes the untyped request dict
+                    response=anthropic_reply,  # pyright: ignore[reportArgumentType]  # the Anthropic reply dict, written back in place
+                    guardrail_to_apply=guardrail_to_apply,
+                    litellm_logging_obj=litellm_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=_body_level_request_data(_OBJECT_BY_REFERENCE.validate_python(request_data or {})),
+                )
             return await _generic_passthrough_handler().process_output_response(
                 response=response,
                 guardrail_to_apply=guardrail_to_apply,

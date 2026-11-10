@@ -21,7 +21,7 @@ jobs:
       pull-requests: read
       actions: read
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     services:
       redis:
         image: redis@sha256:e2debfb7956fa12c7ddc79d7e645c8cf26b30c99a6e9161ea9bf4171e1668a5f
@@ -208,7 +208,7 @@ jobs:
             exit 0
           fi
           retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
-          CLAUDE_VERSION="$(retry uv run --no-sync python tests/e2e/claude_code/pr_gate_version_resolver.py)"
+          CLAUDE_VERSION="$(retry uv run --no-sync python tests/e2e/cli_harness/npm_version_resolver.py @anthropic-ai/claude-code)"
           tests/e2e/claude_code/cron_vm/install_claude_code.sh "$CLAUDE_VERSION" "$RUNNER_TEMP/claude-cli"
           PATH="$RUNNER_TEMP/claude-cli:$PATH" uv run --no-sync pytest -q tests/e2e_harness
           uv run --no-sync pytest --tb=short -q --noconftest -o addopts= -o "pythonpath=tests/e2e tests/e2e_harness" -p no:rerunfailures \

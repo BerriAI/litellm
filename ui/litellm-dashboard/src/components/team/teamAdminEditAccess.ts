@@ -1,4 +1,6 @@
+import type { ParseKeys, TFunction } from "i18next";
 import { z } from "zod";
+import i18n from "@/i18n/i18n";
 import { numberOrNull } from "@/lib/forms/numberOrNull";
 
 import {
@@ -14,10 +16,6 @@ export const TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION = "raise_max_budget";
 export const TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION = "create_member_keys";
 
 export const TEAM_ADMIN_METADATA_FIELD = "metadata";
-
-export const TEAM_ADMIN_EDITING_DISABLED_TITLE = "Team admins cannot edit team settings on this proxy";
-export const TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION =
-  "Ask a proxy admin to enable fields under Settings > UI > Team admin editable fields.";
 
 const teamAdminEditAccessShape = {
   kind: z.literal("team_admin"),
@@ -85,23 +83,26 @@ export const isTeamAdminDurationSettingsField = (
   field: TeamAdminSettingsField,
 ): field is TeamAdminDurationSettingsField => field === "team_member_budget_duration";
 
-const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([
-  ["tpm_limit", "Tokens per minute Limit (TPM)"],
-  ["rpm_limit", "Requests per minute Limit (RPM)"],
-  ["max_budget", "Max Budget (USD)"],
-  [TEAM_ADMIN_METADATA_FIELD, "Team Metadata"],
-  ["soft_budget", "Soft Budget (USD)"],
-  ["team_member_budget", "Member Default Budget (USD)"],
-  ["team_member_budget_duration", "Member Default Budget Duration"],
-  ["team_member_tpm_limit", "Member Default TPM Limit"],
-  ["team_member_rpm_limit", "Member Default RPM Limit"],
-  [TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION, "Raise the team's max budget"],
-  ["projects", "Create and update projects"],
-  ["member_key_budgets", "Update budgets on team members' keys"],
-  [TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION, "Create keys for team members"],
+const TEAM_ADMIN_FIELD_LABEL_KEYS: ReadonlyMap<string, ParseKeys> = new Map<string, ParseKeys>([
+  ["tpm_limit", "teams.adminEditAccess.fieldLabels.tpmLimit"],
+  ["rpm_limit", "teams.adminEditAccess.fieldLabels.rpmLimit"],
+  ["max_budget", "teams.adminEditAccess.fieldLabels.maxBudget"],
+  [TEAM_ADMIN_METADATA_FIELD, "teams.adminEditAccess.fieldLabels.metadata"],
+  ["soft_budget", "teams.adminEditAccess.fieldLabels.softBudget"],
+  ["team_member_budget", "teams.adminEditAccess.fieldLabels.teamMemberBudget"],
+  ["team_member_budget_duration", "teams.adminEditAccess.fieldLabels.teamMemberBudgetDuration"],
+  ["team_member_tpm_limit", "teams.adminEditAccess.fieldLabels.teamMemberTpmLimit"],
+  ["team_member_rpm_limit", "teams.adminEditAccess.fieldLabels.teamMemberRpmLimit"],
+  [TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION, "teams.adminEditAccess.fieldLabels.raiseMaxBudget"],
+  ["projects", "teams.adminEditAccess.fieldLabels.projects"],
+  ["member_key_budgets", "teams.adminEditAccess.fieldLabels.memberKeyBudgets"],
+  [TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION, "teams.adminEditAccess.fieldLabels.createMemberKeys"],
 ]);
 
-export const teamAdminFieldLabel = (field: string): string => TEAM_ADMIN_FIELD_LABELS.get(field) ?? field;
+export const teamAdminFieldLabel = (field: string, t: TFunction = i18n.t.bind(i18n)): string => {
+  const key = TEAM_ADMIN_FIELD_LABEL_KEYS.get(field);
+  return key === undefined ? field : t(key);
+};
 
 export type TeamAdminSettingsValues = { readonly [F in TeamAdminNumericSettingsField]?: string | number | null } & {
   readonly [F in TeamAdminDurationSettingsField]?: string | null;
@@ -218,11 +219,14 @@ export interface TeamAdminMetadataPairIssue {
 export const teamAdminMetadataPairIssue = (
   pair: Partial<MetadataPair> | undefined,
   context: TeamAdminMetadataContext,
+  t: TFunction = i18n.t.bind(i18n),
 ): TeamAdminMetadataPairIssue | null => {
   if (pair?.key === undefined) return null;
-  if (context.proxyControlledKeys.has(pair.key)) return { path: "key", message: "Only proxy admins can set this key" };
+  if (context.proxyControlledKeys.has(pair.key)) {
+    return { path: "key", message: t("teams.adminEditAccess.metadataIssues.proxyControlledKey") };
+  }
   if (!context.declaredKeys.has(pair.key) || !(pair.key in context.storedMetadata)) return null;
   const value = pairValue(pair);
   const clearsStoredValue = isBlank(value) && canonicalJson(value) !== canonicalJson(context.storedMetadata[pair.key]);
-  return clearsStoredValue ? { path: "value", message: "This field cannot be left empty" } : null;
+  return clearsStoredValue ? { path: "value", message: t("teams.adminEditAccess.metadataIssues.cannotBeEmpty") } : null;
 };

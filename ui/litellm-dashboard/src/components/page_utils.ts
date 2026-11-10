@@ -2,7 +2,8 @@
  * Utility functions for working with navigation pages
  */
 
-import { labelText, menuGroups } from "./leftnav";
+import i18n from "@/i18n/i18n";
+import { groupText, labelText, menuGroups } from "./leftnav";
 import { pageDescriptions, PageMetadata } from "./page_metadata";
 import { internalUserRoles } from "@/utils/roles";
 
@@ -46,8 +47,10 @@ export const getAvailablePages = (): PageMetadata[] => {
         pages.push({
           page: item.page,
           label: labelText(item),
-          group: group.groupLabel,
-          description: pageDescriptions[item.page] || "No description available",
+          group: groupText(group.groupLabel),
+          description: pageDescriptions[item.page]
+            ? i18n.t(pageDescriptions[item.page])
+            : i18n.t("adminPanel.pageVisibility.noDescription"),
         });
       }
 
@@ -60,8 +63,10 @@ export const getAvailablePages = (): PageMetadata[] => {
             pages.push({
               page: child.page,
               label: labelText(child),
-              group: `${group.groupLabel} > ${parentLabel}`,
-              description: pageDescriptions[child.page] || "No description available",
+              group: `${groupText(group.groupLabel)} > ${parentLabel}`,
+              description: pageDescriptions[child.page]
+                ? i18n.t(pageDescriptions[child.page])
+                : i18n.t("adminPanel.pageVisibility.noDescription"),
             });
           }
         });

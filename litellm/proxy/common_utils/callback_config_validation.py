@@ -7,9 +7,13 @@ per-integration checks here.
 
 import math
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
+from typing import Final, Literal, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
@@ -276,7 +280,7 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     """Validate every ``logging`` entry of a team/key metadata payload."""
     if not metadata:
         return None
-    entries: Final = _object_sequence(metadata.get("logging"))
+    entries: Final = object_sequence(metadata.get("logging"))
     if entries is None:
         return None
     entry_error: Final = next(
@@ -302,11 +306,11 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
 
 def stored_callback_entries(logging_entries: object) -> tuple[tuple[str | None, Mapping[str, str]], ...]:
     """The callback name and vars of every stored ``logging`` entry."""
-    entries: Final = _object_sequence(logging_entries) or ()
+    entries: Final = object_sequence(logging_entries) or ()
     return tuple((_entry_callback_name(entry), _entry_callback_vars(entry)) for entry in entries)
 
 
-def _object_sequence(value: object) -> Sequence[object] | None:
+def object_sequence(value: object) -> Sequence[object] | None:
     return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else None
 
 
@@ -444,4 +448,73 @@ def _newrelic_config_error(callback_vars: Mapping[str, str]) -> str | None:
     api_key: Final = callback_vars.get("newrelic_api_key")
     if region is not None and (not api_key or api_key == "None"):
         return "newrelic_region requires newrelic_api_key; the region rides the team's own key."
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialReferenceRejection:
+    status_code: Literal[400, 403]
+    message: str
+
+
+def credential_is_defined(credential_name: str) -> bool:
+    return CredentialAccessor.find_credential(credential_name) is not None
+
+
+_STRING_KEYED: Final = TypeAdapter(Mapping[str, object])
+
+
+def string_keyed(value: object) -> Mapping[str, object]:
+    try:
+        return _STRING_KEYED.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def _logging_entries(metadata: object) -> object:
+    return string_keyed(metadata).get("logging")
+
+
+def _entry_credential_name(entry: object) -> str | None:
+    match entry:
+        case {"litellm_credential_name": str() as credential_name}:
+            return credential_name
+        case _:
+            return None
+
+
+def logging_credential_names(logging_entries: object) -> tuple[str, ...]:
+    return tuple(
+        name for entry in object_sequence(logging_entries) or () if (name := _entry_credential_name(entry)) is not None
+    )
+
+
+def credential_reference_rejection(
+    requested_metadata: object,
+    stored_logging: object,
+    *,
+    is_proxy_admin: bool,
+    is_defined: Callable[[str], bool] = credential_is_defined,
+) -> CredentialReferenceRejection | None:
+    """Gate a key metadata write whose logging entries reference a proxy credential.
+
+    ``requested_metadata`` is None when the write leaves the key's metadata untouched. The admin check runs before
+    the existence check so a non-admin cannot probe which credential names are defined.
+    """
+    if requested_metadata is None:
+        return None
+    requested_logging: Final = _logging_entries(requested_metadata)
+    requested_names: Final = logging_credential_names(requested_logging)
+    stored_names: Final = logging_credential_names(stored_logging)
+    references_involved: Final = bool(requested_names or stored_names)
+    if references_involved and not is_proxy_admin and requested_logging != stored_logging:
+        return CredentialReferenceRejection(
+            403,
+            "Only proxy admins can change the logging entries of a key that uses litellm_credential_name",
+        )
+    undefined: Final = sorted({name for name in set(requested_names) - set(stored_names) if not is_defined(name)})
+    if undefined:
+        return CredentialReferenceRejection(
+            400, f"metadata.logging references undefined credential(s): {', '.join(undefined)}"
+        )
     return None

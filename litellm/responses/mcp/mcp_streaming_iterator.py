@@ -1,6 +1,9 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from typing_extensions import ReadOnly
+from typing_extensions import TypedDict as ExtraItemsTypedDict
+
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
@@ -37,6 +40,11 @@ else:
     MCPTool = Any
 
 MAX_MCP_TOOL_CALL_ROUNDS: Final = 5
+
+
+class _FollowUpRequest(ExtraItemsTypedDict, total=False, extra_items=object):
+    input: ReadOnly[str | ResponseInputParam]
+    model: ReadOnly[str]
 
 
 def _output_items(response: ResponsesAPIResponse) -> Sequence[object]:
@@ -550,6 +558,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Phase 4: Tool Execution Events
         if self.phase == "tool_execution":
+            if self._stream_error is not None:
+                self.phase = "finished"
+                return await self._anext_impl()
             # Emit any queued tool execution events
             if self.tool_execution_events:
                 return self.tool_execution_events.pop(0)
@@ -713,6 +724,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.phase = "tool_execution"
         await self._generate_tool_execution_events()
 
+        if self._stream_error is not None:
+            return None
         if not isinstance(response_obj, ResponsesAPIResponse):
             return chunk
         if self._follow_up_pending():
@@ -974,6 +987,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         except Exception as e:
             verbose_logger.error("Error in tool execution: %s", e)
+            if LiteLLM_Proxy_MCP_Handler.should_raise_mcp_guardrail_block(e):
+                self._stream_error = e
+                return
             import traceback
 
             traceback.print_exc()
@@ -1035,7 +1051,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     self.max_tool_call_rounds,
                 )
 
-            follow_up_response: Final = await aresponses(**follow_up_params)
+            follow_up_response: Final = await aresponses(**_FollowUpRequest(**follow_up_params))
 
             # Route the follow-up through the same base_iterator machinery as
             # the initial call so its completion is checked for further tool

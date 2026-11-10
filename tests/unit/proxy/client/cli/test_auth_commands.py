@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import os
 import stat
@@ -16,6 +17,7 @@ from litellm.litellm_core_utils.cli_keyring import (
     DISABLE_KEYRING_ENV_VAR,
     KeyringDisabled,
     KeyringNotInstalled,
+    KeyringUnreachable,
     SecretErased,
     SecretStored,
 )
@@ -1344,6 +1346,22 @@ class TestKeychainBackedCommands:
         assert "could not be removed" in result.output
         assert not (isolated_home / ".litellm" / "token.json").exists()
 
+    @pytest.mark.parametrize("failure", [KeyringDisabled(), KeyringUnreachable(), KeyringNotInstalled()])
+    def test_logout_without_a_usable_keychain_leaves_every_command_signed_out(
+        self, isolated_home, secret_vault_factory, failure
+    ):
+        vault = secret_vault_factory(available=False, failure=failure)
+        self._login(vault)
+        obj = {"base_url": "https://test.example.com", "secret_vault": vault}
+        self.runner.invoke(logout, obj=obj)
+
+        whoami_result = self.runner.invoke(whoami, obj=obj)
+        print_result = self.runner.invoke(print_token, obj=obj)
+
+        assert whoami_result.output == "Not authenticated. Run 'lite login' to authenticate.\n"
+        assert print_result.exit_code == 1
+        assert print_result.output == "Not authenticated. Run 'lite login'.\n"
+
     def test_print_token_explains_a_locked_keychain_instead_of_printing_nothing(
         self, isolated_home, secret_vault_factory
     ):
@@ -1932,6 +1950,287 @@ class TestPkceLogoutCommand:
         )
         assert "Logged out successfully" not in result.output
         clear.assert_not_called()
+
+    def test_a_logout_that_reaches_the_keychain_late_still_revokes_the_login(
+        self, isolated_home, secret_vault_factory
+    ):
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession):
+            self.runner.invoke(logout, obj={"secret_vault": locked})
+            result = self.runner.invoke(logout, obj={"secret_vault": unlocked})
+
+        assert result.output == "Logged out successfully. Authentication token cleared.\n"
+        assert unlocked.blob is None
+        assert _FakeSession.instances[-1].posts == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+
+    def test_a_logout_that_cannot_note_the_keychain_login_leaves_it_for_the_next_logout_to_revoke(
+        self, isolated_home, secret_vault_factory
+    ):
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+        (isolated_home / ".litellm" / "keychain_not_cleared").mkdir()
+
+        with patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession):
+            locked_logout = self.runner.invoke(logout, obj={"secret_vault": locked})
+            result = self.runner.invoke(logout, obj={"secret_vault": unlocked})
+
+        assert locked_logout.exit_code == 0, locked_logout.output
+        assert "Not logged out" in locked_logout.output
+        assert "Delete that file" not in locked_logout.output
+        assert result.output == "Logged out successfully. Authentication token cleared.\n"
+        assert unlocked.blob is None
+        assert [post for session in _FakeSession.instances for post in session.posts] == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+
+    def test_a_login_after_a_logout_that_missed_the_keychain_revokes_the_login_it_replaces(
+        self, isolated_home, secret_vault_factory
+    ):
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            self.runner.invoke(logout, obj={"secret_vault": locked})
+            result = self.runner.invoke(
+                login, ["--pkce"], obj={"base_url": PKCE_BASE_URL, "secret_vault": unlocked}
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Could not revoke" not in result.output
+        assert [post for session in _FakeSession.instances for post in session.posts] == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
+
+    def test_a_second_logout_that_misses_the_keychain_still_lets_the_first_login_be_revoked(
+        self, isolated_home, secret_vault_factory
+    ):
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            self.runner.invoke(logout, obj={"secret_vault": locked})
+            self.runner.invoke(login, ["--pkce"], obj={"base_url": PKCE_BASE_URL, "secret_vault": locked})
+            self.runner.invoke(logout, obj={"secret_vault": locked})
+            result = self.runner.invoke(logout, obj={"secret_vault": unlocked})
+
+        assert result.output == "Logged out successfully. Authentication token cleared.\n"
+        assert unlocked.blob is None
+        assert [post["token"] for session in _FakeSession.instances for _, post in session.posts] == [
+            "llm_srefresh_fresh",
+            "llm_srefresh_old",
+        ]
+
+    @pytest.mark.parametrize("logout_while_locked", [True, False])
+    def test_a_logout_after_a_locked_keychain_login_revokes_the_login_the_keychain_kept(
+        self, isolated_home, secret_vault_factory, logout_while_locked
+    ):
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            if logout_while_locked:
+                self.runner.invoke(cli, ["logout"], obj={"secret_vault": locked})
+            self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "login", "--pkce"], obj={"secret_vault": locked})
+            result = self.runner.invoke(cli, ["logout"], obj={"secret_vault": unlocked})
+
+        assert result.output == "Logged out successfully. Authentication token cleared.\n"
+        assert unlocked.blob is None
+        assert list((isolated_home / ".litellm").iterdir()) == []
+        assert [post for session in _FakeSession.instances for post in session.posts] == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": token, "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+            for token in ("llm_srefresh_old", "llm_srefresh_fresh")
+        ]
+
+    def test_a_proxy_that_cannot_revoke_the_earlier_login_never_holds_back_the_current_logout(
+        self, isolated_home, secret_vault_factory
+    ):
+        class _EarlierProxyUnavailableSession(_FakeSession):
+            def post(self, url, *, data=None, json=None, timeout, allow_redirects):
+                self.posts.append((url, data))
+                if data["token"] == "llm_srefresh_old":
+                    return _FakeHttpResponse(503, {"error": "temporarily_unavailable"})
+                return _FakeHttpResponse(200, {})
+
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _EarlierProxyUnavailableSession),
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            self.runner.invoke(cli, ["logout"], obj={"secret_vault": locked})
+            self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "login", "--pkce"], obj={"secret_vault": locked})
+            result = self.runner.invoke(cli, ["logout"], obj={"secret_vault": unlocked})
+
+        assert result.exit_code == 0, result.output
+        assert (
+            "Could not revoke the previous login's refresh token on the proxy (revocation failed with 503"
+            in result.output
+        )
+        assert result.output.endswith("Logged out successfully. Authentication token cleared.\n")
+        assert unlocked.blob is None
+        assert list((isolated_home / ".litellm").iterdir()) == []
+        assert [post["token"] for session in _FakeSession.instances for _, post in session.posts] == [
+            "llm_srefresh_old",
+            "llm_srefresh_fresh",
+        ]
+
+    def test_a_logout_whose_only_login_is_the_one_left_in_the_keychain_waits_for_its_revocation(
+        self, isolated_home, secret_vault_factory
+    ):
+        class _UnavailableSession(_FakeSession):
+            def __init__(self):
+                super().__init__()
+                self.response = _FakeHttpResponse(503, {"error": "temporarily_unavailable"})
+
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with patch("litellm.proxy.client.cli.commands.auth.requests.Session", _UnavailableSession):
+            self.runner.invoke(cli, ["logout"], obj={"secret_vault": locked})
+            result = self.runner.invoke(cli, ["logout"], obj={"secret_vault": unlocked})
+
+        assert result.exit_code == 1
+        assert "Nothing was cleared; run `lite logout` again shortly." in result.output
+        assert unlocked.blob is not None
+
+    def test_a_login_after_a_locked_keychain_login_revokes_the_login_the_keychain_kept(
+        self, isolated_home, secret_vault_factory
+    ):
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "login", "--pkce"], obj={"secret_vault": locked})
+            result = self.runner.invoke(
+                cli, ["--base-url", PKCE_BASE_URL, "login", "--pkce"], obj={"secret_vault": unlocked}
+            )
+
+        assert result.exit_code == 0, result.output
+        assert "Could not revoke" not in result.output
+        assert [post["token"] for session in _FakeSession.instances for _, post in session.posts] == [
+            "llm_srefresh_old",
+            "llm_srefresh_fresh",
+        ]
+
+    @pytest.mark.parametrize("seconds_the_clock_stepped_back", [0, 600])
+    def test_a_command_between_the_unlock_and_the_logout_keeps_the_login_the_keychain_kept_revocable(
+        self, isolated_home, secret_vault_factory, seconds_the_clock_stepped_back
+    ):
+        unlocked = secret_vault_factory()
+        first_login = _pkce_record(timestamp=time.time() + seconds_the_clock_stepped_back)
+        save_cli_token(CliTokenRecord(**first_login), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession),
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=_pkce_credential()),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            self.runner.invoke(cli, ["logout"], obj={"secret_vault": locked})
+            self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "login", "--pkce"], obj={"secret_vault": locked})
+            printed = self.runner.invoke(cli, ["auth", "print-token"], obj={"secret_vault": unlocked})
+            result = self.runner.invoke(cli, ["logout"], obj={"secret_vault": unlocked})
+
+        assert printed.stdout == "sk-cli-fresh\n"
+        assert result.output == "Logged out successfully. Authentication token cleared.\n"
+        assert [post["token"] for session in _FakeSession.instances for _, post in session.posts] == [
+            "llm_srefresh_old",
+            "llm_srefresh_fresh",
+        ]
+
+    @pytest.mark.parametrize("revocation_status", [200, 503])
+    def test_a_renewal_that_takes_the_keychain_entry_revokes_the_login_left_in_it(
+        self, isolated_home, secret_vault_factory, revocation_status
+    ):
+        class _RenewingSession(_FakeSession):
+            def post(self, url, *, data=None, json=None, timeout, allow_redirects):
+                self.posts.append((url, data))
+                if url.endswith("/token"):
+                    return _FakeHttpResponse(200, PKCE_TOKEN_RESPONSE)
+                return _FakeHttpResponse(revocation_status, {})
+
+        unlocked = secret_vault_factory()
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=unlocked)
+        locked = secret_vault_factory(blob=unlocked.blob, available=False)
+        expiring_login = dataclasses.replace(_pkce_credential(), expires_at=time.time() + 30)
+
+        with (
+            patch("litellm.proxy.client.cli.commands.auth.requests.Session", _RenewingSession),
+            patch("litellm.proxy.client.cli.commands.auth.run_pkce_login", return_value=expiring_login),
+            patch("litellm.proxy.client.cli.interface.show_commands"),
+        ):
+            self.runner.invoke(cli, ["logout"], obj={"secret_vault": locked})
+            self.runner.invoke(cli, ["--base-url", PKCE_BASE_URL, "login", "--pkce"], obj={"secret_vault": locked})
+            printed = self.runner.invoke(cli, ["auth", "print-token"], obj={"secret_vault": unlocked})
+            self.runner.invoke(cli, ["logout"], obj={"secret_vault": unlocked})
+
+        assert printed.stdout == "sk-cli-rotated\n"
+        assert ("Could not revoke" in printed.stderr) is (revocation_status != 200)
+        assert [
+            post["token"] for session in _FakeSession.instances for url, post in session.posts if url.endswith("/revoke")
+        ] == ["llm_srefresh_old", "llm_srefresh_rotated"]
+
+    def test_a_logout_after_the_keychain_refused_the_erase_does_not_revoke_the_login_again(
+        self, isolated_home, secret_vault_factory
+    ):
+        vault = secret_vault_factory(erasable=False)
+        save_cli_token(CliTokenRecord(**_pkce_record()), vault=vault)
+
+        with patch("litellm.proxy.client.cli.commands.auth.requests.Session", _FakeSession):
+            first = self.runner.invoke(logout, obj={"secret_vault": vault})
+            second = self.runner.invoke(logout, obj={"secret_vault": vault})
+
+        assert first.exit_code == 0, first.output
+        assert second.exit_code == 0, second.output
+        assert "still in the OS keychain" in second.output
+        assert [post for session in _FakeSession.instances for post in session.posts] == [
+            (
+                f"{PKCE_BASE_URL}/revoke",
+                {"token": "llm_srefresh_old", "token_type_hint": "refresh_token", "client_id": "llm_dcrc_abc"},
+            )
+        ]
 
     def test_logout_of_a_classic_token_makes_no_request(self):
         with (

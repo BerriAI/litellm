@@ -4,6 +4,7 @@ import os
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.vertex_ai.audio_transcription.gemini_transcribe_transformation import (
@@ -254,6 +255,20 @@ class TestTransformResponse:
         raw_response = httpx.Response(status_code=200, text="<html>not json</html>")
         with pytest.raises(VertexAIError, match="non-JSON"):
             config.transform_audio_transcription_response(raw_response)
+
+    def test_non_json_error_omits_response_body(self, config):
+        raw_response = httpx.Response(status_code=200, text='{"candidates": [{"content": {"parts": [{"text": "sensitive')
+        with pytest.raises(VertexAIError) as excinfo:
+            config.transform_audio_transcription_response(raw_response)
+        assert "sensitive" not in str(excinfo.value)
+
+    def test_field_of_unexpected_type_omits_response_body(self, config):
+        raw_response = httpx.Response(
+            status_code=200, json={"candidates": [{"content": {"parts": "sensitive transcript"}}]}
+        )
+        with pytest.raises(ValidationError) as excinfo:
+            config.transform_audio_transcription_response(raw_response)
+        assert "sensitive" not in str(excinfo.value)
 
 
 class TestValidateEnvironment:

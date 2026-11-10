@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { PluginSource } from "./types";
 import {
   formatInstallCommand,
   validatePluginName,
   getSourceDisplayText,
   getSourceLink,
+  getManagedSkillArchivePath,
   getCategoryBadgeColor,
   isValidSemanticVersion,
   isValidEmail,
@@ -14,6 +16,48 @@ import {
   isValidSha256,
   buildMarketplaceSettingsSnippet,
 } from "./helpers";
+
+describe.each(["legacy", "neutral"])("getManagedSkillArchivePath %s", (format) => {
+  const base = "https://proxy.example.com";
+  const digest = "a".repeat(64);
+  const path =
+    format === "legacy" ? `/claude-code/plugins/my-skill/archive/${digest}.zip` : "/skill-hub/skills/my-skill/archive";
+  const source = {
+    source: "archive" as const,
+    url: `${base}${path}`,
+    sha256: format === "legacy" ? digest : undefined,
+  };
+  const identify = (overrides: Partial<PluginSource> = {}, name = "my-skill") =>
+    getManagedSkillArchivePath(name, { ...source, ...overrides }, base);
+
+  it("recognizes only the gateway archive, including a mounted gateway", () => {
+    expect(identify()).toBe(path);
+    const mounted = { ...source, url: `${base}/gateway${path}` };
+    expect(getManagedSkillArchivePath("my-skill", mounted, "/gateway", base)).toBe(path);
+  });
+
+  it.each([
+    `https://other.example.com${path}`,
+    `http://proxy.example.com${path}`,
+    `https://proxy.example.com:8443${path}`,
+    `https://user@proxy.example.com${path}`,
+    `${base}/other${path}`,
+    `${base}${path}?redirect=other`,
+    `${base}${path}#fragment`,
+    `${base}${path.replace("my-skill", "another-skill")}`,
+    ...(format === "legacy" ? [`${base}${path.replace(digest, "b".repeat(64))}`] : []),
+  ])("rejects a different credential recipient or archive: %s", (url) => {
+    expect(identify({ url })).toBeNull();
+  });
+
+  it("requires an archive type, safe skill name and full SHA256 digest", () => {
+    expect(identify({ source: "url" })).toBeNull();
+    expect(identify({}, "../my-skill")).toBeNull();
+    if (format !== "legacy") return;
+    expect(identify({ sha256: undefined })).toBeNull();
+    expect(identify({ sha256: "short" })).toBeNull();
+  });
+});
 
 describe("buildMarketplaceSettingsSnippet", () => {
   it("sends the key placeholder as a bearer header when the proxy requires a key", () => {

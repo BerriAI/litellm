@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import type { DecisionRequest, SystemOneRequest } from "./schemas";
 import type { OpenAIDecisionsRequest } from "./openAIDecisions";
 import { parseJson } from "./validatePayload";
@@ -32,7 +33,7 @@ type PresetEndpoint = "/v1/decisions" | "/v1/systemone";
 
 export interface DecisionPreset {
   id: string;
-  label: string;
+  label: ParseKeys;
   request: PresetRequest;
 }
 
@@ -126,10 +127,10 @@ const leadScoring = {
 } satisfies PresetRequest;
 
 export const DECISION_PRESETS: readonly DecisionPreset[] = [
-  { id: "bug-triage", label: "Triage a bug report", request: bugTriage },
-  { id: "support-routing", label: "Route a support ticket", request: supportRouting },
-  { id: "moderation", label: "Moderate a forum comment", request: moderation },
-  { id: "lead-scoring", label: "Score a sales lead", request: leadScoring },
+  { id: "bug-triage", label: "playground.systemOne.presets.bugTriage", request: bugTriage },
+  { id: "support-routing", label: "playground.systemOne.presets.supportRouting", request: supportRouting },
+  { id: "moderation", label: "playground.systemOne.presets.moderation", request: moderation },
+  { id: "lead-scoring", label: "playground.systemOne.presets.leadScoring", request: leadScoring },
 ];
 
 const toOpenAIQuestion = (name: string, question: PresetQuestion): OpenAIDecisionsRequest["questions"][number] => {

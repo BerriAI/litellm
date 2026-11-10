@@ -46,7 +46,14 @@ Every price in a row lowers to one `Price { meter, channel, when }` and its `Uni
 
 `store/` is the catalog's in-memory store and the only place that indexes model names. Its rules are in [src/store/AGENTS.md](src/store/AGENTS.md)
 
-`layers.rs`, `resolve/`, `model_info.rs` and `register.rs` hold types only. The functions over them land with their first caller
+`cost_map.rs` holds a host's inputs, the installed document and the `register_model` overlay in `register.rs`. It serves the document in the key order and alias sharing Python's `litellm.model_cost` has, without the overlay, since where a registration lands is a lookup in the published table. It never holds the live table, which belongs to the host
+
+- `CostMap` is immutable behind an `Arc`. A new document is a new `CostMap`
+- `Registrations<V>` is generic over the host's value type, because Python registrations can hold `datetime` and other values JSON cannot. The host keeps its own objects (`Py<PyDict>` in python-bridge) and does the merging
+  - Entry order is latest-registration order. `landed_on` records which registered keys landed on each row key
+- `write_pass` stops at the first `place` that returns `None` and reports `Pass::Swapped`. Retrying is the host's job
+
+`resolve/` and `model_info.rs` hold types only. The functions over them land with their first caller
 
 Catalog errors use one opaque `Error` with typed causes and JSON Pointer accessors (`path`, `key`, `field`). `Error::rejects` alone decides whether an error fails the document, rejects its row or neither, and `ErrorKind` is the stable name hosts report it by
 

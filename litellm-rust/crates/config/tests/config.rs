@@ -440,3 +440,29 @@ fn mcp_config_redacts_nested_credentials_and_preserves_policy_for_validation() {
 fn rejects_invalid_typed_mcp_settings(#[case] setting: &str) {
     assert!(Config::from_yaml(&format!("mcp_servers:\n  docs:\n    {setting}\n")).is_err());
 }
+
+#[rstest]
+fn inactive_redis_cache_keeps_malformed_known_inputs_deferred() {
+    let config = Config::from_yaml(
+        "litellm_settings:\n  cache: false\n  cache_params:\n    type: redis\n    host: []\n    port: invalid\n    socket_timeout: invalid",
+    )
+    .unwrap();
+
+    assert!(matches!(
+        config.litellm_settings.cache_params,
+        Some(litellm_config::CacheSettings::Redis(_))
+    ));
+}
+
+#[rstest]
+fn non_redis_cache_settings_remain_opaque() {
+    let config = Config::from_yaml(
+        "litellm_settings:\n  cache_params:\n    type: local\n    custom_option:\n      nested: true",
+    )
+    .unwrap();
+
+    assert!(matches!(
+        config.litellm_settings.cache_params,
+        Some(litellm_config::CacheSettings::Other(_))
+    ));
+}

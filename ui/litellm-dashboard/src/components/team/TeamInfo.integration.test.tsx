@@ -832,6 +832,21 @@ describe("TeamInfoView - model settings", () => {
     seedDefaultMocks();
   });
 
+  it("submits the prompt storage restriction in team metadata", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: [] }));
+    renderWithProviders(<TeamInfoView {...props} userModels={["gpt-4"]} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.click(screen.getByRole("switch", { name: "Store prompts in spend logs" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toEqual(
+      expect.objectContaining({ metadata: expect.objectContaining({ store_prompts_in_spend_logs: false }) }),
+    );
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
   });
