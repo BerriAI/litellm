@@ -3882,11 +3882,9 @@ version = "0.1.0"
 dependencies = [
  "ipnet",
  "litellm-secret-value",
- "rstest",
  "serde",
  "serde_json",
  "strum",
- "tokio",
 ]
 
 [[package]]
@@ -4406,7 +4404,6 @@ dependencies = [
  "litellm-circuit-breaker",
  "litellm-core-utils",
  "litellm-error",
- "litellm-gateway-auth-core",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",

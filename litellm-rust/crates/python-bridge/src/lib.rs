@@ -1,4 +1,3 @@
-mod auth;
 mod cache;
 mod callable;
 mod coercion;
@@ -26,8 +25,6 @@ mod _native {
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
     use pyo3::{prelude::*, types::PyModule};
 
-    #[pymodule_export]
-    use crate::auth::{AuthCoreHandle, CustomAuthCall, OAuth2Call};
     #[pymodule_export]
     use crate::db::NativeDatabase;
     #[cfg(feature = "panic-test")]

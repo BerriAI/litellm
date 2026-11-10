@@ -13,6 +13,3 @@ serde.workspace = true
 serde_json.workspace = true
 strum.workspace = true
 
-[dev-dependencies]
-rstest.workspace = true
-tokio.workspace = true

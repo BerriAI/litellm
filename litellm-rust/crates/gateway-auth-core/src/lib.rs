@@ -22,7 +22,7 @@ pub use inputs::{
     AuthorizeSettings, JwtSettings, KeySettings, OAuth2IntrospectionSettings, OAuth2ProxySettings,
     PlanFacts, PlanSettings, RequestFacts, RoutingOverride,
 };
-pub use native::{NativeCore, NativeCustomAuthCore, NativeOAuth2Core, Unported};
+pub use native::{NativeCore, Unported};
 pub use outcome::{
     Anonymous, AnonymousReason, CredentialPlan, CustomAuthResult, CustomIdentity, Denial, Grant,
     Identity, JwtIdentity, KeyPlan, ModelBudgetExceeded, ModelBudgetResult, OAuth2Denial,
