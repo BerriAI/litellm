@@ -14,7 +14,12 @@ from typing import Final, Literal, cast  # noqa: TID251  # preserve arbitrary ke
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
+from litellm.types.utils import (
+    BAGGAGE_METADATA_KEYS_VAR,
+    CAPTURE_MESSAGE_CONTENT_VAR,
+    EXCLUDED_SERVICES_VAR,
+    OTEL_DESTINATION_VARS,
+)
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
@@ -43,6 +48,7 @@ def callback_config_error(
     if langfuse_error is not None:
         return langfuse_error
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_baggage_metadata_keys_value,
         validate_capture_message_content_value,
         validate_excluded_services_value,
     )
@@ -53,6 +59,7 @@ def callback_config_error(
             for variable_name, validator in (
                 (CAPTURE_MESSAGE_CONTENT_VAR, validate_capture_message_content_value),
                 (EXCLUDED_SERVICES_VAR, validate_excluded_services_value),
+                (BAGGAGE_METADATA_KEYS_VAR, validate_baggage_metadata_keys_value),
             )
             if (
                 error := _destination_setting_error(
@@ -269,11 +276,17 @@ def conflicting_callback_var_error(
 
 
 def _same_callback_var_value(variable_name: str, first: str, second: str) -> bool:
-    if variable_name != EXCLUDED_SERVICES_VAR:
-        return first == second
-    from litellm.integrations.otel.model.config import parse_excluded_services
+    if variable_name == EXCLUDED_SERVICES_VAR:
+        from litellm.integrations.otel.model.config import parse_excluded_services
 
-    return parse_excluded_services(first) == parse_excluded_services(second)
+        return parse_excluded_services(first) == parse_excluded_services(second)
+    if variable_name == BAGGAGE_METADATA_KEYS_VAR:
+        from litellm.integrations.otel.model.baggage import parse_destination_metadata_keys
+
+        first_keys: Final = parse_destination_metadata_keys(first)
+        second_keys: Final = parse_destination_metadata_keys(second)
+        return first_keys is not None and second_keys is not None and frozenset(first_keys) == frozenset(second_keys)
+    return first == second
 
 
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:
@@ -331,7 +344,7 @@ def _conflicting_entry_setting_error(
     return next(
         (
             error
-            for variable_name in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR)
+            for variable_name in OTEL_DESTINATION_VARS
             if (error := conflicting_callback_var_error(callback_name, variable_name, callback_vars, earlier))
             is not None
         ),
@@ -364,7 +377,7 @@ def _logging_entry_error(entry: object) -> str | None:
     destination_var_error: Final = next(
         (
             f"{variable_name} must be a string, got {type(callback_vars[variable_name]).__name__}"
-            for variable_name in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR)
+            for variable_name in OTEL_DESTINATION_VARS
             if variable_name in callback_vars and not isinstance(callback_vars[variable_name], str)
         ),
         None,

@@ -99,6 +99,14 @@ def validate_capture_message_content_value(value: str) -> None:
         )
 
 
+def validate_baggage_metadata_keys_value(value: str) -> None:
+    from litellm.integrations.otel.model.baggage import destination_metadata_keys_error
+
+    error: Final = destination_metadata_keys_error(value)
+    if error is not None:
+        raise ValueError(error)
+
+
 def validate_excluded_services_value(value: str) -> None:
     from litellm.integrations.otel.model.config import invalid_excluded_service_names
 

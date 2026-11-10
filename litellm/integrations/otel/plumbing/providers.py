@@ -49,6 +49,7 @@ from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_TRACE_NAME,
     LangfuseMapper,
 )
+from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.config import (
     CaptureMessageContent,
     ExporterOwner,
@@ -71,6 +72,7 @@ from litellm.integrations.otel.model.semconv import (
 from litellm.integrations.otel.model.spans import LiteLLMSpanKind
 from litellm.integrations.otel.plumbing.context import (
     request_destinations,
+    request_metadata,
     request_traces_excluded,
     suppressed_backends,
 )
@@ -486,6 +488,26 @@ class _CountedSpanView(_SpanView):
         return self._dropped_counts[2]
 
 
+def with_destination_metadata(
+    span: ReadableSpan, metadata_keys: tuple[str, ...], metadata: Mapping[str, str]
+) -> ReadableSpan:
+    """``span`` plus the ``litellm.metadata.*`` values a destination's own ``metadata_keys`` select.
+
+    Bound when the span ends, so a tree held for sampling keeps its own request's values. An
+    attribute the span already carries wins, so a destination key never replaces a value the
+    global allowlist or the proxy's identity wrote.
+    """
+    if not metadata_keys:
+        return span
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    extra: Final = {
+        key: value for key, value in promoted_metadata(metadata, metadata_keys).items() if key not in attributes
+    }
+    if not extra:
+        return span
+    return _CountedSpanView(span, MappingProxyType({**attributes, **extra}))
+
+
 def _is_litellm_span(span: ReadableSpan) -> bool:
     """Whether LiteLLM's own tracer wrote ``span``, rather than application or instrumentation code."""
     scope: Final = span.instrumentation_scope
@@ -782,6 +804,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             if span.context is not None:
                 self._roots.pop(span.context.span_id, None)
         failed: Final = span.status.status_code is StatusCode.ERROR
+        metadata: Final = request_metadata()
         for destination in request_destinations():
             if (
                 self._operator_already_writes(span, destination, suppressed)
@@ -794,10 +817,11 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 )
             ):
                 continue
+            view = with_destination_metadata(span, destination.metadata_keys, metadata)
             if not _is_sampled(destination):
-                self._forward(span, destination)
+                self._forward(view, destination)
                 continue
-            for held_span, held_destination in self._route(request, span, destination, failed):
+            for held_span, held_destination in self._route(request, view, destination, failed):
                 self._forward(held_span, held_destination)
         for held_span, held_destination in self._settle(request, span, failed):
             self._forward(held_span, held_destination)

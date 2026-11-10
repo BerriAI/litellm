@@ -208,6 +208,7 @@ def destination_for(
     service_name: str | None = None,
     capture_message_content: str | None = None,
     excluded_db_systems: frozenset[str] | None = None,
+    metadata_keys: tuple[str, ...] | None = None,
 ) -> OtelDestination | None:
     """The destination ``params`` names for ``callback_name``, or ``None``.
 
@@ -240,6 +241,7 @@ def destination_for(
         span_scope=_span_scope(callback_name, params),
         capture_message_content=capture_message_content,
         excluded_db_systems=excluded_db_systems,
+        metadata_keys=metadata_keys or (),
         success_sampling_rate=success_sampling_rate,
         error_sampling_rate=error_sampling_rate,
     )

@@ -61,6 +61,7 @@ from litellm.integrations.otel.plumbing.context import (
     destination_backends,
     request_destinations,
     set_request_destinations,
+    set_request_metadata,
 )
 from litellm.integrations.otel.plumbing.providers import (
     TenantFanOutSpanProcessor,
@@ -588,6 +589,93 @@ class TestFanOut:
             "batch_write_to_db _PROXY_track_cost_callback",
             "chat gpt-4",
         }
+
+    def test_destination_metadata_keys_reach_only_that_destination(self):
+        team, sibling, operator = InMemorySpanExporter(), InMemorySpanExporter(), InMemorySpanExporter()
+        exporters: Final = {"http://team.local": team, "http://sibling.local": sibling}
+        provider: Final = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda destination: SimpleSpanProcessor(exporters[destination.endpoint])
+            )
+        )
+
+        def run():
+            set_request_destinations(
+                (
+                    OtelDestination(
+                        endpoint="http://team.local",
+                        metadata_keys=("requester_metadata.tenant_id", "requester_metadata.order.id"),
+                    ),
+                    OtelDestination(endpoint="http://sibling.local"),
+                )
+            )
+            set_request_metadata(
+                MappingProxyType(
+                    {
+                        "requester_metadata.tenant_id": "tenant-1",
+                        "requester_metadata.order.id": "order-1",
+                        "requester_metadata.unlisted": "nope",
+                    }
+                )
+            )
+            emit(provider)
+
+        in_fresh_context(run)
+
+        team_attributes: Final = {key: value for key, value in (team.get_finished_spans()[0].attributes or {}).items()}
+        assert {key: value for key, value in team_attributes.items() if key.startswith("litellm.metadata.")} == {
+            "litellm.metadata.tenant_id": "tenant-1",
+            "litellm.metadata.order.id": "order-1",
+        }
+        assert [
+            key
+            for span in (*sibling.get_finished_spans(), *operator.get_finished_spans())
+            for key in span.attributes or {}
+            if key.startswith("litellm.metadata.")
+        ] == []
+
+    def test_destination_metadata_key_never_replaces_an_attribute_the_span_carries(self):
+        team: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider()
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _: SimpleSpanProcessor(team)))
+
+        def run():
+            set_request_destinations(
+                (OtelDestination(endpoint="http://team.local", metadata_keys=("requester_metadata.tenant_id",)),)
+            )
+            set_request_metadata(MappingProxyType({"requester_metadata.tenant_id": "from-caller"}))
+            with get_tracer(provider, "litellm").start_as_current_span("chat gpt-4") as span:
+                span.set_attribute("litellm.metadata.tenant_id", "from-operator-allowlist")
+
+        in_fresh_context(run)
+
+        assert team.get_finished_spans()[0].attributes["litellm.metadata.tenant_id"] == "from-operator-allowlist"
+
+    def test_sampled_destination_keeps_the_metadata_of_the_request_that_ended_its_spans(self):
+        team: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider()
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _: SimpleSpanProcessor(team)))
+        destination: Final = OtelDestination(
+            endpoint="http://team.local",
+            metadata_keys=("requester_metadata.tenant_id",),
+            success_sampling_rate=1.0,
+            error_sampling_rate=1.0,
+        )
+
+        def run(tenant: str):
+            set_request_destinations((destination,))
+            set_request_metadata(MappingProxyType({"requester_metadata.tenant_id": tenant}))
+            emit(provider)
+
+        in_fresh_context(run, "tenant-a")
+        in_fresh_context(run, "tenant-b")
+
+        assert sorted(span.attributes["litellm.metadata.tenant_id"] for span in team.get_finished_spans()) == [
+            "tenant-a",
+            "tenant-b",
+        ]
 
     def test_team_exclusions_replace_empty_global_and_operator_keeps_all_database_spans(self):
         team, inherited, operator = InMemorySpanExporter(), InMemorySpanExporter(), InMemorySpanExporter()
