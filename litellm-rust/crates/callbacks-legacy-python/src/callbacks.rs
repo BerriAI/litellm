@@ -26,7 +26,7 @@ pub trait LegacyCallbacks {
     fn pre_call(
         &self,
         py: Python<'_>,
-        input: &str,
+        input: &Bound<'_, PyAny>,
         api_key: Option<&str>,
         body: &Bound<'_, PyDict>,
         headers: &Bound<'_, PyDict>,
@@ -59,7 +59,16 @@ pub trait LegacyCallbacks {
 
     fn defers_async_logging(&self, py: Python<'_>) -> bool;
 
-    fn defer_success(&self, py: Python<'_>, pending: &Bound<'_, PyAny>) -> PyResult<()>;
+    fn claim_async_success_log(&self, py: Python<'_>) -> PyResult<bool>;
+
+    fn defer_success(
+        &self,
+        py: Python<'_>,
+        pending: &Bound<'_, PyAny>,
+        response: &Option<Py<PyAny>>,
+        start: &Py<PyAny>,
+        end: &Option<Py<PyAny>>,
+    ) -> PyResult<()>;
 
     fn sync_success_for_async_call(
         &self,
@@ -148,7 +157,7 @@ impl LegacyCallbacks for PythonLogger {
     fn pre_call(
         &self,
         py: Python<'_>,
-        input: &str,
+        input: &Bound<'_, PyAny>,
         api_key: Option<&str>,
         body: &Bound<'_, PyDict>,
         headers: &Bound<'_, PyDict>,
@@ -203,8 +212,21 @@ impl LegacyCallbacks for PythonLogger {
             .unwrap_or(false)
     }
 
-    fn defer_success(&self, py: Python<'_>, pending: &Bound<'_, PyAny>) -> PyResult<()> {
-        Logging::DeferSuccess.call(py, (self.object(py), pending))?;
+    fn claim_async_success_log(&self, py: Python<'_>) -> PyResult<bool> {
+        Logging::ClaimAsyncSuccess
+            .call(py, (self.object(py),))?
+            .extract()
+    }
+
+    fn defer_success(
+        &self,
+        py: Python<'_>,
+        pending: &Bound<'_, PyAny>,
+        response: &Option<Py<PyAny>>,
+        start: &Py<PyAny>,
+        end: &Option<Py<PyAny>>,
+    ) -> PyResult<()> {
+        Logging::DeferSuccess.call(py, (self.object(py), pending, response, start, end))?;
         Ok(())
     }
 
@@ -252,6 +274,7 @@ impl LegacyCallbacks for PythonLogger {
     ) -> PyResult<()> {
         let coroutine =
             Logging::AsyncSuccessHandler.call(py, (self.object(py), response, start, end))?;
+        Logging::MarkAsyncSuccessEnqueued.call(py, (self.object(py),))?;
         let enqueue = Logging::Enqueue.call(py, (&coroutine,));
         if enqueue.is_err()
             && let Err(error) = coroutine.call_method0("close")

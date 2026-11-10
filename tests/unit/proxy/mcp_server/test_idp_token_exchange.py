@@ -1,20 +1,34 @@
+import json
 import logging
 from typing import Final
 
+import jwt
 import pytest
-from fastapi import HTTPException
+from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi import HTTPException, Request
 from prisma.engine.errors import BinaryNotFoundError
 from prisma.errors import DataError
 
 from litellm.caching.caching import DualCache
-from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth, ProxyException
+from litellm.proxy import proxy_server
+from litellm.proxy._types import (
+    JWTIssuerConfig,
+    LiteLLM_JWTAuth,
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    Member,
+    ProxyException,
+)
 from litellm.proxy.auth.handle_jwt import JWKSUnreachableError, JWTHandler, jwks_unavailable_exception
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server.gateway_dcr_flow import SubjectIdentity, SubjectTokenRefusal
 from litellm.proxy.mcp_server.idp_token_exchange import (
     REJECTED_SUBJECT_TOKEN,
     SUBJECT_TOKEN_CHECK_FAULTED,
     SUBJECT_TOKEN_CHECK_UNAVAILABLE,
     TokenExchangePrerequisites,
+    exchange_idp_subject_token,
     identity_from_subject_token,
     token_exchange_available,
 )
@@ -246,3 +260,71 @@ async def test_agent_token_cannot_be_exchanged_for_a_user_identity(user_id: str 
     assert isinstance(result, SubjectTokenRefusal)
     assert result.error == "invalid_request"
     assert "direct JWT authentication" in result.description
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enforce_team", "team_id", "expected"),
+    (
+        (True, "exchange-team", SubjectIdentity(user_id="exchange-user", team_id="exchange-team")),
+        (False, None, SubjectIdentity(user_id="exchange-user", team_id=None)),
+        (True, None, SubjectTokenRefusal(error="invalid_request", description=REJECTED_SUBJECT_TOKEN)),
+    ),
+    ids=("native-team", "teamless-without-enforcement", "teamless-under-enforcement"),
+)
+async def test_subject_exchange_applies_team_admission_before_returning_an_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    enforce_team: bool,
+    team_id: str | None,
+    expected: SubjectIdentity | SubjectTokenRefusal,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    database: Final = object()
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=database,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="sub",
+            team_ids_jwt_field="groups",
+            enforce_team_based_model_access=enforce_team,
+            team_allowed_routes=["/token"],
+        ),
+    )
+    signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwks_url: Final = "https://identity.invalid/exchange/jwks"
+    cache.set_cache(
+        f"litellm_jwt_auth_keys_{jwks_url}",
+        [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))],
+    )
+    cache.set_cache(
+        "exchange-user",
+        LiteLLM_UserTable(user_id="exchange-user", user_role="internal_user", teams=[team_id] if team_id else []),
+        model_type=LiteLLM_UserTable,
+    )
+    if team_id is not None:
+        cache.set_cache(
+            f"team_id:{team_id}",
+            LiteLLM_TeamTable(team_id=team_id, members_with_roles=[Member(user_id="exchange-user", role="user")]),
+            model_type=LiteLLM_TeamTable,
+        )
+        cache.set_cache(
+            f"team_membership:exchange-user:{team_id}",
+            LiteLLM_TeamMembership(user_id="exchange-user", team_id=team_id),
+            model_type=LiteLLM_TeamMembership,
+        )
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.setattr(proxy_server, "jwt_handler", handler)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    token: Final = jwt.encode(
+        {"sub": "exchange-user", "groups": [team_id] if team_id else []}, signing_key, algorithm="RS256"
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": "/token", "headers": []})
+    assert await exchange_idp_subject_token(token, request) == expected

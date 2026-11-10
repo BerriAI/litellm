@@ -357,6 +357,14 @@ def _bedrock_profile(params: Mapping[str, object], model: str) -> bool:
     return params.get("custom_llm_provider") == "bedrock" or model.startswith("bedrock/")
 
 
+def _declared_upstream(params: Mapping[str, object]) -> tuple[str, str | None] | None:
+    model: Final = params.get("model")
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(model, str):
+        return None
+    return model, declared_provider(model, provider if isinstance(provider, str) else None)
+
+
 def _search_tool_support(deployment: Mapping[str, object]) -> bool | None:
     """A deployment's answer to Codex's client ``tool_search``."""
     from litellm.responses.litellm_completion_transformation.tool_search import chat_config_builds_anthropic_request
@@ -2214,6 +2222,15 @@ class HostRegistry(HostModelInfo):
         return declared_provider(
             model if isinstance(model, str) else None, provider if isinstance(provider, str) else None
         )
+
+    def _core_get_routable_upstreams(
+        self, model_name: str, team_id: str | None = None
+    ) -> tuple[tuple[str, str | None], ...]:
+        """Per routable deployment that names a model: that model and the provider the deployment declares."""
+        upstreams: Final = (
+            _declared_upstream(_params_of(deployment)) for deployment in self._routable_deployments(model_name, team_id)
+        )
+        return tuple(upstream for upstream in upstreams if upstream is not None)
 
     def _core_get_routable_deployment_model_info(
         self, model_name: str, team_id: str | None = None

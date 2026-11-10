@@ -745,8 +745,10 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
     """LIT-5466: the provider call is timed to first byte, so at stream completion the total minus
     that duration is token generation, not LiteLLM overhead."""
     logging_obj = _logging_obj_stub()
+    logging_obj.stream = True
     logging_obj.model_call_details = {"litellm_params": {}, "llm_api_duration_ms": 200.0}
     logging_obj.caching_details = None
+    logging_obj.response_timing_metrics = {"_response_ms": 300.0, "litellm_overhead_time_ms": 100.0}
 
     class _CompletedEvent:
         def __init__(self) -> None:
@@ -760,6 +762,9 @@ def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
 
     assert iterator.completed_response._hidden_params["_response_ms"] == 10000.0
     assert "litellm_overhead_time_ms" not in iterator.completed_response._hidden_params
+    logging_obj.set_response_timing_metrics.assert_called_once_with(
+        {"_response_ms": 10000.0, "litellm_overhead_time_ms": 100.0}
+    )
 
 
 def _mock_config_with_completed_response(response: ResponsesAPIResponse) -> Mock:

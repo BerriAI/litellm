@@ -82,7 +82,11 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
+    from litellm.responses.streaming_iterator import (
+        ResponsesWsFrameGuard,
+        ResponsesWsTurnAdmission,
+        ResponsesWsTurnUsageRecorder,
+    )
     from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
@@ -2870,6 +2874,7 @@ async def _aresponses_websocket(
     api_key: str | None = None,
     timeout: float | None = None,
     turn_admission: "ResponsesWsTurnAdmission | None" = None,
+    turn_usage_recorder: "ResponsesWsTurnUsageRecorder | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:
@@ -2964,6 +2969,7 @@ async def _aresponses_websocket(
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
         turn_admission=turn_admission,
+        turn_usage_recorder=turn_usage_recorder,
         frame_guard=responses_ws_frame_guard,
         **remaining_kwargs,
     )

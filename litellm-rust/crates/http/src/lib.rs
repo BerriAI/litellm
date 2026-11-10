@@ -18,7 +18,7 @@ pub mod websocket;
 
 pub use client::Client;
 pub use config::{ClientIdentity, HttpClientConfig, Resolution, Verify};
-pub use error::{Error, TlsSource};
+pub use error::{BodyCut, Error, TlsSource};
 pub use pool::{ClientVariant, HttpClientPool};
 pub use proxy::EnvironmentProxies;
 pub use settings::{HttpSettings, HttpSettingsLayer, SslVerify, TcpKeepalive};

@@ -124,6 +124,7 @@ from litellm.router_rust.invoke.streaming import (
     shape_attempt_kwargs,
 )
 from litellm.router_rust.invoke.walk import FallbackOutcomes, WalkMetadata, await_all, log_retry_into
+from litellm.router_rust.invoke.websocket import turns_counted_their_requests
 from litellm.router_rust.routing_stores import RoutingStores
 from litellm.router_rust.steps.access import caller_fields, selection_refusal
 from litellm.router_rust.steps.callbacks import OptionalChecks, RustOptionalChecks
@@ -5079,8 +5080,11 @@ class _Driver:
     def _tracks_usage(self, call: "AttemptCall", response: object, deferred: bool) -> bool:
         """Whether the attempt counts against its deployment's usage (``_deployment_tracks_usage``). A
         ``None`` response counts nothing (``increment_deployment_usage_for_response``), and an attempt
-        that reports no success then is a realtime session, which logs none to count it either."""
+        that reports no success then is a realtime session, which logs none to count it either. A
+        Responses socket whose finished turns each counted their own request adds none at close."""
         if deferred and response is None:
+            return False
+        if turns_counted_their_requests(call.kwargs):
             return False
         model: Final = call.kwargs.get("model")
         return self._core.deployment_tracks_usage(

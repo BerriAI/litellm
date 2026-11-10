@@ -1,5 +1,7 @@
 import pytest
+from typing import Final
 from unittest.mock import AsyncMock, patch
+from starlette.requests import Request
 import litellm
 from litellm.proxy.auth.user_api_key_auth import (
     _run_post_custom_auth_checks,
@@ -19,6 +21,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
     # custom_auth_run_common_checks for custom-auth deployments. The
     # helper itself no longer calls common_checks.
     valid_token = UserAPIKeyAuth(token="test_token")
+    http_request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions"})
 
     # Default: common_checks should NOT be called inside the helper
     with patch(
@@ -27,7 +30,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
         mock_common.return_value = True
         result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
-            request=None,
+            request=http_request,
             request_data={},
             route="/v1/chat/completions",
             parent_otel_span=None,
@@ -50,7 +53,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
         mock_common.return_value = True
         result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
-            request=None,
+            request=http_request,
             request_data={},
             route="/v1/chat/completions",
             parent_otel_span=None,
@@ -137,6 +140,7 @@ async def test_custom_auth_defers_end_user_budget_to_common_checks_when_enabled(
     # With custom_auth_run_common_checks set, the wrapper's common_checks()
     # enforces the end-user budget, so the helper must not double-enforce it.
     valid_token = UserAPIKeyAuth(token="test_token", end_user_id="customer-1")
+    http_request: Final = Request({"type": "http", "method": "POST", "path": "/v1/chat/completions"})
     end_user_obj = LiteLLM_EndUserTable(
         user_id="customer-1",
         blocked=False,
@@ -165,7 +169,7 @@ async def test_custom_auth_defers_end_user_budget_to_common_checks_when_enabled(
     ):
         await _run_post_custom_auth_checks(
             valid_token=valid_token,
-            request=None,
+            request=http_request,
             request_data={"model": "gpt-4"},
             route="/v1/chat/completions",
             parent_otel_span=None,
