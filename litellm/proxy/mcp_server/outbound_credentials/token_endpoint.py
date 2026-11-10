@@ -39,6 +39,7 @@ from litellm.exceptions import Timeout
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # litellm http handler is untyped
 )
+from litellm.proxy.common_utils.fips import refuse_jwt_algorithm_in_fips_mode
 from litellm.proxy.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
@@ -266,6 +267,7 @@ def _client_auth_params(endpoint: str, client_id: str, client_auth: ClientAuth) 
 
 
 def _client_assertion(endpoint: str, client_id: str, auth: PrivateKeyJwtAuth) -> str:
+    refuse_jwt_algorithm_in_fips_mode(auth.signing_alg)
     now: Final = int(time.time())
     return jwt.encode(
         {

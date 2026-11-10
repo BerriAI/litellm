@@ -10,6 +10,7 @@ Tests cover:
 """
 
 import base64
+import json
 import time
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1053,6 +1054,41 @@ async def test_verify_incoming_jwt_returns_payload_on_valid_token():
             payload = await signer._verify_incoming_jwt(incoming_token)
 
     assert payload["sub"] == "idp-user-42"
+
+
+async def _verify_with_jwks(token: str, jwks_keys: list) -> dict:
+    signer = _make_signer(access_token_discovery_uri="https://idp.example.com/.well-known/openid-configuration")
+    with patch.object(signer, "_get_oidc_discovery", new_callable=AsyncMock, return_value={"jwks_uri": "https://i/jwks"}):
+        with patch.object(_signer_mod, "_fetch_jwks", new_callable=AsyncMock, return_value=jwks_keys):
+            return await signer._verify_incoming_jwt(token)
+
+
+_HMAC_SECRET = b"a-shared-secret-of-32-bytes-or-so"
+_HMAC_JWKS = [{"kty": "oct", "kid": "h", "k": base64.urlsafe_b64encode(_HMAC_SECRET).rstrip(b"=").decode()}]
+
+
+def _token(key, algorithm: str, kid: str) -> str:
+    return jwt.encode({"sub": "idp-user", "exp": int(time.time()) + 300}, key, algorithm=algorithm, headers={"kid": kid})
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_accepts_an_hmac_jwks_key_outside_fips_mode():
+    payload = await _verify_with_jwks(_token(_HMAC_SECRET, "HS256", "h"), _HMAC_JWKS)
+    assert payload["sub"] == "idp-user"
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_refuses_an_hmac_jwks_key_in_fips_mode(fips_mode: None):
+    with pytest.raises(ValueError, match="fips_mode is on and does not allow the JWT algorithm 'HS256'"):
+        await _verify_with_jwks(_token(_HMAC_SECRET, "HS256", "h"), _HMAC_JWKS)
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_accepts_an_ed25519_jwks_key_in_fips_mode(fips_mode: None):
+    key = ed25519.Ed25519PrivateKey.generate()
+    jwk = {**json.loads(jwt.algorithms.OKPAlgorithm.to_jwk(key.public_key())), "kid": "e"}
+    payload = await _verify_with_jwks(_token(key, "EdDSA", "e"), [jwk])
+    assert payload["sub"] == "idp-user"
 
 
 @pytest.mark.asyncio

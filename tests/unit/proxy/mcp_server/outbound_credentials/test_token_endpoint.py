@@ -15,7 +15,7 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
 from pydantic import SecretStr
 
 import litellm
@@ -204,6 +204,51 @@ async def test_fetch_unsignable_client_assertion_is_misconfigured_not_a_crash(au
     client.post.assert_not_called()
     assert _ENDPOINT not in result.error.summary
     assert "idp.example.com" not in result.error.summary
+
+
+_HMAC_AUTH = PrivateKeyJwtAuth(private_key=SecretStr("a-shared-secret-of-32-bytes-or-so"), signing_alg="HS256")
+_ED25519_PEM = (
+    ed25519.Ed25519PrivateKey.generate()
+    .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    .decode()
+)
+
+
+@pytest.mark.asyncio
+async def test_fetch_signs_an_hmac_client_assertion_outside_fips_mode():
+    client = _client(_resp())
+    with patch(_PATCH_TARGET, return_value=client):
+        result = await TokenEndpointClient().fetch(_ENDPOINT, _CLIENT_ID, {"grant_type": "g"}, _HMAC_AUTH)
+
+    assert isinstance(result, Ok)
+    assert jwt.get_unverified_header(_posted_data(client)["client_assertion"])["alg"] == "HS256"
+
+
+@pytest.mark.asyncio
+async def test_fetch_refuses_an_hmac_client_assertion_in_fips_mode(fips_mode: None):
+    client = AsyncMock()
+    with patch(_PATCH_TARGET, return_value=client):
+        result = await TokenEndpointClient().fetch(_ENDPOINT, _CLIENT_ID, {"grant_type": "g"}, _HMAC_AUTH)
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+    client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pem, signing_alg", [(_PRIVATE_PEM, "RS256"), (_ED25519_PEM, "EdDSA")], ids=["rsa", "eddsa"])
+async def test_fetch_signs_a_public_key_client_assertion_in_fips_mode(fips_mode: None, pem: str, signing_alg: str):
+    client = _client(_resp())
+    with patch(_PATCH_TARGET, return_value=client):
+        result = await TokenEndpointClient().fetch(
+            _ENDPOINT,
+            _CLIENT_ID,
+            {"grant_type": "g"},
+            PrivateKeyJwtAuth(private_key=SecretStr(pem), signing_alg=signing_alg),
+        )
+
+    assert isinstance(result, Ok)
+    assert jwt.get_unverified_header(_posted_data(client)["client_assertion"])["alg"] == signing_alg
 
 
 @pytest.mark.asyncio

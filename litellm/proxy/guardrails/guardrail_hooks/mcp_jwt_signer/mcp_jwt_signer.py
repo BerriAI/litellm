@@ -92,6 +92,7 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.fips import refuse_jwt_algorithm_in_fips_mode
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
@@ -483,6 +484,7 @@ class MCPJWTSigner(CustomGuardrail):
         # PyJWT populates algorithm_name from the key's `alg` field; when absent
         # it infers from the key type (RSAPublicKey → RS256).
         alg: Final = getattr(signing_jwk, "algorithm_name", None) or "RS256"
+        refuse_jwt_algorithm_in_fips_mode(alg)
 
         decode_options: Final[Options] = {"verify_exp": True}
         decode_kwargs: Final[_JWTDecodeKwargs] = {
