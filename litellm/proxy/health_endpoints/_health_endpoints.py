@@ -2720,6 +2720,7 @@ async def test_model_connection(
         )
         health_check_params: Final = {
             **_OBJECT_MAPPING.validate_python(litellm_params),
+            "model_info": _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
             **_admin_api_key_from_request(
                 _OBJECT_MAPPING.validate_python(request_litellm_params),
                 _OBJECT_MAPPING.validate_python(litellm_params),
