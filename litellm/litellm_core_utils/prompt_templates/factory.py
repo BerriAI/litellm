@@ -4858,7 +4858,7 @@ def _has_no_content(message: object) -> bool:
     return not content or (isinstance(content, str) and not content.strip())
 
 
-def _is_empty_user_message(message: object) -> bool:
+def is_empty_user_message(message: object) -> bool:
     return message_field(message, "role") == "user" and _has_no_content(message)
 
 
@@ -4872,7 +4872,7 @@ def _ends_on_empty_user_turn(
         return False
     if not contents or contents[-1]["role"] != "assistant":
         return False
-    return all(_is_empty_user_message(messages[index]) for index in range(start, len(messages)))
+    return all(is_empty_user_message(messages[index]) for index in range(start, len(messages)))
 
 
 def _has_cache_mark(holder: object) -> bool:

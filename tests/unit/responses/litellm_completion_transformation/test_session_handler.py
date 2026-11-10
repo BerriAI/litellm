@@ -1450,6 +1450,12 @@ _FILLED_REPLAY: Final = [
 ]
 _DROPPED_REPLAY: Final = [("user", "What is 2+2?"), ("assistant", "Four."), ("assistant", "Eight.")]
 _ROUTE_THAT_FILLS: Final = {"model": "anthropic/claude-opus-5-5", "custom_llm_provider": "anthropic"}
+_ROUTE_THAT_ACCEPTS_A_PREFILL: Final = {"model": "anthropic/claude-sonnet-4-5", "custom_llm_provider": "anthropic"}
+_ARN_ROUTE_THAT_FILLS: Final = {
+    "model": "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
+    "custom_llm_provider": "bedrock",
+    "metadata": json.dumps({"model_map_information": {"model_map_key": "us.anthropic.claude-opus-5-5"}}),
+}
 
 
 def _stored_turns(*spend_logs: dict[str, object]) -> StoredTurns:
@@ -1468,15 +1474,8 @@ def _replayed_turns(session: ChatCompletionSession) -> list[tuple[object, object
     ("stored_route", "expected"),
     (
         (_ROUTE_THAT_FILLS, _FILLED_REPLAY),
-        (
-            {
-                "model": "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
-                "custom_llm_provider": "bedrock",
-                "metadata": json.dumps({"model_map_information": {"model_map_key": "us.anthropic.claude-opus-5-5"}}),
-            },
-            _FILLED_REPLAY,
-        ),
-        ({"model": "anthropic/claude-sonnet-4-5", "custom_llm_provider": "anthropic"}, _DROPPED_REPLAY),
+        (_ARN_ROUTE_THAT_FILLS, _FILLED_REPLAY),
+        (_ROUTE_THAT_ACCEPTS_A_PREFILL, _DROPPED_REPLAY),
     ),
     ids=("stored_model_refuses_a_prefill", "stored_arn_priced_as_a_model_that_refuses_it", "stored_model_accepts_it"),
 )
@@ -1498,6 +1497,51 @@ async def test_a_stored_follow_up_whose_lone_user_item_had_no_content_replays_wh
     )
 
     assert _replayed_turns(result) == expected
+
+
+async def _replay_of_a_blank_follow_up(
+    stored_route: Mapping[str, str], blank_input: str | list[dict[str, object]]
+) -> list[tuple[object, object]]:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-blank-turn", "What is 2+2?", "Four.")
+    follow_up: Final = {
+        **_spend_log("chatcmpl-follow-up", "session-blank-turn", "", "Eight."),
+        **stored_route,
+        "proxy_server_request": {"input": blank_input, "model": "claude-bridge"},
+    }
+    result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        "chatcmpl-follow-up",
+        stored_turns=_stored_turns(first_turn, follow_up),
+        replays_empty_user_turns=True,
+    )
+    return _replayed_turns(result)
+
+
+@pytest.mark.parametrize(
+    "blank_input",
+    (
+        "   ",
+        [{"role": "user", "content": "   "}],
+        [{"role": "user", "content": [{"type": "input_text", "text": " \n"}]}],
+    ),
+    ids=("whitespace_input_string", "whitespace_string_item", "whitespace_text_block_item"),
+)
+@pytest.mark.parametrize(
+    "stored_route",
+    (_ROUTE_THAT_FILLS, _ARN_ROUTE_THAT_FILLS),
+    ids=("stored_model_refuses_a_prefill", "stored_arn_priced_as_a_model_that_refuses_it"),
+)
+@pytest.mark.asyncio
+async def test_a_stored_blank_user_turn_replays_the_placeholder_its_model_saw(
+    stored_route: Mapping[str, str], blank_input: str | list[dict[str, object]]
+) -> None:
+    assert await _replay_of_a_blank_follow_up(stored_route, blank_input) == _FILLED_REPLAY
+
+
+@pytest.mark.asyncio
+async def test_a_stored_blank_user_turn_replays_as_sent_when_its_model_accepts_a_prefill() -> None:
+    replay: Final = await _replay_of_a_blank_follow_up(_ROUTE_THAT_ACCEPTS_A_PREFILL, [{"role": "user", "content": "   "}])
+
+    assert replay == [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "   "), ("assistant", "Eight.")]
 
 
 @pytest.mark.asyncio

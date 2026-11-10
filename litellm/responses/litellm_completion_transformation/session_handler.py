@@ -469,6 +469,7 @@ class ResponsesSessionHandler:
         from litellm.responses.litellm_completion_transformation.transformation import (
             LiteLLMCompletionResponsesConfig,
             restored_empty_user_turn,
+            without_blank_user_tail,
         )
 
         response_input_param: str | ResponseInputParam | None = None
@@ -492,27 +493,29 @@ class ResponsesSessionHandler:
             _stored_response(spend_log), item_cache_control, tool_call_provider_fields
         )
         if response_input_param:
-            chat_completion_message_history.extend(
-                LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                    input=bridge_client_tool_search(response_input_param, None).input,
-                    responses_api_request={},
-                    replay_reasoning=True,
-                    item_cache_control=item_cache_control,
-                    tool_call_provider_fields=tool_call_provider_fields,
-                    only_since_compaction=True,
-                    replay_tool_search=True,
-                )
+            stored_input: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=bridge_client_tool_search(response_input_param, None).input,
+                responses_api_request={},
+                replay_reasoning=True,
+                item_cache_control=item_cache_control,
+                tool_call_provider_fields=tool_call_provider_fields,
+                only_since_compaction=True,
+                replay_tool_search=True,
             )
-            if replays_empty_user_turns and output_messages:
-                chat_completion_message_history.extend(
-                    restored_empty_user_turn(
-                        response_input_param,
-                        chat_completion_message_history,
-                        item_cache_control,
-                        partial(_stored_turn_fills_empty_user_turns, spend_log),
-                        text=EMPTY_TEXT_PLACEHOLDER,
-                    )
+            input_before_blank_tail: Final = without_blank_user_tail(stored_input)
+            restored_turn: Final = (
+                restored_empty_user_turn(
+                    response_input_param,
+                    (*chat_completion_message_history, *input_before_blank_tail),
+                    item_cache_control,
+                    partial(_stored_turn_fills_empty_user_turns, spend_log),
+                    text=EMPTY_TEXT_PLACEHOLDER,
                 )
+                if replays_empty_user_turns and output_messages
+                else ()
+            )
+            chat_completion_message_history.extend(input_before_blank_tail if restored_turn else stored_input)
+            chat_completion_message_history.extend(restored_turn)
 
         chat_completion_message_history.extend(output_messages)
         return chat_completion_message_history
