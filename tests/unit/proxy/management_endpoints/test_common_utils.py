@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
+    SpecialProxyStrings,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.common_utils import (
@@ -422,6 +423,36 @@ class TestOrgAdminCanInviteUser:
         )
         assert _org_admin_can_invite_user(admin_user, target_user) is False
 
+    @pytest.mark.parametrize(
+        "target_user_id,target_role",
+        [
+            ("proxy-admin-1", LitellmUserRoles.PROXY_ADMIN.value),
+            ("viewer-admin-1", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value),
+            (
+                SpecialProxyStrings.default_user_id.value,
+                LitellmUserRoles.INTERNAL_USER.value,
+            ),
+        ],
+    )
+    def test_org_admin_cannot_invite_global_proxy_admin(
+        self, target_user_id, target_role
+    ):
+        """Org admins must not mint invitations for global proxy admins in a shared org."""
+        admin_user = LiteLLM_UserTable(
+            user_id="admin",
+            organization_memberships=[
+                self._make_membership("org1", LitellmUserRoles.ORG_ADMIN.value),
+            ],
+        )
+        target_user = LiteLLM_UserTable(
+            user_id=target_user_id,
+            user_role=target_role,
+            organization_memberships=[
+                self._make_membership("org1", LitellmUserRoles.INTERNAL_USER.value),
+            ],
+        )
+        assert _org_admin_can_invite_user(admin_user, target_user) is False
+
 
 class TestTeamAdminCanInviteUser:
     """Tests for _team_admin_can_invite_user async function."""
@@ -480,6 +511,39 @@ class TestTeamAdminCanInviteUser:
             prisma_client=mock_prisma,
         )
         assert result is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "target_user_id,target_role",
+        [
+            ("proxy-admin-1", LitellmUserRoles.PROXY_ADMIN.value),
+            ("viewer-admin-1", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value),
+            (
+                SpecialProxyStrings.default_user_id.value,
+                LitellmUserRoles.INTERNAL_USER.value,
+            ),
+        ],
+    )
+    async def test_team_admin_cannot_invite_global_proxy_admin(
+        self, target_user_id, target_role
+    ):
+        """Team admins must not mint invitations for global proxy admins in a shared team."""
+        mock_prisma = MagicMock()
+        mock_auth = MagicMock()
+        mock_auth.user_id = "admin"
+        admin_user = LiteLLM_UserTable(user_id="admin", teams=["t1"])
+        target_user = LiteLLM_UserTable(
+            user_id=target_user_id, user_role=target_role, teams=["t1"]
+        )
+
+        result = await _team_admin_can_invite_user(
+            user_api_key_dict=mock_auth,
+            admin_user_obj=admin_user,
+            target_user_obj=target_user,
+            prisma_client=mock_prisma,
+        )
+        assert result is False
+        mock_prisma.db.litellm_teamtable.find_many.assert_not_called()
 
 
 class TestUserHasAdminPrivileges:
@@ -1264,6 +1328,54 @@ class TestAdminCanInviteUserGuard:
                 prisma_client=MagicMock(),
             )
         assert result is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "target_user_id,target_role",
+        [
+            ("proxy-admin-1", LitellmUserRoles.PROXY_ADMIN.value),
+            ("viewer-admin-1", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value),
+            (
+                SpecialProxyStrings.default_user_id.value,
+                LitellmUserRoles.INTERNAL_USER.value,
+            ),
+        ],
+    )
+    async def test_non_proxy_admin_cannot_invite_global_proxy_admin(
+        self, target_user_id, target_role
+    ):
+        now = datetime.now(timezone.utc)
+        auth = UserAPIKeyAuth(
+            user_id="admin1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+        membership = LiteLLM_OrganizationMembershipTable(
+            user_id="x",
+            organization_id="org1",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=now,
+            updated_at=now,
+        )
+        admin_obj = LiteLLM_UserTable(
+            user_id="admin1",
+            teams=["t1"],
+            organization_memberships=[membership],
+        )
+        target_obj = LiteLLM_UserTable(
+            user_id=target_user_id,
+            user_role=target_role,
+            teams=["t1"],
+            organization_memberships=[membership],
+        )
+        mock_prisma = MagicMock()
+        mock_get_user = AsyncMock(side_effect=[admin_obj, target_obj])
+        with patch("litellm.proxy.auth.auth_checks.get_user_object", mock_get_user):
+            result = await admin_can_invite_user(
+                target_user_id=target_user_id,
+                user_api_key_dict=auth,
+                prisma_client=mock_prisma,
+            )
+        assert result is False
+        mock_prisma.db.litellm_teamtable.find_many.assert_not_called()
 
 
 class TestTeamAdminCanInviteUserQuery:
