@@ -50,7 +50,7 @@ from integration._support.scim import (
 )
 from pydantic import JsonValue, TypeAdapter
 
-from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS, TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 
 pytestmark: Final = pytest.mark.shares_worker_state
 
@@ -69,6 +69,17 @@ SELECT table_name, action, object_id, changed_by, changed_by_api_key
 FROM "LiteLLM_AuditLog"
 WHERE object_id IN (%s, %s) AND action = 'deleted'
 ORDER BY table_name
+"""
+AUDIT_ROWS_NAMING_SQL: Final = """
+SELECT table_name, object_id, changed_by_api_key
+FROM "LiteLLM_AuditLog"
+WHERE object_id = ANY(%s::text[]) AND action = 'deleted'
+ORDER BY table_name, object_id
+"""
+OLDEST_TRANSACTION_BLOCKED_BY_SQL: Final = """
+SELECT coalesce(max(extract(epoch FROM clock_timestamp() - xact_start)), 0)::float AS age
+FROM pg_stat_activity
+WHERE %s::int = ANY(pg_blocking_pids(pid))
 """
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _PIDS: Final = TypeAdapter(tuple[int, ...])
@@ -115,15 +126,28 @@ def _deleted_audit_rows(team: str, hashed_key: str) -> list[dict[str, JsonValue]
     return read_rows(DELETED_AUDIT_ROWS_SQL, (team, hashed_key))
 
 
+def _audit_rows_naming(object_ids: tuple[str, ...]) -> list[dict[str, JsonValue]]:
+    return read_rows(AUDIT_ROWS_NAMING_SQL, ("{" + ",".join(object_ids) + "}",))
+
+
+def _oldest_transaction_blocked_by(holder: int) -> float:
+    age: Final = read_rows(OLDEST_TRANSACTION_BLOCKED_BY_SQL, (str(holder),))[0]["age"]
+    assert isinstance(age, float), age
+    return age
+
+
 def _worker_startups(log: Path) -> tuple[tuple[int, ...], int]:
     text: Final = log.read_text()
     return _PIDS.validate_python(_STARTED_WORKER.findall(text)), text.count("Application startup complete.")
 
 
 @contextmanager
-def _fresh_connection(candidate: Gateway) -> Iterator[Gateway]:
+def _fresh_connection(candidate: Gateway, timeout: httpx.Timeout | float | None = None) -> Iterator[Gateway]:
     with httpx.Client(
-        base_url=candidate.client.base_url, timeout=candidate.client.timeout, trust_env=False, limits=GATEWAY_LIMITS
+        base_url=candidate.client.base_url,
+        timeout=candidate.client.timeout if timeout is None else timeout,
+        trust_env=False,
+        limits=GATEWAY_LIMITS,
     ) as client:
         yield Gateway(client, candidate.key, candidate.upstream_url)
 
@@ -292,6 +316,82 @@ def test_a_group_delete_revokes_member_keys_and_a_re_created_group_gets_its_serv
         assert string_value(body(recreated)["id"]) == team
         eventually(partial(_models_status, gateway, service_key), lambda code: code == 200, seconds=90)
         assert _models_status(gateway, member_key) == 401
+
+
+@pytest.mark.timeout(OWNED_PROXY_TIMEOUT)
+def test_a_group_delete_sent_with_the_idps_scim_token_revokes_member_keys_and_audits_them_under_that_token(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with (
+        owned_proxy_process(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": os.environ["DATABASE_URL"], "LITELLM_STORE_AUDIT_LOGS": "true"},
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        candidate: Final = owned.gateway
+        scim_token: Final = scenario.key(allowed_routes=["/scim/*"], models=[])
+        users: Final = seed_users(scenario, 3)
+        team: Final = created_team(scenario, create_group(candidate, users))
+        member_keys: Final = (team_key(candidate, team, users[0]), team_key(candidate, team, users[1]))
+        service_key: Final = service_account_key(candidate, scenario, team)
+
+        deleted: Final = delete_group(candidate, team, key=scim_token)
+        assert deleted.status_code == 204, deleted.text
+
+        assert keys_of(team) == frozenset({_hashed(service_key)})
+        for key in member_keys:
+            _assert_revoked_everywhere((candidate,), key)
+        audited: Final = (team, *(_hashed(key) for key in member_keys), _hashed(service_key))
+        rows: Final = eventually(lambda: _audit_rows_naming(audited), lambda found: len(found) >= 3, seconds=30)
+        token: Final = _hashed(scim_token)
+        assert rows == [
+            {"table_name": "LiteLLM_TeamTable", "object_id": team, "changed_by_api_key": token},
+            *(
+                {"table_name": "LiteLLM_VerificationToken", "object_id": hashed, "changed_by_api_key": token}
+                for hashed in sorted(_hashed(key) for key in member_keys)
+            ),
+        ]
+
+
+@pytest.mark.timeout(TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS + 120)
+def test_a_group_delete_that_outlives_its_transaction_on_a_locked_member_row_changes_nothing_and_a_retry_lands(
+    gateway: Gateway,
+) -> None:
+    patient_timeout: Final = TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS + 90
+    with (
+        gateway.scenario() as scenario,
+        _fresh_connection(gateway, timeout=patient_timeout) as patient,
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        users: Final = seed_users(scenario, 3)
+        team: Final = created_team(scenario, create_group(gateway, users))
+        key: Final = team_key(gateway, team, users[0])
+
+        with held_user_row(users[0]) as holder:
+            delete: Final = pool.submit(delete_group, patient, team)
+            eventually(
+                lambda: (
+                    delete.done()
+                    or _oldest_transaction_blocked_by(holder) > TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS + 1
+                ),
+                lambda outlived: outlived,
+                seconds=TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS + 30,
+            )
+        failed: Final = delete.result(timeout=patient_timeout)
+
+        assert failed.status_code >= 500, failed.text
+        assert_landed(gateway, team, users)
+        assert keys_of(team) == frozenset({_hashed(key)})
+        assert read_rows(DELETED_TEAM_RECORDS_SQL, (team,)) == []
+        assert read_rows(DELETED_KEY_RECORDS_SQL, (_hashed(key),)) == []
+        assert _models_status(gateway, key) == 200
+
+        retried: Final = delete_group(gateway, team)
+        assert retried.status_code == 204, retried.text
+        assert_gone(gateway, team, users, key)
 
 
 def test_deleting_an_unknown_group_is_404(gateway: Gateway) -> None:

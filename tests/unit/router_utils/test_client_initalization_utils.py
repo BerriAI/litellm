@@ -81,14 +81,17 @@ def test_slot_is_released_when_the_held_call_raises():
         assert limit.in_flight == 1
 
 
-def _router_limit(router: Router, model_name: str) -> MaxParallelRequestsLimit:
-    deployment: Final = router.get_deployment_by_model_group_name(model_group_name=model_name)
-    assert deployment is not None
-    client: Final = router._get_client(
-        deployment=deployment.model_dump(), kwargs={}, client_type="max_parallel_requests"
-    )
-    assert isinstance(client, MaxParallelRequestsLimit)
-    return client
+async def _concurrent_outcomes(router: Router, calls: int) -> list[str]:
+    async def attempt() -> str:
+        try:
+            await router.acompletion(
+                model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], mock_response="ok", mock_delay=0.3
+            )
+        except litellm.RateLimitError as e:
+            return e.message
+        return "ok"
+
+    return await asyncio.gather(*[attempt() for _ in range(calls)])
 
 
 @pytest.mark.parametrize(
@@ -103,23 +106,25 @@ def _router_limit(router: Router, model_name: str) -> MaxParallelRequestsLimit:
 @pytest.mark.asyncio
 async def test_router_deployment_rejects_past_its_derived_cap(litellm_params: dict[str, int], expected_cap: int):
     router: Final = Router(
-        model_list=[{"model_name": "gpt-5.6", "litellm_params": {"model": "openai/gpt-5.6", **litellm_params}}]
+        model_list=[
+            {"model_name": "gpt-5.6", "litellm_params": {"model": "openai/gpt-5.6", "api_key": "k", **litellm_params}}
+        ],
+        num_retries=0,
     )
-    limit: Final = _router_limit(router, "gpt-5.6")
-    assert limit.max_parallel_requests == expected_cap
-    release: Final = asyncio.Event()
-    holders: Final = [asyncio.create_task(_hold(limit, release)) for _ in range(expected_cap)]
-    await asyncio.sleep(0)
-    assert limit.in_flight == expected_cap
-    assert f"max_parallel_requests={expected_cap}" in _expect_rejection(limit).message
-    release.set()
-    assert await asyncio.wait_for(asyncio.gather(*holders), timeout=2) == ["ok"] * expected_cap
+
+    outcomes: Final = await _concurrent_outcomes(router, expected_cap + 1)
+
+    assert outcomes.count("ok") == expected_cap
+    rejections: Final = [outcome for outcome in outcomes if outcome != "ok"]
+    assert len(rejections) == 1
+    assert f"max_parallel_requests={expected_cap}" in rejections[0]
 
 
-def test_router_without_any_concurrency_setting_has_no_limit():
-    router: Final = Router(model_list=[{"model_name": "gpt-5.6", "litellm_params": {"model": "openai/gpt-5.6"}}])
-    deployment: Final = router.get_deployment_by_model_group_name(model_group_name="gpt-5.6")
-    assert deployment is not None
-    assert (
-        router._get_client(deployment=deployment.model_dump(), kwargs={}, client_type="max_parallel_requests") is None
+@pytest.mark.asyncio
+async def test_router_without_any_concurrency_setting_has_no_limit():
+    router: Final = Router(
+        model_list=[{"model_name": "gpt-5.6", "litellm_params": {"model": "openai/gpt-5.6", "api_key": "k"}}],
+        num_retries=0,
     )
+
+    assert await _concurrent_outcomes(router, 20) == ["ok"] * 20

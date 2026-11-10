@@ -1,5 +1,7 @@
 import json
+import uuid
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Final
 
 import pytest
@@ -488,3 +490,103 @@ def test_responses_input_tokens_sends_openai_the_owners_previous_response_id(cou
         assert counted.status_code == 200, counted.text
         count_body: Final = _body_for(wire.drain(), "/v1/responses/input_tokens")
         assert count_body["previous_response_id"] == _RESPONSES_REPLY["id"]
+
+
+_PROVIDER_FILE_ID: Final = "file-audit-provider"
+_UPLOADED_FILE: Final[Mapping[str, JsonValue]] = {
+    "id": _PROVIDER_FILE_ID,
+    "object": "file",
+    "bytes": 5,
+    "created_at": 1,
+    "filename": "notes.txt",
+    "purpose": "user_data",
+    "status": "processed",
+}
+
+
+def _files_peer(request: Request) -> Reply:
+    if request.target == "/v1/files":
+        return Reply(body=json.dumps(_UPLOADED_FILE).encode())
+    return _count_response(request)
+
+
+def _file_input(file_id: str) -> list[JsonValue]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Summarize the notes."},
+                {"type": "input_file", "file_id": file_id},
+            ],
+        }
+    ]
+
+
+@dataclass(frozen=True, slots=True)
+class _FileTenants:
+    model_id: str
+    model: str
+    owner_key: str
+    outsider_key: str
+    file_id: str
+
+
+def _file_tenants(scenario: Scenario, wire: Wire) -> _FileTenants:
+    model_id: Final = f"audit-openai-{uuid.uuid4().hex}"
+    model: Final = scenario.model(
+        model_info={"id": model_id},
+        model="openai/gpt-4o-mini",
+        api_base=f"{wire.url}/v1",
+        api_key="sk-integration-openai",
+    )
+    owner_key: Final = scenario.key(
+        user_id=scenario.user(user_role="internal_user"), team_id=scenario.team(models=[model]), models=[model]
+    )
+    outsider_key: Final = scenario.key(
+        user_id=scenario.user(user_role="internal_user"), team_id=scenario.team(models=[model]), models=[model]
+    )
+    uploaded: Final = scenario.gateway.request_multipart(
+        "/v1/files",
+        {"purpose": "user_data", "target_model_names": model},
+        {"file": ("notes.txt", b"notes", "text/plain")},
+        key=owner_key,
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    file_id: Final = _JSON_OBJECT.validate_json(uploaded.content)["id"]
+    assert isinstance(file_id, str) and file_id != _PROVIDER_FILE_ID, uploaded.text
+    assert [request.target for request in wire.drain()] == ["/v1/files"]
+    return _FileTenants(model_id, model, owner_key, outsider_key, file_id)
+
+
+def test_responses_input_tokens_sends_openai_the_provider_id_of_a_managed_file(counting_proxy: OwnedProxy) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_files_peer) as wire, gateway.scenario() as scenario:
+        tenants: Final = _file_tenants(scenario, wire)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses/input_tokens",
+            {
+                "model": tenants.model,
+                "input": _file_input(tenants.file_id),
+                "model_file_id_mapping": {tenants.file_id: {tenants.model_id: "file-forged"}},
+            },
+            key=tenants.owner_key,
+        )
+        assert response.status_code == 200, response.text
+        assert _JSON_OBJECT.validate_json(response.content)["input_tokens"] == _COUNT
+        assert _count_body(wire) == {"model": "gpt-4o-mini", "input": _file_input(_PROVIDER_FILE_ID)}
+
+
+def test_responses_input_tokens_refuses_another_teams_managed_file_before_openai(counting_proxy: OwnedProxy) -> None:
+    gateway: Final = counting_proxy.gateway
+    with wire_server(_files_peer) as wire, gateway.scenario() as scenario:
+        tenants: Final = _file_tenants(scenario, wire)
+        refused: Final = gateway.request(
+            "POST",
+            "/v1/responses/input_tokens",
+            {"model": tenants.model, "input": _file_input(tenants.file_id)},
+            key=tenants.outsider_key,
+        )
+        assert refused.status_code == 403, refused.text
+        assert _JSON_OBJECT.validate_json(refused.content)["error"]["type"] == "permission_error", refused.text
+        assert wire.drain() == ()

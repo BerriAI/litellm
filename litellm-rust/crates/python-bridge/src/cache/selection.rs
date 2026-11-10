@@ -1,15 +1,10 @@
-use super::{native, python};
-use litellm_cache_response::{
-    CacheOptions, CachePolicy, CacheScope, ResponseCacheService, ScopedCache,
-};
+use super::{CACHE_HOST_MODULE, HandleError, python};
+use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope, ScopedCache};
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::Protocol,
 };
 use pyo3::{prelude::*, types::PyDict};
-use std::sync::Arc;
-
-const CACHE_HOST_MODULE: &str = "litellm.rust_bridge.host.cache";
 
 pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
 
@@ -24,7 +19,6 @@ impl<P: Protocol> Protocol for Cached<P> {
 
 enum Backend {
     Disabled,
-    Native(Arc<dyn ResponseCacheService>),
     Python { namespace: String },
 }
 
@@ -39,11 +33,10 @@ impl Selection {
         services: HostServices<P>,
     ) -> (Option<ScopedCache>, CacheOptions)
     where
-        P::Error: From<MachineFault>,
+        P::Error: From<MachineFault> + std::error::Error,
     {
         let service = match self.backend {
             Backend::Disabled => None,
-            Backend::Native(service) => Some(service),
             Backend::Python { namespace } => Some(python::service(services, namespace)),
         };
         (
@@ -76,37 +69,21 @@ fn selected_cache<'py>(
     Ok(Some(configured))
 }
 
-pub(crate) fn configured_native(
+pub(crate) fn ensure_cache_disabled(
     py: Python<'_>,
     kwargs: &Bound<'_, PyDict>,
     call_type: &str,
-) -> PyResult<(
-    Option<Arc<dyn ResponseCacheService>>,
-    litellm_cache_response::CacheOptions,
-)> {
+) -> PyResult<()> {
     let Some(configured) = selected_cache(py, kwargs, call_type)? else {
-        return Ok((
-            None,
-            litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
-        ));
+        return Ok(());
     };
-    native_configuration(&configured, kwargs)
-}
-
-fn native_configuration(
-    configured: &Bound<'_, PyAny>,
-    kwargs: &Bound<'_, PyDict>,
-) -> PyResult<(Option<Arc<dyn ResponseCacheService>>, CacheOptions)> {
-    if !configured
+    if configured
         .call_method("should_use_cache", (), Some(kwargs))?
         .extract::<bool>()?
     {
-        return Ok((
-            None,
-            litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
-        ));
+        return Err(HandleError::Unsupported.into());
     }
-    native::v2::configured(configured, kwargs)
+    Ok(())
 }
 
 pub(crate) fn configure(
@@ -122,13 +99,6 @@ pub(crate) fn configure(
             options: CacheOptions::new(CacheScope::Shared),
         });
     };
-    if native::v2::native_handle(&cache)?.is_some() {
-        let (native, options) = native_configuration(&cache, arguments)?;
-        return Ok(Selection {
-            backend: native.map_or(Backend::Disabled, Backend::Native),
-            options,
-        });
-    }
     let enabled = cache
         .call_method("should_use_cache", (), Some(arguments))?
         .extract::<bool>()?;

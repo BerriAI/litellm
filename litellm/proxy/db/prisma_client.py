@@ -12,7 +12,7 @@ import subprocess
 import time
 import urllib
 import urllib.parse
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar
 
@@ -36,7 +36,10 @@ from litellm.secret_managers.main import str_to_bool
 
 if TYPE_CHECKING:
     from prisma import Prisma
+    from prisma import models as prisma_models
     from prisma.types import HttpConfig
+
+    from litellm.repositories.prisma_protocols import TableActions
 
 _ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = "20261015120000_add_environment_variables_revision_trigger"
 
@@ -904,6 +907,21 @@ class PrismaWrapper:
 
         async def disconnect(self, timeout: float | timedelta | None = None) -> None: ...
 
+        async def execute_raw(self, query: str, *args: object) -> int: ...
+
+        async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+        @property
+        def litellm_deprecatedverificationtoken(
+            self,
+        ) -> TableActions[prisma_models.LiteLLM_DeprecatedVerificationToken]: ...
+
+        @property
+        def litellm_mcpservertable(self) -> TableActions[prisma_models.LiteLLM_MCPServerTable]: ...
+
+        @property
+        def litellm_shadowevaljob(self) -> TableActions[prisma_models.LiteLLM_ShadowEvalJob]: ...
+
     def __getattr__(self, name: str):
         """
         Proxy attribute access to the underlying Prisma client.
@@ -1125,6 +1143,18 @@ class PrismaManager:
             verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
             return False
         return ProxyExtrasDBManager.build_request_log_indexes()
+
+    @staticmethod
+    def migration_dry_run_summary(use_migrate: bool = True) -> tuple[bool, str]:
+        """`--check_migrations_against_existing_data` on its own: the pending migrations applied inside a
+        transaction that is rolled back, as (whether they all applied, what the operator reads)."""
+        from litellm_proxy_extras.utils import (
+            ProxyExtrasDBManager,  # pyright: ignore[reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        )
+        from pydantic import TypeAdapter
+
+        summary: Final[object] = ProxyExtrasDBManager.migration_dry_run_summary(use_migrate=use_migrate)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm-proxy-extras is an optional install
+        return TypeAdapter(tuple[bool, str]).validate_python(summary)
 
     @staticmethod
     def start_request_log_index_build() -> None:

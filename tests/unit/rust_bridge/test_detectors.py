@@ -33,6 +33,7 @@ MAPPED_FILE_INPUT: Final = [{"role": "user", "content": [{"type": "input_file", 
 CACHED_TEXT: Final = {"type": "input_text", "text": "hi", "cache_control": {"type": "ephemeral"}}
 THINKING_TURN: Final = {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "s"}]}
 REDACTED: Final = {"type": "redacted_thinking", "data": "x"}
+STRICT_TOOL: Final = {"name": "b", "input_schema": {"type": "object"}, "strict": True}
 TOOL_SEARCH_TYPE: Final = sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0]
 
 
@@ -42,6 +43,24 @@ def function_tool(parameters: object) -> Mapping[str, object]:
 
 def call(**kwargs: object) -> NativeCall:
     return NativeCall(args=(), kwargs=kwargs, base={"model": "gpt-5"})
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "expected"),
+    (
+        ("openai/gpt-luna-latest", None, True),
+        ("gpt-luna-latest", "openai", True),
+        ("gemini/gemini-pro-latest", None, False),
+        ("gpt-luna-latest", None, True),
+        ("anthropic/claude-opus-latest", None, True),
+        ("moonshot/kimi-latest", None, True),
+        ("kimi-latest", None, False),
+        ("claude-opus-latest", "anthropic", True),
+        ("", None, False),
+    ),
+)
+def test_floating_alias_requires_python(model: str, provider: str | None, expected: bool) -> None:
+    assert detectors.latest_alias(call(model=model, custom_llm_provider=provider)) is expected
 
 
 @pytest.mark.parametrize(
@@ -92,7 +111,7 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.prompt_management, {"model": "litellm_agent/gpt-5"}, True),
         (detectors.prompt_management, {"model": "gpt-5"}, False),
         (detectors.caller_client, {"client": object()}, True),
-        (detectors.caller_client, {"shared_session": object()}, True),
+        (detectors.caller_client, {"shared_session": object()}, False),
         (detectors.caller_client, {"client": None, "shared_session": None}, False),
         (detectors.caller_client, {}, False),
         (detectors.extra_body, {"extra_body": {"stream": True}}, True),
@@ -189,6 +208,24 @@ def _wrap_nested_level(value: object, depth: int) -> object:
             {"messages": [{"role": "user", "content": [{"type": "text"}]}]},
             False,
         ),
+        (messages_detectors.tool_custom_field, {"tools": [{"name": "a"}, {"name": "b", "custom": {}}]}, True),
+        (messages_detectors.tool_custom_field, {"tools": [{"name": "a", "defer_loading": True}]}, False),
+        (messages_detectors.tool_custom_field, {}, False),
+        (messages_detectors.strict_tools_retry, {"drop_params": True, "tools": [{"name": "a"}, STRICT_TOOL]}, True),
+        (
+            messages_detectors.strict_tools_retry,
+            {"drop_params": True, "tools": [{**STRICT_TOOL, "strict": False}]},
+            False,
+        ),
+        (
+            messages_detectors.strict_tools_retry,
+            {"additional_drop_params": ["metadata.user_id"], "tools": [STRICT_TOOL]},
+            False,
+        ),
+        (messages_detectors.strict_tools_retry, {"tools": [STRICT_TOOL]}, False),
+        (messages_detectors.strict_tools_retry, {"drop_params": False, "tools": [STRICT_TOOL]}, False),
+        (messages_detectors.strict_tools_retry, {"drop_params": True, "tools": [{"name": "a"}]}, False),
+        (messages_detectors.strict_tools_retry, {"drop_params": True}, False),
         (detectors.drop_params, {"drop_params": True}, True),
         (detectors.drop_params, {"drop_params": False}, False),
         (detectors.drop_params, {"drop_params": " True "}, True),
@@ -313,6 +350,25 @@ def test_global_settings_are_detected(
 def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
     assert not messages_detectors.stream_cost_injection(call())
+
+
+def test_stream_cost_injection_reads_the_request_header_the_proxy_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    opted_in: Final = {"proxy_server_request": {"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}}}
+    assert messages_detectors.stream_cost_injection(call(stream=True, **opted_in))
+    assert not messages_detectors.stream_cost_injection(call(**opted_in))
+    assert not messages_detectors.stream_cost_injection(call(stream=True, proxy_server_request={"headers": {}}))
+
+
+def test_foundry_beta_row_reads_the_api_base_the_anthropic_handler_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    assert messages_detectors.foundry_beta_row(call(api_base="https://team.services.ai.azure.com/anthropic"))
+    assert messages_detectors.foundry_beta_row(call(base_url="https://team.cognitiveservices.azure.com/anthropic"))
+    assert not messages_detectors.foundry_beta_row(call(api_base="https://api.anthropic.com"))
+    assert not messages_detectors.foundry_beta_row(call())
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://team.services.ai.azure.com/anthropic")
+    assert messages_detectors.foundry_beta_row(call())
 
 
 def test_model_alias_map_applies_only_to_the_requested_model(monkeypatch: pytest.MonkeyPatch) -> None:

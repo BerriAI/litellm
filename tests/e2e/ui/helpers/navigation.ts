@@ -37,7 +37,7 @@ export async function navigateToPage(page: PlaywrightPage, pageEnum: Page): Prom
   // assert against the default page.
   for (let attempt = 0; attempt < 3; attempt++) {
     await page.goto(`/ui?page=${pageEnum}`);
-    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("complementary")).toBeVisible();
     const url = new URL(page.url());
     const onLegacyRoot = url.pathname.replace(/\/+$/, "").endsWith("/ui");
     if (!onLegacyRoot || url.searchParams.get("page") === pageEnum) {
@@ -62,18 +62,29 @@ export async function dismissFeedbackPopup(page: PlaywrightPage): Promise<void> 
   }
 }
 
-export async function hideLiteAdmin(page: PlaywrightPage): Promise<void> {
+export async function setAriaHidden(page: PlaywrightPage, hidden: boolean): Promise<void> {
   await page.getByRole("button", { name: /Account menu/i }).click();
   const panel = page.getByTestId("sidebar-account-menu-panel");
   await expect(panel).toBeVisible({ timeout: 5_000 });
-  const toggle = panel.getByRole("switch", { name: "Toggle hide LiteAdmin" });
-  if ((await toggle.getAttribute("aria-checked")) !== "true") {
-    await toggle.click();
+  const premium = await panel.getByText("Premium", { exact: true }).isVisible();
+  const toggle = panel.getByRole("switch", { name: "Toggle hide Aria Agent", exact: true });
+  if (premium) {
+    await expect(toggle).toBeVisible();
+    if ((await toggle.getAttribute("aria-checked")) !== String(hidden)) {
+      await toggle.click();
+    }
+    await expect(toggle).toHaveAttribute("aria-checked", String(hidden));
+  } else {
+    await expect(toggle).toHaveCount(0);
   }
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await expect(panel).toBeHidden();
-  await expect(page.getByRole("button", { name: "LiteAdmin", exact: true })).toBeHidden();
+  const aria = sidebarLink(page, "Aria Agent");
+  if (premium && hidden) {
+    await expect(aria).toBeHidden();
+  } else {
+    await expect(aria).toBeVisible();
+  }
 }
 
 /**

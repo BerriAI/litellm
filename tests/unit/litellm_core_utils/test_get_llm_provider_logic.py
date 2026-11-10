@@ -1,4 +1,8 @@
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Final
+
+import respx
 
 import asyncio, httpx, importlib, os
 import pytest
@@ -8,18 +12,57 @@ from litellm import CustomLLM
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
+    resolve_model_and_provider_for_metadata,
     get_provider_affinity_header,
     inferred_provider,
     is_registered_custom_provider,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.types.router import LiteLLM_Params
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.rust_bridge.host.model_cost import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from unittest.mock import patch
 
 CUSTOM_PROVIDER: Final = "test-onprem-llm"
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (("openai/gpt-luna-latest", None), ("gpt-luna-latest", "openai"), ("gpt-luna-latest", None)),
+)
+def test_latest_alias_resolves_to_the_cost_map_target(model: str, provider: str | None) -> None:
+    target: Final = get_model_latest_aliases()["openai"]["gpt-luna-latest"]
+    resolved, resolved_provider, _, api_base = get_llm_provider(
+        model, custom_llm_provider=provider, api_base="https://api.openai.com/v1"
+    )
+    assert (resolved, resolved_provider, api_base) == (target, "openai", "https://api.openai.com/v1")
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "gemini/gemini-pro-latest",
+        "gemini/gemini-flash-latest",
+        "dashscope/qwen-plus-latest",
+        "mistral/mistral-large-latest",
+    ),
+)
+def test_provider_native_latest_alias_passes_through(model: str) -> None:
+    provider, name = model.split("/", 1)
+    assert get_llm_provider(model)[:2] == (name, provider)
+
+
+def test_latest_alias_completion_reports_and_prices_the_target() -> None:
+    target: Final = get_model_latest_aliases()["anthropic"]["claude-opus-latest"]
+    response: Final = litellm.completion(
+        model="anthropic/claude-opus-latest", messages=[{"role": "user", "content": "hi"}], mock_response="hi"
+    )
+    assert response.model == target
+    cost: Final = litellm.completion_cost(completion_response=response)
+    assert cost is not None and cost > 0
+    assert cost == litellm.completion_cost(completion_response=response, model=target, custom_llm_provider="anthropic")
 
 
 @pytest.fixture
@@ -115,6 +158,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -165,7 +209,8 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
+
 
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
@@ -186,6 +231,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -209,11 +255,13 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider():
     _, response, _, _ = litellm.get_llm_provider(model="anthropic.claude-v2:1")
 
     assert response == "bedrock"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_fireworks():  # tests finetuned fireworks models - https://github.com/BerriAI/litellm/issues/4923
@@ -222,16 +270,19 @@ def test_get_llm_provider_fireworks():  # tests finetuned fireworks models - htt
     assert custom_llm_provider == "fireworks_ai"
     assert model == "accounts/my-test-1234"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_catch_all():
     _, response, _, _ = litellm.get_llm_provider(model="*")
     assert response == "openai"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_gpt_instruct():
     _, response, _, _ = litellm.get_llm_provider(model="gpt-3.5-turbo-instruct-0914")
 
     assert response == "text-completion-openai"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_mistral_custom_api_base():
@@ -242,6 +293,7 @@ def test_get_llm_provider_mistral_custom_api_base():
     assert custom_llm_provider == "mistral"
     assert model == "mistral-large-fr"
     assert api_base == "https://mistral-large-fr-ishaan.francecentral.inference.ai.azure.com/v1"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_deepseek_custom_api_base():
@@ -254,6 +306,7 @@ def test_get_llm_provider_deepseek_custom_api_base():
     assert api_base == "MY-FAKE-BASE"
 
     os.environ.pop("DEEPSEEK_API_BASE")
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_vertex_ai_image_models(monkeypatch):
@@ -272,6 +325,7 @@ def test_get_llm_provider_vertex_ai_image_models(monkeypatch):
     )
     assert custom_llm_provider == "vertex_ai"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_ai21_chat():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
@@ -280,6 +334,7 @@ def test_get_llm_provider_ai21_chat():
     assert custom_llm_provider == "ai21_chat"
     assert model == "jamba-1.5-large"
     assert api_base == "https://api.ai21.com/studio/v1"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_ai21_chat_test2():
@@ -297,6 +352,7 @@ def test_get_llm_provider_ai21_chat_test2():
     assert model == "jamba-1.5-large"
     assert api_base == "https://api.ai21.com/studio/v1"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_cohere_chat_test2():
     """
@@ -312,6 +368,7 @@ def test_get_llm_provider_cohere_chat_test2():
     assert custom_llm_provider == "cohere_chat"
     assert model == "command-r-plus-08-2024"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_azure_o1():
 
@@ -320,6 +377,7 @@ def test_get_llm_provider_azure_o1():
     )
     assert custom_llm_provider == "azure"
     assert model == "o1-mini"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_hosted_vllm_default_api_key():
@@ -335,6 +393,7 @@ def test_hosted_vllm_default_api_key():
     )
     assert dynamic_api_key == "fake-api-key"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_jina_ai():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
@@ -344,6 +403,7 @@ def test_get_llm_provider_jina_ai():
     assert api_base == "https://api.jina.ai/v1"
     assert model == "jina-embeddings-v3"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_hosted_vllm():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
@@ -352,6 +412,7 @@ def test_get_llm_provider_hosted_vllm():
     assert custom_llm_provider == "hosted_vllm"
     assert model == "llama-3.1-70b-instruct"
     assert dynamic_api_key == "fake-api-key"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_llamafile():
@@ -363,6 +424,7 @@ def test_get_llm_provider_llamafile():
     assert dynamic_api_key == "fake-api-key"
     assert api_base == "http://127.0.0.1:8080/v1"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_watson_text():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
@@ -370,6 +432,7 @@ def test_get_llm_provider_watson_text():
     )
     assert custom_llm_provider == "watsonx_text"
     assert model == "watson-text-to-speech"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_azure_global_standard_get_llm_provider():
@@ -380,6 +443,7 @@ def test_azure_global_standard_get_llm_provider():
     )
     assert custom_llm_provider == "azure_ai"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_nova_bedrock_converse():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
@@ -388,6 +452,7 @@ def test_nova_bedrock_converse():
     assert custom_llm_provider == "bedrock"
     assert model == "amazon.nova-micro-v1:0"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_bedrock_invoke_anthropic():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
@@ -395,6 +460,7 @@ def test_bedrock_invoke_anthropic():
     )
     assert custom_llm_provider == "bedrock"
     assert model == "invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.parametrize("model", ["xai/grok-2-vision-latest", "grok-2-vision-latest"])
@@ -411,6 +477,7 @@ def test_xai_api_base(model):
     assert model == "grok-2-vision-latest"
     assert api_base == "https://api.x.ai/v1"
     assert dynamic_api_key == "xai-my-specialkey"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_litellm_proxy_custom_llm_provider():
@@ -440,6 +507,7 @@ def test_get_litellm_proxy_custom_llm_provider():
     assert provider == "litellm_proxy"
     assert key == expected_api_key
     assert base == expected_api_base
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_litellm_proxy_with_args_override_env_vars():
@@ -472,6 +540,7 @@ def test_get_litellm_proxy_with_args_override_env_vars():
     assert key == arg_api_key
     assert base == arg_api_base
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_litellm_proxy_model_prefix_stripping():
     """
@@ -502,6 +571,7 @@ def test_get_litellm_proxy_model_prefix_stripping():
     assert key == expected_api_key
     assert base == expected_api_base
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true():
     """
@@ -530,6 +600,7 @@ def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true():
     assert key == proxy_api_key
     assert base == proxy_api_base
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true_model_prefix():
     """
@@ -555,6 +626,7 @@ def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true_model_prefix():
     assert provider == "litellm_proxy"
     assert key == proxy_api_key
     assert base == proxy_api_base
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_use_proxy_arg_true():
@@ -584,6 +656,7 @@ def test_get_llm_provider_use_proxy_arg_true():
     assert provider == "litellm_proxy"
     assert key == proxy_api_key
     assert base == proxy_api_base
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
@@ -621,6 +694,7 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     assert key == arg_api_key  # Should use the argument key
     assert base == arg_api_base  # Should use the argument base
 
+
 @pytest.fixture
 def shipped_generalizations():
     """Install the rules shipped in the bundled backup, then restore.
@@ -643,6 +717,7 @@ def shipped_generalizations():
         yield rules
     finally:
         set_fallback_generalizations(previous)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 class TestClaudeModelPatternMatching:
@@ -709,9 +784,97 @@ class TestClaudeModelPatternMatching:
             litellm.get_llm_provider(model="claude-opus-4-9")
 
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+class TestTypesafeJevPatternMatching:
+    def test_every_priced_jev_id_routes_to_typesafe(self, shipped_generalizations: None) -> None:
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+        priced_ids: Final = tuple(
+            key.removeprefix("typesafe/")
+            for key in GetModelCostMap.load_local_model_cost_map()
+            if key.startswith("typesafe/")
+        )
+        assert "jev-latest" in priced_ids
+        assert {model: litellm.get_llm_provider(model=model)[1] for model in priced_ids} == dict.fromkeys(
+            priced_ids, "typesafe"
+        )
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "foo/jev-latest",
+            "openjev-latest",
+            "jev-",
+            "jev-latest model",
+            "jev-internal-router",
+            "jev-2.0-internal",
+            "jev-1.0-acme.router",
+            "jev-1.0",
+            "jev-2.0",
+            "jev-1.13",
+        ],
+    )
+    def test_namespaced_or_partial_jev_name_does_not_match_rule(
+        self, model: str, shipped_generalizations: None
+    ) -> None:
+        from litellm.litellm_core_utils.fallback_generalizations import (
+            match_routing_generalization,
+        )
+
+        assert match_routing_generalization(model) is None
+
+
 @pytest.mark.parametrize("prefix", ["openai", "anthropic", "custom_openai", "openai_like"])
 def test_opencode_affinity_resolution_preserves_existing_transport(prefix: str) -> None:
     api_base: Final = "https://opencode.ai/zen/go/v1"
     model, provider, _, destination = get_llm_provider(model=f"{prefix}/test-model", api_base=api_base)
     assert (model, provider, destination) == ("test-model", prefix, api_base)
     assert get_provider_affinity_header(destination) == "x-opencode-session"
+
+
+@pytest.fixture
+def chatgpt_login_tripwire(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    blocked: Final = tmp_path / "blocked"
+    blocked.write_text("ordinary file")
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(blocked / "unused"))
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    with respx.mock as transport:
+        yield
+        assert len(transport.calls) == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected"),
+    [
+        ("chatgpt/gpt-5.4", None, ("gpt-5.4", "chatgpt")),
+        ("gpt-5.4", "chatgpt", ("gpt-5.4", "chatgpt")),
+        ("github_copilot/gpt-4o", None, ("gpt-4o", "github_copilot")),
+        ("openai/gpt-5.4", None, ("gpt-5.4", "openai")),
+    ],
+)
+def test_resolve_model_and_provider_for_metadata_never_logs_in(
+    chatgpt_login_tripwire: None, model: str, custom_llm_provider: str | None, expected: tuple[str, str]
+) -> None:
+    assert resolve_model_and_provider_for_metadata(model, custom_llm_provider) == expected
+
+
+def test_metadata_callers_never_log_in_for_a_declared_chatgpt_deployment(
+    chatgpt_login_tripwire: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
+    from litellm.proxy.spend_tracking.savings import _resolve_model
+    from litellm.router import Router
+    from litellm.utils import supports_native_streaming
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    assert supports_native_streaming("chatgpt/gpt-5.4", None) is True
+    assert get_api_base("chatgpt/gpt-5.4", {"model": "chatgpt/gpt-5.4"}) == "https://chatgpt.com/backend-api/codex"
+    identity = _resolve_model("chatgpt/gpt-5.4", None)
+    assert identity is not None and identity.provider == "chatgpt"
+    group = (
+        Router(model_list=[{"model_name": "codex", "litellm_params": {"model": "chatgpt/gpt-5.4"}}])
+        .registry()
+        .group("codex")
+    )
+    assert group is not None and group.providers == ["chatgpt"]

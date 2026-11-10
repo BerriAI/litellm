@@ -197,3 +197,24 @@ class TestToolParamsFollowTheModelMap:
 
         assert ("tools" in optional_params) is tools_forwarded
         assert ("tool_choice" in optional_params) is tools_forwarded
+
+
+class TestWebSearchRequestsFromToolUsage:
+    def test_counts_only_paid_search_tools(self):
+        payload = {"usage": {"tool_usage": {"web_search": 2, "image_search": 1, "code_interpreter": 3, "web_extractor": 1}}}
+        assert dynamic_config.web_search_requests_from_tool_usage(payload) == 3
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"usage": {"prompt_tokens": 1}},
+            {"usage": {"tool_usage": {"code_interpreter": 2}}},
+            {"usage": {"tool_usage": {"web_search": "2"}}},
+            {"usage": {"tool_usage": {"web_search": True}}},
+            {"usage": {"tool_usage": []}},
+            {"usage": None},
+            "not a mapping",
+        ],
+    )
+    def test_anything_but_a_positive_search_count_is_none(self, payload):
+        assert dynamic_config.web_search_requests_from_tool_usage(payload) is None

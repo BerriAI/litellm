@@ -34,15 +34,24 @@ pub fn messages_body(body: Map<String, Value>) -> Result<MessagesRequest, Error>
 /// Python's `GenericLiteLLMParams(**kwargs)`.
 pub fn litellm_params(fields: Map<String, Value>) -> Result<LitellmParams, Error> {
     serde_json::from_value(Value::Object(fields))
-        .map_err(|err| Error::InvalidRequest(ErrorDetail::invalid("litellm params", err)))
+        .map_err(|err| Error::invalid_request(ErrorDetail::invalid("litellm params", err)))
 }
 
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(ErrorDetail::invalid("Anthropic messages request", err))
+    Error::invalid_request(ErrorDetail::invalid("Anthropic messages request", err))
 }
 
 pub type MessagesCallResponse =
-    CallOutput<Box<MessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
+    CallOutput<MessagesBody, super::route::MessagesStreamHead, Bytes, Error>;
+
+// Python's `transform_anthropic_messages_response` returns any JSON object the provider sends
+// with a 200, message or not, so one that is not a message passes through as sent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MessagesBody {
+    Message(Box<MessagesResponse>),
+    Unchecked(Map<String, Value>),
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
@@ -144,6 +153,7 @@ mod tests {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 thinking_always_on: false,
+                thinking_on_by_default: false,
                 supports_legacy_thinking: false,
                 supports_output_config: true,
                 supports_sampling_params: false,
