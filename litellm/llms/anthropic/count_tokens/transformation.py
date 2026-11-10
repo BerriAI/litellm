@@ -158,6 +158,10 @@ def _needs_chat_translation(message: Mapping[str, object]) -> bool:
     return message.get("role") == "tool" or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
 
 
+def _is_system_role(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system"
+
+
 def _counts_blank_text_as_chat_sends_it(messages: Sequence[Mapping[str, object]]) -> bool:
     from litellm.litellm_core_utils.prompt_templates.factory import carries_empty_text
 
@@ -313,12 +317,14 @@ def anthropic_fields_for_chat_tool_use(
     tools: Sequence[Mapping[str, object]] | None,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    translates_system_messages: bool = False,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
     if (
         not chat_params
         and not any(map(_needs_tool_translation, counted_tools))
         and not any(map(_needs_chat_translation, messages))
+        and not (translates_system_messages and any(map(_is_system_role, messages)))
         and not _counts_blank_text_as_chat_sends_it(messages)
     ):
         return None
@@ -351,10 +357,13 @@ async def anthropic_count_fields(
     messages_format: TokenCountMessagesFormat,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    translates_system_messages: bool = False,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     if messages_format != "openai":
         return None
-    return await asyncify(anthropic_fields_for_chat_tool_use)(model, messages, system, tools, translator, chat_params)
+    return await asyncify(anthropic_fields_for_chat_tool_use)(
+        model, messages, system, tools, translator, chat_params, translates_system_messages
+    )
 
 
 class AnthropicCountTokensConfig:

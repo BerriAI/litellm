@@ -1,5 +1,6 @@
 import base64
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 
 import httpx
@@ -467,7 +468,11 @@ def _counted_body(request: httpx.Request) -> Mapping[str, JsonValue]:
 
 def _sent_texts(body: Mapping[str, JsonValue]) -> tuple[tuple[JsonValue, str], ...]:
     messages: Final = body["messages"]
-    return tuple(pair for message in (messages if isinstance(messages, list) else []) for pair in _role_texts(message))
+    return tuple(chain.from_iterable(map(_role_texts, messages if isinstance(messages, list) else [])))
+
+
+def _sent_system_and_texts(body: Mapping[str, JsonValue]) -> tuple[tuple[JsonValue, str], ...]:
+    return (*(("system prompt", text) for text in _texts(body.get("system"))), *_sent_texts(body))
 
 
 _DROPPED: Final = (("user", "What is 2+2?"), ("user", "And 3+3?"))
@@ -596,10 +601,14 @@ _ADD_TOOL: Final = {"type": "function", "function": {"name": "add", "parameters"
 
 
 async def _converse_sent_and_counted(
-    messages: list[dict[str, JsonValue]], tools: list[dict[str, JsonValue]]
+    messages: list[dict[str, JsonValue]],
+    tools: list[dict[str, JsonValue]],
+    model: str = "us.anthropic.claude-haiku-5-5",
+    response_format: dict[str, JsonValue] | None = None,
 ) -> tuple[tuple[tuple[JsonValue, str], ...], tuple[tuple[JsonValue, str], ...]]:
     credentials: Final = DEPLOYMENT["litellm_params"]
-    deployment_model: Final = "bedrock/us.anthropic.claude-haiku-5-5"
+    deployment_model: Final = f"bedrock/{model}"
+    chat_params: Final = {"response_format": response_format} if response_format else {}
     inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
     await litellm.acompletion(
         model=deployment_model,
@@ -607,25 +616,27 @@ async def _converse_sent_and_counted(
         max_tokens=8,
         client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
         **({"tools": tools} if tools else {}),
+        **chat_params,
         **credentials,
     )
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
 
     result: Final = await _counter(bedrock).count_tokens(
-        model_to_use="us.anthropic.claude-haiku-5-5",
+        model_to_use=model,
         messages=messages,
         contents=None,
         deployment={"litellm_params": {**credentials, "model": deployment_model}},
-        request_model="claude-haiku-5-5",
+        request_model=model,
         tools=tools or None,
         messages_format="openai",
+        chat_params=chat_params,
     )
 
     assert result is not None
     assert result.error is False
     return (
-        _sent_texts(_JSON_BODY.validate_json(inference.requests[0].content)),
-        _sent_texts(_counted_body(bedrock.requests[0])),
+        _sent_system_and_texts(_JSON_BODY.validate_json(inference.requests[0].content)),
+        _sent_system_and_texts(_counted_body(bedrock.requests[0])),
     )
 
 
@@ -682,36 +693,159 @@ async def test_claude_converse_count_under_modify_params_sends_tool_history_the_
     assert converse_sent == expected_sent
 
 
+_QUESTION: Final = {"role": "user", "content": "What is 2+2?"}
+_BE_BRIEF: Final = {"role": "system", "content": "Be brief."}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "messages, expected_sent",
+    "messages, modify_params, expected_sent",
     (
         (
-            [{"role": "user", "content": "What is 2+2?"}, _EMPTY_WITH_CACHE_CONTROL],
+            [_QUESTION, _EMPTY_WITH_CACHE_CONTROL],
+            True,
             (("user", "What is 2+2?"), ("assistant", "Please continue."), ("user", "Please continue.")),
         ),
         (
-            [_EMPTY_WITH_CACHE_CONTROL, {"role": "user", "content": "What is 2+2?"}],
+            [_EMPTY_WITH_CACHE_CONTROL, _QUESTION],
+            True,
             (("user", "Please continue."), ("assistant", "Please continue."), ("user", "What is 2+2?")),
         ),
         (
-            [{"role": "user", "content": "What is 2+2?"}, _ANSWER],
+            [_QUESTION, _ANSWER],
+            True,
             (("user", "What is 2+2?"), ("assistant", "Four."), ("user", "Please continue.")),
         ),
+        ([_QUESTION, _ANSWER], None, (("user", "What is 2+2?"), ("assistant", "Four."))),
+        (
+            [_BE_BRIEF, _ANSWER, _QUESTION],
+            True,
+            (
+                ("system prompt", "Be brief."),
+                ("user", "Please continue."),
+                ("assistant", "Four."),
+                ("user", "What is 2+2?"),
+            ),
+        ),
+        ([_ANSWER], True, (("user", "Please continue."), ("assistant", "Four."), ("user", "Please continue."))),
+        ([_BE_BRIEF], True, (("system prompt", "Be brief."), ("user", "Please continue."))),
+        (
+            [_QUESTION, {"role": "assistant", "content": "The answer is", "prefix": True}],
+            True,
+            (("user", "What is 2+2?"), ("assistant", "The answer is")),
+        ),
     ),
-    ids=("final_empty_string_and_cache_control", "leading_empty_string_and_cache_control", "final_answer"),
+    ids=(
+        "final_empty_string_and_cache_control",
+        "leading_empty_string_and_cache_control",
+        "final_answer",
+        "final_answer_under_null",
+        "leading_answer_after_a_system_message",
+        "only_an_answer",
+        "only_a_system_message",
+        "final_prefix",
+    ),
 )
-async def test_claude_converse_count_under_modify_params_sends_the_edge_user_turns_converse_inference_adds(
+async def test_claude_converse_count_sends_the_edge_user_turns_converse_inference_adds(
     messages: list[dict[str, JsonValue]],
+    modify_params: bool | None,
     expected_sent: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
 
     converse_sent, counted = await _converse_sent_and_counted(messages, [])
 
     assert counted == converse_sent
     assert converse_sent == expected_sent
+
+
+_TOOL_ROUND: Final = (
+    {"role": "assistant", "content": None, "tool_calls": [_add_call("call_1")]},
+    {"role": "tool", "tool_call_id": "call_1", "content": "4"},
+)
+_FOLLOW_UP: Final = {"role": "user", "content": "And 3+3?"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("modify_params", (False, True))
+@pytest.mark.parametrize(
+    "messages",
+    (
+        [_BE_BRIEF, _QUESTION, *_TOOL_ROUND, _FOLLOW_UP],
+        [{"role": "developer", "content": "Be brief."}, _QUESTION, *_TOOL_ROUND, _FOLLOW_UP],
+        [_QUESTION, *_TOOL_ROUND, _BE_BRIEF, _FOLLOW_UP],
+        [_QUESTION, *_TOOL_ROUND, _FOLLOW_UP, _BE_BRIEF],
+        [_QUESTION, _BE_BRIEF, _EMPTY_WITH_CACHE_CONTROL],
+        [_BE_BRIEF, _QUESTION],
+    ),
+    ids=(
+        "leading_system_and_tool_history",
+        "leading_developer_and_tool_history",
+        "system_after_tool_history",
+        "trailing_system_after_tool_history",
+        "system_before_an_empty_assistant_turn",
+        "leading_system",
+    ),
+)
+async def test_claude_converse_count_sends_system_messages_where_converse_inference_sends_them(
+    messages: list[dict[str, JsonValue]], modify_params: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+
+    converse_sent, counted = await _converse_sent_and_counted(messages, [])
+
+    assert counted == converse_sent
+    assert "Be brief." in (text for _, text in converse_sent)
+
+
+@pytest.mark.asyncio
+async def test_claude_converse_count_keeps_tool_history_when_neutralizing_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+    monkeypatch.setattr(litellm, "bedrock_neutralize_orphaned_tool_blocks", False)
+
+    converse_sent, counted = await _converse_sent_and_counted([_QUESTION, *_TOOL_ROUND, _FOLLOW_UP], [])
+
+    assert counted == converse_sent
+    assert not any(text.startswith("[tool") for _, text in counted)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("us.anthropic.claude-haiku-5-5", "us.anthropic.claude-opus-4-7"))
+async def test_claude_converse_count_keeps_tool_history_the_response_format_tool_keeps(model: str) -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "schema": {"type": "object", "properties": {"n": {"type": "integer"}}}},
+    }
+
+    converse_sent, counted = await _converse_sent_and_counted(
+        [_QUESTION, *_TOOL_ROUND, _FOLLOW_UP], [], model=model, response_format=response_format
+    )
+
+    assert counted == converse_sent
+
+
+@pytest.mark.asyncio
+async def test_claude_converse_count_of_tool_history_without_tools_logs_no_neutralizing_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
+
+    with caplog.at_level("WARNING"):
+        result: Final = await _counter(bedrock).count_tokens(
+            model_to_use="us.anthropic.claude-haiku-5-5",
+            messages=[_QUESTION, *_TOOL_ROUND, _FOLLOW_UP],
+            contents=None,
+            deployment={"litellm_params": {**credentials, "model": "bedrock/us.anthropic.claude-haiku-5-5"}},
+            request_model="claude-haiku-5-5",
+            messages_format="openai",
+        )
+
+    assert result is not None
+    assert result.error is False
+    assert ("user", "[tool result for call_1: 4]") in _sent_texts(_counted_body(bedrock.requests[0]))
+    assert not any("neutralizing orphaned tool blocks" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio

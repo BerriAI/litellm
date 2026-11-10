@@ -42,6 +42,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
+    assistant_turns_as_converse_sends_them,
     make_valid_bedrock_tool_name,
 )
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
@@ -319,7 +320,7 @@ class AmazonConverseConfig(BaseConfig):
         return messages_copy
 
     @staticmethod
-    def _has_orphaned_tool_blocks(messages: list[AllMessageValues]) -> bool:
+    def _has_orphaned_tool_blocks(messages: Sequence[AllMessageValues]) -> bool:
         return any(
             (m.get("role") == "assistant" and m.get("tool_calls")) or m.get("role") in ("tool", "function")
             for m in messages
@@ -331,7 +332,18 @@ class AmazonConverseConfig(BaseConfig):
     ) -> list[AllMessageValues]:
         if optional_params.get("tools") or not AmazonConverseConfig._has_orphaned_tool_blocks(messages):
             return messages
+        verbose_logger.warning(
+            "litellm.bedrock: request has tool blocks in message history but no "
+            "`tools=` param; neutralizing orphaned tool blocks to text so Bedrock "
+            "accepts the request without a toolConfig. Non-text tool-result "
+            "payloads are dropped. Pass `tools=` to preserve structured tool calling."
+        )
+        return list(AmazonConverseConfig._orphaned_tool_blocks_as_text(messages, "guardrailConfig" in optional_params))
 
+    @staticmethod
+    def _orphaned_tool_blocks_as_text(
+        messages: Sequence[AllMessageValues], guardrail_active: bool
+    ) -> tuple[AllMessageValues, ...]:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             convert_content_list_to_str,
         )
@@ -347,8 +359,6 @@ class AmazonConverseConfig(BaseConfig):
         def _result_text(message: AllMessageValues) -> str:
             rendered = convert_content_list_to_str(message).strip()
             return rendered or "<non-text tool result omitted>"
-
-        guardrail_active: Final = "guardrailConfig" in optional_params
 
         def _rewrite(message: AllMessageValues) -> AllMessageValues:
             role = message.get("role")
@@ -370,23 +380,57 @@ class AmazonConverseConfig(BaseConfig):
                 return ChatCompletionUserMessage(role="user", content=content)
             return message
 
-        verbose_logger.warning(
-            "litellm.bedrock: request has tool blocks in message history but no "
-            "`tools=` param; neutralizing orphaned tool blocks to text so Bedrock "
-            "accepts the request without a toolConfig. Non-text tool-result "
-            "payloads are dropped. Pass `tools=` to preserve structured tool calling."
-        )
-        return [_rewrite(message) for message in messages]
+        return tuple(map(_rewrite, messages))
 
-    @staticmethod
-    def with_orphaned_tool_blocks_as_sent(
-        messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]] | None
-    ) -> Sequence[Mapping[str, object]]:
-        if not litellm.bedrock_neutralize_orphaned_tool_blocks:
-            return messages
-        return AmazonConverseConfig._neutralize_orphaned_tool_blocks(
-            cast(list[AllMessageValues], list(messages)),  # cast-ok: the same chat messages inference neutralizes
-            {"tools": list(tools)} if tools else {},
+    def _response_format_adds_tools(
+        self, chat_params: Mapping[str, object], model: str, model_info: Mapping[str, object] | None
+    ) -> bool:
+        response_format: Final = chat_params.get("response_format")
+        if not isinstance(response_format, dict):
+            return False
+        try:
+            mapped: Final = cast(  # cast-ok: returns the optional params it maps
+                Mapping[str, object],
+                self._translate_response_format_param(
+                    value=response_format,
+                    model=model,
+                    optional_params={},
+                    non_default_params=dict(chat_params),
+                    model_info=model_info,
+                ),
+            )
+        except (KeyError, TypeError):
+            return False
+        return bool(mapped.get("tools"))
+
+    def chat_messages_as_sent(
+        self,
+        messages: Sequence[Mapping[str, object]],
+        tools: Sequence[Mapping[str, object]] | None,
+        chat_params: Mapping[str, object],
+        model: str,
+        model_info: Mapping[str, object] | None,
+    ) -> tuple[Mapping[str, object], ...]:
+        with_system_roles: Final = self.translate_developer_role_to_system_role(
+            cast(Sequence[AllMessageValues], messages),  # cast-ok: the same chat messages inference transforms
+            model=model,
+            custom_llm_provider="bedrock",
+            api_base=None,
+            model_info=model_info,
+        )
+        leading_count: Final = self._leading_system_count(with_system_roles)
+        system_placed: Final = (
+            *with_system_roles[:leading_count],
+            *self._mid_conversation_system_as_user(with_system_roles[leading_count:]),
+        )
+        if (
+            not litellm.bedrock_neutralize_orphaned_tool_blocks
+            or tools
+            or self._response_format_adds_tools(chat_params, model, model_info)
+        ):
+            return assistant_turns_as_converse_sends_them(system_placed)
+        return assistant_turns_as_converse_sends_them(
+            self._orphaned_tool_blocks_as_text(system_placed, guardrail_active=False)
         )
 
     @staticmethod
@@ -1737,10 +1781,7 @@ class AmazonConverseConfig(BaseConfig):
         deployment_model: str | None = None,
         model_info: Mapping[str, object] | None = None,
     ) -> tuple[list[AllMessageValues], list[SystemContentBlock]]:
-        leading_count: Final = next(
-            (i for i, m in enumerate(messages) if not is_system_message(m)),
-            len(messages),
-        )
+        leading_count: Final = self._leading_system_count(messages)
         hoisted: Final = messages[:leading_count]
         remaining: Final = messages[leading_count:]
         system_content_blocks: Final[list[SystemContentBlock]] = []
@@ -1768,14 +1809,18 @@ class AmazonConverseConfig(BaseConfig):
                         )
                         if cache_block:
                             system_content_blocks.append(cache_block)
+        return list(self._mid_conversation_system_as_user(remaining)), system_content_blocks
+
+    @staticmethod
+    def _leading_system_count(messages: Sequence[AllMessageValues]) -> int:
+        return next((i for i, m in enumerate(messages) if not is_system_message(m)), len(messages))
+
+    def _mid_conversation_system_as_user(self, messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
         reordered: Final = tuple(
-            chain.from_iterable(
-                self._reordered_around_tool_results(remaining, index) for index in range(len(remaining))
-            )
+            chain.from_iterable(self._reordered_around_tool_results(messages, index) for index in range(len(messages)))
         )
         converted: Final = tuple(self._converted_or_kept(message) for message in reordered)
-        kept: Final = [message for message in converted if message is not None]
-        return kept, system_content_blocks
+        return tuple(message for message in converted if message is not None)
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
         if "top_k" in inference_params:
