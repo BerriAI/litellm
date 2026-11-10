@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import datetime
+import inspect
+import json
 import traceback
 import uuid
 import weakref
@@ -241,8 +243,31 @@ def update_logging(
     )
 
 
-def pre_call(logger: LoggingSurface, input: str, api_key: str | None, additional_args: dict[str, object]) -> None:
+def pre_call(
+    logger: LoggingSurface,
+    input: str | Sequence[Mapping[str, str]],
+    api_key: str | None,
+    additional_args: dict[str, object],
+) -> None:
     logger.pre_call(input=input, api_key=api_key, additional_args=additional_args)
+
+
+def messages_input(body: Mapping[str, object], kwargs: Mapping[str, object]) -> Sequence[Mapping[str, str]]:
+    from litellm.messages import anthropic_messages_handler
+
+    # Python's Messages handler builds its body as messages, max_tokens, model, then its own parameters in
+    # signature order and the caller's other keywords in their order, and logs that body as serialized
+    order: Final = (
+        "messages",
+        "max_tokens",
+        "model",
+        *inspect.signature(anthropic_messages_handler).parameters,
+        *kwargs,
+        *body,
+    )
+    return [
+        {"role": "user", "content": json.dumps({name: body[name] for name in dict.fromkeys(order) if name in body})}
+    ]
 
 
 def post_call(

@@ -42,6 +42,8 @@ pub(crate) enum Logging {
     Update,
     #[strum(serialize = "pre_call")]
     PreCall,
+    #[strum(serialize = "messages_input")]
+    MessagesInput,
     #[strum(serialize = "post_call")]
     PostCall,
     #[strum(serialize = "record_response")]

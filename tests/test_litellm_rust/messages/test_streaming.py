@@ -1,10 +1,13 @@
+import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import pytest
 
+import litellm
 from tests.test_litellm_rust.messages.data import MESSAGES_EVENTS, MESSAGES_RESPONSE, call
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, relaxed
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
@@ -68,3 +71,40 @@ async def test_stream_closed_early_logs_success_once(server: RecordingServer) ->
     assert len(await recorder.wait_for_async("async_log_success_event")) == 1
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
+
+
+async def _streamed_pre_call_input(server: RecordingServer) -> object:
+    server.enqueue(STREAM)
+    recorder: Final = RecordingLogger()
+    with rebound(litellm, "callbacks", [recorder]):
+        stream: Final = await call(
+            server, stream=True, system="Be brief", metadata={"user_id": "user-1"}, stop_sequences=["END"]
+        )
+        assert isinstance(stream, AsyncIterator)
+        _ = [chunk async for chunk in stream]
+    pre_call: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
+    assert isinstance(pre_call, dict)
+    return pre_call["input"]
+
+
+@pytest.mark.asyncio
+async def test_stream_logs_the_request_body_as_input_like_python(server: RecordingServer) -> None:
+    logged: Final = await _streamed_pre_call_input(server)
+
+    assert_served_natively(server)
+    assert logged == [
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "max_tokens": 64,
+                    "model": "claude-sonnet-5",
+                    "metadata": {"user_id": "user-1"},
+                    "stop_sequences": ["END"],
+                    "stream": True,
+                    "system": "Be brief",
+                }
+            ),
+        }
+    ]
