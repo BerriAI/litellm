@@ -3,12 +3,13 @@ import uuid
 from collections.abc import Mapping, Sequence
 from itertools import filterfalse
 from types import MappingProxyType
-from typing import Any, Final, cast
+from typing import Any, Final, Protocol, cast
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, require_attributes
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
+from litellm.llms.anthropic.common_utils import anthropic_server_call_fields, anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.native.utils import openai_chat_refusal_text
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_output_item
@@ -83,7 +84,11 @@ def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int |
     )
 
 
-def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str | None) -> tuple[object, ...]:
+class _CopiesWithUpdate(Protocol):
+    def model_copy(self, *, update: Mapping[str, object]) -> object: ...
+
+
+def _output_items_with_id(items: tuple[object, ...], item_type: str, item_id: str | None) -> tuple[object, ...]:
     if item_id is None:
         return items
 
@@ -92,7 +97,10 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
         return items
 
     return tuple(
-        item.model_copy(update={"id": item_id}) if index == target_index else item for index, item in enumerate(items)
+        require_attributes(item, _CopiesWithUpdate, "model_copy").model_copy(update={"id": item_id})
+        if index == target_index
+        else item
+        for index, item in enumerate(items)
     )
 
 
@@ -133,6 +141,7 @@ def _delta_carries_output(delta: ChatCompletionDelta) -> bool:
         getattr(delta, "images", None),
         getattr(delta, "audio", None),
         openai_chat_refusal_text(delta),
+        anthropic_server_call_fields(delta),
     )
     return any(fields) or _delta_has_signed_thinking_block(delta)
 
@@ -228,6 +237,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
         self._tool_search = tool_search_routing(request_tools)
         self._tool_search_executions: Mapping[str, ToolSearchExecution] = MappingProxyType({})
+        self._done_tool_search_call_ids: frozenset[str] = frozenset()
 
     async def aclose(self) -> None:
         await self.litellm_custom_stream_wrapper.aclose()
@@ -265,6 +275,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _queue_tool_search_call_done(
         self, call_id: str, output_index: int, final_args: str, execution: ToolSearchExecution
     ) -> None:
+        if call_id in self._done_tool_search_call_ids:
+            return
+        self._done_tool_search_call_ids = self._done_tool_search_call_ids | {call_id}
         self._queue_tool_search_call_added(call_id, output_index, "", execution)
         item: Final = build_tool_search_call(
             call_id, final_args or self._tool_args_by_call_id.get(call_id, ""), "completed", execution
@@ -276,6 +289,18 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
             )
         )
+
+    def _queue_streamed_tool_search_calls(self, chunk: ModelResponseStream) -> None:
+        if not chunk.choices:
+            return
+        for call in anthropic_server_tool_calls(chunk.choices[0].delta):
+            if (execution := self._tool_search_execution(call.id, call.function.name or "")) is None:
+                continue
+            if call.id not in self._tool_output_index_by_call_id:
+                self._queue_held_annotations()
+            self._queue_tool_search_call_done(
+                call.id, self._get_or_assign_tool_output_index(call.id), call.function.arguments, execution
+            )
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing: Final = self._tool_output_index_by_call_id.get(call_id)
@@ -509,11 +534,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         try:
             message: Final = litellm_complete_object.choices[0].message
-            tool_calls = getattr(message, "tool_calls", None)
+            server_tool_calls: Final = anthropic_server_tool_calls(message)
+            tool_calls: Final = (*server_tool_calls, *_tool_call_objects(getattr(message, "tool_calls", None)))
         except Exception:
-            tool_calls = None
+            return
 
-        for tc in _tool_call_objects(tool_calls):
+        if not tool_calls:
+            return
+
+        server_tool_call_ids: Final = frozenset(tool_call.id for tool_call in server_tool_calls)
+
+        for tc in tool_calls:
             call_id_raw = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
             if not call_id_raw:
                 continue
@@ -537,6 +568,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 continue
             if (search_execution := self._tool_search_execution(call_id, fn_name)) is not None:
                 self._queue_tool_search_call_done(call_id, output_index, fn_args, search_execution)
+                continue
+            if call_id in server_tool_call_ids:
                 continue
 
             # Track if this is a new tool call that wasn't streamed
@@ -1205,7 +1238,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
 
         # Tool-first
-        if hasattr(delta, "tool_calls") and delta.tool_calls:
+        if (hasattr(delta, "tool_calls") and delta.tool_calls) or anthropic_server_call_fields(delta):
             # Tool calls already handled via _queue_tool_call_delta_events
             # DO NOT create message item
             return
@@ -1383,6 +1416,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
     def _queue_chunk_events(self, chunk: ModelResponseStream) -> None:
         self._hold_chunk_annotations(chunk)
+        self._queue_streamed_tool_search_calls(chunk)
         response_api_chunk: Final = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
         if response_api_chunk:
             self._pending_response_events.append(response_api_chunk)

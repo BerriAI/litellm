@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 from collections.abc import Generator, Mapping
@@ -11,7 +12,7 @@ from typing import Final
 
 from cli_harness.lockdown import isolated_home, locked_down_env
 from cli_harness.rate_limiter import RateBucket, RateLimiter
-from codex.rollout import Compaction, rollout_compactions
+from codex.rollout import Compaction, Subagent, rollout_compactions, rollout_parent_thread, rollout_subagent
 from codex.run import CodexRun, codex_run
 from e2e_metadata import step
 
@@ -38,6 +39,13 @@ model_catalog_url = "{gateway}/v1/models"
 
 
 @dataclass(frozen=True, slots=True)
+class McpServer:
+    command: str
+    args: tuple[str, ...]
+    env: Mapping[str, str]
+
+
+@dataclass(frozen=True, slots=True)
 class CodexHarness:
     home: Path
     api_key: str = field(repr=False)
@@ -57,9 +65,34 @@ class CodexHarness:
             _ = (workspace / name).write_text(content)
         return workspace
 
+    @step("Give Codex the {name} MCP server")
+    def add_mcp_server(self, name: str, server: McpServer) -> None:
+        with (self.codex_home / "config.toml").open("a") as config:
+            _ = config.write(_mcp_server_table(name, server))
+
     @step('Run Codex on {model} through the proxy with the prompt "{prompt}"')
-    def exec(self, prompt: str, *, model: str, cwd: Path, compact_after_tokens: int | None = None) -> CodexRun:
-        return self._run(("exec",), (*_compaction_flags(compact_after_tokens), "--model", model, "--", prompt), cwd)
+    def exec(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        cwd: Path,
+        compact_after_tokens: int | None = None,
+        enable: tuple[str, ...] = (),
+        disable: tuple[str, ...] = (),
+    ) -> CodexRun:
+        return self._run(
+            ("exec",),
+            (
+                *_compaction_flags(compact_after_tokens),
+                *_feature_flags(enable=enable, disable=disable),
+                "--model",
+                model,
+                "--",
+                prompt,
+            ),
+            cwd,
+        )
 
     @step('Resume Codex thread {thread_id} on {model} through the proxy with the prompt "{prompt}"')
     def resume(
@@ -74,6 +107,12 @@ class CodexHarness:
     def compactions(self, thread_id: str) -> tuple[Compaction, ...]:
         rollouts: Final = sorted(self.codex_home.glob(f"sessions/**/rollout-*-{thread_id}.jsonl"))
         return tuple(chain.from_iterable(rollout_compactions(rollout.read_text()) for rollout in rollouts))
+
+    def subagents(self, thread_id: str) -> tuple[Subagent, ...]:
+        rollouts: Final = tuple(
+            path.read_text() for path in sorted(self.codex_home.glob("sessions/**/rollout-*.jsonl"))
+        )
+        return tuple(rollout_subagent(rollout) for rollout in rollouts if rollout_parent_thread(rollout) == thread_id)
 
     def _run(self, subcommand: tuple[str, ...], args: tuple[str, ...], cwd: Path) -> CodexRun:
         _ = self.limiter.acquire(self.rate_bucket)
@@ -90,6 +129,24 @@ class CodexHarness:
             check=False,
         )
         return codex_run(exit_code=completed.returncode, stdout=completed.stdout, stderr=completed.stderr)
+
+
+def _mcp_server_table(name: str, server: McpServer) -> str:
+    env: Final = ", ".join(f"{json.dumps(key)} = {json.dumps(value)}" for key, value in server.env.items())
+    return (
+        f"\n[mcp_servers.{json.dumps(name)}]\n"
+        f"command = {json.dumps(server.command)}\n"
+        f"args = {json.dumps(server.args)}\n"
+        f"env = {{ {env} }}\n"
+        'default_tools_approval_mode = "approve"\n'
+    )
+
+
+def _feature_flags(*, enable: tuple[str, ...], disable: tuple[str, ...]) -> tuple[str, ...]:
+    return (
+        *chain.from_iterable(("--enable", feature) for feature in enable),
+        *chain.from_iterable(("--disable", feature) for feature in disable),
+    )
 
 
 def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:

@@ -245,6 +245,11 @@ class Plan:
     named: tuple[str, ...] = ()
 
     @property
+    def handler(self) -> str:
+        """The handler name the host op ends in, which route capabilities and pre-routing strategies key on."""
+        return self.host_op.rsplit(".", 1)[-1]
+
+    @property
     def on_its_own_loop(self) -> bool:
         """``function_with_fallbacks`` runs these sync endpoints' whole walk on a private event loop."""
         return self.sync and self.kind in ("chat", "embedding", "image")
@@ -1907,10 +1912,9 @@ class RustEndpoints:
         if self._scheduler is None:
             from litellm.scheduler import Scheduler
 
-            self._scheduler = (
-                Scheduler(polling_interval=self._polling_interval)  # pyright: ignore[reportArgumentType]  # as configured
-                if self._polling_interval is not None
-                else Scheduler()
+            self._scheduler = Scheduler(
+                polling_interval=self._polling_interval,  # pyright: ignore[reportArgumentType]  # as configured
+                redis_cache=self._core.routing_cache.redis_cache,
             )
         return self._scheduler
 
@@ -2114,7 +2118,10 @@ class RustEndpoints:
 
     def text_completion(self, request: Mapping[str, object]) -> object:
         """The sync `text_completion`: one pick, no retries, the group name as the model."""
-        from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin
+        from litellm.litellm_core_utils.routing_common_utils import (
+            deployment_model_id_pin,
+            metadata_defaults_under_request,
+        )
 
         kwargs: Final = without(request, "is_retry", "is_fallback", "is_async")
         model: Final = kwargs.get("model")
@@ -2135,9 +2142,9 @@ class RustEndpoints:
             if key not in kwargs:
                 kwargs[key] = value
             elif key == "metadata":
-                bucket = kwargs[key]
-                if isinstance(bucket, dict):
-                    bucket.update(as_dict(value))  # pyright: ignore[reportUnknownMemberType]  # the request's metadata dict
+                metadata_bucket(kwargs, key).update(
+                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(kwargs[key]))
+                )
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
             kwargs["model_id"] = pinned

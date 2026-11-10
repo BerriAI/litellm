@@ -236,10 +236,11 @@ impl Router {
             .unwrap_or((0, 0));
         let (budget, policy_applies) =
             stream_retry_budget(&snapshot, &request, &origin, failure.kind);
-        let inputs = SelectInputs {
+        let mut inputs = SelectInputs {
             target_order: target.order,
             requested: Some(target.group.clone()),
             fallback_hop: at.level > 0,
+            failed_ids: origin.deployment_id.iter().cloned().collect(),
             ..SelectInputs::default()
         };
         let mut last = failure;
@@ -290,6 +291,14 @@ impl Router {
                     // `_stream_fallback_error_for_raised`: a status the pre-stream retry rule
                     // would not retry ends the retries with that failure.
                     Error::Attempt(failure) => {
+                        if let Some(id) = failure
+                            .failed_deployment_id
+                            .clone()
+                            .or(failed.deployment_id)
+                            && !inputs.failed_ids.contains(&id)
+                        {
+                            inputs.failed_ids.push(id);
+                        }
                         let stop = failure.status.is_some_and(|s| !should_retry_status(s));
                         last = failure;
                         if stop {

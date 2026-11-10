@@ -15,6 +15,8 @@ from collections.abc import Callable, Mapping, Sequence
 from types import FunctionType, MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
+from pydantic import TypeAdapter
+
 from litellm.router_config import RouterConfig, build_router_config
 from litellm.router_core import RouterCore, make_core
 from litellm.router_deprecated import DeprecatedRouterMembers
@@ -52,7 +54,7 @@ if TYPE_CHECKING:
 # ``Router(...)``'s parameters, their defaults and its docstring: ``router_arguments`` binds a call
 # against them and ``Router.__init__`` reports them. The body is never run.
 def _router_init(
-    self,
+    self: object,
     model_list: list[DeploymentTypedDict] | list[dict[str, Any]] | None = None,
     ## ASSISTANTS API ##
     assistants_config: AssistantsTypedDict | None = None,
@@ -203,6 +205,7 @@ def _router_init(
 
 
 _CORE_SIGNATURE: Final = inspect.signature(_router_init)
+_PASSED_VALUE: Final = TypeAdapter(object)
 
 
 def router_arguments(
@@ -214,7 +217,13 @@ def router_arguments(
         bound: Final = _CORE_SIGNATURE.bind_partial(None, *args, **kwargs).arguments
     except TypeError as error:
         raise TypeError(f"Router.__init__() {error}") from None
-    return MappingProxyType({name: value for name, value in bound.items() if name != "self"})
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in zip(bound, map(_PASSED_VALUE.validate_python, bound.values()))
+            if name != "self"
+        }
+    )
 
 
 def _class_descriptor(cls: type, name: str) -> bool:
@@ -222,17 +231,22 @@ def _class_descriptor(cls: type, name: str) -> bool:
 
 
 if TYPE_CHECKING:
-    from typing import overload
+    from typing import ParamSpec, overload
 
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.types.llms.openai import AllMessageValues, OpenAIFileObject
     from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse
 
+    _P: Final = ParamSpec("_P")
+
+    def _takes_parameters_of(source: Callable[_P, None]) -> Callable[[Callable[..., None]], Callable[_P, None]]: ...
+
     class Router(RustCore, DeprecatedRouterMembers):
         """What type checkers see: the constructor's parameters and the endpoints' return types. The
         endpoints are served by the core at run time (litellm/router_rust/invoke/endpoints.py)."""
 
-        __init__ = _router_init  # pyright: ignore[reportAssignmentType, reportIncompatibleMethodOverride]  # Router(...)'s parameters
+        @_takes_parameters_of(_router_init)
+        def __init__(self) -> None: ...  # pyright: ignore[reportMissingSuperCall]  # a type-checking stub
 
         @classmethod
         def from_config(cls, config: RouterConfig, host: PythonHost = python_host) -> "Router": ...

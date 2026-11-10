@@ -13,6 +13,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -47,6 +48,51 @@ from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.parametrize("user_id", ["", " \t\n", "user\x00id", 123, True, [], {}])
+def test_new_user_rejects_invalid_custom_id(user_id: object) -> None:
+    with pytest.raises(ValidationError) as exc:
+        NewUserRequest.model_validate({"user_id": user_id})
+    assert exc.value.errors()[0]["loc"] == ("user_id",)
+
+
+@pytest.mark.parametrize("user_id", [None, "employee-42", "社員@example.test", "  employee-42  "])
+def test_new_user_normalizes_custom_id_and_preserves_auto_generation(user_id: str | None) -> None:
+    request: Final = NewUserRequest(user_id=user_id)
+    assert request.user_id == (user_id.strip() if user_id is not None else None)
+
+
+@pytest.mark.asyncio
+async def test_new_user_returns_conflict_when_id_is_taken_after_duplicate_check(mocker: MockerFixture) -> None:
+    from prisma.errors import UniqueViolationError
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import PrismaClient
+
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        count=AsyncMock(return_value=0),
+        create=AsyncMock(side_effect=UniqueViolationError(
+            {"user_facing_error": {"meta": {"target": ["user_id"]}}},
+            message="Unique constraint failed on user_id",
+        )),
+        upsert=AsyncMock(return_value=LiteLLM_UserTable(user_id="employee-42")),
+    )
+    mocker.patch("prisma.Prisma", return_value=SimpleNamespace(litellm_usertable=table))
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", database)
+    with pytest.raises(ProxyException) as exc:
+        await new_user(
+            data=NewUserRequest(user_id="employee-42", auto_create_key=False, send_invite_email=False),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert str(exc.value.code) == "409"
+    assert "employee-42" in exc.value.message
+
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
@@ -4176,7 +4222,10 @@ async def test_admin_user_update_spend_invalidates_counter(mocker):
     admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
 
     await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
-    mock_invalidate.assert_awaited_once_with(counter_key="spend:user:target-user")
+    assert [call.kwargs["counter_key"] for call in mock_invalidate.await_args_list] == [
+        "spend:user:target-user",
+        "spend:committed:user:target-user",
+    ]
 
 
 @pytest.mark.asyncio
@@ -4862,7 +4911,9 @@ async def test_user_new_persists_model_max_budget(monkeypatch, model_max_budget,
         models = []
 
     class _FakePrisma:
-        async def insert_data(self, data, table_name):
+        async def insert_data(
+            self, data: Mapping[str, object], table_name: str, *, allow_existing_user: bool = True
+        ) -> _FakeUserRow | SimpleNamespace:
             if table_name == "user":
                 captured["user_data"] = dict(data)
                 return _FakeUserRow()
@@ -5175,6 +5226,39 @@ async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> Non
     broadcast.assert_awaited_once_with(cache_key=deleted.user_id)
 
 
+@pytest.mark.asyncio
+async def test_delete_user_drops_the_committed_spend_of_the_users_it_deleted(mocker: MockerFixture) -> None:
+    from litellm.proxy._types import DeleteUserRequest, LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import delete_user
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None, memory={"spend:committed:user:user-gone": 7.0, "spend:committed:user:user-stays": 3.0}
+    )
+    mocker.patch("litellm.proxy.proxy_server.spend_counter_store", spend.store())  # test-quality-ok: substitute the spend counter dependency
+    deleted: Final = LiteLLM_UserTable(user_id="user-gone", user_email="gone@example.test", teams=[])
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=deleted)
+    prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(return_value=[])
+    prisma_client.db.litellm_jwtkeymapping.find_many = mocker.AsyncMock(return_value=[])
+    prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(return_value=[])
+    prisma_client.db.litellm_verificationtoken.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_invitationlink.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+    _serve_locked_user_delete(prisma_client, deleted)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", None)  # test-quality-ok: delete_user reads it off proxy_server at call time
+
+    await delete_user(
+        data=DeleteUserRequest(user_ids=[deleted.user_id]),
+        user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert spend.memory == {"spend:committed:user:user-stays": 3.0}
+
+
 _DB_OUTAGE_503_BODY: Final = {
     "error": {
         "message": "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.",
@@ -5435,3 +5519,16 @@ async def test_user_update_reports_a_bad_budget_duration_as_a_request_error_not_
     assert (exc_info.value.code, exc_info.value.type) == ("400", "invalid_request_error")
     assert "Invalid budget_duration" in exc_info.value.message
     assert "Authentication Error" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fips_mode")
+async def test_fips_user_update_hashes_off_the_event_loop(pbkdf2_on_event_loop: list[bool]) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _hash_password_in_dict
+
+    data: Final = {"password": "Str0ng!Passw0rd"}
+
+    await _hash_password_in_dict(data, {"password_policy_check_breached_passwords": False})
+
+    assert pbkdf2_on_event_loop == [False]
+    assert data["password"].startswith("pbkdf2:")

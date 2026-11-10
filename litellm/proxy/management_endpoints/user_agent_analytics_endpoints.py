@@ -158,7 +158,9 @@ def _typed_table(repo: DailyTagSpendRepository | VerificationTokenRepository | U
 
 
 async def _query_raw(prisma_client: "PrismaClient", sql_query: str, *params: object) -> object:
-    return await prisma_client.db.query_raw(sql_query, *params)
+    from litellm.proxy.utils import query_raw_rows
+
+    return await query_raw_rows(prisma_client.db, sql_query, *params)
 
 
 @router.get(

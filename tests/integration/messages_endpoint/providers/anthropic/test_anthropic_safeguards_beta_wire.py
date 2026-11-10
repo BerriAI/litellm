@@ -15,6 +15,7 @@ import openai
 import pytest
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
+from integration._support.device_login import device_login_peers, write_copilot_access
 from integration._support.process import owned_proxy
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -665,18 +666,18 @@ def test_github_copilot_messages_forward_safeguards_without_deriving_the_beta(
     marker: Final = uuid.uuid4().hex
     token_dir: Final = tmp_path / "copilot"
     token_dir.mkdir()
-    with wire_server(anthropic_peer) as wire:
-        (token_dir / "api-key.json").write_text(
-            json.dumps({"token": "synthetic-copilot-token", "expires_at": 4102444800, "endpoints": {"api": wire.url}})
-        )
+    with device_login_peers(tmp_path, provider=anthropic_peer) as peers:
+        write_copilot_access(token_dir, "synthetic-copilot-token")
         with (
-            owned_proxy(gateway, tmp_path, {"GITHUB_COPILOT_TOKEN_DIR": str(token_dir)}) as owned,
+            owned_proxy(
+                gateway, tmp_path, {**peers.environment(), "GITHUB_COPILOT_TOKEN_DIR": str(token_dir)}
+            ) as owned,
             owned.scenario() as scenario,
         ):
-            model: Final = scenario.model(model="github_copilot/claude-sonnet-4-5", api_base=wire.url)
+            model: Final = scenario.model(model="github_copilot/claude-sonnet-4-5", api_base=peers.api.url)
             response: Final = _post(owned, messages_body(model, marker), beta=_CLIENT_BETAS_WITH_DANGEROUS)
             _assert_answered(response, marker)
-            observed: Final = _only(wire)
+            observed: Final = _only(peers.api.secure)
             _expect_messages(
                 observed, target="/v1/messages", auth=("authorization", "Bearer synthetic-copilot-token"), beta=None
             )

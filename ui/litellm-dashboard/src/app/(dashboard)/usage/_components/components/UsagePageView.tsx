@@ -107,6 +107,8 @@ import { useTagSummary } from "@/app/(dashboard)/hooks/tags/useTagSummary";
 import { Panel } from "./overview/Primitives";
 import UsageOverview from "./overview/UsageOverview";
 
+const GATEWAY_ENDPOINT_COLORS = ["#2b3fd6", "#ef4444"];
+
 interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
@@ -585,7 +587,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                               t("usage.pageView.gatewayByEndpoint.successful"),
                               t("usage.pageView.gatewayByEndpoint.failed"),
                             ]}
-                            colors={["#2b3fd6", "#ef4444"]}
+                            colors={GATEWAY_ENDPOINT_COLORS}
                             xKey="route"
                             format={(value) => value.toLocaleString()}
                             className="h-64"

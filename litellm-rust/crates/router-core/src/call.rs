@@ -4,13 +4,7 @@
 //! `should_retry_this_error` and `_time_to_sleep_before_retry` in `litellm/router.py`, and
 //! `run_async_fallback` in `router_utils/fallback_event_handlers.py`.
 
-use std::{
-    borrow::Cow,
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{borrow::Cow, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use serde_json::{Map, Value};
 
@@ -1014,8 +1008,13 @@ impl Core {
                 return Err(failed);
             };
             let named = failure.failed_deployment_id.as_ref();
-            if let (Some(status), Some(id)) =
-                (failure.status, named.or(failed.deployment_id.as_ref()))
+            let failed_on = named.or(failed.deployment_id.as_ref());
+            if let Some(id) = failed_on
+                && !inputs.failed_ids.contains(id)
+            {
+                inputs.failed_ids.push(id.clone());
+            }
+            if let (Some(status), Some(id)) = (failure.status, failed_on)
                 && !should_retry_status(status)
                 && !inputs.skipped_ids.contains(id)
             {
@@ -1247,7 +1246,7 @@ impl Core {
                 .unrouted_attempt(snapshot, op, request, target, (retry, max_retries), at)
                 .await;
         }
-        let pick_started = Instant::now();
+        let pick_started = self.health.now_time();
         let (deployment, candidates) = match self
             .picked(snapshot, op, request, target, inputs, retry, at)
             .await
@@ -1264,7 +1263,11 @@ impl Core {
         self.host.observe(&RouterEvent::Selected {
             model_group: candidates.model_group.clone(),
             deployment_id: deployment.id.clone(),
-            pick: pick_started.elapsed(),
+            pick: self
+                .health
+                .now_time()
+                .duration_since(pick_started)
+                .unwrap_or_default(),
         });
         if !self.host.supports(op, deployment.provider()) {
             return Err(Error::Config(ConfigError::Unsupported(Unsupported::Op {
@@ -1290,7 +1293,7 @@ impl Core {
                     },
                     None,
                     snapshot.settings.dynamic.default_ref(),
-                    jiff::Timestamp::now(),
+                    self.health.timestamp(),
                 ),
                 Ok(None)
             );
