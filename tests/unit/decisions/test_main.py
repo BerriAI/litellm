@@ -4900,3 +4900,122 @@ def test_hosted_vllm_systemone_maps_image_rejection_to_bad_request(
 
     assert caught.value.status_code == 400
     assert route.call_count == 1
+
+
+_DECISIONS_ONLY_CHAT_URL: Final = "http://ai-guard:5004/v1/chat/completions"
+
+_CHAT_COMPLETION_RESPONSE: Final = {
+    "id": "chatcmpl-decisions-only-control",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "chat-model",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "hi"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _decisions_only_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "d3-lite",
+                "litellm_params": {
+                    "model": "hosted_vllm/d3-lite",
+                    "api_base": "http://ai-guard:5004/v1",
+                    "api_key": "k",
+                },
+                "model_info": {"id": "d3-lite-ai-guard", "mode": "decisions", "discoverable": False},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_against_a_decisions_only_deployment_fails_fast_with_400(
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post(_DECISIONS_ONLY_CHAT_URL).respond(status_code=404, json={"detail": "Not Found"})
+    router: Final = _decisions_only_router()
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape("decisions-only")) as caught:
+        await router.acompletion(
+            model="d3-lite",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert caught.value.status_code == 400
+    assert "d3-lite" in str(caught.value)
+    assert not upstream.called
+
+
+def test_sync_chat_completions_against_a_decisions_only_deployment_fails_fast_with_400(
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post(_DECISIONS_ONLY_CHAT_URL).respond(status_code=404, json={"detail": "Not Found"})
+    router: Final = _decisions_only_router()
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape("decisions-only")) as caught:
+        router.completion(
+            model="d3-lite",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+    assert caught.value.status_code == 400
+    assert "d3-lite" in str(caught.value)
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_against_a_decisions_only_deployment_rejects_without_a_router(
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post(_DECISIONS_ONLY_CHAT_URL).respond(status_code=404, json={"detail": "Not Found"})
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape("decisions-only")) as caught:
+        await litellm.acompletion(
+            model="hosted_vllm/d3-lite",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base="http://ai-guard:5004/v1",
+            api_key="k",
+            model_info={"id": "d3-lite-ai-guard", "mode": "decisions"},
+        )
+
+    assert caught.value.status_code == 400
+    assert "d3-lite" in str(caught.value)
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_against_a_chat_mode_deployment_still_serves_chat(
+    respx_mock: respx.MockRouter,
+) -> None:
+    upstream: Final = respx_mock.post("http://ai-guard:5004/v1/chat/completions").respond(
+        json=_CHAT_COMPLETION_RESPONSE
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat-model",
+                "litellm_params": {
+                    "model": "hosted_vllm/chat-model",
+                    "api_base": "http://ai-guard:5004/v1",
+                    "api_key": "k",
+                },
+                "model_info": {"id": "chat-model-ai-guard", "mode": "chat"},
+            },
+        ]
+    )
+
+    response: Final = await router.acompletion(
+        model="chat-model",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert upstream.called
+    assert response.choices[0].message.content == "hi"
