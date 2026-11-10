@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Final, Optional
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
-from litellm_proxy_extras._redaction import _redact_credentials
 from litellm_proxy_extras.migration_lock import held_migration_lock
 from litellm_proxy_extras.prisma_toolchain import (
     PRISMA_COMMAND_TIMEOUT_ENV_VAR,

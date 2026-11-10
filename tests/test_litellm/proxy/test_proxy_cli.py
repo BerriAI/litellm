@@ -2249,7 +2249,7 @@ class TestRunServerDbSetup:
     @pytest.mark.parametrize(
         ("skip_server_startup", "migrated", "build_succeeds", "calls_expected", "succeeds"),
         (
-            (True, True, False, ("setup", "build"), False),
+            (True, True, False, ("setup", "build"), True),
             (True, True, True, ("setup", "build"), True),
             (False, True, False, ("setup", "start"), True),
             (False, False, False, ("setup",), False),

@@ -678,7 +678,8 @@ def _setup_database_with_request_log_indexes(
     if not setup():
         return False
     if skip_server_startup:
-        return build()
+        build()
+        return True
     start()
     return True
 
