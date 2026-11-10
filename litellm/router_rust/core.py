@@ -2565,7 +2565,7 @@ class RustCore(
         return self._call_sync(plan_for("completion"), request_from_call("completion", args, kwargs))
 
     def text_completion(self, *args: object, **kwargs: object) -> object:  # kwargs-ok: endpoint payload
-        return self._endpoints.text_completion(request_from_call("text_completion", args, kwargs))
+        return self._call_sync(plan_for("text_completion"), request_from_call("text_completion", args, kwargs))
 
     def embedding(
         self,
