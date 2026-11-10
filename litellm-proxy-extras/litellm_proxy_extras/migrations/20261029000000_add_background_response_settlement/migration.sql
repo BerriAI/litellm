@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 -- CreateTable
 CREATE TABLE IF NOT EXISTS "LiteLLM_BackgroundResponseSettlement" (
     "response_id" TEXT NOT NULL,
