@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import inspect
 from collections.abc import Mapping
@@ -99,6 +100,22 @@ def _budget_reservation() -> dict:
 
 def _kwargs_with_a_budget_reservation(reservation: dict) -> dict[str, object]:
     return {**_OCR_KWARGS, "metadata": {"user_api_key_budget_reservation": reservation}}
+
+
+def test_a_deferred_success_waits_for_the_proxy_release() -> None:
+    logger: Final = _supplied_logger()
+    released: Final[list[str]] = []
+    start: Final = datetime.datetime.now()
+    end: Final = start + datetime.timedelta(seconds=1)
+
+    legacy.defer_success(logger, lambda: released.append("released"), "response", start, end)
+
+    assert logger.deferred_success_result == ("response", start, end)
+    assert released == []
+    release: Final = logger.enqueue_deferred_logging
+    assert release is not None
+    release()
+    assert released == ["released"]
 
 
 def test_setup_claims_the_budget_reservation_for_an_async_call() -> None:
@@ -247,6 +264,30 @@ def test_the_rust_contract_matches_the_shim_signatures() -> None:
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
 
 
+def test_messages_input_is_the_body_as_the_python_handler_builds_and_serializes_it() -> None:
+    body: Final = {
+        "model": "claude-sonnet-4-5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16,
+        "system": "brief",
+        "stream": True,
+        "context_management": {"edits": []},
+        "output_config": {"effort": "low"},
+    }
+
+    logged: Final = legacy.messages_input(
+        body, {"output_config": {"effort": "low"}, "context_management": {"edits": []}}
+    )
+
+    assert logged == [
+        {
+            "role": "user",
+            "content": '{"messages": [{"role": "user", "content": "hi"}], "max_tokens": 16, "model": "claude-sonnet-4-5", '
+            '"stream": true, "system": "brief", "output_config": {"effort": "low"}, "context_management": {"edits": []}}',
+        }
+    ]
+
+
 def _messages_logger() -> Logging:
     return Logging(
         model="claude-sonnet-4-5",
@@ -298,3 +339,67 @@ def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
     assert head["additional_headers"] == {"request-id": "req_native", "llm_provider-request-id": "req_native"}
     assert head["litellm_call_id"] == "messages"
     assert "_response_ms" in head
+
+
+@pytest.mark.asyncio
+async def test_a_native_stream_failure_logs_like_the_python_chunk_processor(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+
+    logged: Final[list[tuple[object, ...]]] = []
+    scheduled: Final[list[Mapping[str, object]]] = []
+
+    async def schedule(**kwargs: object) -> None:
+        scheduled.append(MappingProxyType(dict(kwargs)))
+
+    monkeypatch.setattr(verbose_proxy_logger, "error", lambda *args: logged.append(args))
+    monkeypatch.setattr(PassThroughStreamingHandler, "schedule_stream_failure_logging", schedule)
+    logger: Final = _supplied_logger()
+    logger.model_call_details["cache_hit"] = False
+    cut: Final = httpx.ReadError("cut")
+
+    await legacy.stream_failure(logger, "anthropic", {}, [b"event: ping\n\n"], cut)
+
+    assert logged == [("Error in chunk_processor: %s", cut)]
+    assert "cache_hit" not in logger.model_call_details
+    assert scheduled[0]["exception"] is cut
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_stream_abandoned_mid_cancel_bills_after_the_disconnect_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+
+    logger: Final = _messages_logger()
+    logger.update_environment_variables(
+        litellm_params={"metadata": {}, "proxy_server_request": {"url": "/v1/messages"}}, optional_params={}
+    )
+
+    async def billing() -> None:
+        return None
+
+    events: Final[list[str]] = []
+    monkeypatch.setattr(PassThroughStreamingHandler, "_route_streaming_logging_to_handler", lambda **_: billing())
+    monkeypatch.setattr(legacy, "enqueue_logging", lambda coroutine: (events.append("billed"), coroutine.close()))
+    started: Final = asyncio.Event()
+    now: Final = datetime.datetime.now()
+
+    async def relay() -> None:
+        try:
+            started.set()
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            legacy.stream_success(logger, "/v1/messages", "anthropic", {}, [b"event: ping\n\n"], now, now, None, True)
+            await asyncio.sleep(0)
+            events.append("disconnect recorded")
+            raise
+
+    task: Final = asyncio.create_task(relay())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+
+    assert events == ["disconnect recorded", "billed"]
