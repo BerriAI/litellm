@@ -8,8 +8,7 @@ import sys
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 )
@@ -75,7 +74,7 @@ def test_empiriolabs_chat_models_still_route_through_the_json_provider(
     monkeypatch.setenv("EMPIRIOLABS_API_KEY", "environment-key")
     monkeypatch.delenv("EMPIRIOLABS_API_BASE", raising=False)
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(f"{EMPIRIOLABS_BASE_URL}/chat/completions").respond(
             200,
             json={
@@ -125,7 +124,7 @@ EMBEDDING_RESPONSE: Final = {
 
 
 def test_empiriolabs_embeddings_post_to_v1_embeddings_with_the_bearer_key():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(f"{EMPIRIOLABS_BASE_URL}/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         response: Final = litellm.embedding(
             model="empiriolabs/text-embedding-v4",
@@ -163,7 +162,7 @@ SEARCHED_CHAT_RESPONSE: Final = {
 
 
 def test_empiriolabs_web_search_calls_in_tool_usage_are_billed_per_call(local_model_cost_map: None) -> None:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(f"{EMPIRIOLABS_BASE_URL}/chat/completions").respond(200, json=SEARCHED_CHAT_RESPONSE)
         response: Final = litellm.completion(
             model="empiriolabs/qwen3-7-plus",

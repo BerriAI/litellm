@@ -259,7 +259,7 @@ def _build_default_redis_client():
 def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
     import contextlib
 
-    import httpx
+    import httpx2 as httpx
     from starlette.applications import Starlette
     from starlette.responses import PlainTextResponse, Response
     from starlette.routing import Route

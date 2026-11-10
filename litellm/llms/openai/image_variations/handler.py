@@ -5,7 +5,7 @@ OpenAI Image Variations Handler
 from collections.abc import Callable, Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncOpenAI, OpenAI
 
 import litellm

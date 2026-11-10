@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Final
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import JsonValue
 

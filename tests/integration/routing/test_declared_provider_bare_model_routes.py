@@ -18,7 +18,7 @@ from itertools import product
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 import websockets
 from openai import OpenAI

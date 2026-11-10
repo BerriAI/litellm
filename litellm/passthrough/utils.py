@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 from urllib.parse import parse_qs
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX

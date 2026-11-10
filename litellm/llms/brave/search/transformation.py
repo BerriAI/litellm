@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Final, Literal, TypedDict
 
-import httpx
+import httpx2 as httpx
 from dateutil import parser
 from pydantic import ConfigDict, TypeAdapter
 

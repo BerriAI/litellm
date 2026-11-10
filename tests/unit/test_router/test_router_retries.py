@@ -4,12 +4,14 @@ import asyncio
 from typing import Final
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
@@ -289,7 +291,7 @@ async def test_authentication_errors_are_not_retried(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={
                 "error": {
@@ -299,7 +301,7 @@ async def test_authentication_errors_are_not_retried(
                     "code": "invalid_api_key",
                 }
             },
-        )
+        ))
     )
     policy_kwargs: Final = (
         {"model_group_retry_policy": {"retry-test-model": RetryPolicy(AuthenticationErrorRetries=0)}}

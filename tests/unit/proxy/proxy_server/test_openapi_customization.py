@@ -18,7 +18,7 @@ import threading
 from types import SimpleNamespace
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, GetJsonSchemaHandler

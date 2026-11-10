@@ -2,7 +2,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException, Request
 from pydantic import ConfigDict, TypeAdapter
 

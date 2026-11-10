@@ -14,7 +14,7 @@ prompt compression, and refuses member auto-routers, which need the proxy's team
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Protocol
 
-import httpx
+import httpx2 as httpx
 
 if TYPE_CHECKING:
     from litellm.router import Router

@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Final, Protocol, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import iter_items

@@ -12,10 +12,11 @@ from __future__ import annotations
 import asyncio
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.proxy import proxy_server
@@ -293,7 +294,7 @@ def test_model_info_lookup_returns_404_when_typed_info_has_no_cost_map_entry(
     with no raw entry the route must 404 rather than answer 200 with typed fields only."""
     monkeypatch.setattr(proxy_server, "llm_router", None)
     respx.get("https://huggingface.co/not-in-map-org/not-in-map-model/raw/main/config.json").mock(
-        return_value=httpx.Response(404)
+        return_value=response_for_respx(httpx.Response(404))
     )
     with auth_as():
         response = client.get("/utils/model_info", params={"model": "huggingface/not-in-map-org/not-in-map-model"})

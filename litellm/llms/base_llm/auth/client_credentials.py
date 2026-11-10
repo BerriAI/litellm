@@ -17,7 +17,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 from urllib.parse import quote, quote_plus, urlencode
 
-import httpx
+import httpx2 as httpx
 from pydantic import SecretStr, ValidationError
 from typing_extensions import assert_never
 

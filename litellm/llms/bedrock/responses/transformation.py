@@ -38,7 +38,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm._logging import verbose_logger

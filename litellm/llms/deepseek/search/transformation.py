@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError

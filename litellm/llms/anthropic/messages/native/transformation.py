@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import ClassVar, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 import litellm

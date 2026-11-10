@@ -7,11 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings, get_provider_specific_params
@@ -336,9 +338,9 @@ def test_record_decision_logs_conduct_verdict_and_rule(decision: _Decision, expe
 @respx.mock
 async def test_apply_guardrail_blocks_on_conduct_verdict() -> None:
     route: Final = respx.post("https://guard.example.test/mcp").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json={"jsonrpc": "2.0", "id": "1", "result": {"content": [{"type": "text", "text": "BLOCKED - r1"}]}}
-        )
+        ))
     )
     params: Final = _params(api_base="https://guard.example.test")
     callback: Final = initialize_guardrail(params, _guardrail(params))
@@ -357,14 +359,14 @@ async def test_apply_guardrail_blocks_on_conduct_verdict() -> None:
 @respx.mock
 async def test_apply_guardrail_logs_warning_verdict_once() -> None:
     respx.post("https://guard.example.test/mcp").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "jsonrpc": "2.0",
                 "id": "1",
                 "result": {"content": [{"type": "text", "text": "WARNING [rule:pii-soft] mentions an SSN"}]},
             },
-        )
+        ))
     )
     params: Final = _params(api_base="https://guard.example.test")
     callback: Final = initialize_guardrail(params, _guardrail(params))
@@ -383,7 +385,9 @@ async def test_apply_guardrail_logs_warning_verdict_once() -> None:
 async def test_unreachable_fallback_reaches_the_plugin_without_its_deprecated_kwarg(
     fallback: str, blocks: bool
 ) -> None:
-    respx.post("https://guard.example.test/mcp").mock(side_effect=httpx.ConnectError("refused"))
+    respx.post("https://guard.example.test/mcp").mock(
+        side_effect=side_effect_for_respx(httpx.ConnectError("refused"))
+    )
     params: Final = _params(api_base="https://guard.example.test", unreachable_fallback=fallback)
     inputs: Final = GenericGuardrailAPIInputs(texts=["ping"])
 

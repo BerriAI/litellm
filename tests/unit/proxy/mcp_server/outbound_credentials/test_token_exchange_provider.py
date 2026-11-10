@@ -24,7 +24,7 @@ _HTTP_CLIENT = "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
 def _client_raising_4xx(body: object):
     """An httpx client whose POST returns a 4xx whose ``raise_for_status`` raises an HTTPStatusError
     carrying ``body`` as its JSON, so the RFC 6749 error-code classification can be driven."""
-    import httpx
+    import httpx2 as httpx
 
     request = httpx.Request("POST", "https://idp/token")
     response = httpx.Response(400, json=body, request=request)

@@ -8,10 +8,11 @@ from typing import Final, cast
 from urllib.parse import parse_qs
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.integrations.sqs import SQSLogger
 from litellm.types.utils import StandardLoggingPayload
@@ -49,7 +50,7 @@ async def test_async_send_batch_dispatches_queued_payload(
         sent.set()
         return httpx.Response(200)
 
-    route: Final = respx_mock.post(queue_url).mock(side_effect=respond)
+    route: Final = respx_mock.post(queue_url).mock(side_effect=side_effect_for_respx(respond))
     logger: Final = SQSLogger(
         sqs_queue_url=queue_url,
         sqs_region_name="us-east-1",
@@ -185,7 +186,7 @@ async def test_async_send_message_posts_the_queue_url_and_encoded_payload(
             "response": {"choices": [{"message": {"content": "logged"}}]},
         },
     )
-    route: Final = respx_mock.post(queue_url).mock(return_value=httpx.Response(200))
+    route: Final = respx_mock.post(queue_url).mock(return_value=response_for_respx(httpx.Response(200)))
     logger: Final = SQSLogger(
         sqs_queue_url=queue_url,
         sqs_region_name="us-east-1",
@@ -218,7 +219,9 @@ async def test_async_send_message_handles_a_rejected_queue_request(
             "response": {"choices": [{"message": {"content": "logged"}}]},
         },
     )
-    route: Final = respx_mock.post(queue_url).mock(return_value=httpx.Response(403, text="rejected"))
+    route: Final = respx_mock.post(queue_url).mock(
+        return_value=response_for_respx(httpx.Response(403, text="rejected"))
+    )
     logger: Final = SQSLogger(
         sqs_queue_url=queue_url,
         sqs_region_name="us-east-1",

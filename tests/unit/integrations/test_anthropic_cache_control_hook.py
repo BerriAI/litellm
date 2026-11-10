@@ -1,3 +1,4 @@
+import httpx2 as httpx
 import copy
 import itertools
 import json
@@ -13,11 +14,13 @@ from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
-import respx
-from httpx import Response
+
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
 from openai.types.chat import ChatCompletionMessage
 from pydantic import BaseModel, ConfigDict
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
@@ -2538,7 +2541,7 @@ class TestEnableAnthropicPromptCaching:
     async def test_public_completion_cache_ownership(
         self, monkeypatch, local_model_cost_map, asynchronous, model, target, client_control, expected
     ):
-        import httpx
+        import httpx2 as httpx
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
@@ -5243,7 +5246,7 @@ def _foundry_siblings_sharing_one_model_string(
     routes: Final = MappingProxyType(
         {
             host: respx_mock.post(host=f"{host}.services.ai.azure.com", path=path).mock(
-                return_value=Response(200, json=dict(reply))
+                return_value=response_for_respx(httpx.Response(200, json=dict(reply)))
             )
             for host in registration_order
         }
@@ -5406,7 +5409,9 @@ async def test_azure_drop_params_keeps_a_client_breakpoint_by_the_deployments_ow
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     routes: Final = MappingProxyType(
         {
-            host: respx_mock.post(host=f"{host}.openai.azure.com").mock(return_value=Response(200, json=dict(reply)))
+            host: respx_mock.post(host=f"{host}.openai.azure.com").mock(
+                return_value=response_for_respx(httpx.Response(200, json=dict(reply)))
+            )
             for host in registration_order
         }
     )
@@ -5451,7 +5456,7 @@ async def test_openai_messages_bridge_sends_a_breakpoint_by_the_deployments_own_
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     _, reply = _FOUNDRY_RESPONSES_ROUTE
     responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=Response(200, json=dict(reply))
+        return_value=response_for_respx(httpx.Response(200, json=dict(reply)))
     )
     router: Final = Router(
         model_list=[
@@ -5492,7 +5497,7 @@ _OPENAI_ROUTES: Final = MappingProxyType(
 def _openai_route(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, entrypoint: str) -> respx.Route:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     url, reply = _OPENAI_ROUTES[entrypoint]
-    return respx_mock.post(url).mock(return_value=Response(200, json=dict(reply)))
+    return respx_mock.post(url).mock(return_value=response_for_respx(httpx.Response(200, json=dict(reply))))
 
 
 @pytest.mark.parametrize("declared", [True, False])
@@ -5531,7 +5536,7 @@ async def test_an_azure_ai_wildcard_deployments_breakpoint_flag_still_speaks_for
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     path, reply = _FOUNDRY_CHAT_ROUTE
     chat: Final = respx_mock.post(host="qa-wildcard.services.ai.azure.com", path=path).mock(
-        return_value=Response(200, json=dict(reply))
+        return_value=response_for_respx(httpx.Response(200, json=dict(reply)))
     )
     router: Final = Router(
         model_list=[
@@ -5712,12 +5717,12 @@ async def test_an_azure_custom_deployment_declaring_the_breakpoint_flag_gets_ope
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     azure: Final = respx_mock.post(host="qa-azure.openai.azure.com").mock(
-        side_effect=lambda request: Response(
+        side_effect=side_effect_for_respx(lambda request: httpx.Response(
             200,
             json=dict(
                 _FOUNDRY_RESPONSES_ROUTE[1] if request.url.path.endswith("/responses") else _FOUNDRY_CHAT_ROUTE[1]
             ),
-        )
+        ))
     )
     deployment_params: Final = {
         "model": "azure/my-custom-deployment",
@@ -5790,10 +5795,10 @@ async def test_a_bedrock_claude_deployment_declaring_the_breakpoint_flag_keeps_b
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     bedrock: Final = respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com").mock(
-        side_effect=lambda request: Response(
+        side_effect=side_effect_for_respx(lambda request: httpx.Response(
             200,
             json=dict(_BEDROCK_INVOKE_REPLY if request.url.path.endswith("/invoke") else _BEDROCK_CONVERSE_REPLY),
-        )
+        ))
     )
     router: Final = Router(
         model_list=[

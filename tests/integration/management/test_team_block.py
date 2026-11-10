@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import BaseModel, ConfigDict, JsonValue
 

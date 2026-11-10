@@ -5,7 +5,7 @@ from collections.abc import Callable, Coroutine, Mapping
 from functools import partial
 from typing import Final, Literal, overload
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT

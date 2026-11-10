@@ -4,8 +4,8 @@ import os
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils

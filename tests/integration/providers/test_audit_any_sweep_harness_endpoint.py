@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway
 from pydantic import JsonValue

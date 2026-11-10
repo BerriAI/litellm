@@ -14,10 +14,10 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import boto3
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from botocore.credentials import Credentials
 from botocore.exceptions import ClientError
 
@@ -27,6 +27,7 @@ from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.rust_bridge import configuration
 from litellm.types.utils import AdapterCompletionStreamWrapper, ModelResponse
+from tests._support.respx_httpx2 import side_effect_for_respx
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
@@ -93,7 +94,7 @@ async def _drive_async_completion(
     outer_dispatch: bool = False,
 ):
     """Run the real `async_completion` with a stubbed transport."""
-    import httpx as _httpx
+    import httpx2 as _httpx
 
     client = MagicMock()
 
@@ -458,7 +459,9 @@ async def test_fake_stream_on_each_router_surface_is_bounded_by_the_request_time
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(CONVERSE_ANSWER))
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=side_effect_for_respx(slow_upstream_answer(CONVERSE_ANSWER))
+    )
     router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
         "bedrock/converse/ai21.jamba-1-5-large-v1:0"
     )
@@ -480,7 +483,9 @@ async def test_fake_stream_through_a_router_adapter_is_bounded_by_the_request_ti
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "adapters", [{"id": "chat", "adapter": _ChatCompletionAdapter()}])
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(CONVERSE_ANSWER))
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=side_effect_for_respx(slow_upstream_answer(CONVERSE_ANSWER))
+    )
     router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
         "bedrock/converse/ai21.jamba-1-5-large-v1:0"
     )
@@ -501,7 +506,7 @@ async def test_live_anthropic_messages_stream_through_the_router_fails_at_the_st
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer())
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=side_effect_for_respx(slow_upstream_answer()))
     router: Final = _router_with_a_stream_timeout_shorter_than_the_upstreams_first_byte(
         "bedrock/invoke/anthropic.claude-sonnet-4-5-v1:0"
     )
@@ -588,7 +593,9 @@ async def test_native_output_retry_is_bounded_by_the_request_timeout_not_the_str
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_rejects_native_output_then_answers_slowly)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=side_effect_for_respx(_rejects_native_output_then_answers_slowly)
+    )
     router: Final = _bedrock_router(
         "bedrock/converse/us.anthropic.claude-opus-4-8",
         timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
@@ -621,7 +628,9 @@ async def test_a_denied_native_output_stream_is_sent_again_buffered_with_native_
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_denies_streaming_then_answers)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=side_effect_for_respx(_denies_streaming_then_answers)
+    )
     router: Final = _bedrock_router(
         "bedrock/converse/us.anthropic.claude-opus-5-5", timeout=60, stream_timeout=STREAM_TIMEOUT_SECONDS
     )
@@ -665,7 +674,9 @@ async def test_a_denied_native_output_stream_on_the_invoke_route_is_sent_again_b
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_denies_invoke_streaming_then_answers)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=side_effect_for_respx(_denies_invoke_streaming_then_answers)
+    )
     router: Final = _bedrock_router(
         "bedrock/invoke/us.anthropic.claude-opus-5-5", timeout=60, stream_timeout=STREAM_TIMEOUT_SECONDS
     )
@@ -713,7 +724,9 @@ async def test_a_rejected_schema_after_a_denied_invoke_stream_falls_back_to_the_
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_denies_invoke_streaming_and_rejects_native_output)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=side_effect_for_respx(_denies_invoke_streaming_and_rejects_native_output)
+    )
     router: Final = _bedrock_router(
         "bedrock/invoke/us.anthropic.claude-opus-5-5", timeout=60, stream_timeout=STREAM_TIMEOUT_SECONDS
     )
@@ -737,7 +750,9 @@ async def test_failed_native_output_retry_reports_the_request_timeout_it_was_bou
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=_rejects_native_output_then_answers_slowly)
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=side_effect_for_respx(_rejects_native_output_then_answers_slowly)
+    )
     request_timeout: Final = UPSTREAM_FIRST_BYTE_SECONDS / 2
     router: Final = _bedrock_router(
         "bedrock/converse/us.anthropic.claude-opus-4-8", timeout=request_timeout, stream_timeout=STREAM_TIMEOUT_SECONDS
@@ -773,7 +788,9 @@ async def test_failed_stream_on_each_router_surface_reports_the_timeout_it_was_b
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(side_effect=slow_upstream_answer(upstream_answer))
+    respx_mock.post(url__regex=_BEDROCK_RUNTIME_URL).mock(
+        side_effect=side_effect_for_respx(slow_upstream_answer(upstream_answer))
+    )
     router: Final = _bedrock_router(model, timeout=UPSTREAM_FIRST_BYTE_SECONDS / 2, stream_timeout=STREAM_TIMEOUT_SECONDS)
 
     with pytest.raises(openai.APIError) as excinfo:

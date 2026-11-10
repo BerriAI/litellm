@@ -8,7 +8,7 @@ import urllib.parse
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, ClassVar, Final, get_args, overload
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

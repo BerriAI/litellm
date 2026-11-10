@@ -1,4 +1,4 @@
-import httpx
+import httpx2 as httpx
 from unittest.mock import patch, PropertyMock
 
 import pytest

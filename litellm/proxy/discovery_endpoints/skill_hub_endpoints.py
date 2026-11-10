@@ -7,7 +7,7 @@ from itertools import chain
 from typing import Annotated, Final, Literal
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile
 
 import litellm

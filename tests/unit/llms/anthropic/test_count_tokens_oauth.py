@@ -13,12 +13,13 @@ import os
 import sys
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -175,9 +176,9 @@ class TestCountTokensUsesWorkloadIdentity:
 
         monkeypatch.setattr("litellm.llms.anthropic.common_utils.aget_anthropic_wif_token", fake_mint)
 
-        with respx.mock(assert_all_called=True) as router:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
             route = router.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
-                return_value=httpx.Response(200, json={"input_tokens": 11})
+                return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 11}))
             )
             result = await token_counter_module.AnthropicTokenCounter().count_tokens(
                 model_to_use="claude-sonnet-4-5",
@@ -205,9 +206,9 @@ class TestCountTokensUsesWorkloadIdentity:
             monkeypatch.delenv(name, raising=False)
         monkeypatch.setattr(litellm, "anthropic_key", FAKE_REGULAR_KEY)
 
-        with respx.mock(assert_all_called=True) as router:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
             route = router.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
-                return_value=httpx.Response(200, json={"input_tokens": 13})
+                return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 13}))
             )
             result = await AnthropicTokenCounter().count_tokens(
                 model_to_use="claude-sonnet-4-5",
@@ -242,9 +243,9 @@ class TestCountTokensUsesWorkloadIdentity:
         monkeypatch.setattr(litellm, "anthropic_key", None)
         monkeypatch.setattr(litellm, "api_key", None)
 
-        with respx.mock(assert_all_called=True) as router:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
             route = router.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
-                return_value=httpx.Response(200, json={"input_tokens": 17})
+                return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 17}))
             )
             result = await AnthropicTokenCounter(client_oauth_token=FAKE_OAUTH_TOKEN).count_tokens(
                 model_to_use="claude-sonnet-4-5",
@@ -372,7 +373,9 @@ async def test_count_token_counters_return_typed_success_and_error_responses(
     router: Final = respx.mock
 
     with router:
-        count_route: Final = router.post(endpoint).mock(return_value=httpx.Response(status_code, json=response_body))
+        count_route: Final = router.post(endpoint).mock(
+            return_value=response_for_respx(httpx.Response(status_code, json=response_body))
+        )
         result: Final = await counter_type().count_tokens(
             model_to_use="claude-test",
             messages=[{"role": "user", "content": "hi"}],

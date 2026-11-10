@@ -1,9 +1,10 @@
+from tests._support.respx_httpx2 import response_for_respx
 import json
 from typing import Final
 
-import httpx
-import respx
+import httpx2 as httpx
 
+from tests._support import respx_httpx2 as respx
 from litellm import text_completion
 
 FIREWORKS_COMPLETIONS_URL: Final = "https://api.fireworks.ai/inference/v1/completions"
@@ -30,7 +31,7 @@ def _fireworks_completion_response() -> dict[str, object]:
 
 def test_fireworks_text_completion_sends_prompt_array(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(FIREWORKS_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, json=_fireworks_completion_response())
+        return_value=response_for_respx(httpx.Response(200, json=_fireworks_completion_response()))
     )
 
     response: Final = text_completion(
@@ -48,7 +49,7 @@ def test_fireworks_text_completion_sends_prompt_array(respx_mock: respx.MockRout
 
 def test_fireworks_text_completion_echo_returns_prompt_and_logprobs(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(FIREWORKS_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, json=_fireworks_completion_response())
+        return_value=response_for_respx(httpx.Response(200, json=_fireworks_completion_response()))
     )
 
     response: Final = text_completion(

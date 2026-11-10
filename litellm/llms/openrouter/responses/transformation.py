@@ -11,7 +11,7 @@ Docs: https://openrouter.ai/docs/api/reference/responses/overview
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 import litellm

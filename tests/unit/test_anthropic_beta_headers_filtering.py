@@ -14,7 +14,7 @@ from typing import Dict, Final, List, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from anthropic.types.anthropic_beta_param import AnthropicBetaParam
 
 import litellm
@@ -267,7 +267,7 @@ class TestAnthropicBetaHeadersFiltering:
         unsupported = self.get_unsupported_headers("bedrock_converse")
         mapped_headers = self.get_mapped_headers("bedrock_converse")
 
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("httpx2.AsyncClient") as mock_client_class:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
@@ -689,7 +689,7 @@ def test_requests_without_betas_never_fetch_the_beta_table(monkeypatch: pytest.M
     monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
     monkeypatch.delenv("LITELLM_OFFLINE_MODE", raising=False)
     anthropic_beta_headers_manager._BETA_HEADERS_CONFIG = None
-    with respx.mock(assert_all_called=False) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as router:
         remote_table: Final = router.get(litellm.anthropic_beta_headers_url).respond(
             json=GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
         )

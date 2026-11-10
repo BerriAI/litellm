@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict
 

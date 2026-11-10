@@ -1,10 +1,12 @@
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import OpenAIFileObject
@@ -72,7 +74,9 @@ async def test_file_content_of_an_uploaded_file_downloads_original_bytes() -> No
 
 @respx.mock
 async def test_delete_file_maps_xai_deleted_object() -> None:
-    respx.delete(f"{API_BASE}/v1/files/file_07").respond(200, json={"id": "file_07", "deleted": True, "object": "file"})
+    respx.delete(f"{API_BASE}/v1/files/file_07").respond(
+        200, json={"id": "file_07", "deleted": True, "object": "file"}
+    )
 
     deleted: Final = await litellm.afile_delete(
         file_id="file_07", custom_llm_provider="xai", api_key=KEY, api_base=API_BASE
@@ -111,11 +115,11 @@ async def test_list_files_reads_data_array() -> None:
 @respx.mock
 async def test_list_files_walks_every_page_by_pagination_token() -> None:
     route: Final = respx.get(f"{API_BASE}/v1/files").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json={"data": [_XAI_FILE], "pagination_token": "file_07"}),
             httpx.Response(200, json={"data": [{**_XAI_FILE, "id": "file_08"}], "pagination_token": "file_08"}),
             httpx.Response(200, json={"data": [], "pagination_token": "file_08"}),
-        ]
+        ])
     )
 
     listed: Final = await litellm.afile_list(custom_llm_provider="xai", api_key=KEY, api_base=API_BASE)

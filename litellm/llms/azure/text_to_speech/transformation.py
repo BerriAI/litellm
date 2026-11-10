@@ -8,7 +8,7 @@ from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, Final, Union
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base

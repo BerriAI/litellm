@@ -5,7 +5,7 @@ Transformation for Calling Google models in their native format.
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

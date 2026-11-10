@@ -2,7 +2,7 @@ import time
 from collections.abc import Callable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,

@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs
 
-import httpx
+import httpx2 as httpx
 import psutil
 import pytest
 import yaml

@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Final, cast
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import psutil
 import pytest
 import yaml

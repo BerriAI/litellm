@@ -2,8 +2,7 @@ import json
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 
 
@@ -11,7 +10,7 @@ import litellm
 def test_morph_forwards_chat_options_and_prices_cached_input(local_model_cost_map: None, cached_tokens: int) -> None:
     messages: Final = [{"role": "user", "content": "Return a JSON greeting"}]
     response_format: Final = {"type": "json_object"}
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.morphllm.com/v1/chat/completions").respond(
             200,
             json={
@@ -107,7 +106,7 @@ def test_morph_preserves_tool_calls_and_stream_usage() -> None:
             },
         },
     ]
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.morphllm.com/v1/chat/completions").respond(
             200,
             headers={"content-type": "text/event-stream"},

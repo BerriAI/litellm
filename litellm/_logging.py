@@ -1021,6 +1021,7 @@ def _suppress_loggers():
     # Suppress httpx request logging at INFO level
     httpx_logger: Final = logging.getLogger("httpx")
     httpx_logger.setLevel(logging.WARNING)
+    logging.getLogger("httpx2").setLevel(logging.WARNING)
 
     # Suppress APScheduler logging at INFO level
     apscheduler_executors_logger: Final = logging.getLogger("apscheduler.executors.default")
@@ -1035,6 +1036,7 @@ _REDACTED_THIRD_PARTY_LOGGERS: Final[tuple[str, ...]] = (
     "asyncio",
     "backoff",
     "httpx",
+    "httpx2",
     "uvicorn.error",
 )
 

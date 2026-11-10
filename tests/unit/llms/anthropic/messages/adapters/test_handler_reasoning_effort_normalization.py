@@ -12,10 +12,11 @@ import logging
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.anthropic.messages.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
@@ -427,7 +428,9 @@ async def _body_sent_upstream(
     upstream_body: Mapping[str, object],
     **messages_params: object,
 ) -> Mapping[str, object]:
-    route: Final = respx_mock.post(url__regex=upstream_url).mock(return_value=httpx.Response(200, json=upstream_body))
+    route: Final = respx_mock.post(url__regex=upstream_url).mock(
+        return_value=response_for_respx(httpx.Response(200, json=upstream_body))
+    )
     router: Final = Router(
         model_list=[{"model_name": "group", "litellm_params": {**litellm_params}, "model_info": {**model_info}}]
     )
@@ -566,7 +569,7 @@ class TestADeclaredDeploymentRoundsTheMessagesTierOntoItsLevels:
         """The map says gpt-5.5-pro refuses minimal and knows nothing of my-kimi, so the chain alone
         would send medium and low."""
         route: Final = respx_mock.post(url__regex=upstream_url).mock(
-            return_value=httpx.Response(200, json=upstream_body)
+            return_value=response_for_respx(httpx.Response(200, json=upstream_body))
         )
 
         await litellm.anthropic.messages.acreate(

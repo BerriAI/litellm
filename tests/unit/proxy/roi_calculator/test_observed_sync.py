@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import BaseModel, SecretStr
 

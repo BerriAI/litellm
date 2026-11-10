@@ -7,10 +7,11 @@ from contextlib import nullcontext
 from types import MappingProxyType
 from typing import Any, Final, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -5672,7 +5673,9 @@ def _tool_result_with_text_blocks(text_block: Mapping[str, object]) -> list[dict
 
 
 def _chat_bridge_route(respx_mock: respx.MockRouter) -> respx.Route:
-    return respx_mock.post(url__regex=_CHAT_BRIDGE_URL).mock(return_value=httpx.Response(200, json=_CHAT_BRIDGE_REPLY))
+    return respx_mock.post(url__regex=_CHAT_BRIDGE_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_CHAT_BRIDGE_REPLY))
+    )
 
 
 def _sent_tool_messages(route: respx.Route) -> list[object]:
@@ -5863,7 +5866,7 @@ async def test_async_messages_retry_once_without_reasoning_the_backend_cannot_de
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
-        side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+        side_effect=side_effect_for_respx([_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)])
     )
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -5902,7 +5905,7 @@ def test_sync_messages_retry_once_without_reasoning_the_backend_cannot_decrypt(
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
-        side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+        side_effect=side_effect_for_respx([_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)])
     )
 
     response: Final = litellm.anthropic.messages.create(
@@ -5926,7 +5929,7 @@ async def test_async_messages_with_num_retries_send_the_rejected_reasoning_only_
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
-        side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+        side_effect=side_effect_for_respx([_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)])
     )
 
     await litellm.anthropic.messages.acreate(
@@ -5949,7 +5952,7 @@ def test_sync_messages_with_global_num_retries_send_the_rejected_reasoning_once_
 ) -> None:
     monkeypatch.setattr(litellm, "num_retries", 2)
     route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
-        side_effect=[_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+        side_effect=side_effect_for_respx([_RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)])
     )
 
     litellm.anthropic.messages.create(
@@ -5977,7 +5980,7 @@ async def test_async_messages_retry_a_server_error_with_the_reasoning_and_drop_i
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
-        side_effect=[_SERVER_ERROR, _RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+        side_effect=side_effect_for_respx([_SERVER_ERROR, _RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)])
     )
 
     response: Final = await litellm.anthropic.messages.acreate(
@@ -6000,7 +6003,7 @@ def test_sync_messages_retry_a_server_error_with_the_reasoning_and_drop_it_only_
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(
-        side_effect=[_SERVER_ERROR, _RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)]
+        side_effect=side_effect_for_respx([_SERVER_ERROR, _RETRY_REJECTION, httpx.Response(200, json=_RETRY_REPLY)])
     )
 
     response: Final = litellm.anthropic.messages.create(
@@ -6059,7 +6062,7 @@ async def test_async_messages_log_only_the_outcome_of_the_turn_sent_again(
 ) -> None:
     failure_log: Final = _FailureLog()
     monkeypatch.setattr(litellm, "callbacks", [failure_log])
-    respx_mock.post(url__regex=_RETRY_URL).mock(side_effect=[_RETRY_REJECTION, sent_again])
+    respx_mock.post(url__regex=_RETRY_URL).mock(side_effect=side_effect_for_respx([_RETRY_REJECTION, sent_again]))
 
     with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
         await litellm.anthropic.messages.acreate(
@@ -6085,7 +6088,7 @@ def test_sync_messages_log_only_the_outcome_of_the_turn_sent_again(
 ) -> None:
     failure_log: Final = _FailureLog()
     monkeypatch.setattr(litellm, "callbacks", [failure_log])
-    respx_mock.post(url__regex=_RETRY_URL).mock(side_effect=[_RETRY_REJECTION, sent_again])
+    respx_mock.post(url__regex=_RETRY_URL).mock(side_effect=side_effect_for_respx([_RETRY_REJECTION, sent_again]))
 
     with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
         litellm.anthropic.messages.create(
@@ -6120,7 +6123,7 @@ def test_sync_messages_log_only_the_outcome_of_the_turn_sent_again(
 async def test_messages_do_not_retry_other_rejections(
     respx_mock: respx.MockRouter, messages: list[dict[str, object]], rejection: httpx.Response
 ) -> None:
-    route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(return_value=rejection)
+    route: Final = respx_mock.post(url__regex=_RETRY_URL).mock(return_value=response_for_respx(rejection))
 
     with pytest.raises(litellm.BadRequestError):
         await litellm.anthropic.messages.acreate(
@@ -6141,7 +6144,7 @@ async def test_messages_do_not_retry_other_rejections(
 async def test_messages_do_not_retry_when_the_translated_request_already_dropped_the_reasoning(
     respx_mock: respx.MockRouter,
 ) -> None:
-    route: Final = respx_mock.post(url__regex=_CHAT_BRIDGE_URL).mock(return_value=_RETRY_REJECTION)
+    route: Final = respx_mock.post(url__regex=_CHAT_BRIDGE_URL).mock(return_value=response_for_respx(_RETRY_REJECTION))
 
     with pytest.raises(litellm.BadRequestError):
         await litellm.anthropic.messages.acreate(
@@ -6162,7 +6165,7 @@ async def test_openai_thinking_on_the_chat_adapter_replays_the_reasoning_its_res
 ) -> None:
     monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
     route: Final = respx_mock.post(url__regex=r".*openai-thinking\.example/v1/responses").mock(
-        return_value=httpx.Response(200, json=_RETRY_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_RETRY_REPLY))
     )
 
     await litellm.anthropic.messages.acreate(
@@ -6273,7 +6276,9 @@ async def test_streamed_reasoning_summaries_stay_with_their_own_encrypted_item(
         {"type": "response.completed", "response": completed},
     )
     respx_mock.post(url__regex=_RETRY_URL).mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_responses_sse(events))
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_responses_sse(events))
+        )
     )
 
     stream: Final = await litellm.anthropic.messages.acreate(

@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException, status
 from pydantic import BeforeValidator, TypeAdapter, ValidationError
 

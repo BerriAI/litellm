@@ -8,8 +8,7 @@ import sys
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.utils import trim_messages
 
@@ -57,7 +56,7 @@ def test_abliteration_complete_url_appends_endpoint():
 
 
 def test_abliteration_chat_forwards_reasoning_and_accounts_for_cache(local_model_cost_map: None) -> None:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.abliteration.ai/v1/chat/completions").respond(
             200,
             json={

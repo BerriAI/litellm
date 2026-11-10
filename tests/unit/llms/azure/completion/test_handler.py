@@ -1,9 +1,12 @@
+import httpx2 as httpx
 from typing import Final
 
 import pytest
-import respx
-from httpx import Response
 
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
+
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import atext_completion, text_completion
 
@@ -22,11 +25,11 @@ AZURE_TEXT_CALL: Final = {
 @pytest.fixture
 def rejected_completions_endpoint():
     return respx.post(url__startswith=COMPLETIONS_URL).mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             400,
             json={"error": {"message": "bad prompt", "code": "invalid_prompt"}},
             headers={"x-request-id": "req-1"},
-        )
+        ))
     )
 
 
@@ -55,7 +58,7 @@ async def test_acompletion_surfaces_the_status_and_headers_of_a_rejected_request
 @pytest.mark.respx(assert_all_called=True)
 def test_azure_instruct_max_retries_zero_sends_one_request(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(url__startswith=COMPLETIONS_URL).mock(
-        return_value=Response(500, json={"error": {"message": "temporary failure"}})
+        return_value=response_for_respx(httpx.Response(500, json={"error": {"message": "temporary failure"}}))
     )
 
     with pytest.raises(litellm.APIError):

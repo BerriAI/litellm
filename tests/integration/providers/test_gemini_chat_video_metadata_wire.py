@@ -5,7 +5,7 @@ import json
 from collections.abc import Callable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, Scenario, object_value
 from integration._support.vertex import service_account_json

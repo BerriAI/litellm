@@ -22,7 +22,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import jwt
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never

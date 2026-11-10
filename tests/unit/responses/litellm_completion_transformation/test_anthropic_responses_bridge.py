@@ -4,9 +4,10 @@ from itertools import chain
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from pydantic import BaseModel
 
@@ -23,6 +24,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
 from litellm.types.utils import Message, ModelResponse
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 from tests.unit.proxy.conftest import httpx_transport
 
@@ -517,7 +519,7 @@ def _anthropic_sse(*events: Mapping[str, object]) -> bytes:
 
 def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(respx_mock: respx.MockRouter) -> None:
     respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=_anthropic_sse(
@@ -539,7 +541,7 @@ def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(res
                 {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
                 {"type": "message_stop"},
             ),
-        )
+        ))
     )
 
     stream: Final = litellm.responses(
@@ -601,7 +603,7 @@ def test_empty_responses_tool_output_reaches_anthropic_without_json_text(
     respx_mock: respx.MockRouter, output: str | list[dict[str, str]]
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_anthropic_message({"type": "text", "text": "ok"})
+        return_value=response_for_respx(_anthropic_message({"type": "text", "text": "ok"}))
     )
     response: Final = litellm.responses(
         model=_MODEL,
@@ -633,10 +635,10 @@ def test_responses_over_anthropic_return_the_compaction_block_and_send_it_back(
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             _anthropic_message(_COMPACTION_BLOCK, {"type": "text", "text": "The."}),
             _anthropic_message({"type": "text", "text": "dog."}),
-        ]
+        ])
     )
 
     first: Final = litellm.responses(
@@ -654,7 +656,7 @@ def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
@@ -689,7 +691,7 @@ def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_
                 ),
             ),
             _anthropic_message({"type": "text", "text": "dog."}),
-        ]
+        ])
     )
 
     events: Final = tuple(
@@ -728,7 +730,7 @@ def test_streamed_responses_over_anthropic_emit_the_compaction_item_and_send_it_
 
 def test_streamed_responses_over_anthropic_answer_after_a_failed_compaction(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=_anthropic_sse(
@@ -752,7 +754,7 @@ def test_streamed_responses_over_anthropic_answer_after_a_failed_compaction(resp
                 {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
                 {"type": "message_stop"},
             ),
-        )
+        ))
     )
 
     events: Final = tuple(
@@ -864,7 +866,7 @@ def test_streamed_compaction_item_done_carries_the_same_newest_block_as_the_comp
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=_anthropic_sse(
@@ -883,7 +885,7 @@ def test_streamed_compaction_item_done_carries_the_same_newest_block_as_the_comp
                 {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 4}},
                 {"type": "message_stop"},
             ),
-        )
+        ))
     )
 
     events: Final = tuple(
@@ -914,10 +916,10 @@ def test_responses_over_anthropic_send_back_a_compaction_item_replayed_as_sdk_ou
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             _anthropic_message(_COMPACTION_BLOCK, {"type": "text", "text": "The."}),
             _anthropic_message({"type": "text", "text": "dog."}),
-        ]
+        ])
     )
 
     first: Final = litellm.responses(
@@ -939,10 +941,10 @@ async def test_router_with_encrypted_content_affinity_sends_the_compaction_block
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             _anthropic_message(_COMPACTION_BLOCK, {"type": "text", "text": "The."}),
             _anthropic_message({"type": "text", "text": "dog."}),
-        ]
+        ])
     )
     router: Final = litellm.Router(
         model_list=[
@@ -1203,7 +1205,7 @@ def test_responses_over_anthropic_send_a_compaction_item_as_summary_text_when_th
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_anthropic_message({"type": "text", "text": "dog."})
+        return_value=response_for_respx(_anthropic_message({"type": "text", "text": "dog."}))
     )
     compaction_item: Final = {
         "type": "compaction",
@@ -1310,7 +1312,7 @@ def test_responses_over_anthropic_offer_codex_tool_search_as_a_function_and_hold
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_anthropic_message({"type": "text", "text": "ok"})
+        return_value=response_for_respx(_anthropic_message({"type": "text", "text": "ok"}))
     )
 
     litellm.responses(
@@ -1332,7 +1334,7 @@ def test_claude_calling_tool_search_comes_back_as_a_client_tool_search_call(
     respx_mock: respx.MockRouter, tool_input: Mapping[str, object]
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_claude_tool_use("toolu_search", "tool_search", tool_input)
+        return_value=response_for_respx(_claude_tool_use("toolu_search", "tool_search", tool_input))
     )
 
     response: Final = litellm.responses(
@@ -1352,7 +1354,7 @@ def test_claude_calling_a_function_named_tool_search_stays_a_function_call_witho
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_claude_tool_use("toolu_search", "tool_search", {"query": "calendar"})
+        return_value=response_for_respx(_claude_tool_use("toolu_search", "tool_search", {"query": "calendar"}))
     )
     own_tool_search: Final = {**_SHELL_TOOL, "name": "tool_search"}
 
@@ -1364,7 +1366,7 @@ def test_claude_calling_a_function_named_tool_search_stays_a_function_call_witho
 
 def test_streamed_claude_tool_search_is_one_client_tool_search_call_item(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=_anthropic_sse(
@@ -1398,7 +1400,7 @@ def test_streamed_claude_tool_search_is_one_client_tool_search_call_item(respx_m
                 {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 4}},
                 {"type": "message_stop"},
             ),
-        )
+        ))
     )
 
     events: Final = tuple(
@@ -1423,7 +1425,9 @@ def test_codex_tool_search_output_loads_the_found_tool_and_answers_the_search_on
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_claude_tool_use("toolu_event", "mcp__codex_apps__calendar_create_event", {"title": "Standup"})
+        return_value=response_for_respx(
+            _claude_tool_use("toolu_event", "mcp__codex_apps__calendar_create_event", {"title": "Standup"})
+        )
     )
 
     response: Final = litellm.responses(
@@ -1462,7 +1466,9 @@ def test_a_namespace_codex_loads_through_tool_search_is_callable_and_its_calls_k
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_claude_tool_use("toolu_projects", "mcp__vercel____list_projects", {"title": "x"})
+        return_value=response_for_respx(
+            _claude_tool_use("toolu_projects", "mcp__vercel____list_projects", {"title": "x"})
+        )
     )
     loaded: Final = _deferred_namespace("mcp__vercel__", "list_projects", "get_project")
 
@@ -1488,7 +1494,7 @@ def test_a_namespace_codex_loads_through_tool_search_is_callable_and_its_calls_k
 
 def test_codex_tool_search_output_loading_the_same_tool_twice_sends_it_once(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=_anthropic_message({"type": "text", "text": "ok"})
+        return_value=response_for_respx(_anthropic_message({"type": "text", "text": "ok"}))
     )
 
     litellm.responses(
@@ -1668,7 +1674,9 @@ def test_responses_over_anthropic_return_the_refusal_explanation_as_a_refusal_pa
     respx_mock: respx.MockRouter, content: tuple[Mapping[str, object], ...], expected_parts: list[tuple[str, str]]
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(200, json={**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": list(content)})
+        return_value=response_for_respx(
+            httpx.Response(200, json={**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": list(content)})
+        )
     )
 
     response: Final = litellm.responses(model=_MODEL, input="Write the exploit.", api_key="mock_api_key")
@@ -1681,7 +1689,7 @@ def test_a_refused_responses_turn_sent_back_keeps_its_explanation_in_the_history
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(200, json={**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": []})
+        return_value=response_for_respx(httpx.Response(200, json={**ANTHROPIC_DOCS_REFUSAL_MESSAGE, "content": []}))
     )
     refused: Final = litellm.responses(model=_MODEL, input="Write the exploit.", api_key="mock_api_key")
 
@@ -1764,9 +1772,9 @@ def test_streamed_responses_over_anthropic_stream_the_refusal_explanation_as_a_r
     expected_parts: list[tuple[str, str]],
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, headers={"content-type": "text/event-stream"}, content=_refusal_stream(*content)
-        )
+        ))
     )
 
     events: Final = tuple(
@@ -1794,7 +1802,7 @@ def test_streamed_responses_over_anthropic_give_a_refusal_after_thinking_its_own
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=_anthropic_sse(
@@ -1822,7 +1830,7 @@ def test_streamed_responses_over_anthropic_give_a_refusal_after_thinking_its_own
                 },
                 {"type": "message_stop"},
             ),
-        )
+        ))
     )
 
     events: Final = tuple(
@@ -1911,7 +1919,7 @@ def test_responses_over_anthropic_report_a_paused_turn_as_completed_with_its_pen
     expected_incomplete_details: Mapping[str, object] | None,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 **ANTHROPIC_DOCS_REFUSAL_MESSAGE,
@@ -1925,7 +1933,7 @@ def test_responses_over_anthropic_report_a_paused_turn_as_completed_with_its_pen
                 "stop_reason": stop_reason,
                 "stop_details": None,
             },
-        )
+        ))
     )
 
     response: Final = litellm.responses(
@@ -1958,7 +1966,7 @@ def test_streamed_responses_over_anthropic_complete_a_paused_turn_with_its_pendi
     expected_incomplete_details: Mapping[str, object] | None,
 ) -> None:
     respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=_anthropic_sse(
@@ -1996,7 +2004,7 @@ def test_streamed_responses_over_anthropic_complete_a_paused_turn_with_its_pendi
                 },
                 {"type": "message_stop"},
             ),
-        )
+        ))
     )
 
     events: Final = tuple(

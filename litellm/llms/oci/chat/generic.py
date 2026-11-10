@@ -11,7 +11,7 @@ import hashlib
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ValidationError
 
 from litellm.llms.oci.common_utils import (

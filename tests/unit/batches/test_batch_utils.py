@@ -18,11 +18,10 @@ import asyncio, json, time
 import logging
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
-
+from tests._support import respx_httpx2 as respx
 import litellm
 import litellm.batches.batch_utils as bu
 from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
@@ -33,6 +32,7 @@ from litellm.batches.batch_utils import(
     calculate_batch_cost_and_usage,
 )
 from litellm.cost_calculator import batch_cost_calculator
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from unittest.mock import AsyncMock, patch
 
@@ -1084,7 +1084,7 @@ async def test_output_file_content_vertex_managed_uri_accepted_by_real_validatio
         _vertex_predictions_row("request-2", 20, 10),
     ]
     route = respx.get(url__regex=r"https://storage\.googleapis\.com/storage/v1/b/litellm-bucket/o/.*").mock(
-        return_value=httpx.Response(200, content=_vertex_jsonl(rows))
+        return_value=response_for_respx(httpx.Response(200, content=_vertex_jsonl(rows)))
     )
 
     file_content = await bu._fetch_batch_output_file_content(

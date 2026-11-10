@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import jwt
 import openai
 import psutil

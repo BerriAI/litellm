@@ -17,13 +17,15 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
@@ -1348,14 +1350,14 @@ async def test_entra_rejecting_the_agent_oidc_token_returns_401_with_only_the_aa
     monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
     monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
     respx_mock.post("https://login.microsoftonline.com/qa-tenant/oauth2/v2.0/token").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             400,
             json={
                 "error": "invalid_client",
                 "error_description": "AADSTS700213: No matching federated identity record found for app "
                 f"'{_ENTRA_APP_CLIENT_ID}'. Trace ID: {_ENTRA_TRACE_ID}",
             },
-        )
+        ))
     )
 
     status_code, error = await _send_message_to_entra_agent(
@@ -3076,7 +3078,7 @@ async def test_failed_upstream_stream_relays_its_body_only_when_that_is_a_json_o
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream: Final = respx_mock.post("http://backend-agent:10001").mock(
-        return_value=httpx.Response(404, content=upstream_body)
+        return_value=response_for_respx(httpx.Response(404, content=upstream_body))
     )
 
     events: Final = [

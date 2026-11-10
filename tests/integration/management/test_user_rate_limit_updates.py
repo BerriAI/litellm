@@ -4,7 +4,7 @@ from contextlib import ExitStack
 from typing import Final
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 

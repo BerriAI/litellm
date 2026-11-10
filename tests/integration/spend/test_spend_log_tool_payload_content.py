@@ -10,7 +10,7 @@ from typing import Final
 from uuid import uuid4
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value

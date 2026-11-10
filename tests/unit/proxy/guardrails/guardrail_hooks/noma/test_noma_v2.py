@@ -3,10 +3,9 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeAlias
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail

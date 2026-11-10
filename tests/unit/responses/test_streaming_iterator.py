@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 import websockets.exceptions
 from pydantic_core import PydanticSerializationError

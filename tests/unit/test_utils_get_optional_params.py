@@ -3,11 +3,12 @@ import logging
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.utils import (
     get_optional_params,
     get_optional_params_embeddings,
@@ -2019,7 +2020,7 @@ def test_completion_passes_num_retries_to_optional_params_as_max_retries(
     capture: Final = _PreCallOptionalParamsCapture()
     monkeypatch.setattr(litellm, "callbacks", [capture])
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-retries",
@@ -2029,7 +2030,7 @@ def test_completion_passes_num_retries_to_optional_params_as_max_retries(
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(

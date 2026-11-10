@@ -11,7 +11,7 @@ from collections.abc import Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeAlias, Union
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm

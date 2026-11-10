@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import psycopg
 import pytest
 import yaml
@@ -31,7 +31,7 @@ BURST_REQUESTS: Final = 30
 _GATED_LOGGER: Final = """
 import os
 import re
-import httpx
+import httpx2 as httpx
 from litellm.integrations.custom_logger import CustomLogger
 
 class ShutdownLogger(CustomLogger):

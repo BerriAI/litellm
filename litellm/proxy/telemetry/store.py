@@ -5,7 +5,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Final, Protocol
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from typing_extensions import LiteralString
 

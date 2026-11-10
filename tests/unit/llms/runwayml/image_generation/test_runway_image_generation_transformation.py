@@ -1,7 +1,7 @@
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.runwayml.image_generation.transformation import RunwayMLImageGenerationConfig

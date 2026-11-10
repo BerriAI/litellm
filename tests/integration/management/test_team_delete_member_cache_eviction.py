@@ -18,7 +18,7 @@ from hashlib import sha256
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from pydantic import JsonValue

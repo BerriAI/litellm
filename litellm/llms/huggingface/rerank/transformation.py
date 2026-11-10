@@ -2,7 +2,7 @@ import os
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import TypedDict
 
 import litellm

@@ -1,7 +1,7 @@
 from typing import Final
 from unittest.mock import Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import (

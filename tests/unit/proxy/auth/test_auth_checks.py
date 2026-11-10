@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest, litellm
 
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
-import httpx
+import httpx2 as httpx
 from fastapi import Request, status
 from prisma import Prisma
 from litellm._service_logger import ServiceTypes
@@ -465,7 +465,7 @@ def test_lens_management_does_not_require_an_inference_user_parameter(route: str
 async def test_get_end_user_object(customer_spend, customer_budget):
     """
     Scenario 1: normal - get_end_user_object returns the cached user
-    Scenario 2: user over budget - NOTE: budget enforcement now happens in 
+    Scenario 2: user over budget - NOTE: budget enforcement now happens in
                 common_checks() via _check_end_user_budget(), not in get_end_user_object()
 
     This test verifies that get_end_user_object correctly retrieves the end user

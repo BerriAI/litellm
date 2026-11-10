@@ -6,7 +6,7 @@ Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 
 from typing import Any, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 import litellm

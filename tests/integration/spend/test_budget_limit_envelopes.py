@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from hashlib import sha256
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import JsonValue
 

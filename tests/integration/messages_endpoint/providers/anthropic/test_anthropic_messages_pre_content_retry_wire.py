@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 import anthropic
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter
 import pytest
 import yaml

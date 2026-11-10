@@ -5,7 +5,7 @@ when AsyncHTTPHandler instances are garbage collected.
 
 import asyncio
 import gc
-import httpx
+import httpx2 as httpx
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 

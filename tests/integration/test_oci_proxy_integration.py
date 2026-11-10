@@ -38,7 +38,7 @@ import time
 from pathlib import Path
 from typing import Iterator
 
-import httpx
+import httpx2 as httpx
 import pytest
 from tests._master_key import MASTER_KEY
 from tests.integration._support.process import stop_child

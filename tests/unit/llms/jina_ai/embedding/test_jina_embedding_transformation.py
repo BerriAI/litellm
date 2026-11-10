@@ -2,11 +2,13 @@ import json
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 
@@ -146,7 +148,7 @@ def test_jina_ai_embedding_forwards_task_and_dimensions_and_parses_values(
     respx_mock: respx.MockRouter,
 ) -> None:
     route: Final = respx_mock.post("https://api.jina.ai/v1/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "model": "jina-embeddings-v3",
@@ -154,7 +156,7 @@ def test_jina_ai_embedding_forwards_task_and_dimensions_and_parses_values(
                 "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
                 "usage": {"prompt_tokens": 3, "total_tokens": 3},
             },
-        )
+        ))
     )
 
     response: Final = litellm.embedding(

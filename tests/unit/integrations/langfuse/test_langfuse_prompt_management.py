@@ -66,7 +66,7 @@ class TestLangfusePromptManagement:
             assert mock_run_async.call_args[0][0] == langfuse_prompt_management.async_log_failure_event
 
     def test_langfuse_client_init_passes_dedicated_httpx_client(self):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.custom_httpx.http_handler import get_httpx_client
 

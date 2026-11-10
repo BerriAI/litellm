@@ -5,11 +5,13 @@ from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
@@ -2319,7 +2321,7 @@ FIREWORKS_API_BASE: Final = "https://api.fireworks.ai/inference/v1"
 
 def _mock_fireworks_vision_completion(respx_mock: respx.MockRouter) -> respx.Route:
     return respx_mock.post(f"{FIREWORKS_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-test",
@@ -2329,7 +2331,7 @@ def _mock_fireworks_vision_completion(respx_mock: respx.MockRouter) -> respx.Rou
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
 
 

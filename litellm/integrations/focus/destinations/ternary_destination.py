@@ -15,7 +15,7 @@ from litellm.types.llms.custom_http import VerifyTypes
 from .base import FocusDestination, FocusTimeWindow
 
 if TYPE_CHECKING:
-    import httpx
+    import httpx2 as httpx
     from aiohttp import ClientSession
 
 TERNARY_UPLOAD_TIMEOUT_SECONDS: Final = 120.0

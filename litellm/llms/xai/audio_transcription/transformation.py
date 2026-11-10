@@ -5,7 +5,7 @@ Translates from OpenAI's `/v1/audio/transcriptions` to xAI's `/v1/stt`
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm

@@ -212,7 +212,7 @@ class SpeechToCompletionBridgeTransformationHandler:
     ) -> "HttpxBinaryResponseContent":
         import base64
 
-        import httpx
+        import httpx2 as httpx
 
         from litellm.types.llms.openai import HttpxBinaryResponseContent
         from litellm.types.utils import Choices

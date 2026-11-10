@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.anthropic_sse import sse
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.types.utils import TokenCountResponse

@@ -5,7 +5,7 @@ import json
 from typing import Final, Optional, cast
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm
@@ -19,7 +19,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 async def test_watsonx_text_gpt_oss_async_completion_fetches_hf_template_off_the_event_loop(
     monkeypatch, tokenizer_config_cached
 ):
-    import httpx
+    import httpx2 as httpx
 
     from litellm._uuid import uuid
     from litellm.litellm_core_utils.prompt_templates import huggingface_template_handler

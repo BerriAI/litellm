@@ -3,7 +3,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # the base signature leaves the params bag untyped
 from urllib.parse import unquote
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base

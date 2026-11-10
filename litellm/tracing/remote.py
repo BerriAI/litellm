@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Final, NoReturn
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 

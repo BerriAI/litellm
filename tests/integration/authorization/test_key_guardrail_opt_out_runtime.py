@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from anthropic import Anthropic
 from openai import AsyncOpenAI, OpenAI

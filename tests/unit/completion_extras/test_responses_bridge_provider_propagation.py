@@ -3,10 +3,11 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.caching.caching import Cache
 from litellm.completion_extras.litellm_responses_transformation.handler import (
@@ -162,9 +163,9 @@ def _bridged_cache_edge(monkeypatch):
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     ids = itertools.count(1)
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         route = router.post(url__regex=r"https://example\.invalid/openai/responses.*").mock(
-            side_effect=lambda request: httpx.Response(200, json=_responses_api_body(next(ids)))
+            side_effect=side_effect_for_respx(lambda request: httpx.Response(200, json=_responses_api_body(next(ids))))
         )
         yield route
 

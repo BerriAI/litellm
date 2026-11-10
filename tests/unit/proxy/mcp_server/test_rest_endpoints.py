@@ -11,7 +11,7 @@ from litellm.proxy.mcp_server import operations as mcp_operations
 if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
     from exceptiongroup import BaseExceptionGroup
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import HTTPException
 from mcp.types import CallToolResult, TextContent, Tool

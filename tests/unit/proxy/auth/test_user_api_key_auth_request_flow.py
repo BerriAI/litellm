@@ -8807,7 +8807,7 @@ async def test_burst_against_a_stalled_db_fails_fast_with_503_and_turns_readines
     park in the pod with readiness green until it OOMed. Now every one of them fails
     within the lookup deadline as a 503, and the next readiness probe takes the pod out
     of rotation."""
-    import httpx
+    import httpx2 as httpx
     from fastapi import Depends, FastAPI
 
     import litellm.proxy.health_endpoints._health_endpoints as health_endpoints
@@ -13674,7 +13674,7 @@ async def test_auto_register_mapping_insert_emits_a_postgres_insert_event_for_th
 async def test_lens_oauth2_validates_identity_without_inference_user_field(
     route: str, jwt_override: bool, active: bool
 ) -> None:
-    import httpx
+    import httpx2 as httpx
     import jwt
     from starlette.requests import Request
 
@@ -13717,7 +13717,7 @@ async def test_lens_oauth2_validates_identity_without_inference_user_field(
                 "OAUTH_CLIENT_SECRET": "fixture-client-secret",
             },
         ),
-        patch("httpx.AsyncClient.send", side_effect=token_info) as network,
+        patch("httpx2.AsyncClient.send", side_effect=token_info) as network,
     ):
         if active:
             identity: Final = await user_api_key_auth(request=request, api_key=f"Bearer {token}")
@@ -13745,7 +13745,7 @@ async def test_lens_oauth2_dispatch_preserves_opt_in_premium_and_route_boundary(
         patch("litellm.proxy.proxy_server.master_key", "sk-fixture-master"),
         patch("litellm.proxy.proxy_server.prisma_client", None),
         patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
-        patch("httpx.AsyncClient.send", side_effect=AssertionError("OAuth2 must not run for this request")) as network,
+        patch("httpx2.AsyncClient.send", side_effect=AssertionError("OAuth2 must not run for this request")) as network,
     ):
         with pytest.raises(ProxyException) as error:
             await user_api_key_auth(request=request, api_key="Bearer fixture-opaque-lens-token")

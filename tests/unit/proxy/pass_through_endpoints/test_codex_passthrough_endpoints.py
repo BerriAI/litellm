@@ -6,10 +6,11 @@ from collections.abc import Callable, Iterator, Sequence
 from datetime import datetime
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import jwt
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Request
 from fastapi.testclient import TestClient
@@ -35,6 +36,7 @@ from litellm.responses.litellm_completion_transformation.reasoning_items import 
     mint_reasoning_item_id,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests._master_key import MASTER_KEY
 
 _BASE: Final = "https://chatgpt.com/backend-api/codex"
@@ -191,7 +193,7 @@ async def test_usage_logged_without_credentials(
         if stream
         else httpx.Response(200, json=result)
     )
-    respx_mock.post(f"{_BASE}/responses").mock(return_value=response_body)
+    respx_mock.post(f"{_BASE}/responses").mock(return_value=response_for_respx(response_body))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy_server.app), base_url="http://test") as caller:
         response: Final = await caller.post(
             "/backend-api/codex/responses",
@@ -335,7 +337,7 @@ def test_native_catalog_offers_the_declared_reasoning_efforts_the_requesting_cod
 def test_native_catalog_relays_an_unmergeable_upstream_answer_unchanged(
     client: TestClient, respx_mock: respx.MockRouter, mixed_router: Router, upstream: httpx.Response
 ) -> None:
-    respx_mock.get(f"{_BASE}/models").mock(return_value=upstream)
+    respx_mock.get(f"{_BASE}/models").mock(return_value=response_for_respx(upstream))
     response: Final = client.get("/backend-api/codex/models?client_version=1.0.0", headers=_HEADERS)
     assert response.status_code == upstream.status_code
     assert response.content == upstream.content
@@ -411,7 +413,7 @@ def _provider_reply(request: httpx.Request) -> httpx.Response:
 
 
 def _open_weights_provider(respx_mock: respx.MockRouter) -> respx.Route:
-    return respx_mock.post(f"{_PROVIDER_BASE}/responses").mock(side_effect=_provider_reply)
+    return respx_mock.post(f"{_PROVIDER_BASE}/responses").mock(side_effect=side_effect_for_respx(_provider_reply))
 
 
 _UPSTREAM_MODELS_ETAG: Final = '"upstream-v2"'
@@ -436,9 +438,9 @@ def test_litellm_model_on_native_route_streams_like_v1_without_chatgpt_credentia
     _account_catalog(respx_mock)
     chatgpt: Final = respx_mock.post(f"{_BASE}/responses").respond(json={})
     provider: Final = respx_mock.post(f"{_PROVIDER_BASE}/responses").mock(
-        side_effect=lambda _: httpx.Response(
+        side_effect=side_effect_for_respx(lambda _: httpx.Response(
             200, content=_provider_stream("Hi"), headers={"content-type": "text/event-stream"}
-        )
+        ))
     )
     body: Final = {"model": "open-weights", "input": "Say hi", "stream": True, "store": False}
     native: Final = client.post("/backend-api/codex/responses", json=body, headers=_ACCOUNT_HEADERS)
@@ -526,9 +528,9 @@ def test_litellm_model_on_native_route_gets_the_reasoning_effort_codex_m_would_s
     )
     _account_catalog(respx_mock)
     provider: Final = respx_mock.post(f"{_PROVIDER_BASE}/responses").mock(
-        side_effect=lambda _: httpx.Response(
+        side_effect=side_effect_for_respx(lambda _: httpx.Response(
             200, content=_provider_stream("Hi"), headers={"content-type": "text/event-stream"}
-        )
+        ))
     )
     body: Final = {
         "model": model,
@@ -1175,7 +1177,7 @@ def test_native_responses_ask_chatgpt_which_models_the_account_lists_on_a_cache_
     catalog_answer: httpx.Response | httpx.TimeoutException,
     subscription: bool,
 ) -> None:
-    catalog: Final = respx_mock.get(f"{_BASE}/models").mock(side_effect=[catalog_answer])
+    catalog: Final = respx_mock.get(f"{_BASE}/models").mock(side_effect=side_effect_for_respx([catalog_answer]))
     provider: Final = _open_weights_provider(respx_mock)
     chatgpt: Final = _chatgpt_responses(respx_mock)
     response: Final = client.post(
@@ -1214,11 +1216,11 @@ def test_a_failed_account_catalog_read_with_another_login_leaves_the_accounts_ow
 ) -> None:
     own_login: Final = f"Bearer {_CHATGPT_JWT}"
     catalog: Final = respx_mock.get(f"{_BASE}/models").mock(
-        side_effect=lambda request: (
+        side_effect=side_effect_for_respx(lambda request: (
             httpx.Response(200, json=_UPSTREAM_CATALOG)
             if request.headers["authorization"] == own_login
             else httpx.Response(401)
-        )
+        ))
     )
     provider: Final = _open_weights_provider(respx_mock)
     chatgpt: Final = _chatgpt_responses(respx_mock)
@@ -1463,7 +1465,9 @@ def test_openai_reasoning_from_the_native_route_is_dropped_for_chatgpt_and_unwra
         ),
     )
     _account_catalog(respx_mock)
-    provider: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=_openai_reply)
+    provider: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(
+        side_effect=side_effect_for_respx(_openai_reply)
+    )
     chatgpt: Final = _chatgpt_responses(respx_mock)
     turn: Final = {"model": "api-model", "input": [_USER_TURN], "stream": stream, "store": False}
     first: Final = client.post("/backend-api/codex/responses", json=turn, headers=_ACCOUNT_HEADERS)
@@ -1545,7 +1549,7 @@ def test_litellm_model_on_native_route_gets_only_the_reasoning_it_can_decrypt(
 ) -> None:
     _account_catalog(respx_mock)
     fireworks: Final = _open_weights_provider(respx_mock)
-    luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=_provider_reply)
+    luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=side_effect_for_respx(_provider_reply))
     response: Final = client.post(
         "/backend-api/codex/responses",
         json={
@@ -1635,7 +1639,7 @@ def test_reasoning_the_target_cannot_resolve_reaches_it_without_its_id(
 ) -> None:
     _account_catalog(respx_mock)
     fireworks: Final = _open_weights_provider(respx_mock)
-    luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=_provider_reply)
+    luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=side_effect_for_respx(_provider_reply))
     response: Final = client.post(
         "/backend-api/codex/responses",
         json={
@@ -1655,7 +1659,9 @@ def test_reasoning_the_chat_bridge_target_cannot_resolve_reaches_it_as_its_summa
     client: TestClient, respx_mock: respx.MockRouter, xai_fireworks_and_openai_router: Router
 ) -> None:
     _account_catalog(respx_mock)
-    chat_endpoint: Final = respx_mock.post(f"{_XAI_BASE}/chat/completions").mock(side_effect=_xai_search_call_reply)
+    chat_endpoint: Final = respx_mock.post(f"{_XAI_BASE}/chat/completions").mock(
+        side_effect=side_effect_for_respx(_xai_search_call_reply)
+    )
     response: Final = client.post(
         "/backend-api/codex/responses",
         json={
@@ -1712,7 +1718,7 @@ def test_codex_additional_tools_item_reaches_each_provider_in_a_shape_it_accepts
 ) -> None:
     _account_catalog(respx_mock)
     fireworks: Final = _open_weights_provider(respx_mock)
-    luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=_provider_reply)
+    luna: Final = respx_mock.post(f"{_OPENAI_BASE}/responses").mock(side_effect=side_effect_for_respx(_provider_reply))
     response: Final = client.post(
         "/backend-api/codex/responses",
         json={
@@ -1942,7 +1948,9 @@ def test_codex_turn_for_xai_goes_through_chat_completions_and_its_namespaced_cal
 ) -> None:
     _account_catalog(respx_mock)
     responses_endpoint: Final = respx_mock.post(f"{_XAI_BASE}/responses").respond(json=_provider_completed("Hi"))
-    chat_endpoint: Final = respx_mock.post(f"{_XAI_BASE}/chat/completions").mock(side_effect=_xai_search_call_reply)
+    chat_endpoint: Final = respx_mock.post(f"{_XAI_BASE}/chat/completions").mock(
+        side_effect=side_effect_for_respx(_xai_search_call_reply)
+    )
     response: Final = client.post(
         "/backend-api/codex/responses",
         json={
@@ -1989,7 +1997,7 @@ def test_encrypted_reasoning_stays_only_when_every_deployment_the_router_may_pic
             ),
         )
         providers: Final = tuple(
-            respx_mock.post(f"{base}/responses").mock(side_effect=_provider_reply)
+            respx_mock.post(f"{base}/responses").mock(side_effect=side_effect_for_respx(_provider_reply))
             for base in (_OPENAI_BASE, second_base)
         )
         response: Final = client.post(
@@ -2030,7 +2038,8 @@ def test_encrypted_reasoning_stays_on_a_global_alias_of_a_group_pinned_to_its_or
     )
     _account_catalog(respx_mock)
     providers: Final = tuple(
-        respx_mock.post(f"{base}/responses").mock(side_effect=_provider_reply) for base in (_OPENAI_BASE, second_base)
+        respx_mock.post(f"{base}/responses").mock(side_effect=side_effect_for_respx(_provider_reply))
+        for base in (_OPENAI_BASE, second_base)
     )
     response: Final = client.post(
         "/backend-api/codex/responses",

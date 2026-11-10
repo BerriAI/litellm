@@ -2,10 +2,11 @@ import json
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.openai_like.dynamic_config import create_config_class
@@ -180,8 +181,8 @@ async def test_streamlake_completion_uses_openai_compatible_http(
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    with respx.mock(assert_all_called=True) as respx_mock:
-        route: Final = respx_mock.post(expected_url).mock(side_effect=handler)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(expected_url).mock(side_effect=side_effect_for_respx(handler))
         if is_async:
             response: Final = await litellm.acompletion(
                 model="streamlake/ep-test-endpoint",
@@ -230,8 +231,10 @@ def test_endpoint_id_call_forwards_tools_and_reasoning_effort_to_streamlake(monk
     }
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    with respx.mock(assert_all_called=True) as respx_mock:
-        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(return_value=httpx.Response(200, json=response_body))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
+        )
         litellm.completion(
             model="streamlake/ep-test-endpoint",
             messages=[{"role": "user", "content": "weather in Paris?"}],
@@ -318,8 +321,10 @@ def test_cache_control_marks_reach_streamlake(monkeypatch: pytest.MonkeyPatch) -
     }
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    with respx.mock(assert_all_called=True) as respx_mock:
-        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(return_value=httpx.Response(200, json=response_body))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
+        )
         litellm.completion(
             model="streamlake/qwen3.8-27b",
             messages=[{"role": "system", "content": [system_block]}, {"role": "user", "content": "hi"}],
@@ -349,8 +354,10 @@ def test_reasoning_effort_is_dropped_for_models_streamlake_lists_without_reasoni
     }
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    with respx.mock(assert_all_called=True) as respx_mock:
-        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(return_value=httpx.Response(200, json=response_body))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(STREAMLAKE_CHAT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
+        )
         litellm.completion(
             model=f"streamlake/{model}",
             messages=[{"role": "user", "content": "hi"}],

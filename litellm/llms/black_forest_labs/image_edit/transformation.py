@@ -12,8 +12,8 @@ import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

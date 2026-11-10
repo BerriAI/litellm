@@ -9,11 +9,13 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import BaseModel
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
@@ -389,7 +391,7 @@ async def test_responses_call_sends_the_provider_only_the_client_metadata_and_se
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_PROVIDER_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_PROVIDER_RESPONSE))
     )
     router: Final = _io_limited_router("itpm", otpm=10_000)
 
@@ -417,7 +419,7 @@ def test_sync_responses_call_sends_the_provider_only_the_client_metadata(
 ):
     litellm.in_memory_llm_clients_cache.flush_cache()
     provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_PROVIDER_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_PROVIDER_RESPONSE))
     )
 
     _io_limited_router("itpm", otpm=10_000).responses(
@@ -485,10 +487,10 @@ async def test_retried_call_settles_deployment_io_tokens_to_the_successful_attem
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     provider: Final = respx_mock.post(provider_url).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(500, json={"error": {"message": "upstream failed", "type": "server_error"}}),
             httpx.Response(200, json=provider_response),
-        ]
+        ])
     )
     router: Final = Router(
         model_list=[

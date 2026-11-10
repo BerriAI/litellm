@@ -7,7 +7,7 @@ from typing import Any, Dict
 from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi import HTTPException
-from httpx import Request, Response
+from httpx2 import Request, Response
 from litellm.types.utils import (
     Choices,
     Delta,

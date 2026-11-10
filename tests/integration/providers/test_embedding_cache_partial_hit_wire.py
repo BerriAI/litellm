@@ -1,7 +1,7 @@
 import json
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, eventually
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter

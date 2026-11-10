@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Any, Final
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 import pydantic
 from typing_extensions import TypedDict, Unpack
 

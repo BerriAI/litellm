@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

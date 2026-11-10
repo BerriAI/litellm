@@ -3020,7 +3020,7 @@ def test_inline_auto_images_read_supported_formats(image_format: str) -> None:
 )
 def test_auto_image_fallback_does_not_fetch_urls_or_raise(data: str) -> None:
     # The unit suite disables sockets; a fetch must also not be attempted and swallowed.
-    with patch("httpx.Client.get", side_effect=AssertionError("auto counting must not fetch URLs")) as get:
+    with patch("httpx2.Client.get", side_effect=AssertionError("auto counting must not fetch URLs")) as get:
         assert calculate_img_tokens(data) == 85
     get.assert_not_called()
 
@@ -3159,7 +3159,7 @@ def test_image_estimate_preserves_default_when_policy_is_unavailable(model: str,
 def test_image_estimate_uses_bounded_fallback_without_fetching_media(
     data: str, model: str, detail: str, bound: int
 ) -> None:
-    with patch("httpx.Client.send") as send:
+    with patch("httpx2.Client.send") as send:
         estimate: Final = estimate_image_tokens(model, data, detail)
     send.assert_not_called()
     assert estimate == bound
@@ -3188,7 +3188,7 @@ HUB_SETUP_SCRIPT: Final = """
 import json
 import sys
 sys.path.insert(0, sys.argv[1])
-import httpx
+import httpx2 as httpx
 import huggingface_hub
 import litellm
 served = json.loads(sys.argv[2])

@@ -1,5 +1,5 @@
 from fastapi import HTTPException
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.proxy._types import (

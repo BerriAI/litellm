@@ -5,7 +5,7 @@ rotation-aware cache keying, expires_in-driven expiry, error classification, and
 401 -> discard -> refetch -> retry-once recovery in ``ClientCredentialsBearerAuth``.
 """
 
-import httpx
+import httpx2 as httpx
 import httpx2
 import pytest
 from pydantic import SecretStr

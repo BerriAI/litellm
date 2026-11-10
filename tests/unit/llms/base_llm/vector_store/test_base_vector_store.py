@@ -7,10 +7,11 @@ cycle with the upstream scripted at the provider's own URL.
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 OPENAI_VECTOR_STORES_URL: Final = "https://api.openai.com/v1/vector_stores"
@@ -21,7 +22,7 @@ OPENAI_VECTOR_STORE_SEARCH_URL: Final = "https://api.openai.com/v1/vector_stores
 async def test_basic_create_vector_store(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     create_route = respx_mock.post(OPENAI_VECTOR_STORES_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "vs_abc123",
@@ -34,7 +35,7 @@ async def test_basic_create_vector_store(respx_mock: respx.MockRouter, monkeypat
                 "last_active_at": 1745836841,
                 "metadata": {},
             },
-        )
+        ))
     )
 
     response = await litellm.vector_stores.acreate(
@@ -59,7 +60,7 @@ async def test_basic_create_vector_store(respx_mock: respx.MockRouter, monkeypat
 async def test_basic_search_vector_store(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     search_route = respx_mock.post(OPENAI_VECTOR_STORE_SEARCH_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "vector_store.search_results.page",
@@ -74,7 +75,7 @@ async def test_basic_search_vector_store(respx_mock: respx.MockRouter, monkeypat
                     }
                 ],
             },
-        )
+        ))
     )
 
     response = await litellm.vector_stores.asearch(

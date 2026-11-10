@@ -1,9 +1,10 @@
 
 
 import pytest
-import httpx
-import respx
+import httpx2 as httpx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 
@@ -27,7 +28,7 @@ class TestPerplexityWebSearch:
 
 def test_perplexity_401_maps_to_authentication_error(respx_mock: respx.MockRouter) -> None:
     route = respx_mock.post("https://api.perplexity.ai/chat/completions").mock(
-        return_value=httpx.Response(401, json={"error": {"message": "invalid API key"}})
+        return_value=response_for_respx(httpx.Response(401, json={"error": {"message": "invalid API key"}}))
     )
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:

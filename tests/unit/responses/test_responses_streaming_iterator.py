@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

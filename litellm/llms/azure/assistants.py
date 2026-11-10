@@ -1,7 +1,7 @@
 from collections.abc import Coroutine, Iterable
 from typing import Final, Literal, TypedDict
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 from openai.types.shared_params.metadata import Metadata
 from typing_extensions import overload

@@ -1,6 +1,5 @@
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.litellm_core_utils.llm_response_utils import get_api_base as get_api_base_module
 from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
@@ -57,7 +56,7 @@ class TestDeclaredAuthenticatingProvider:
         token_dir.mkdir()
         token = f"gho_{isolated_token_dirs.name}"
         (token_dir / "access-token").write_text(token)
-        with respx.mock(assert_all_called=True) as router:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
             route = router.get("https://api.github.com/copilot_internal/user").respond(
                 json={"endpoints": {"api": "https://api.enterprise.githubcopilot.com"}}
             )

@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-import httpx
+import httpx2 as httpx
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Errors as BatchErrors
 from openai.types.batch_error import BatchError

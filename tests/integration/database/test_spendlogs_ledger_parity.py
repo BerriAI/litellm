@@ -503,7 +503,7 @@ async def _assert_legacy_database_parity(
                     monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": enabled})
                     await SpendLogsRepository(client).insert_with_deliveries(stored_rows)
             elif path == "ledger" and export_url is not None:
-                import httpx
+                import httpx2 as httpx
                 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
                 from litellm.proxy.utils import ProxyUpdateSpend
 

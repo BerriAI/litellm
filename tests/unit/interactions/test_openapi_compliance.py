@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Final, get_args
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openapi_core import OpenAPI
 from pydantic import BaseModel, TypeAdapter
@@ -370,7 +370,7 @@ class TestEndpointCompliance:
 
 if __name__ == "__main__":
     # Quick manual test
-    import httpx
+    import httpx2 as httpx
 
     print("Loading OpenAPI spec...")
     response = httpx.get(OPENAPI_SPEC_URL)

@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Final, Generic, TypeVar
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError

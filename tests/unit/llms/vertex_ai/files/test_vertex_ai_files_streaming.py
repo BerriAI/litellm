@@ -34,7 +34,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

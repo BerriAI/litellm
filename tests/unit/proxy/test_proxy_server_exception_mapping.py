@@ -1,12 +1,14 @@
+from tests._support.respx_httpx2 import response_for_respx
 import asyncio
 import json
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 
 CONFIG_DIR: Final = Path(__file__).resolve().parent / "test_configs"
@@ -55,7 +57,7 @@ def test_chat_completion_exception(
     client: TestClient, respx_mock: respx.MockRouter
 ) -> None:
     respx_mock.post(OPENAI_CHAT_COMPLETIONS).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={
                 "error": {
@@ -65,7 +67,7 @@ def test_chat_completion_exception(
                     "code": "invalid_api_key",
                 }
             },
-        )
+        ))
     )
 
     response: Final = client.post(
@@ -88,7 +90,7 @@ def test_chat_completion_exception_azure(
     client: TestClient, respx_mock: respx.MockRouter
 ) -> None:
     upstream: Final = respx_mock.post(AZURE_CHAT_COMPLETIONS).mock(
-        return_value=httpx.Response(401, json=AZURE_401_BODY)
+        return_value=response_for_respx(httpx.Response(401, json=AZURE_401_BODY))
     )
 
     response: Final = client.post(
@@ -117,7 +119,7 @@ def test_embedding_auth_exception_azure(
     client: TestClient, respx_mock: respx.MockRouter
 ) -> None:
     upstream: Final = respx_mock.post(AZURE_EMBEDDINGS).mock(
-        return_value=httpx.Response(401, json=AZURE_401_BODY)
+        return_value=response_for_respx(httpx.Response(401, json=AZURE_401_BODY))
     )
 
     response: Final = client.post(
@@ -188,7 +190,7 @@ def test_chat_completion_exception_azure_context_window(
     client: TestClient, respx_mock: respx.MockRouter
 ) -> None:
     upstream: Final = respx_mock.post(AZURE_CHAT_COMPLETIONS).mock(
-        return_value=httpx.Response(400, json=CONTEXT_LENGTH_EXCEEDED_BODY)
+        return_value=response_for_respx(httpx.Response(400, json=CONTEXT_LENGTH_EXCEEDED_BODY))
     )
 
     response: Final = client.post(

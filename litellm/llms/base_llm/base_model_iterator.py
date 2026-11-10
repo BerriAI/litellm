@@ -6,7 +6,7 @@ import litellm
 from litellm.constants import STREAM_SSE_DONE_STRING
 
 if TYPE_CHECKING:
-    import httpx
+    import httpx2 as httpx
 from litellm.types.llms.openai import ChatCompletionRedactedThinkingBlock, ChatCompletionThinkingBlock
 from litellm.types.utils import (
     Choices,

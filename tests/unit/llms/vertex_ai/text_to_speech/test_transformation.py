@@ -10,12 +10,14 @@ import json
 from collections.abc import Iterator, Mapping
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 import responses
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
@@ -1472,7 +1474,9 @@ async def _aspeech_vertex(
     respx_mock: respx.MockRouter, speech_input: str, voice_params: Mapping[str, object]
 ) -> httpx.Request:
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(b"vertex-audio").decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(b"vertex-audio").decode()})
+        )
     )
     response: Final = await litellm.aspeech(
         model="vertex_ai/test",
@@ -1741,7 +1745,7 @@ async def test_aspeech_vertex_ai_gemini_tts_formats_the_bridge_serves_stay_on_ge
 ) -> None:
     route: Final = respx_mock.post(
         url__regex=rf"https://aiplatform\.googleapis\.com/.*/models/{model}:generateContent$"
-    ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE)))
 
     response: Final = await litellm.aspeech(
         model=f"vertex_ai/{model}",
@@ -1762,7 +1766,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_reaches_cloud_tts_for_any_gemini
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     response: Final = await litellm.aspeech(
@@ -1787,7 +1793,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_without_voice_keeps_the_gemini_m
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     await litellm.aspeech(
@@ -1826,7 +1834,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_drop_params_swaps_a_cloud_tts_vo
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     await litellm.aspeech(
@@ -1850,7 +1860,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_without_a_location_uses_the_vert
     monkeypatch.delenv("VERTEX_LOCATION", raising=False)
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post("https://us-texttospeech.googleapis.com/v1/text:synthesize").mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     await litellm.aspeech(
@@ -1870,7 +1882,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_sends_instructions_as_the_style_
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     await litellm.aspeech(
@@ -1893,7 +1907,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_with_a_numeric_speaking_rate_ret
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     result: Final = await litellm.aspeech(
@@ -1938,7 +1954,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_keeps_the_deployment_region(
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post(synthesize_url).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     response: Final = await litellm.aspeech(
@@ -1978,7 +1996,9 @@ async def test_aspeech_vertex_ai_chirp_keeps_the_global_host_when_only_vertexai_
 ) -> None:
     monkeypatch.setenv("VERTEXAI_LOCATION", "europe-west4")
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(b"global-audio").decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(b"global-audio").decode()})
+        )
     )
 
     response: Final = await litellm.aspeech(
@@ -1998,13 +2018,13 @@ async def test_router_gemini_tts_mp3_unknown_voice_is_a_bad_request_that_keeps_t
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     respx_mock.post(_SYNTHESIZE_URL).mock(
-        side_effect=lambda request: (
+        side_effect=side_effect_for_respx(lambda request: (
             httpx.Response(
                 404, json={"error": {"code": 404, "message": "Voice Koree not found.", "status": "NOT_FOUND"}}
             )
             if json.loads(request.content)["voice"]["name"] == "Koree"
             else httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
-        )
+        ))
     )
     router: Final = litellm.Router(
         model_list=[
@@ -2032,9 +2052,9 @@ async def test_aspeech_vertex_ai_chirp_unknown_voice_stays_not_found(
     respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
 ) -> None:
     respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             404, json={"error": {"code": 404, "message": "Voice en-US-Nope not found.", "status": "NOT_FOUND"}}
-        )
+        ))
     )
 
     with pytest.raises(litellm.NotFoundError, match="Voice en-US-Nope not found"):
@@ -2068,7 +2088,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_sends_speak_tags_as_text(
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
     speech_input: Final = "<speak>Have a wonderful day</speak>"
 
@@ -2107,7 +2129,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_sends_both_speakers_to_cloud_tts
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     result: Final = await litellm.aspeech(
@@ -2164,7 +2188,9 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_malformed_params_are_bad_request
 ) -> None:
     audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
     route: Final = respx_mock.post(_SYNTHESIZE_URL).mock(
-        return_value=httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+        )
     )
     request: Final = {
         "model": "vertex_ai/gemini-3.1-flash-tts-preview",
@@ -2191,8 +2217,14 @@ async def test_aspeech_vertex_ai_gemini_tts_mp3_malformed_params_are_bad_request
 async def test_aspeech_vertex_ai_beta_lyria_2_serves_the_openai_params_it_ignores(
     respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
 ) -> None:
-    route: Final = respx_mock.post(url__regex=r"https://us-central1-aiplatform\.googleapis\.com/.*/lyria-002:predict$").mock(
-        return_value=httpx.Response(200, json={"predictions": [{"audioContent": "bHlyaWEtMi1hdWRpbw==", "mimeType": "audio/wav"}]})
+    route: Final = respx_mock.post(
+        url__regex=r"https://us-central1-aiplatform\.googleapis\.com/.*/lyria-002:predict$"
+    ).mock(
+        return_value=response_for_respx(
+            httpx.Response(
+                200, json={"predictions": [{"audioContent": "bHlyaWEtMi1hdWRpbw==", "mimeType": "audio/wav"}]}
+            )
+        )
     )
 
     response: Final = await litellm.aspeech(
@@ -2216,7 +2248,7 @@ async def test_aspeech_vertex_ai_gemini_tts_wav_unknown_voice_keys_are_bad_reque
 ) -> None:
     route: Final = respx_mock.post(
         url__regex=r"https://aiplatform\.googleapis\.com/.*/models/gemini-3.1-flash-tts-preview:generateContent$"
-    ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE)))
     request: Final = {
         "model": "vertex_ai/gemini-3.1-flash-tts-preview",
         "input": "Say hello",

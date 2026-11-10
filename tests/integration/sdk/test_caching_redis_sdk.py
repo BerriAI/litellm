@@ -5,13 +5,15 @@ import uuid
 from typing import Final
 from urllib.parse import unquote
 
-import httpx
+import httpx2 as httpx
 import pytest
 import redis
-import respx
+
+from tests._support import respx_httpx2 as respx
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, wire_server
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import Router, acompletion, aembedding, completion
 from litellm.caching.caching import Cache, LiteLLMCacheType
@@ -488,9 +490,9 @@ async def test_redis_semantic_cache_acompletion(
         "model": "text-embedding-ada-002",
         "usage": {"prompt_tokens": 1, "total_tokens": 1},
     }
-    with respx.mock(base_url="https://api.openai.com") as upstream:
+    with respx.mock(using="httpcore2_and_legacy", base_url="https://api.openai.com") as upstream:
         embeddings: Final = upstream.post("/v1/embeddings").mock(
-            return_value=httpx.Response(200, json=embedding_response)
+            return_value=response_for_respx(httpx.Response(200, json=embedding_response))
         )
         first: Final = await acompletion(
             model="gpt-4o-mini",
@@ -532,9 +534,9 @@ def test_redis_semantic_cache_completion(
         "model": "text-embedding-ada-002",
         "usage": {"prompt_tokens": 1, "total_tokens": 1},
     }
-    with respx.mock(base_url="https://api.openai.com") as upstream:
+    with respx.mock(using="httpcore2_and_legacy", base_url="https://api.openai.com") as upstream:
         embeddings: Final = upstream.post("/v1/embeddings").mock(
-            return_value=httpx.Response(200, json=embedding_response)
+            return_value=response_for_respx(httpx.Response(200, json=embedding_response))
         )
         first: Final = completion(
             model="gpt-4o-mini",

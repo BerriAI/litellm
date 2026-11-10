@@ -10,7 +10,7 @@ from collections.abc import Iterator, Sequence
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support.client import eventually, object_value, string_value

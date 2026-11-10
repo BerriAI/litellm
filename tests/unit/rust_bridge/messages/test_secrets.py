@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Mapping
 from dataclasses import replace
 from typing import Final, Protocol, cast  # noqa: TID251  # narrows the parametrized path to its protocol
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

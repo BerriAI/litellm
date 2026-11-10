@@ -4,11 +4,13 @@ from typing import Final, TypedDict
 
 from typing_extensions import ReadOnly
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import REDACTED_BY_LITELLM
@@ -81,7 +83,9 @@ async def _stream_and_record(
     recorder: Final = _UsageRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     route: Final = respx_mock.post(_OPENAI_URL).mock(
-        return_value=httpx.Response(200, text=_STREAM, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=_STREAM, headers={"content-type": "text/event-stream"})
+        )
     )
     stream_options: Final = {"stream_options": {"include_usage": True}} if include_usage else {}
     response: Final = await litellm.acompletion(

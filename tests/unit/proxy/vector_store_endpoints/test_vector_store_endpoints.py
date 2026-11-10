@@ -36,6 +36,7 @@ from litellm.proxy.vector_store_files_endpoints.endpoints import (
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
+from tests._support.respx_httpx2 import side_effect_for_respx
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -3323,8 +3324,9 @@ class _PreCallBodies(CustomLogger):
 def test_proxy_vector_store_writes_send_the_provider_exactly_the_callers_metadata(
     monkeypatch, operation, model, metadata_field, expected_metadata
 ):
-    import httpx
-    import respx
+    import httpx2 as httpx
+
+    from tests._support import respx_httpx2 as respx
     from fastapi.testclient import TestClient
 
     from litellm.constants import VECTOR_STORE_CALLER_METADATA_KWARG
@@ -3365,8 +3367,10 @@ def test_proxy_vector_store_writes_send_the_provider_exactly_the_callers_metadat
 
     path = "/v1/vector_stores" if operation == "create" else "/v1/vector_stores/vs_1"
     routing = {} if model is None else {"model": model}
-    with respx.mock(assert_all_called=False) as upstream:
-        upstream.post(url__regex=r"https://api\.openai\.com/v1/vector_stores.*").mock(side_effect=echo)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+        upstream.post(url__regex=r"https://api\.openai\.com/v1/vector_stores.*").mock(
+            side_effect=side_effect_for_respx(echo)
+        )
         response = TestClient(app).post(
             path,
             json={"name": "x", **routing, **metadata_field},
@@ -3405,8 +3409,8 @@ def test_proxy_vector_store_writes_send_the_provider_exactly_the_callers_metadat
 def test_proxy_vector_store_writes_send_only_the_callers_metadata_when_the_raw_body_cannot_be_reparsed(
     monkeypatch, operation, request_body
 ):
-    import httpx
-    import respx
+    import httpx2 as httpx
+    from tests._support import respx_httpx2 as respx
     from fastapi.testclient import TestClient
 
     from litellm.proxy import proxy_server
@@ -3443,8 +3447,10 @@ def test_proxy_vector_store_writes_send_only_the_callers_metadata_when_the_raw_b
         **request_body.get("headers", {}),
     }
     body_kwargs = {key: value for key, value in request_body.items() if key != "headers"}
-    with respx.mock(assert_all_called=False) as upstream:
-        upstream.post(url__regex=r"https://api\.openai\.com/v1/vector_stores.*").mock(side_effect=echo)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+        upstream.post(url__regex=r"https://api\.openai\.com/v1/vector_stores.*").mock(
+            side_effect=side_effect_for_respx(echo)
+        )
         response = TestClient(app).post(path, headers=headers, **body_kwargs)
 
     assert response.status_code == 200, response.text

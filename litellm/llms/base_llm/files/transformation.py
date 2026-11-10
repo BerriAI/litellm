@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator, Callable, Iterable, Iterator, Mappin
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Union
 
-import httpx
+import httpx2 as httpx
 from openai.types.file_deleted import FileDeleted
 
 from litellm.files.types import FileContentStreamingResult

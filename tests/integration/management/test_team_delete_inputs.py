@@ -13,7 +13,7 @@ from collections.abc import Callable, Mapping
 from hashlib import sha256
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import JsonValue
 from redis import Redis

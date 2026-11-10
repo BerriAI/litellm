@@ -5,7 +5,7 @@ Unit tests for litellm/llms/oci/chat/generic.py — error paths and stream handl
 import pytest
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 
 from litellm import ModelResponse
 from litellm.llms.oci.chat.generic import (

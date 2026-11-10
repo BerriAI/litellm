@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.fireworks_ai.embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig
 
@@ -39,7 +40,7 @@ def test_fireworks_embeddings_forwards_supported_dimensions(monkeypatch: pytest.
     model_key: Final = "fireworks_ai/nomic-ai/nomic-embed-text-v1.5"
     monkeypatch.setitem(litellm.model_cost, model_key, {**litellm.model_cost[model_key], "input_cost_per_token": 2.5e-08})
     route: Final = respx.post("https://fireworks.example/v1/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -47,7 +48,7 @@ def test_fireworks_embeddings_forwards_supported_dimensions(monkeypatch: pytest.
                 "model": "nomic-ai/nomic-embed-text-v1.5",
                 "usage": {"prompt_tokens": 4, "total_tokens": 4},
             },
-        )
+        ))
     )
 
     response: Final = litellm.embedding(

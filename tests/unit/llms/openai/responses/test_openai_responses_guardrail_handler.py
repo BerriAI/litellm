@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import logging
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 
@@ -4642,7 +4642,7 @@ class TestBuildBlockSseChunks:
 
     @pytest.mark.parametrize("stream_started", [False, True])
     def test_block_message_reaches_an_sdk_reader_once(self, stream_started):
-        import httpx
+        import httpx2 as httpx
         import openai
 
         created_event = {

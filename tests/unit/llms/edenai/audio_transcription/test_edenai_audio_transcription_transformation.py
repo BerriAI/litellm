@@ -1,7 +1,7 @@
 """Eden AI `/v3/audio/transcriptions`: OpenAI's speech-to-text API served by Eden's gateway, which
 reports the real per-request cost at the top level of the JSON body."""
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

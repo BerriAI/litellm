@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-import httpx
-from httpx._types import FileContent, RequestFiles
+import httpx2 as httpx
+from httpx2._types import FileContent, RequestFiles
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base

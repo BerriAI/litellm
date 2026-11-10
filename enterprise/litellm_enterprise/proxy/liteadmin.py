@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final
 from urllib.parse import urlencode, urlsplit
 
-import httpx
+import httpx2 as httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError

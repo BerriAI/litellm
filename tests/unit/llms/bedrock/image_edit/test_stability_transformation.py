@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging

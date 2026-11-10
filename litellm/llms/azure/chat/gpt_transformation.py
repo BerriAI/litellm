@@ -7,7 +7,7 @@ from typing import (
     cast,  # noqa: TID251  # non_default_params reaches the mapper as an untyped dict
 )
 
-from httpx._models import Headers, Response
+from httpx2._models import Headers, Response
 
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import deployment_prompt_cache_breakpoint_support

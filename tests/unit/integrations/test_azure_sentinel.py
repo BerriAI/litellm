@@ -6,9 +6,9 @@ import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-from httpx import Request, Response
+from httpx2 import Request, Response
 from pydantic import BaseModel, computed_field
 
 from litellm.integrations.azure_sentinel.azure_sentinel import AzureSentinelLogger

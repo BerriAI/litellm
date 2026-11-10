@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Final
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi.testclient import TestClient
 from prometheus_client import values

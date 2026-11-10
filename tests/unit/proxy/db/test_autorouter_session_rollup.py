@@ -12,7 +12,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import TypeAdapter
 

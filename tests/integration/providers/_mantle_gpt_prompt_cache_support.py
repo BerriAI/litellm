@@ -12,7 +12,7 @@ from typing import Final, Literal, Protocol
 from urllib.parse import urlsplit
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows

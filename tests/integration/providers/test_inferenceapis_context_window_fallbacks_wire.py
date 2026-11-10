@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Final
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.bedrock_discovery import open_connections_to

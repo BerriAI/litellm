@@ -3,10 +3,12 @@ import logging
 from collections.abc import Iterator
 from typing import Final
 
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from litellm._logging import verbose_logger
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
@@ -86,7 +88,7 @@ def _assert_deepseek_request(request: httpx.Request, messages: list[dict[str, st
 def test_completion_cost_deepseek_reports_prompt_cache_usage(respx_mock: respx.MockRouter) -> None:
     messages: Final = [{"role": "user", "content": "A cached prompt"}]
     route: Final = respx_mock.post(DEEPSEEK_CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-deepseek-cache",
@@ -108,7 +110,7 @@ def test_completion_cost_deepseek_reports_prompt_cache_usage(respx_mock: respx.M
                     "prompt_cache_miss_tokens": 6,
                 },
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -522,7 +524,9 @@ class TestDeepSeekVisionMultimodalContent:
 async def test_deepseek_forwards_native_effort(
     respx_mock: respx.MockRouter, model: str, effort: str, thinking: str | None, stream: bool
 ) -> None:
-    route: Final = respx_mock.post(DEEPSEEK_CHAT_COMPLETIONS_URL).mock(return_value=_deepseek_response(stream))
+    route: Final = respx_mock.post(DEEPSEEK_CHAT_COMPLETIONS_URL).mock(
+        return_value=response_for_respx(_deepseek_response(stream))
+    )
     response: Final = await litellm.acompletion(
         model=f"deepseek/{model}",
         messages=[{"role": "user", "content": "Hello"}],

@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeAlias
 
-import httpx
+import httpx2 as httpx
 from pydantic import SecretStr
 
 BodyEncoding: TypeAlias = Literal["json", "form"]

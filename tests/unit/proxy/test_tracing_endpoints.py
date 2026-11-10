@@ -11,11 +11,11 @@ from types import ModuleType
 from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, call
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from httpx import Response
+from httpx2 import Response
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
 

@@ -3,7 +3,7 @@ from dataclasses import replace
 from typing import Final
 from urllib.parse import parse_qs
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.litellm_core_utils import oauth_token_exchange

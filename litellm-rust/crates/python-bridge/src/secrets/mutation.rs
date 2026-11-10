@@ -103,7 +103,7 @@ pub(super) fn http_message(
     url: &str,
     status: u16,
 ) -> PyResult<String> {
-    let httpx = py.import("httpx")?;
+    let httpx = py.import("httpx2")?;
     let request = httpx.getattr("Request")?.call1((method, url))?;
     let kwargs = PyDict::new(py);
     kwargs.set_item("request", request)?;

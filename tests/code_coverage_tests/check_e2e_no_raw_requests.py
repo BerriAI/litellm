@@ -19,7 +19,7 @@ from typing import Final
 TESTS_DIR = Path(__file__).resolve().parents[1]
 SCANNED_DIRS = ("e2e", "e2e_harness")
 
-BANNED_MODULES = ("requests", "urllib.request", "http.client", "httpx", "aiohttp")
+BANNED_MODULES = ("requests", "urllib.request", "http.client", "httpx", "httpx2", "aiohttp")
 
 ALLOWED_RAW_CLIENT_FILES = {
     "e2e/e2e_http.py": ("requests",),

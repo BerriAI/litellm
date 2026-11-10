@@ -1,11 +1,12 @@
 import re
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.sail.helpers import (
     MODEL,
     SAIL_API_BASE,
@@ -63,9 +64,9 @@ async def test_sail_chat_stream_sends_the_tier_window_and_bills_its_price_column
     column_suffix: str,
 ) -> None:
     route: Final = respx_mock.post(f"{SAIL_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, content=chat_completion_stream(), headers={"content-type": "text/event-stream"}
-        )
+        ))
     )
 
     stream: Final = await litellm.acompletion(
@@ -351,9 +352,9 @@ def test_sail_chat_uses_sail_api_base_env_and_key(
 ) -> None:
     monkeypatch.setenv("SAIL_API_BASE", "https://sail-gateway.invalid/v1")
     route: Final = respx_mock.post("https://sail-gateway.invalid/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json={"id": "c", "object": "chat.completion", "created": 0, "model": "m", "choices": []}
-        )
+        ))
     )
 
     litellm.completion(model=MODEL, messages=MESSAGES)

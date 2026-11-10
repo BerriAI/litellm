@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support.bedrock_runtime_peer import answer, respond, target_of

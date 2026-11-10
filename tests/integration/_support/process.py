@@ -20,7 +20,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 import psutil
 import yaml
 from cryptography import x509

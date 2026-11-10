@@ -11,9 +11,9 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient

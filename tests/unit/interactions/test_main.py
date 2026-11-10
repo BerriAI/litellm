@@ -1,14 +1,16 @@
+
 import base64
 import json
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 from respx import MockRouter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import interactions
 from litellm.integrations.custom_logger import CustomLogger
@@ -168,7 +170,9 @@ class TestGoogleInteractionsCreate:
         response_body: dict[str, object],
         expected_response: dict[str, object],
     ) -> None:
-        route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        route: Final = respx_mock.post(url).mock(
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
+        )
 
         response: Final = interactions.create(
             model=model,
@@ -224,7 +228,9 @@ class TestGoogleInteractionsCreate:
         expected_body: dict[str, object],
         response_body: dict[str, object],
     ) -> None:
-        route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=response_body))
+        route: Final = respx_mock.post(url).mock(
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
+        )
 
         response: Final = interactions.create(
             model=model,
@@ -239,10 +245,10 @@ class TestGoogleInteractionsCreate:
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_create_with_agent_config_sends_it_to_gemini(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={"id": "interaction-agent", "object": "interaction", "status": "completed"},
-            )
+            ))
         )
 
         interactions.create(
@@ -263,7 +269,9 @@ class TestGoogleInteractionsCreate:
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_create_keeps_positional_response_settings_in_place(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(200, json={"id": "interaction-model", "status": "completed"})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"id": "interaction-model", "status": "completed"})
+            )
         )
 
         interactions.create(
@@ -334,7 +342,7 @@ class TestGoogleInteractionsCreate:
         expected_target: Mapping[str, object],
     ) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(200, json={"id": "interaction-drop", "status": "completed"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "interaction-drop", "status": "completed"}))
         )
 
         interactions.create(
@@ -350,7 +358,7 @@ class TestGoogleInteractionsCreate:
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_create_rejects_agent_config_a_bridged_provider_cannot_take(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi"))
+            return_value=response_for_respx(httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi")))
         )
 
         with pytest.raises(litellm.UnsupportedParamsError, match="'agent_config' is not supported for openai") as e:
@@ -376,7 +384,7 @@ class TestGoogleInteractionsCreate:
         self, respx_mock: MockRouter, drop_kwargs: Mapping[str, object]
     ) -> None:
         route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi"))
+            return_value=response_for_respx(httpx.Response(200, json=_openai_response_body("resp-agent-config", "Hi")))
         )
 
         interactions.create(
@@ -453,7 +461,9 @@ class TestGoogleInteractionsCreate:
         expected_chunks: tuple[dict[str, object], ...],
     ) -> None:
         route: Final = respx_mock.post(url).mock(
-            return_value=httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+            return_value=response_for_respx(
+                httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+            )
         )
 
         response_stream: Final = interactions.create(
@@ -470,10 +480,10 @@ class TestGoogleInteractionsCreate:
     @pytest.mark.usefixtures("fake_provider_credentials")
     def test_invalid_model_raises_not_found(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 404,
                 json={"error": {"code": 404, "message": "model not found", "status": "NOT_FOUND"}},
-            )
+            ))
         )
 
         with pytest.raises(litellm.NotFoundError):
@@ -498,7 +508,7 @@ class TestInteractionsAcreateOffline:
     @pytest.mark.asyncio
     async def test_acreate_simple_gemini(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "interaction-offline",
@@ -508,7 +518,7 @@ class TestInteractionsAcreateOffline:
                     "steps": [{"type": "model_output", "content": [{"type": "text", "text": "299792458"}]}],
                     "usage": {"input_tokens": 6, "output_tokens": 3},
                 },
-            )
+            ))
         )
         response: Final = await interactions.acreate(
             model="gemini/gemini-2.5-flash",
@@ -533,11 +543,11 @@ class TestInteractionsAcreateOffline:
     @pytest.mark.asyncio
     async def test_acreate_streaming_gemini(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 text='data: {"event_type":"step.delta","delta":{"type":"text","text":"Hello"}}\n\n',
                 headers={"content-type": "text/event-stream"},
-            )
+            ))
         )
 
         response_stream: Final = await interactions.acreate(
@@ -563,7 +573,7 @@ class TestInteractionsAcreateOffline:
         self, respx_mock: MockRouter
     ) -> None:
         route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "interaction-offline",
@@ -573,7 +583,7 @@ class TestInteractionsAcreateOffline:
                     "steps": [{"type": "model_output", "content": [{"type": "text", "text": "Hi"}]}],
                     "usage": {"total_input_tokens": 6, "total_output_tokens": 3},
                 },
-            )
+            ))
         )
         response: Final = await interactions.acreate(
             model="gemini/gemini-4-argon",
@@ -593,7 +603,7 @@ class TestInteractionsAcreateOffline:
     @pytest.mark.asyncio
     async def test_acreate_simple_litellm_responses_bridge(self, respx_mock: MockRouter) -> None:
         route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "resp-offline",
@@ -610,7 +620,7 @@ class TestInteractionsAcreateOffline:
                     ],
                     "usage": {"input_tokens": 6, "output_tokens": 3, "total_tokens": 9},
                 },
-            )
+            ))
         )
         response: Final = await interactions.acreate(
             model="gpt-5.6",
@@ -673,7 +683,7 @@ def test_create_simple_string_input_for_google_and_responses(
     response_body: Mapping[str, JsonValue],
     expected_body: Mapping[str, JsonValue],
 ) -> None:
-    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=response_body))
+    route: Final = respx_mock.post(url).mock(return_value=response_for_respx(httpx.Response(200, json=response_body)))
 
     response: Final = interactions.create(
         model=model,
@@ -736,7 +746,7 @@ def test_create_with_system_instruction_for_google_and_responses(
     response_body: Mapping[str, JsonValue],
     expected_body: Mapping[str, JsonValue],
 ) -> None:
-    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=response_body))
+    route: Final = respx_mock.post(url).mock(return_value=response_for_respx(httpx.Response(200, json=response_body)))
 
     response: Final = interactions.create(
         model=model,
@@ -753,14 +763,14 @@ def test_create_streaming_returns_interaction_events(
     respx_mock: MockRouter,
 ) -> None:
     route: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=(
                 b'data: {"event_type":"step.delta","delta":{"type":"text_delta","text":"1, 2, 3"}}\n\n'
                 b'data: {"event_type":"interaction.completed","id":"interaction-stream","status":"completed"}\n\n'
             ),
-        )
+        ))
     )
 
     chunks: Final = tuple(
@@ -832,7 +842,9 @@ async def test_streaming_skips_malformed_lines_and_stops_at_done(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post(_GEMINI_STREAM_URL).mock(
-        return_value=httpx.Response(200, text=_GEMINI_STREAM_WITH_DONE, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=_GEMINI_STREAM_WITH_DONE, headers={"content-type": "text/event-stream"})
+        )
     )
 
     chunks: Final = await _stream_gemini_interaction(sync_mode)
@@ -850,7 +862,9 @@ def test_create_streaming_hands_completed_interaction_to_success_callback(
     recorder: Final = _CompletedInteractionRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     respx_mock.post(_GEMINI_STREAM_URL).mock(
-        return_value=httpx.Response(200, text=_GEMINI_STREAM_WITH_DONE, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=_GEMINI_STREAM_WITH_DONE, headers={"content-type": "text/event-stream"})
+        )
     )
 
     tuple(
@@ -887,7 +901,9 @@ _FIRST_HOP: Final = {
 
 @pytest.mark.usefixtures("fake_provider_credentials")
 def test_create_keeps_requires_continuation_status_and_token_for_the_caller(respx_mock: MockRouter) -> None:
-    route: Final = respx_mock.post(_GEMINI_URL).mock(return_value=httpx.Response(200, json=_FIRST_HOP))
+    route: Final = respx_mock.post(_GEMINI_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_FIRST_HOP))
+    )
 
     response: Final = interactions.create(**_LONG_DECODE_REQUEST, api_key="gemini-offline")
 
@@ -900,9 +916,9 @@ def test_create_keeps_requires_continuation_status_and_token_for_the_caller(resp
 @pytest.mark.usefixtures("fake_provider_credentials")
 def test_create_sends_a_caller_continuation_token_to_resume_a_long_decode(respx_mock: MockRouter) -> None:
     route: Final = respx_mock.post(_GEMINI_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json={**_FIRST_HOP, "id": "hop-2", "status": "completed", "continuation_token": None}
-        )
+        ))
     )
 
     response: Final = interactions.create(

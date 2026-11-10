@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
-from httpx import Response
+from httpx2 import Response
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.bedrock.passthrough.transformation import BedrockPassthroughConfig

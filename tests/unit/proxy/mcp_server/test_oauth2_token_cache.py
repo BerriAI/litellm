@@ -7,7 +7,7 @@ fallback to static token, and the skip-condition property.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.proxy._types import MCPTransport

@@ -7,7 +7,7 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import click
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from fastapi import FastAPI

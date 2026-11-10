@@ -16,7 +16,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 from pydantic import ConfigDict, TypeAdapter, ValidationError, field_validator
 from typing_extensions import NotRequired, ReadOnly, TypedDict

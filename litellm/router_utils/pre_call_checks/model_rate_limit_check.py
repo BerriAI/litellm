@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict
 
 import litellm

@@ -8,7 +8,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from openai.types.file_deleted import FileDeleted
 from pydantic import ConfigDict
 from typing_extensions import ReadOnly, TypedDict

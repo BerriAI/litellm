@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger

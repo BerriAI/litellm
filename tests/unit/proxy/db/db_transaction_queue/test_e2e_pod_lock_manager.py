@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
-import httpx
+import httpx2 as httpx
 import json
 from unittest.mock import MagicMock, patch
 

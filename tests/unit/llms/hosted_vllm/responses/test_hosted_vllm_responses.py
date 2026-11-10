@@ -12,11 +12,11 @@ from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.hosted_vllm.responses.transformation import (
     HostedVLLMResponsesAPIConfig,
@@ -201,7 +201,7 @@ _VLLM_RESPONSES_URL: Final = "https://test-vllm.example.com/v1/responses"
 
 def _vllm_responses_route(output_text: str) -> respx.Route:
     return respx.post(_VLLM_RESPONSES_URL).mock(
-        return_value=httpx.Response(200, json=_make_mock_responses_api_response(output_text))
+        return_value=response_for_respx(httpx.Response(200, json=_make_mock_responses_api_response(output_text)))
     )
 
 

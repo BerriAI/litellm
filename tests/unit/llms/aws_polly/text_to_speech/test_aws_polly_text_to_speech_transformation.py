@@ -1,7 +1,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm
@@ -15,7 +15,7 @@ async def test_azure_ava_tts_with_custom_voice():
     """
     from unittest.mock import patch
 
-    import httpx
+    import httpx2 as httpx
 
     mock_response_content = b"fake_audio_data"
     mock_httpx_response = MagicMock(spec=httpx.Response)
@@ -55,7 +55,7 @@ async def test_azure_ava_tts_fable_voice_mapping():
     """
     from unittest.mock import patch
 
-    import httpx
+    import httpx2 as httpx
 
     mock_response_content = b"fake_audio_data"
     mock_httpx_response = MagicMock(spec=httpx.Response)
@@ -98,7 +98,7 @@ async def test_aws_polly_tts_with_native_voice():
     import json
     from unittest.mock import patch
 
-    import httpx
+    import httpx2 as httpx
 
     # Mock response - Polly returns audio bytes directly
     mock_response_content = b"fake_audio_data"
@@ -176,7 +176,7 @@ async def test_aws_polly_tts_with_openai_voice_mapping():
     import json
     from unittest.mock import patch
 
-    import httpx
+    import httpx2 as httpx
 
     mock_response_content = b"fake_audio_data"
     mock_httpx_response = MagicMock(spec=httpx.Response)
@@ -220,7 +220,7 @@ async def test_aws_polly_tts_with_ssml():
     import json
     from unittest.mock import patch
 
-    import httpx
+    import httpx2 as httpx
 
     mock_response_content = b"fake_audio_data"
     mock_httpx_response = MagicMock(spec=httpx.Response)

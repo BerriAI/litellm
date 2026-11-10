@@ -1,6 +1,7 @@
 """
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
+import httpx2 as httpx
 import base64
 import copy
 import json
@@ -8,9 +9,11 @@ from collections.abc import Callable
 from typing import Final
 
 import pytest
-import respx
-from httpx import Response
 
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
+
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
@@ -107,7 +110,7 @@ class TestOpenAIGPTConfig:
 @pytest.mark.respx(assert_all_called=True)
 def test_o3_reasoning_effort_is_sent_in_chat_request(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-o3",
@@ -123,7 +126,7 @@ def test_o3_reasoning_effort_is_sent_in_chat_request(respx_mock: respx.MockRoute
                 ],
                 "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
             },
-        )
+        ))
     )
     response: Final = litellm.completion(
         model="o3-mini",
@@ -1296,10 +1299,12 @@ async def test_openai_media_download_preserves_supported_chat_fields(
     image_url: Final = "data:image/png;base64,aW1hZ2U="
     in_memory_cache.delete_cache(pdf_url)
     download: Final = respx_mock.get(pdf_url).mock(
-        return_value=Response(200, headers={"content-type": "application/pdf"}, content=pdf_content)
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "application/pdf"}, content=pdf_content)
+        )
     )
     chat: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_CHAT_REPLY))
     )
 
     text_part: Final = {"type": "text", "text": "What is the first page of the PDF?"}
@@ -1361,7 +1366,7 @@ def test_vision_with_custom_model_preserves_base64_image_in_request(respx_mock: 
         }
     ]
     route: Final = respx_mock.post("https://my-custom.api.openai.com/chat/completions").mock(
-        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_CHAT_REPLY))
     )
 
     litellm.completion(
@@ -2103,7 +2108,7 @@ def test_completion_leaves_the_callers_closing_developer_message_unchanged_on_a_
     respx_mock: respx.MockRouter,
 ) -> None:
     chat: Final = respx_mock.post("http://vllm.internal:8000/v1/chat/completions").mock(
-        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_CHAT_REPLY))
     )
     messages: Final = [
         {"role": "user", "content": "Describe the image."},
@@ -2186,7 +2191,7 @@ async def test_chat_sends_a_breakpoint_by_the_deployments_own_flag_not_a_sibling
     catalog_row_without_a_flag: Final = {"litellm_provider": "openai", "mode": "chat"}
     monkeypatch.setitem(litellm.model_cost, "qa-openai-shared", catalog_row_without_a_flag)
     chat: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_CHAT_REPLY))
     )
     router: Final = litellm.Router(
         model_list=[

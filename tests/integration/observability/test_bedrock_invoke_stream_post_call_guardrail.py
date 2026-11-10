@@ -25,7 +25,7 @@ from typing import Final
 from urllib.parse import unquote
 
 import boto3
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from botocore.config import Config

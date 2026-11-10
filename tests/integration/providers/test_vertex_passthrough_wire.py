@@ -15,7 +15,7 @@ from queue import Empty, SimpleQueue
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from cryptography import x509

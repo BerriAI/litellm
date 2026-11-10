@@ -1,7 +1,7 @@
 import uuid
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, object_value
 
 

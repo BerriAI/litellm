@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from botocore.awsrequest import AWSPreparedRequest, AWSResponse
 

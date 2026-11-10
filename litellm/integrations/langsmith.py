@@ -9,7 +9,7 @@ import types
 from datetime import datetime, timezone
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 

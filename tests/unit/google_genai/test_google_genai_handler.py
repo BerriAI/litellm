@@ -9,10 +9,11 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 
@@ -145,7 +146,7 @@ def test_citation_metadata_transformation():
     """
     from unittest.mock import MagicMock
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
@@ -382,9 +383,11 @@ async def _drain(stream: object) -> None:
 async def test_generate_content_adapter_keeps_provider_error_status(_httpx_transport: None):
     from litellm.types.router import GenericLiteLLMParams
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post("http://upstream.test/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
+            return_value=response_for_respx(
+                httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
+            )
         )
         with pytest.raises(litellm.BadRequestError) as exc_info:
             await GenerateContentToCompletionHandler.async_generate_content_handler(
@@ -406,9 +409,9 @@ async def test_generate_content_adapter_logs_router_model_group(
     success_payloads = _SuccessPayloads()
     monkeypatch.setattr(litellm, "callbacks", [success_payloads])
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post("http://upstream.test/v1/chat/completions").mock(
-            return_value=httpx.Response(200, json=_CHAT_BODY)
+            return_value=response_for_respx(httpx.Response(200, json=_CHAT_BODY))
         )
         await GenerateContentToCompletionHandler.async_generate_content_handler(
             model="hosted_vllm/grok",
@@ -439,12 +442,12 @@ async def test_generate_content_adapter_asks_openai_compatible_upstream_for_stre
 ):
     from litellm.types.router import GenericLiteLLMParams
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route = upstream.post("http://upstream.test/v1/chat/completions").mock(
             return_value=(
-                httpx.Response(200, text=_CHAT_SSE, headers={"content-type": "text/event-stream"})
+                response_for_respx(httpx.Response(200, text=_CHAT_SSE, headers={"content-type": "text/event-stream"})
                 if stream
-                else httpx.Response(200, json=_CHAT_BODY)
+                else httpx.Response(200, json=_CHAT_BODY))
             )
         )
         response = await GenerateContentToCompletionHandler.async_generate_content_handler(
@@ -508,9 +511,11 @@ async def _adapter_stream_payloads(
 ):
     from litellm.types.router import GenericLiteLLMParams
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(upstream_url).mock(
-            return_value=httpx.Response(200, text=upstream_sse, headers={"content-type": "text/event-stream"})
+            return_value=response_for_respx(
+                httpx.Response(200, text=upstream_sse, headers={"content-type": "text/event-stream"})
+            )
         )
         response = await GenerateContentToCompletionHandler.async_generate_content_handler(
             model=model,
@@ -536,9 +541,11 @@ async def test_generate_content_adapter_failure_is_logged_once(
     failures = _FailureCallTypes()
     monkeypatch.setattr(litellm, "callbacks", [failures])
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post("http://upstream.test/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
+            return_value=response_for_respx(
+                httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
+            )
         )
         with pytest.raises(litellm.BadRequestError):
             await getattr(litellm.google_genai, entrypoint)(
@@ -556,9 +563,11 @@ def test_sync_generate_content_adapter_failure_is_logged_once(_httpx_transport: 
     failures = _FailureCallTypes()
     monkeypatch.setattr(litellm, "callbacks", [failures])
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post("http://upstream.test/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
+            return_value=response_for_respx(
+                httpx.Response(400, json={"error": {"message": "max_tokens must be positive"}})
+            )
         )
         with pytest.raises(litellm.BadRequestError):
             litellm.google_genai.generate_content(

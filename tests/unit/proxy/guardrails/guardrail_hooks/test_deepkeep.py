@@ -3,8 +3,8 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import respx
-from httpx import Request, Response
+from tests._support import respx_httpx2 as respx
+from httpx2 import Request, Response
 
 import litellm
 from litellm.exceptions import GuardrailRaisedException
@@ -384,7 +384,7 @@ class TestDeepKeepGuardrail:
             event_hook="pre_call",
         )
 
-        import httpx
+        import httpx2 as httpx
 
         with patch.object(
             guardrail.async_handler,
@@ -411,7 +411,7 @@ class TestDeepKeepGuardrail:
             event_hook="pre_call",
         )
 
-        import httpx
+        import httpx2 as httpx
 
         with patch.object(
             guardrail.async_handler,
@@ -1038,7 +1038,7 @@ async def test_api_error_fail_open(monkeypatch: pytest.MonkeyPatch):
         unreachable_fallback="fail_open",
     )
 
-    import httpx
+    import httpx2 as httpx
 
     with patch.object(
         deepkeep_guardrail.async_handler,

@@ -1,15 +1,17 @@
 """Tests for the AIM guardrail's inspection-payload construction."""
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import asyncio
 import contextlib
 import json
 from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-from httpx import Request, Response
+
+from tests._support import respx_httpx2 as respx
+from httpx2 import Request, Response
 
 from litellm import DualCache
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -449,7 +451,7 @@ async def test_aim_still_inspects_every_conversational_call_type(call_type: str)
 
     with patch(  # test-quality-ok: transport is litellm's aiohttp-backed handler; respx cannot intercept it
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        return_value=Response(
+        return_value=httpx.Response(
             json={
                 "analysis_result": {"analysis_time_ms": 1, "policy_drill_down": {}},
                 "required_action": {
@@ -497,9 +499,9 @@ async def test_aim_anonymize_callback_redacts_content_with_respx(mode: str) -> N
         },
     }
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         route = router.post("https://api.aim.test/fw/v1/analyze").mock(
-            return_value=httpx.Response(200, json=response_body)
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
         )
         client = _client_for_aim(guardrail)
         try:
@@ -553,9 +555,9 @@ async def test_aim_anonymize_rejects_multimodal_content_with_respx() -> None:
         },
     }
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         route = router.post("https://api.aim.test/fw/v1/analyze").mock(
-            return_value=httpx.Response(200, json=response_body)
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
         )
         client = _client_for_aim(guardrail)
         try:
@@ -591,9 +593,9 @@ async def test_aim_block_callback_preserves_proxy_error_with_respx(mode: str) ->
         },
     }
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         route = router.post("https://api.aim.test/fw/v1/analyze").mock(
-            return_value=httpx.Response(200, json=response_body)
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
         )
         client = _client_for_aim(guardrail)
         try:
@@ -638,9 +640,9 @@ async def test_aim_output_block_raises_proxy_exception_with_respx() -> None:
         },
     }
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         route = router.post("https://api.aim.test/fw/v1/analyze").mock(
-            return_value=httpx.Response(200, json=response_body)
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
         )
         client = _client_for_aim(guardrail)
         try:
@@ -698,8 +700,8 @@ async def test_aim_post_call_preserves_anonymized_entities_with_respx() -> None:
             },
         )
 
-    with respx.mock(assert_all_called=True) as router:
-        route = router.post("https://api.aim.test/fw/v1/analyze").mock(side_effect=analyze)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        route = router.post("https://api.aim.test/fw/v1/analyze").mock(side_effect=side_effect_for_respx(analyze))
         client = _client_for_aim(guardrail)
         try:
             pre_call_result = await guardrail.async_pre_call_hook(

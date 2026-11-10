@@ -9,7 +9,7 @@ from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import psutil
 import pytest
 import yaml

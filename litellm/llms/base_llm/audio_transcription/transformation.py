@@ -9,7 +9,7 @@ from typing import (
     cast,  # noqa: TID251  # SDK file handles have no runtime validation schema
 )
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.audio import (
     Transcription,

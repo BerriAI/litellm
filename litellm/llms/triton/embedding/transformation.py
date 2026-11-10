@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.base_llm.chat.transformation import AllMessageValues, BaseLLMException

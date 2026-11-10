@@ -1,3 +1,4 @@
+import httpx2 as httpx
 import os
 import sys
 
@@ -10,9 +11,11 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
-import respx
-from httpx import Response
 
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
+
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from litellm.types.utils import ModelResponse
@@ -255,11 +258,11 @@ class TestAzureAnthropicChatCompletion:
 @respx.mock
 def test_completion_surfaces_the_status_and_headers_of_a_rejected_request():
     respx.post("https://example-resource.services.ai.azure.com/anthropic/v1/messages").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             400,
             json={"type": "error", "error": {"type": "invalid_request_error", "message": "max_tokens too large"}},
             headers={"x-request-id": "req-1"},
-        )
+        ))
     )
 
     with pytest.raises(litellm.BadRequestError) as rejected:
@@ -282,7 +285,7 @@ def test_completion_adds_the_binding_beta_so_block_binding_is_kept(
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx.post("https://example-resource.services.ai.azure.com/anthropic/v1/messages").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg_bound",
@@ -294,7 +297,7 @@ def test_completion_adds_the_binding_beta_so_block_binding_is_kept(
                 "stop_sequence": None,
                 "usage": {"input_tokens": 1, "output_tokens": 1},
             },
-        )
+        ))
     )
     block_binding: Final = {"prefix_mismatch_behavior": "error"}
 
@@ -315,7 +318,7 @@ def test_completion_adds_the_binding_beta_so_block_binding_is_kept(
 @respx.mock
 def test_completion_sends_the_binding_beta_next_to_the_callers_own_betas(local_beta_headers_config: None) -> None:
     route: Final = respx.post("https://example-resource.services.ai.azure.com/anthropic/v1/messages").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg_bound",
@@ -327,7 +330,7 @@ def test_completion_sends_the_binding_beta_next_to_the_callers_own_betas(local_b
                 "stop_sequence": None,
                 "usage": {"input_tokens": 1, "output_tokens": 1},
             },
-        )
+        ))
     )
 
     litellm.completion(

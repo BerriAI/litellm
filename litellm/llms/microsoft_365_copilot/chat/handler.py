@@ -7,7 +7,7 @@ from typing import (
 )
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 from aiohttp import ClientSession
 from pydantic import TypeAdapter, ValidationError
 

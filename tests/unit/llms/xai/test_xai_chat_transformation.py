@@ -4,10 +4,11 @@ import os
 from typing import Final
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.xai.chat.transformation import (
     XAI_API_BASE,
@@ -173,7 +174,7 @@ class TestXAIUsageNormalization:
 @pytest.mark.respx(assert_all_called=True)
 def test_completion_strips_message_names_from_request(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{XAI_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-xai",
@@ -189,7 +190,7 @@ def test_completion_strips_message_names_from_request(respx_mock: respx.MockRout
                 ],
                 "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -262,11 +263,11 @@ def test_streaming_include_usage_surfaces_xai_final_usage_chunk(
     )
     sse_body: Final = "".join(f"data: {json.dumps(frame)}\n\n" for frame in frames) + "data: [DONE]\n\n"
     respx_mock.post(f"{XAI_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             content=sse_body.encode(),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
 
     chunks: Final = list(

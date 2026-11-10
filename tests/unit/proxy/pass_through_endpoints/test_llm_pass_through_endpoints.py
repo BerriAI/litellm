@@ -17,9 +17,10 @@ from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from urllib.parse import parse_qs
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
@@ -34,6 +35,7 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
 from litellm.caching.caching import DualCache
 from litellm.types.utils import CallTypes, CallTypesLiteral
@@ -2484,10 +2486,10 @@ async def test_bedrock_agent_runtime_region_lookup_leaves_the_event_loop_free(mo
         },
         receive=receive,
     )
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         retrieve: Final = upstream.post(
             "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/KB1234567/retrieve"
-        ).mock(return_value=httpx.Response(200, json={"retrievalResults": []}))
+        ).mock(return_value=response_for_respx(httpx.Response(200, json={"retrievalResults": []})))
         _ = await bedrock_proxy_route(
             endpoint="knowledgebases/KB1234567/retrieve",
             request=request,
@@ -2810,9 +2812,9 @@ def test_vllm_provider_route_reaches_v1_paths_with_its_key_as_a_bearer(
         proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
     )
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.post("http://vllm-upstream.test:8090/v1/chat/completions").mock(
-            return_value=httpx.Response(200, json={"id": "chatcmpl-1"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "chatcmpl-1"}))
         )
         response: Final = TestClient(proxy_server.app).post(
             request_path,
@@ -2836,9 +2838,9 @@ def test_vllm_provider_route_with_an_empty_key_sends_no_credential_headers(monke
         proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
     )
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.post("http://vllm-upstream.test:8090/v1/chat/completions").mock(
-            return_value=httpx.Response(200, json={"id": "chatcmpl-1"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "chatcmpl-1"}))
         )
         response: Final = TestClient(proxy_server.app).post(
             "/vllm/v1/chat/completions",
@@ -4108,9 +4110,9 @@ def test_openai_passthrough_forwards_verbatim_to_openai(
 ) -> None:
     """Every /openai_passthrough request, including the /v1/files and /v1/batches
     paths that native provider routes also claim, must reach OpenAI unchanged."""
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route = upstream.request(method, f"https://api.openai.com{path}").mock(
-            return_value=httpx.Response(200, json={"id": "upstream_123"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "upstream_123"}))
         )
         response = openai_passthrough_client.request(method, f"/openai_passthrough{path}", json=body)
 
@@ -4197,9 +4199,9 @@ def test_openai_passthrough_sends_the_openai_beta_header_upstream(
     client_headers: dict[str, str],
     upstream_openai_beta: list[str],
 ) -> None:
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.request(method, f"https://api.openai.com/v1{path}").mock(
-            return_value=httpx.Response(200, json={"id": "upstream_123"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "upstream_123"}))
         )
         response: Final = openai_passthrough_client.request(method, f"{client_base_path}{path}", headers=client_headers)
 
@@ -4231,9 +4233,9 @@ def test_azure_passthrough_keeps_its_own_openai_beta_rule(
 ) -> None:
     monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
     monkeypatch.setenv("AZURE_API_KEY", "operator-key")
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.request(method, f"https://operator.openai.azure.com{path}").mock(
-            return_value=httpx.Response(200, json={"id": "upstream_123"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "upstream_123"}))
         )
         response: Final = openai_passthrough_client.request(method, f"/azure{path}", headers=client_headers)
 
@@ -4267,12 +4269,14 @@ def test_openai_passthrough_uses_workload_identity_token_without_static_key(
         monkeypatch.delenv("OPENAI_API_KEY")
     else:
         monkeypatch.setenv("OPENAI_API_KEY", static_key)
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         token_exchange = upstream.post("https://auth.openai.com/oauth/token").mock(
-            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+            )
         )
         route = upstream.post("https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json={"id": "upstream_123"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "upstream_123"}))
         )
         response = openai_passthrough_client.post(
             "/openai_passthrough/v1/responses", json={"model": "gpt-5.1", "input": "hi"}
@@ -4295,7 +4299,7 @@ async def test_openai_passthrough_never_sends_workload_identity_token_to_foreign
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
             return_value=None,
         ),
-        respx.mock(assert_all_mocked=True) as upstream,
+        respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream,
         pytest.raises(Exception, match="Required 'OPENAI_API_KEY'"),
     ):
         await openai_proxy_route(
@@ -6055,8 +6059,10 @@ class TestTranscribeProxyRoute:
         upstream_body = {
             "TranscriptionJob": {"TranscriptionJobName": "litellm-job-1", "TranscriptionJobStatus": "IN_PROGRESS"}
         }
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=upstream_body))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(
+                return_value=response_for_respx(httpx.Response(200, json=upstream_body))
+            )
             response = transcribe_client.post(
                 "/transcribe/StartTranscriptionJob",
                 json=dict(self.START_JOB_BODY),
@@ -6085,7 +6091,7 @@ class TestTranscribeProxyRoute:
     def test_storage_outside_the_listed_buckets_is_refused_before_signing(
         self, transcribe_client: TestClient, body: dict[str, object], member: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post(
                 "/transcribe/StartTranscriptionJob", json={**dict(self.START_JOB_BODY), **body}
@@ -6101,8 +6107,10 @@ class TestTranscribeProxyRoute:
         from litellm.proxy.proxy_server import app
 
         monkeypatch.setitem(app.dependency_overrides, _proxy_general_settings, lambda: {})
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=_owned_job("admin")))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(
+                return_value=response_for_respx(httpx.Response(200, json=_owned_job("admin")))
+            )
             refused = transcribe_client.post("/transcribe/StartTranscriptionJob", json=dict(self.START_JOB_BODY))
             monkeypatch.setitem(
                 app.dependency_overrides,
@@ -6117,7 +6125,7 @@ class TestTranscribeProxyRoute:
         assert route.calls[0].request.headers["x-amz-target"] == "Transcribe.StartTranscriptionJob"
 
     def test_the_caller_cannot_forge_the_owner_tag(self, transcribe_client: TestClient) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post(
                 "/transcribe/StartTranscriptionJob",
@@ -6129,8 +6137,10 @@ class TestTranscribeProxyRoute:
         assert not route.called
 
     def test_sdk_route_reads_operation_from_x_amz_target_and_resigns(self, transcribe_client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=_owned_job("user-a")))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(
+                return_value=response_for_respx(httpx.Response(200, json=_owned_job("user-a")))
+            )
             response = transcribe_client.post(
                 "/transcribe",
                 json={"TranscriptionJobName": "litellm-job-1"},
@@ -6152,8 +6162,10 @@ class TestTranscribeProxyRoute:
     def test_jobs_started_by_others_are_not_reachable(
         self, transcribe_client: TestClient, operation: str, owner: str | None
     ) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(200, json=_owned_job(owner)))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            route = upstream.post(TRANSCRIBE_UPSTREAM).mock(
+                return_value=response_for_respx(httpx.Response(200, json=_owned_job(owner)))
+            )
             response = transcribe_client.post(
                 f"/transcribe/{operation}", json={"TranscriptionJobName": "litellm-job-1"}
             )
@@ -6162,7 +6174,7 @@ class TestTranscribeProxyRoute:
         assert [call.request.headers["x-amz-target"] for call in route.calls] == ["Transcribe.GetTranscriptionJob"]
 
     def test_the_owner_may_delete_the_job(self, transcribe_client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             route.side_effect = [httpx.Response(200, json=_owned_job("user-a")), httpx.Response(200, json={})]
             response = transcribe_client.post(
@@ -6177,7 +6189,7 @@ class TestTranscribeProxyRoute:
 
     @pytest.mark.parametrize("operation", ["ListTranscriptionJobs", "ListVocabularies", "DeleteVocabulary"])
     def test_account_wide_operations_need_a_proxy_admin(self, transcribe_client: TestClient, operation: str) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post(f"/transcribe/{operation}", json={})
 
@@ -6196,9 +6208,9 @@ class TestTranscribeProxyRoute:
             user_api_key_auth,
             lambda: UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
         )
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.post(TRANSCRIBE_UPSTREAM).mock(
-                return_value=httpx.Response(200, json={"TranscriptionJobSummaries": []})
+                return_value=response_for_respx(httpx.Response(200, json={"TranscriptionJobSummaries": []}))
             )
             response = transcribe_client.post("/transcribe/ListTranscriptionJobs", json={})
 
@@ -6206,8 +6218,10 @@ class TestTranscribeProxyRoute:
 
     def test_upstream_error_status_and_body_are_returned(self, transcribe_client: TestClient) -> None:
         aws_error = {"__type": "BadRequestException", "Message": "The requested job couldn't be found."}
-        with respx.mock(assert_all_called=True) as upstream:
-            upstream.post(TRANSCRIBE_UPSTREAM).mock(return_value=httpx.Response(400, json=aws_error))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            upstream.post(TRANSCRIBE_UPSTREAM).mock(
+                return_value=response_for_respx(httpx.Response(400, json=aws_error))
+            )
             response = transcribe_client.post(
                 "/transcribe/StartTranscriptionJob",
                 json={**dict(self.START_JOB_BODY), "TranscriptionJobName": "missing"},
@@ -6228,7 +6242,7 @@ class TestTranscribeProxyRoute:
     def test_rejects_unsupported_operations_without_calling_aws(
         self, transcribe_client: TestClient, operation: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post(f"/transcribe/{operation}", json={})
 
@@ -6241,7 +6255,7 @@ class TestTranscribeProxyRoute:
         ['{"MaxResults": 5, "stream": true}', '{"MaxResults": 5, "stream": false}', '["x"]', "not json"],
     )
     def test_rejects_bad_bodies_without_calling_aws(self, transcribe_client: TestClient, raw_body: str) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post(
                 "/transcribe/GetTranscriptionJob", content=raw_body, headers={"Content-Type": "application/json"}
@@ -6255,7 +6269,7 @@ class TestTranscribeProxyRoute:
     ) -> None:
         for name in ("AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION"):
             monkeypatch.delenv(name, raising=False)
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post("/transcribe/GetTranscriptionJob", json={})
 
@@ -6277,7 +6291,7 @@ class TestTranscribeProxyRoute:
     def test_rejects_unpriced_billable_jobs_without_calling_aws(
         self, transcribe_client: TestClient, operation: str, body: dict[str, object], detail_fragment: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post(f"/transcribe/{operation}", json={**dict(self.START_JOB_BODY), **body})
 
@@ -6289,7 +6303,7 @@ class TestTranscribeProxyRoute:
         self, transcribe_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delitem(litellm.model_cost, "transcribe/StartTranscriptionJob")
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post("/transcribe/StartTranscriptionJob", json=dict(self.START_JOB_BODY))
 
@@ -6299,7 +6313,7 @@ class TestTranscribeProxyRoute:
 
     @pytest.mark.parametrize("target_header", ["", "Transcribe", "ComprehendMedical_20181030.DetectPHI", "Transcribe."])
     def test_sdk_route_rejects_bad_x_amz_target(self, transcribe_client: TestClient, target_header: str) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post(TRANSCRIBE_UPSTREAM)
             response = transcribe_client.post("/transcribe", json={}, headers={"X-Amz-Target": target_header})
 
@@ -7365,14 +7379,14 @@ class TestRouterModelRelayUpstreamContract:
 
         with respx.mock:
             respx.post("https://login.microsoftonline.com/throttled-tenant/oauth2/v2.0/token").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     429,
                     headers={"Retry-After": "7"},
                     json={"error": "temporarily_unavailable", "error_codes": [90055]},
-                )
+                ))
             )
             deployment_route: Final = respx.post(url__startswith="https://litellm-qa.openai.azure.com").mock(
-                return_value=httpx.Response(200, json={"ok": True})
+                return_value=response_for_respx(httpx.Response(200, json={"ok": True}))
             )
             response: Final = await azure_proxy_route(
                 endpoint="openai/deployments/gpt-5/chat/completions",
@@ -7425,7 +7439,7 @@ class TestRouterModelRelayUpstreamContract:
 
         with respx.mock:
             unreachable_route: Final = respx.post(url__startswith="https://litellm-qa-unreachable.openai.azure.com").mock(
-                side_effect=httpx.ConnectError("Connection refused")
+                side_effect=side_effect_for_respx(httpx.ConnectError("Connection refused"))
             )
             with pytest.raises(BaseLLMException) as excinfo:
                 await azure_proxy_route(
@@ -7693,7 +7707,7 @@ async def _bedrock_native_count(
         ),
     )
     respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path__regex=r"/count-tokens$").mock(
-        return_value=aws_reply
+        return_value=response_for_respx(aws_reply)
     )
     request: Final = Request(
         {
@@ -7819,7 +7833,7 @@ async def test_bedrock_native_count_tokens_for_a_bare_region_prefix_answers_bedr
     monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
     invalid_model: Final = {"message": "The provided model identifier is invalid."}
     respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path=f"/model/{model_id}/count-tokens").mock(
-        return_value=httpx.Response(400, json=invalid_model)
+        return_value=response_for_respx(httpx.Response(400, json=invalid_model))
     )
     request: Final = Request({"type": "http", "method": "POST", "path": f"/bedrock/model/{model}/count-tokens", "headers": []})
 
@@ -8255,9 +8269,9 @@ class TestAzureSpeechProxyRoute:
     """Drives the real FastAPI route with respx standing in for the Azure hosts only."""
 
     def test_short_audio_forwards_raw_wav_bytes_with_server_key(self, azure_speech_client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT)
+                return_value=response_for_respx(httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT))
             )
 
             response = azure_speech_client.post(
@@ -8285,9 +8299,11 @@ class TestAzureSpeechProxyRoute:
         self, azure_speech_admin_client: TestClient
     ) -> None:
         body: Final = {"contentUrls": ["https://example.com/a.wav"], "locale": "en-US", "displayName": "job"}
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_BATCH_ENDPOINT}").mock(
-                return_value=httpx.Response(201, json={"self": "https://eastus.api.cognitive.microsoft.com/x"})
+                return_value=response_for_respx(
+                    httpx.Response(201, json={"self": "https://eastus.api.cognitive.microsoft.com/x"})
+                )
             )
 
             response = azure_speech_admin_client.post(
@@ -8317,8 +8333,10 @@ class TestAzureSpeechProxyRoute:
     def test_non_admin_key_cannot_manage_shared_batch_resources(
         self, azure_speech_client: TestClient, method: str, endpoint: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
-            catch_all = upstream.route().mock(return_value=httpx.Response(200, json={"status": "Succeeded"}))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(
+                return_value=response_for_respx(httpx.Response(200, json={"status": "Succeeded"}))
+            )
 
             response = azure_speech_client.request(
                 method,
@@ -8332,9 +8350,11 @@ class TestAzureSpeechProxyRoute:
         assert not catch_all.called
 
     def test_non_admin_key_can_still_fast_transcribe_in_the_batch_family(self, azure_speech_client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+                )
             )
 
             response = azure_speech_client.post(
@@ -8349,12 +8369,12 @@ class TestAzureSpeechProxyRoute:
 
     def test_admin_key_reads_and_deletes_batch_jobs(self, azure_speech_admin_client: TestClient) -> None:
         job_path: Final = f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab"
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.get(f"https://eastus.api.cognitive.microsoft.com{job_path}").mock(
-                return_value=httpx.Response(200, json={"status": "Succeeded"})
+                return_value=response_for_respx(httpx.Response(200, json={"status": "Succeeded"}))
             )
             upstream.delete(f"https://eastus.api.cognitive.microsoft.com{job_path}").mock(
-                return_value=httpx.Response(204)
+                return_value=response_for_respx(httpx.Response(204))
             )
 
             statuses = [
@@ -8369,9 +8389,11 @@ class TestAzureSpeechProxyRoute:
     def test_fast_transcription_multipart_upload_is_forwarded_byte_for_byte(
         self, azure_speech_client: TestClient
     ) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+                )
             )
 
             response = azure_speech_client.post(
@@ -8393,9 +8415,9 @@ class TestAzureSpeechProxyRoute:
 
     def test_batch_get_is_forwarded_with_the_job_id_path(self, azure_speech_admin_client: TestClient) -> None:
         job_path: Final = f"{AZURE_SPEECH_BATCH_ENDPOINT}/8a5d3f2c-0b1e-4c7d-9e6f-1234567890ab/files"
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.get(f"https://eastus.api.cognitive.microsoft.com{job_path}").mock(
-                return_value=httpx.Response(200, json={"values": []})
+                return_value=response_for_respx(httpx.Response(200, json={"values": []}))
             )
 
             response = azure_speech_admin_client.get(
@@ -8421,9 +8443,9 @@ class TestAzureSpeechProxyRoute:
 
         recorder: Final = _Recorder()
         monkeypatch.setattr(litellm, "_async_success_callback", [*litellm._async_success_callback, recorder])
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.request(method, f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_BATCH_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json={"values": []})
+                return_value=response_for_respx(httpx.Response(200, json={"values": []}))
             )
 
             response = azure_speech_admin_client.request(
@@ -8463,9 +8485,11 @@ class TestAzureSpeechProxyRoute:
                 "output_cost_per_second": 0.0,
             },
         )
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json={"durationMilliseconds": 5061, "combinedPhrases": []})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"durationMilliseconds": 5061, "combinedPhrases": []})
+                )
             )
 
             response = azure_speech_client.post(
@@ -8508,9 +8532,9 @@ class TestAzureSpeechProxyRoute:
             },
         )
         transcript: Final = {**AZURE_SPEECH_TRANSCRIPT, "Offset": 10_000_000, "Duration": 30_000_000}
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.post(f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json=transcript)
+                return_value=response_for_respx(httpx.Response(200, json=transcript))
             )
 
             response = azure_speech_client.post(
@@ -8529,12 +8553,14 @@ class TestAzureSpeechProxyRoute:
         self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("AZURE_SPEECH_API_BASE", "https://my-speech.cognitiveservices.azure.com")
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             short_audio = upstream.post(
                 f"https://my-speech.cognitiveservices.azure.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}"
-            ).mock(return_value=httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT))
+            ).mock(return_value=response_for_respx(httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT)))
             fast = upstream.post(f"https://my-speech.cognitiveservices.azure.com{AZURE_SPEECH_FAST_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"durationMilliseconds": 640, "combinedPhrases": []})
+                )
             )
 
             azure_speech_client.post(
@@ -8556,8 +8582,8 @@ class TestAzureSpeechProxyRoute:
     def test_unknown_path_family_is_rejected_before_any_upstream_call(
         self, azure_speech_client: TestClient, endpoint: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
-            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=response_for_respx(httpx.Response(200)))
 
             response = azure_speech_client.post(
                 f"/azure_speech/{endpoint}", content=b"x", headers={"Authorization": "Bearer sk-virtual"}
@@ -8570,8 +8596,8 @@ class TestAzureSpeechProxyRoute:
         self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("AZURE_SPEECH_REGION")
-        with respx.mock(assert_all_called=False) as upstream:
-            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=response_for_respx(httpx.Response(200)))
 
             response = azure_speech_client.post(
                 f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
@@ -8587,8 +8613,8 @@ class TestAzureSpeechProxyRoute:
         self, azure_speech_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("AZURE_SPEECH_API_KEY")
-        with respx.mock(assert_all_called=False) as upstream:
-            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=response_for_respx(httpx.Response(200)))
 
             response = azure_speech_client.post(
                 f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}",
@@ -8630,9 +8656,11 @@ class TestAzureSpeechProxyRoute:
                 "output_cost_per_second": 0.0,
             },
         )
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.post(f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json={"RecognitionStatus": "NoMatch", "Offset": 0, "Duration": 0})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"RecognitionStatus": "NoMatch", "Offset": 0, "Duration": 0})
+                )
             )
 
             response = azure_speech_client.post(
@@ -8733,9 +8761,12 @@ class TestAzureSpeechRawBodyThroughRealAuth:
     def test_master_key_with_raw_wav_body_reaches_azure_without_a_parse_attempt(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, body: bytes
     ) -> None:
-        with respx.mock(assert_all_called=True) as upstream, caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        with (
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream,
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+        ):
             route = upstream.post(f"https://eastus.stt.speech.microsoft.com{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}").mock(
-                return_value=httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT)
+                return_value=response_for_respx(httpx.Response(200, json=AZURE_SPEECH_TRANSCRIPT))
             )
 
             response = self._post_wav(
@@ -8747,8 +8778,8 @@ class TestAzureSpeechRawBodyThroughRealAuth:
         assert [record.message for record in caplog.records if "request body" in record.message] == []
 
     def test_wrong_litellm_key_with_raw_wav_body_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
-            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=response_for_respx(httpx.Response(200)))
 
             response = self._post_wav(monkeypatch, f"/azure_speech{AZURE_SPEECH_SHORT_AUDIO_ENDPOINT}", "sk-wrong")
 
@@ -8767,9 +8798,9 @@ class TestAzureSpeechRawBodyThroughRealAuth:
             + AZURE_SPEECH_NON_UTF8_WAV_BYTES
             + f"\r\n--{boundary}--\r\n".encode()
         )
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"https://eastus.api.cognitive.microsoft.com{AZURE_SPEECH_BATCH_ENDPOINT}").mock(
-                return_value=httpx.Response(201, json={"status": "NotStarted"})
+                return_value=response_for_respx(httpx.Response(201, json={"status": "NotStarted"}))
             )
 
             response = self._post(
@@ -8790,8 +8821,8 @@ class TestAzureSpeechRawBodyThroughRealAuth:
     def test_wrong_litellm_key_with_multipart_batch_upload_is_rejected(
         self, monkeypatch: pytest.MonkeyPatch, content_type: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
-            catch_all = upstream.route().mock(return_value=httpx.Response(200))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            catch_all = upstream.route().mock(return_value=response_for_respx(httpx.Response(200)))
 
             response = self._post(
                 monkeypatch, f"/azure_speech{AZURE_SPEECH_BATCH_ENDPOINT}", "sk-wrong", content_type, b"--x--\r\n"
@@ -8896,8 +8927,10 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
     ) -> None:
         custom_auth: Final = _CountingCustomAuth()
         vertex_url: Final = f"https://us-central1-aiplatform.googleapis.com/{self.GENERATE_CONTENT}"
-        with respx.mock(assert_all_called=True) as upstream:
-            vertex: Final = upstream.post(vertex_url).mock(return_value=httpx.Response(200, json=self.GEMINI_ANSWER))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            vertex: Final = upstream.post(vertex_url).mock(
+                return_value=response_for_respx(httpx.Response(200, json=self.GEMINI_ANSWER))
+            )
 
             response, recorder = self._post(
                 monkeypatch,
@@ -8916,9 +8949,9 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         custom_auth: Final = _CountingCustomAuth()
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             discovery: Final = upstream.post(f"https://discoveryengine.googleapis.com/{self.DISCOVERY_SEARCH}").mock(
-                return_value=httpx.Response(200, json={"results": []})
+                return_value=response_for_respx(httpx.Response(200, json={"results": []}))
             )
 
             response, recorder = self._post(
@@ -8963,8 +8996,10 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         answer: Mapping[str, object],
     ) -> None:
         custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
-        with respx.mock(assert_all_called=True) as upstream:
-            google: Final = upstream.post(upstream_url).mock(return_value=httpx.Response(200, json=answer))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            google: Final = upstream.post(upstream_url).mock(
+                return_value=response_for_respx(httpx.Response(200, json=answer))
+            )
 
             response, recorder = self._post(
                 monkeypatch,
@@ -8983,8 +9018,8 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         custom_auth: Final = _CountingCustomAuth()
-        with respx.mock(assert_all_called=False) as upstream:
-            google: Final = upstream.route().mock(return_value=httpx.Response(200))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            google: Final = upstream.route().mock(return_value=response_for_respx(httpx.Response(200)))
 
             response, _ = self._post(
                 monkeypatch,
@@ -9003,8 +9038,8 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         self, monkeypatch: pytest.MonkeyPatch, header: str
     ) -> None:
         custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
-        with respx.mock(assert_all_called=False) as upstream:
-            google: Final = upstream.route().mock(return_value=httpx.Response(200))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            google: Final = upstream.route().mock(return_value=response_for_respx(httpx.Response(200)))
 
             response, recorder = self._post(
                 monkeypatch, f"/vertex_ai/{self.GENERATE_CONTENT}", {header: self.VIRTUAL_KEY}, custom_auth, ()
@@ -9021,8 +9056,8 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         self, monkeypatch: pytest.MonkeyPatch, path: str
     ) -> None:
         custom_auth: Final = _CountingCustomAuth(only_accepts=self.VIRTUAL_KEY)
-        with respx.mock(assert_all_called=False) as upstream:
-            google: Final = upstream.route().mock(return_value=httpx.Response(200))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            google: Final = upstream.route().mock(return_value=response_for_respx(httpx.Response(200)))
 
             response, recorder = self._post(monkeypatch, path, {}, custom_auth, ("us-central1", "global"))
 
@@ -9065,9 +9100,9 @@ class TestTypeSafePassthroughRoute:
     def test_forwards_every_method_and_body_upstream(
         self, client: TestClient, method: str, body: dict[str, str] | None
     ) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.request(method, "https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
+                return_value=response_for_respx(httpx.Response(200, json={"id": "upstream_123"}))
             )
             response = client.request(method, "/typesafe/v1/systemone", json=body)
 
@@ -9077,9 +9112,9 @@ class TestTypeSafePassthroughRoute:
             assert json.loads(sent.content or b"{}") == (body or {})
 
     def test_forwards_only_the_typesafe_danger_zone_headers_upstream(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post("https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
+                return_value=response_for_respx(httpx.Response(200, json={"id": "upstream_123"}))
             )
             client.post(
                 "/typesafe/v1/systemone",
@@ -9168,9 +9203,9 @@ class TestTypeSafePassthroughRoute:
             assert (stash.reserved_tokens if quota_scope == "key" else stash.otpm_reserved_tokens) > 0
             return httpx.Response(200, json={"model": model})
 
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route: Final = upstream.post(f"https://typesafe.example/base/v1/{endpoint}").mock(
-                side_effect=upstream_response
+                side_effect=side_effect_for_respx(upstream_response)
             )
             response: Final = client.post(f"/{provider}/v1/{endpoint}", json=body)
 
@@ -9244,9 +9279,9 @@ class TestEuJevPassthroughRoute:
 
     def test_forwards_a_decision_upstream_with_the_eu_jev_key(self, client: TestClient) -> None:
         body: Final = {"model": "eu-jeff-latest", "state": "x"}
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
+                return_value=response_for_respx(httpx.Response(200, json={"id": "upstream_123"}))
             )
             response: Final = client.post("/eu_jev/v1/systemone", json=body)
 
@@ -9268,7 +9303,7 @@ class TestEuJevPassthroughRoute:
     ) -> None:
         recorder: Final = _RecordsPreCallModel()
         monkeypatch.setattr(litellm, "callbacks", [recorder])
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json=body)
 
@@ -9288,7 +9323,7 @@ class TestEuJevPassthroughRoute:
     ) -> None:
         recorder: Final = _RecordsPreCallModel()
         monkeypatch.setattr(litellm, "callbacks", [recorder])
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"model": None, "state": "x"})
 
@@ -9300,7 +9335,7 @@ class TestEuJevPassthroughRoute:
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(litellm, "callbacks", [_RecordsPreCallModel(switch_to="eu_jev/eu-jeff-1.0.0")])
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"model": "jeff-latest", "state": "x"})
 
@@ -9312,7 +9347,7 @@ class TestEuJevPassthroughRoute:
     ) -> None:
         recorder: Final = _RecordsPreCallModel()
         monkeypatch.setattr(litellm, "callbacks", [recorder])
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"model": "eu_jev/eu-jeff-1.0.0", "state": "x"})
 
@@ -9339,7 +9374,7 @@ class TestEuJevPassthroughRoute:
             ]
         )
         monkeypatch.setattr(proxy_server, "llm_router", deployment_router)
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev-deployment.example/v2/v1/systemone").respond(
                 200, json={"answers": {}}
             )
@@ -9368,7 +9403,7 @@ class TestEuJevPassthroughRoute:
             ]
         )
         monkeypatch.setattr(proxy_server, "llm_router", team_router)
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             team_server: Final = upstream.route(host="team-a-server.example").respond(200, json={"answers": {}})
             eu_jev: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(
                 200, json={"answers": {}}
@@ -9381,7 +9416,7 @@ class TestEuJevPassthroughRoute:
 
     def test_a_base_ending_in_v1_is_not_doubled(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("EU_JEV_API_BASE", "https://eu-jev.example/base/v1/")
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
 
@@ -9389,7 +9424,7 @@ class TestEuJevPassthroughRoute:
         assert route.called
 
     def test_forwards_query_params_to_the_decision_endpoint(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone", params={"trace": "yes"}).respond(
                 200, json={"answers": {}}
             )
@@ -9400,7 +9435,7 @@ class TestEuJevPassthroughRoute:
 
     def test_uses_the_hosted_api_when_base_is_unset(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("EU_JEV_API_BASE")
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://eu-jev.com/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
 
@@ -9411,7 +9446,7 @@ class TestEuJevPassthroughRoute:
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("EU_JEV_API_KEY")
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route: Final = upstream.route(host="eu-jev.example").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"state": "x"})
 
@@ -9424,7 +9459,7 @@ class TestEuJevPassthroughRoute:
         [("GET", "/eu_jev/api/account/keys"), ("DELETE", "/eu_jev/v1/keys/abc"), ("GET", "/eu_jev/v1/systemone")],
     )
     def test_forwards_nothing_but_a_decision(self, client: TestClient, method: str, path: str) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route: Final = upstream.route(host="eu-jev.example").respond(200, json={})
             response: Final = client.request(method, path)
 
@@ -9433,7 +9468,7 @@ class TestEuJevPassthroughRoute:
 
     def test_rejects_custom_body_that_would_replace_the_authorized_request(self, client: TestClient) -> None:
         smuggled: Final = {"model": "eu-jeff-latest", "state": "refund", "questions": {"q": {"type": "noul"}}}
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post("/eu_jev/v1/systemone", json={"model": "gpt-4o", "custom_body": smuggled})
 
@@ -9442,7 +9477,7 @@ class TestEuJevPassthroughRoute:
         assert not route.called
 
     def test_rejects_streaming_that_would_skip_spend_tracking(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post(
                 "/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x", "stream": True}
@@ -9500,7 +9535,7 @@ class TestEuJevPassthroughRoute:
         self, operator_app: Callable[[list[str], str], FastAPI], root_path: str
     ) -> None:
         with (
-            respx.mock(assert_all_called=True) as upstream,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream,
             TestClient(operator_app(["POST"], "/eu_jev/v1/systemone"), root_path=root_path) as client,
         ):
             route: Final = upstream.post("https://operator.example/decide").respond(200, json={"operator": True})
@@ -9521,7 +9556,7 @@ class TestEuJevPassthroughRoute:
         self, operator_app: Callable[[list[str], str], FastAPI]
     ) -> None:
         with (
-            respx.mock(assert_all_called=True) as upstream,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream,
             TestClient(operator_app(["POST"], "/eu_jev/v1/systemone/")) as client,
         ):
             route: Final = upstream.post("https://operator.example/decide").respond(200, json={"operator": True})
@@ -9535,7 +9570,7 @@ class TestEuJevPassthroughRoute:
         self, operator_app: Callable[[list[str], str], FastAPI], method: str
     ) -> None:
         with (
-            respx.mock(assert_all_called=True) as upstream,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream,
             TestClient(operator_app(["GET", "POST", "PUT"], "/eu_jev/v1/systemone/")) as client,
         ):
             route: Final = upstream.route(method=method, url="https://operator.example/decide").respond(
@@ -9572,7 +9607,7 @@ class TestEuJevPassthroughRoute:
             return UserAPIKeyAuth(api_key="sk-virtual")
 
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, add_the_pass_through_after_routing)
-        with respx.mock(assert_all_called=False) as upstream, TestClient(app) as client:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream, TestClient(app) as client:
             built_in: Final = upstream.post("https://eu-jev.example/base/v1/systemone").respond(200, json={"answers": {}})
             operator: Final = upstream.route(host="operator.example").respond(200, json={"operator": True})
             response: Final = client.post("/eu_jev/v1/systemone", json={"model": "eu-jeff-latest", "state": "x"})
@@ -9589,7 +9624,7 @@ class TestEuJevPassthroughRoute:
         monkeypatch.setenv("LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST", "true")
         app: Final = operator_app(["GET", "PUT"], "/eu_jev/v1/systemone")
         InitPassThroughEndpointHelpers.remove_endpoint_routes("operator-eu-jev")
-        with respx.mock(assert_all_called=False) as upstream, TestClient(app) as client:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream, TestClient(app) as client:
             operator: Final = upstream.route(host="operator.example").respond(200, json={"operator": True})
             responses: Final = (client.get("/eu_jev/v1/systemone"), client.put("/eu_jev/v1/systemone", json={}))
 
@@ -9632,7 +9667,7 @@ class TestOssDecisionPassthroughRoute:
             "answers": {},
             **({"routing": {"model": checkpoint}} if provider == "laya" else {}),
         }
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone?trace=yes").respond(
                 200, json=answer
             )
@@ -9651,7 +9686,7 @@ class TestOssDecisionPassthroughRoute:
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, provider: str, checkpoint: str
     ) -> None:
         monkeypatch.delenv(f"{provider.upper()}_API_BASE")
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             response: Final = client.post(f"/{provider}/v1/systemone", json={"model": checkpoint})
         assert response.status_code == 503
         assert f"{provider.upper()}_API_BASE" in response.text
@@ -9660,7 +9695,7 @@ class TestOssDecisionPassthroughRoute:
     def test_oss_does_not_forward_unsupported_endpoints(
         self, client: TestClient, provider: str, checkpoint: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             response: Final = client.post(f"/{provider}/v1/evaluate", json={"model": checkpoint})
         assert response.status_code == 404
         assert len(upstream.calls) == 0
@@ -9669,7 +9704,7 @@ class TestOssDecisionPassthroughRoute:
     def test_oss_rejects_implicit_checkpoint_selection(
         self, client: TestClient, model: str | None, provider: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             response: Final = client.post(f"/{provider}/v1/systemone", json={"model": model})
         assert response.status_code == 400
         assert len(upstream.calls) == 0
@@ -9681,7 +9716,7 @@ class TestOssDecisionPassthroughRoute:
     def test_oss_rejects_controls_that_change_authorized_body_or_usage_accounting(
         self, client: TestClient, controls: Mapping[str, object], provider: str, checkpoint: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post(f"/{provider}/v1/systemone", json={"model": checkpoint, **controls})
         assert response.status_code == 400
@@ -9734,7 +9769,7 @@ class TestOssDecisionPassthroughRoute:
                 "standard_logging_guardrail_information": [{"guardrail_cost": 25.0}],
             },
         }
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone").respond(200, json={"answers": {}})
             first: Final = client.post(f"/{provider}/v1/systemone", json=body)
             second: Final = client.post(f"/{provider}/v1/systemone", json=body)
@@ -9762,7 +9797,7 @@ class TestOssDecisionPassthroughRoute:
                 return {**data, "model": f"{provider}/{changed_checkpoint}"}
 
         monkeypatch.setattr(litellm, "callbacks", [CheckpointHook()])
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone").respond(200, json={"answers": {}})
             response: Final = client.post(f"/{provider}/v1/systemone", json={"model": checkpoint, "state": "refund"})
         assert response.status_code == 200, response.text
@@ -9784,9 +9819,9 @@ class TestFalAIPassthroughRoute:
 
     def test_submit_forwards_body_and_key_scheme_to_queue_fal_run(self, client: TestClient) -> None:
         body: Final = {"image_url": "https://example.com/in.png", "resolution": 1536}
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post("https://queue.fal.run/fal-ai/trellis-2").mock(
-                return_value=httpx.Response(200, json={"request_id": "req-1", "status": "IN_QUEUE"})
+                return_value=response_for_respx(httpx.Response(200, json={"request_id": "req-1", "status": "IN_QUEUE"}))
             )
             response = client.post("/fal_ai/fal-ai/trellis-2", json=body)
 
@@ -9797,9 +9832,9 @@ class TestFalAIPassthroughRoute:
             assert json.loads(sent.content or b"{}") == body
 
     def test_status_get_forwards_to_queue_fal_run(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.get("https://queue.fal.run/fal-ai/trellis-2/requests/req-1/status").mock(
-                return_value=httpx.Response(200, json={"status": "COMPLETED"})
+                return_value=response_for_respx(httpx.Response(200, json={"status": "COMPLETED"}))
             )
             response = client.get("/fal_ai/fal-ai/trellis-2/requests/req-1/status")
 
@@ -9840,9 +9875,9 @@ class TestFalAIPassthroughRoute:
         )
 
     def test_submit_to_unpriced_endpoint_returns_400_without_upstream_call(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post("https://queue.fal.run/fal-ai/unpriced-model").mock(
-                return_value=httpx.Response(200, json={"request_id": "req-1"})
+                return_value=response_for_respx(httpx.Response(200, json={"request_id": "req-1"}))
             )
             response = client.post("/fal_ai/fal-ai/unpriced-model", json={"image_url": "https://example.com/in.png"})
 
@@ -9858,9 +9893,9 @@ class TestFalAIPassthroughRoute:
             "fal_ai/fal-ai/priceless-model",
             {"litellm_provider": "fal_ai", "mode": "image_generation"},
         )
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post("https://queue.fal.run/fal-ai/priceless-model").mock(
-                return_value=httpx.Response(200, json={"request_id": "req-1"})
+                return_value=response_for_respx(httpx.Response(200, json={"request_id": "req-1"}))
             )
             response = client.post("/fal_ai/fal-ai/priceless-model", json={"image_url": "https://example.com/in.png"})
 
@@ -9876,9 +9911,9 @@ class TestFalAIPassthroughRoute:
             "fal_ai/fal-ai/keyed-only-model",
             {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_image_512": 0.02},
         )
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.post("https://queue.fal.run/fal-ai/keyed-only-model").mock(
-                return_value=httpx.Response(200, json={"request_id": "req-1"})
+                return_value=response_for_respx(httpx.Response(200, json={"request_id": "req-1"}))
             )
             priced = client.post(
                 "/fal_ai/fal-ai/keyed-only-model", json={"image_url": "https://example.com/in.png", "resolution": "512"}
@@ -9891,9 +9926,9 @@ class TestFalAIPassthroughRoute:
             assert len(route.calls) == 1
 
     def test_status_get_on_unpriced_endpoint_forwards(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.get("https://queue.fal.run/fal-ai/unpriced-model/requests/req-9/status").mock(
-                return_value=httpx.Response(200, json={"status": "IN_PROGRESS"})
+                return_value=response_for_respx(httpx.Response(200, json={"status": "IN_PROGRESS"}))
             )
             response = client.get("/fal_ai/fal-ai/unpriced-model/requests/req-9/status")
 
@@ -9956,9 +9991,9 @@ class TestOpenRouterPassthroughRoute:
     def test_forwards_every_method_and_body_upstream(
         self, client: TestClient, method: str, body: dict[str, str] | None
     ) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.request(method, "https://openrouter.example/base/alpha/decisions").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
+                return_value=response_for_respx(httpx.Response(200, json={"id": "upstream_123"}))
             )
             response = client.request(method, "/openrouter/alpha/decisions", json=body)
 
@@ -10082,9 +10117,11 @@ class TestTinyFishProxyRoute:
         yield TestClient(app)
 
     def test_forwards_run_with_server_key_not_callers(self, tinyfish_client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post("https://agent.tinyfish.ai/v1/automation/run").mock(
-                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 2})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 2})
+                )
             )
             response = tinyfish_client.post(
                 "/tinyfish/v1/automation/run", json=self.RUN_BODY, headers={"X-API-Key": "sk-callers-virtual-key"}
@@ -10122,9 +10159,9 @@ class TestTinyFishProxyRoute:
     def test_submit_paths_with_extra_slashes_are_rejected_before_forwarding(
         self, tinyfish_client: TestClient, path: str
     ) -> None:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             upstream.post(url__regex=r"https://agent\.tinyfish\.ai/.*").mock(
-                return_value=httpx.Response(200, json={"run_id": "run-slash", "status": "PENDING"})
+                return_value=response_for_respx(httpx.Response(200, json={"run_id": "run-slash", "status": "PENDING"}))
             )
             response = tinyfish_client.post(path, json=self.RUN_BODY)
 
@@ -10144,9 +10181,11 @@ class TestTinyFishProxyRoute:
     ) -> None:
         monkeypatch.setenv("TINYFISH_ALLOW_AUTHENTICATED_RUNS", "true")
 
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post("https://agent.tinyfish.ai/v1/automation/run").mock(
-                return_value=httpx.Response(200, json={"run_id": "run-2", "status": "COMPLETED", "num_of_steps": 1})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"run_id": "run-2", "status": "COMPLETED", "num_of_steps": 1})
+                )
             )
             response = tinyfish_client.post("/tinyfish/v1/automation/run", json={**self.RUN_BODY, "use_vault": True})
 
@@ -10167,9 +10206,9 @@ class TestTinyFishProxyRoute:
     ) -> None:
         monkeypatch.setenv("TINYFISH_AGENT_API_BASE", "https://agent.staging.tinyfish.ai")
 
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.get("https://agent.staging.tinyfish.ai/v1/runs/run-123").mock(
-                return_value=httpx.Response(200, json={"run_id": "run-123", "status": "RUNNING"})
+                return_value=response_for_respx(httpx.Response(200, json={"run_id": "run-123", "status": "RUNNING"}))
             )
             response = tinyfish_client.get("/tinyfish/v1/runs/run-123")
 
@@ -10188,7 +10227,9 @@ class TestTinyFishProxyRoute:
         billing mode, because the generic passthrough honors both from the caller's body."""
         with respx.mock as upstream:
             route = upstream.post("https://agent.tinyfish.ai/v1/automation/run").mock(
-                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 1})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 1})
+                )
             )
             response = tinyfish_client.post("/tinyfish/v1/automation/run", json=body)
 
@@ -10199,7 +10240,7 @@ class TestTinyFishProxyRoute:
     def test_rejects_envelope_stream_on_cancel(self, tinyfish_client: TestClient) -> None:
         with respx.mock as upstream:
             route = upstream.post("https://agent.tinyfish.ai/v1/runs/run-1/cancel").mock(
-                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "CANCELLED"})
+                return_value=response_for_respx(httpx.Response(200, json={"run_id": "run-1", "status": "CANCELLED"}))
             )
             response = tinyfish_client.post("/tinyfish/v1/runs/run-1/cancel", json={"stream": True})
 
@@ -10222,7 +10263,9 @@ class TestTinyFishProxyRoute:
         the gates only saw fields the body parsed to as JSON."""
         with respx.mock as upstream:
             route = upstream.post("https://agent.tinyfish.ai/v1/automation/run").mock(
-                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 1})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 1})
+                )
             )
             response = tinyfish_client.post(
                 "/tinyfish/v1/automation/run", content=content, headers={"Content-Type": content_type}
@@ -10233,9 +10276,9 @@ class TestTinyFishProxyRoute:
         assert not route.called
 
     def test_cancel_without_body_forwards(self, tinyfish_client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.post("https://agent.tinyfish.ai/v1/runs/run-1/cancel").mock(
-                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "CANCELLED"})
+                return_value=response_for_respx(httpx.Response(200, json={"run_id": "run-1", "status": "CANCELLED"}))
             )
             response = tinyfish_client.post("/tinyfish/v1/runs/run-1/cancel")
 
@@ -10387,9 +10430,9 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, content_type: str
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("read"))
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/_search").mock(
-                return_value=httpx.Response(200, json=dict(self.HITS))
+                return_value=response_for_respx(httpx.Response(200, json=dict(self.HITS)))
             )
             response = opensearch_client.post(
                 "/opensearch/docs/_search",
@@ -10407,8 +10450,10 @@ class TestOpenSearchProxyRoute:
     ) -> None:
         team_grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["read"]}]}
         _act_as(monkeypatch, UserAPIKeyAuth(api_key="sk-virtual", team_id="team-a", team_metadata=team_grant))
-        with respx.mock(assert_all_called=True) as upstream:
-            upstream.post(f"{DOCS_UPSTREAM}/_search").mock(return_value=httpx.Response(200, json=dict(self.HITS)))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            upstream.post(f"{DOCS_UPSTREAM}/_search").mock(
+                return_value=response_for_respx(httpx.Response(200, json=dict(self.HITS)))
+            )
             response = opensearch_client.post(
                 "/opensearch/docs/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
             )
@@ -10433,8 +10478,10 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, api: str
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("read"))
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(201, json={}))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(
+                return_value=response_for_respx(httpx.Response(201, json={}))
+            )
             response = opensearch_client.request(
                 method,
                 f"/opensearch/docs/{api}",
@@ -10453,9 +10500,9 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, document: bytes
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("read", "write"))
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
-                return_value=httpx.Response(201, json={"_id": "abc", "result": "created"})
+                return_value=response_for_respx(httpx.Response(201, json={"_id": "abc", "result": "created"}))
             )
             response = opensearch_client.post(
                 "/opensearch/docs/_doc", content=document, headers={"Content-Type": JSON_TYPE}
@@ -10493,9 +10540,9 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, body: bytes, status_code: int
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("write"))
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             route = upstream.route(host=OPENSEARCH_HOST).mock(
-                return_value=httpx.Response(200, json={"get": {"_source": {"text": "Remote work"}}})
+                return_value=response_for_respx(httpx.Response(200, json={"get": {"_source": {"text": "Remote work"}}}))
             )
             response = opensearch_client.post(
                 f"/opensearch/docs/{path}", content=body, headers={"Content-Type": NDJSON_TYPE}
@@ -10533,9 +10580,9 @@ class TestOpenSearchProxyRoute:
         body: bytes,
     ) -> None:
         _act_as(monkeypatch, caller)
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(url__startswith=f"{DOCS_UPSTREAM}/{path.partition('?')[0]}").mock(
-                return_value=httpx.Response(200, json={"result": "updated"})
+                return_value=response_for_respx(httpx.Response(200, json={"result": "updated"}))
             )
             response = opensearch_client.post(
                 f"/opensearch/docs/{path}", content=body, headers={"Content-Type": NDJSON_TYPE}
@@ -10556,8 +10603,10 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth, index_name: str
     ) -> None:
         _act_as(monkeypatch, caller)
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(
+                return_value=response_for_respx(httpx.Response(200, json={}))
+            )
             response = opensearch_client.post(
                 f"/opensearch/{index_name}/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
             )
@@ -10585,8 +10634,10 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, path: str
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("read", "write"))
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(
+                return_value=response_for_respx(httpx.Response(200, json={}))
+            )
             response = opensearch_client.request(
                 method, path, content=b'{"source":"{}"}', headers={"Content-Type": JSON_TYPE}
             )
@@ -10615,9 +10666,9 @@ class TestOpenSearchProxyRoute:
         status: int,
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("read"))
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.route(method=method, host=OPENSEARCH_HOST, path=upstream_path).mock(
-                return_value=httpx.Response(status, content=b"" if method == "HEAD" else b"{}")
+                return_value=response_for_respx(httpx.Response(status, content=b"" if method == "HEAD" else b"{}"))
             )
             response = opensearch_client.request(
                 method, path, content=b"" if method == "HEAD" else self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
@@ -10631,8 +10682,10 @@ class TestOpenSearchProxyRoute:
     ) -> None:
         settings: Final = {"prod-docs-v2": {"settings": {"index": {"number_of_shards": "2"}}}}
         _act_as(monkeypatch, UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN))
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.get(f"{DOCS_UPSTREAM}/_settings").mock(return_value=httpx.Response(200, json=settings))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            route = upstream.get(f"{DOCS_UPSTREAM}/_settings").mock(
+                return_value=response_for_respx(httpx.Response(200, json=settings))
+            )
             response = opensearch_client.get("/opensearch/docs/_settings")
 
         assert (response.status_code, response.json()) == (200, settings)
@@ -10649,8 +10702,8 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, index_name: str, detail: str
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("read", index_name=index_name))
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.route().mock(return_value=httpx.Response(200, json={}))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            route = upstream.route().mock(return_value=response_for_respx(httpx.Response(200, json={})))
             response = opensearch_client.post(
                 f"/opensearch/{index_name}/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
             )
@@ -10683,8 +10736,8 @@ class TestOpenSearchProxyRoute:
             ),
         )
         _act_as(monkeypatch, _opensearch_caller("read"))
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.route().mock(return_value=httpx.Response(200, json={}))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            route = upstream.route().mock(return_value=response_for_respx(httpx.Response(200, json={})))
             response = opensearch_client.post(
                 "/opensearch/docs/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
             )
@@ -10706,8 +10759,10 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("read", "write"))
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(
+                return_value=response_for_respx(httpx.Response(200, json={}))
+            )
             response = opensearch_client.post(path, content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE})
 
         assert (response.status_code, route.called) == (400, False)
@@ -10851,8 +10906,10 @@ class TestOpenSearchProxyRoute:
         detail: str,
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("read", "write"))
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(
+                return_value=response_for_respx(httpx.Response(200, json={}))
+            )
             response = opensearch_client.post(
                 f"/opensearch/docs/{api}", content=body, headers={"Content-Type": content_type}
             )
@@ -10876,9 +10933,9 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, api: str, body: bytes, content_type: str
     ) -> None:
         monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/{api}").mock(
-                return_value=httpx.Response(200, json={"errors": False, "items": []})
+                return_value=response_for_respx(httpx.Response(200, json={"errors": False, "items": []}))
             )
             response = opensearch_client.post(
                 f"/opensearch/docs/{api}",
@@ -10914,9 +10971,9 @@ class TestOpenSearchProxyRoute:
         monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
         monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
         monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
-                return_value=httpx.Response(201, json={"_id": "abc", "result": "created"})
+                return_value=response_for_respx(httpx.Response(201, json={"_id": "abc", "result": "created"}))
             )
             response = opensearch_client.post(
                 "/opensearch/docs/_doc",
@@ -10930,9 +10987,9 @@ class TestOpenSearchProxyRoute:
         self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("write"))
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/_bulk").mock(
-                return_value=httpx.Response(200, json={"errors": False, "items": []})
+                return_value=response_for_respx(httpx.Response(200, json={"errors": False, "items": []}))
             )
             response = opensearch_client.post(
                 "/opensearch/docs/_bulk",
@@ -10986,9 +11043,9 @@ class TestOpenSearchProxyRoute:
         sent_query: bytes,
     ) -> None:
         _act_as(monkeypatch, _opensearch_caller("read"))
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.route(method=method, host=OPENSEARCH_HOST, path="/prod-docs-v2/_search").mock(
-                return_value=httpx.Response(200, json=dict(self.HITS))
+                return_value=response_for_respx(httpx.Response(200, json=dict(self.HITS)))
             )
             response = opensearch_client.request(method, path, content=body, headers={"Content-Type": JSON_TYPE})
 
@@ -11031,9 +11088,9 @@ class TestOpenSearchProxyRoute:
             b'{"text":"c","model":"text-embedding-3-small"}',
             b'{"text":"d","model":"text-embedding-3-small"}',
         )
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
-                return_value=httpx.Response(201, json={"result": "created"})
+                return_value=response_for_respx(httpx.Response(201, json={"result": "created"}))
             )
             statuses: Final = tuple(
                 opensearch_client.post(
@@ -11053,8 +11110,10 @@ class TestOpenSearchProxyRoute:
     ) -> None:
         rejected: Final = {"error": {"type": "mapper_parsing_exception"}, "status": 400}
         _act_as(monkeypatch, _opensearch_caller("write"))
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(return_value=httpx.Response(400, json=rejected))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
+                return_value=response_for_respx(httpx.Response(400, json=rejected))
+            )
             response = opensearch_client.post(
                 "/opensearch/docs/_doc", content=document, headers={"Content-Type": JSON_TYPE}
             )
@@ -11067,8 +11126,10 @@ class TestOpenSearchProxyRoute:
     ) -> None:
         not_found: Final = {"error": {"type": "index_not_found_exception", "index": "prod-docs-v2"}, "status": 404}
         _act_as(monkeypatch, _opensearch_caller("read"))
-        with respx.mock(assert_all_called=True) as upstream:
-            upstream.post(f"{DOCS_UPSTREAM}/_search").mock(return_value=httpx.Response(404, json=not_found))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            upstream.post(f"{DOCS_UPSTREAM}/_search").mock(
+                return_value=response_for_respx(httpx.Response(404, json=not_found))
+            )
             response = opensearch_client.post(
                 "/opensearch/docs/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
             )
@@ -11083,8 +11144,10 @@ class TestOpenSearchProxyRoute:
             empty_file.write_text("")
             monkeypatch.setenv(name, str(empty_file))
         _act_as(monkeypatch, _opensearch_caller("read", index_name="no-credentials"))
-        with respx.mock(assert_all_called=False) as upstream:
-            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(
+                return_value=response_for_respx(httpx.Response(200, json={}))
+            )
             response = opensearch_client.post(
                 "/opensearch/no-credentials/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
             )
@@ -11157,9 +11220,11 @@ class TestOpenSearchProxyRoute:
         with (
             patch("boto3.client", return_value=sts),
             patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
-            respx.mock(assert_all_called=True) as upstream,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream,
         ):
-            upstream.route(method=method, host=domain).mock(return_value=httpx.Response(200, json={}))
+            upstream.route(method=method, host=domain).mock(
+                return_value=response_for_respx(httpx.Response(200, json={}))
+            )
             response = opensearch_client.request(
                 method, f"/opensearch/docs/{api}", content=b"{}", headers={"Content-Type": JSON_TYPE}
             )

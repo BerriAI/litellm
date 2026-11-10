@@ -16,7 +16,7 @@ import unittest.mock as mock
 # Use __file__ so the import path is correct regardless of the pytest working directory.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm
@@ -70,7 +70,7 @@ class TestResponsesSessionChaining:
                 request=request,
             )
 
-        with mock.patch("httpx.AsyncClient.send", mock_send):
+        with mock.patch("httpx2.AsyncClient.send", mock_send):
             try:
                 await litellm.aresponses(
                     input="hello",
@@ -116,7 +116,7 @@ class TestResponsesSessionChaining:
             }
             return httpx.Response(200, json=response_json, request=request)
 
-        with mock.patch("httpx.AsyncClient.send", mock_send):
+        with mock.patch("httpx2.AsyncClient.send", mock_send):
             try:
                 await litellm.aresponses(
                     input="hello",

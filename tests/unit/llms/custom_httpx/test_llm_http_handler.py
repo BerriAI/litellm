@@ -10,10 +10,11 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
-import httpcore
-import httpx
+import httpcore2 as httpcore
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 import websockets.exceptions
 from botocore.credentials import RefreshableCredentials
 from h2.events import ConnectionTerminated
@@ -78,6 +79,7 @@ from litellm.types.utils import (
     ProviderSpecificHeader,
     TranscriptionResponse,
 )
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
@@ -1399,7 +1401,7 @@ async def test_bedrock_secret_lookups_leave_the_event_loop_free(
         "AGENTCORE_SEARCH_TOOL_NAME",
         "AGENTCORE_GATEWAY_TOKEN",
     )
-    upstream: Final = respx_mock.route().mock(return_value=upstream_answer)
+    upstream: Final = respx_mock.route().mock(return_value=response_for_respx(upstream_answer))
 
     _ = await call()
 
@@ -4298,10 +4300,10 @@ def _rejection(message: str) -> httpx.Response:
 
 
 def _call_azure_ai(recorder: _RecordedAzureAI, **overrides):
-    import respx
+    from tests._support import respx_httpx2 as respx
 
-    with respx.mock(assert_all_called=True) as router:
-        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=side_effect_for_respx(recorder))
         return litellm.completion(
             model="azure_ai/grok-3",
             messages=[{"role": "user", "content": "hi"}],
@@ -4381,14 +4383,14 @@ def test_an_extra_input_outside_a_tool_is_retried_when_dropping_params_was_asked
 async def test_a_tool_field_the_provider_rejects_is_dropped_and_retried_on_the_async_path(
     httpx_transport,
 ):
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     recorder = _RecordedAzureAI(
         [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
     )
 
-    with respx.mock(assert_all_called=True) as router:
-        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=side_effect_for_respx(recorder))
         response = await litellm.acompletion(
             model="azure_ai/grok-3",
             messages=[{"role": "user", "content": "hi"}],
@@ -4407,12 +4409,12 @@ async def test_a_tool_field_the_provider_rejects_is_dropped_and_retried_on_the_a
 async def test_a_provider_that_keeps_rejecting_is_not_retried_forever_on_the_async_path(
     httpx_transport,
 ):
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION)])
 
-    with respx.mock(assert_all_called=True) as router:
-        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=side_effect_for_respx(recorder))
         with pytest.raises(litellm.BadRequestError):
             await litellm.acompletion(
                 model="azure_ai/grok-3",
@@ -6737,11 +6739,11 @@ async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_e
     foundry_api_base: Final = "https://my-resource.services.ai.azure.com/anthropic"
     upstream: Final = _AnthropicMessagesUpstream()
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         table_route: Final = router.get(anthropic_beta_headers_url).mock(
-            side_effect=lambda request: httpx.Response(
+            side_effect=side_effect_for_respx(lambda request: httpx.Response(
                 200, json=bundled_table, headers={"x-fetch-thread": str(threading.get_ident())}
-            )
+            ))
         )
         await BaseLLMHTTPHandler().async_anthropic_messages_handler(
             model="claude-sonnet-4-6",
@@ -6765,7 +6767,7 @@ async def test_first_foundry_request_with_betas_fetches_the_beta_table_off_the_e
 async def test_a_stream_answered_with_one_json_body_is_not_replayed_for_a_provider_that_does_not_opt_in(
     httpx_transport: None,
 ) -> None:
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.post("https://api.openai.com/v1/responses").respond(json={"error": {"message": "quota exceeded"}})
         stream: Final = await litellm.aresponses(
             model="openai/gpt-5.5", input="Hello", api_key="fake-key", stream=True

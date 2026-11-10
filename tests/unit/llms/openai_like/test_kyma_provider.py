@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -104,7 +103,7 @@ def test_kyma_is_available_in_add_model_form():
 
 
 def test_kyma_chat_completion_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(_CHAT_URL).respond(
             200,
             json={
@@ -180,7 +179,7 @@ def test_long_prompt_is_priced_at_its_tier(model: str, threshold_k: int):
 @pytest.mark.parametrize("model", ("kyma/sonar", _UNLISTED_MODEL))
 def test_kyma_response_is_billed_at_the_cost_kyma_reports(model: str):
     reported_cost: Final = 0.00721
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost})
         )
@@ -190,7 +189,7 @@ def test_kyma_response_is_billed_at_the_cost_kyma_reports(model: str):
 
 
 def test_deployment_pricing_overrides_the_cost_kyma_reports():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": 0.00721})
         )
@@ -215,7 +214,7 @@ def _catalog_price(model: str, prompt_tokens: int, completion_tokens: int) -> fl
 @pytest.mark.parametrize("reported_cost", ("-0.5", "1e999"))
 def test_unusable_cost_from_kyma_falls_back_to_the_catalog_price(reported_cost: str):
     usage: Final = {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": "REPORTED_COST"}
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(_CHAT_URL).respond(
             200,
             content=json.dumps(_kyma_chat_body(usage)).replace('"REPORTED_COST"', reported_cost),
@@ -228,7 +227,7 @@ def test_unusable_cost_from_kyma_falls_back_to_the_catalog_price(reported_cost: 
 
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_deployment_base_model_overrides_the_cost_kyma_reports():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": 0.00721})
         )
@@ -244,7 +243,7 @@ def test_deployment_base_model_overrides_the_cost_kyma_reports():
 
 def test_interaction_on_kyma_is_billed_at_the_cost_kyma_reports():
     reported_cost: Final = 0.00721
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost})
         )
@@ -273,7 +272,7 @@ def test_interaction_on_another_openai_compatible_provider_is_billed_at_its_repo
         ],
         "usage": {"input_tokens": 4, "output_tokens": 3, "total_tokens": 7, "cost": 0.00721},
     }
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         upstream.route(path__regex=r".*/chat/completions$").respond(200, json=_kyma_chat_body(chat_usage))
         upstream.route(path__regex=r".*/responses$").respond(200, json=responses_body)
         interaction: Final = litellm.interactions.create(model=model, input="ping", api_key="k")
@@ -283,7 +282,7 @@ def test_interaction_on_another_openai_compatible_provider_is_billed_at_its_repo
 
 def test_sdk_completion_cost_prices_kyma_at_the_cost_kyma_reports():
     reported_cost: Final = 0.00721
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": reported_cost})
         )
@@ -293,7 +292,7 @@ def test_sdk_completion_cost_prices_kyma_at_the_cost_kyma_reports():
 
 
 def _kyma_sdk_response(usage: dict[str, float]) -> litellm.ModelResponse:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(_CHAT_URL).respond(200, json=_kyma_chat_body(usage))
         response: Final = litellm.completion(model="kyma/sonar", messages=[{"role": "user", "content": "ping"}], api_key="k")
     assert isinstance(response, litellm.ModelResponse)
@@ -333,7 +332,7 @@ def _with_kyma_discount_and_margin(monkeypatch: pytest.MonkeyPatch) -> float:
 
 def test_cost_kyma_reports_takes_the_configured_discount_and_margin(monkeypatch: pytest.MonkeyPatch):
     adjustment: Final = _with_kyma_discount_and_margin(monkeypatch)
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7, "cost": 0.008})
         )
@@ -420,7 +419,7 @@ def test_cost_headers_show_the_discount_and_margin_taken_from_the_cost_kyma_repo
 
 @pytest.mark.parametrize("thinking", ({"type": "enabled", "budget_tokens": 1024}, {"type": "adaptive"}))
 def test_messages_thinking_on_a_kyma_claude_model_is_sent_as_reasoning_effort(thinking: dict[str, object]):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
         )
@@ -438,7 +437,7 @@ def test_messages_thinking_on_a_kyma_claude_model_is_sent_as_reasoning_effort(th
 
 def test_kyma_model_missing_from_the_catalog_keeps_its_tools():
     tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(_CHAT_URL).respond(
             200, json=_kyma_chat_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
         )
@@ -461,7 +460,7 @@ def _transcribe() -> object:
 
 @pytest.mark.parametrize("call", (_generate_image, _transcribe))
 def test_unpriced_kyma_media_calls_are_refused_without_calling_kyma(call: Callable[[], object]):
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         kyma: Final = upstream.route(host="kymaapi.com").respond(202, json={"id": "job_kyma"})
         with pytest.raises(litellm.BadRequestError):
             call()

@@ -3,10 +3,11 @@ import json
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -87,10 +88,10 @@ def test_unpriced_fallback_search_tool_is_billed_at_its_own_price_not_the_failed
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post(EXA_SEARCH_URL).mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(500, json={"error": "primary down"}),
             httpx.Response(200, json={"results": [{"title": "t", "url": "https://example.com"}]}),
-        )
+        ))
     )
     map_price, _ = search_provider_cost_per_query(model="exa_ai/search", custom_llm_provider="exa_ai")
     primary_price: Final = 0.05

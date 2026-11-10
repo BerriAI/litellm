@@ -1,3 +1,4 @@
+import httpx2 as httpx
 import json
 import logging
 import traceback
@@ -7,9 +8,11 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
-import respx
-from httpx import Response
 
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
+
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import Router
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -119,7 +122,7 @@ async def test_azure_ai_acompletion_posts_the_conversation_to_the_models_endpoin
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     route: Final = respx_mock.post("https://example-resource.services.ai.azure.com/models/chat/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-azure-ai",
@@ -129,7 +132,7 @@ async def test_azure_ai_acompletion_posts_the_conversation_to_the_models_endpoin
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hi!"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 20, "completion_tokens": 2, "total_tokens": 22},
             },
-        )
+        ))
     )
     messages: Final = [
         {"role": "user", "content": "hi"},
@@ -170,7 +173,7 @@ def test_azure_ai_completion_routes_flexible_api_base(
     respx_mock: respx.MockRouter, api_base: str, expected_path: str
 ) -> None:
     route: Final = respx_mock.post(host="example-resource.services.ai.azure.com", path=expected_path).mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-azure-ai",
@@ -180,7 +183,7 @@ def test_azure_ai_completion_routes_flexible_api_base(
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 14, "completion_tokens": 1, "total_tokens": 15},
             },
-        )
+        ))
     )
     messages: Final = [{"role": "user", "content": "What is the meaning of life?"}]
 
@@ -208,11 +211,11 @@ def test_azure_model_router_stream_chunks_report_selected_model(respx_mock: resp
         "data: [DONE]\n\n"
     )
     route: Final = respx_mock.post(url__startswith=api_url).mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=stream_body,
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     chunks: Final = tuple(
         litellm.completion(
@@ -248,7 +251,9 @@ def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRout
         ],
         "usage": {"prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14},
     }
-    route: Final = respx_mock.post(url__startswith=api_url).mock(return_value=Response(200, json=response_body))
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=response_for_respx(httpx.Response(200, json=response_body))
+    )
     messages: Final = [{"role": "user", "content": "hello"}]
     response: Final = litellm.completion(
         model="azure_ai/gpt-4.1-mini",
@@ -368,7 +373,7 @@ def test_azure_ai_grok_bills_reasoning_tokens_reported_outside_completion_tokens
 ) -> None:
     api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
     route: Final = respx_mock.post(url__startswith=api_url).mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-grok",
@@ -383,7 +388,7 @@ def test_azure_ai_grok_bills_reasoning_tokens_reported_outside_completion_tokens
                     "completion_tokens_details": {"reasoning_tokens": 312},
                 },
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -437,7 +442,7 @@ def test_azure_ai_counts_reasoning_tokens_once_whatever_the_deployment_is_named(
 ) -> None:
     api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
     respx_mock.post(url__startswith=api_url).mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-x",
@@ -447,7 +452,7 @@ def test_azure_ai_counts_reasoning_tokens_once_whatever_the_deployment_is_named(
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "42"}, "finish_reason": "stop"}],
                 "usage": usage,
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -475,7 +480,9 @@ def test_azure_ai_grok_stream_folds_reasoning_tokens_into_the_usage_chunk(respx_
         "data: [DONE]\n\n"
     )
     route: Final = respx_mock.post(url__startswith=api_url).mock(
-        return_value=Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+        )
     )
 
     chunks: Final = tuple(
@@ -531,7 +538,9 @@ def test_azure_ai_stream_counts_reasoning_tokens_once_whatever_the_chunks_call_t
     )
     stream_body: Final = "".join(f"data: {json.dumps({**chunk_base, **chunk})}\n\n" for chunk in chunks_sent)
     respx_mock.post(url__startswith=api_url).mock(
-        return_value=Response(200, text=f"{stream_body}data: [DONE]\n\n", headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=f"{stream_body}data: [DONE]\n\n", headers={"content-type": "text/event-stream"})
+        )
     )
 
     chunks: Final = tuple(
@@ -562,7 +571,6 @@ def test_azure_model_router_response_shows_actual_model():
 
     Regression test for: Azure Model Router should show actual model in response
     """
-    from httpx import Response
 
     from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
     from litellm.types.utils import ModelResponse
@@ -634,7 +642,6 @@ def test_azure_model_router_stamps_selected_model_on_hidden_params():
     re-derive by looking for "model-router" in the model string. Deployments whose alias
     does not contain that text are invisible to the string check.
     """
-    from httpx import Response
 
     from litellm.llms.azure_ai.common_utils import (
         AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
@@ -702,7 +709,7 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
     Regression test: Azure AI returns 400 when tools contain copilot_mcp_server_name.
     LiteLLM should strip the field and retry automatically.
     """
-    import httpx
+    import httpx2 as httpx
 
     config = AzureAIStudioConfig()
 
@@ -760,7 +767,7 @@ def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
 
 
 def test_extra_parameters_error_drops_reasoning_effort_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
-    import httpx
+    import httpx2 as httpx
 
     error_text: Final = json.dumps(
         {
@@ -792,7 +799,7 @@ def test_extra_parameters_error_drops_reasoning_effort_with_one_warning(caplog: 
 
 
 def test_extra_inputs_error_names_drop_params_in_the_reasoning_drop_warning(caplog: pytest.LogCaptureFixture) -> None:
-    import httpx
+    import httpx2 as httpx
 
     detail: Final = [
         {"type": "extra_forbidden", "loc": ["body", "reasoning_effort"], "msg": "Extra inputs are not permitted"}
@@ -1179,7 +1186,7 @@ def test_azure_ai_deployment_reads_only_its_own_breakpoint_flag_not_a_siblings_s
 
     routes: Final = {
         host: respx_mock.post(host=f"{host}.services.ai.azure.com", path="/models/chat/completions").mock(
-            return_value=Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "chatcmpl-azure-ai",
@@ -1189,7 +1196,7 @@ def test_azure_ai_deployment_reads_only_its_own_breakpoint_flag_not_a_siblings_s
                     "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
                 },
-            )
+            ))
         )
         for host in registration_order
     }

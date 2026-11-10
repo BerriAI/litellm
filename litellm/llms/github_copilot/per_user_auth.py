@@ -18,7 +18,7 @@ from typing import (
 )
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

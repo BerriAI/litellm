@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from typing import Final, cast
 from unittest.mock import AsyncMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm
@@ -1041,7 +1041,7 @@ class TestVertexGemmaCompletion:
         the caller's transport was silently dropped, sending the request to the
         real Vertex endpoint.
         """
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
         from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
@@ -1112,7 +1112,7 @@ class TestVertexGemmaCompletion:
 
     def test_sync_completion_ignores_async_client_for_backwards_compatibility(self):
         import asyncio
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
         from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
@@ -1182,7 +1182,7 @@ class TestVertexGemmaCompletion:
     @pytest.mark.asyncio
     async def test_async_completion_honors_raw_httpx_client_transport(self):
         """Async counterpart: a raw httpx.AsyncClient transport must be honored."""
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
             VertexGemmaConfig,
@@ -1243,7 +1243,7 @@ class TestVertexGemmaCompletion:
 
     @pytest.mark.asyncio
     async def test_async_completion_ignores_sync_client_for_backwards_compatibility(self):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
         from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
@@ -1330,7 +1330,7 @@ def _gemma_cached_access_token():
 
 
 def test_sync_gemma_stream(_gemma_cached_access_token):
-    import httpx
+    import httpx2 as httpx
 
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
@@ -1381,7 +1381,7 @@ def test_gemma_stream_is_bounded_by_the_request_timeout_not_the_stream_timeout(_
 
 @pytest.mark.asyncio
 async def test_async_gemma_responses_stream(_gemma_cached_access_token):
-    import httpx
+    import httpx2 as httpx
 
     captured = {}
 

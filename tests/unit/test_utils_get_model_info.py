@@ -4,10 +4,10 @@ from collections.abc import Collection, Iterator, Mapping
 from pathlib import Path
 from typing import Final, Literal, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import get_model_info
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
@@ -596,8 +596,10 @@ def test_get_model_info_huggingface_models(monkeypatch):
 
     monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf_abc123")
 
-    with respx.mock(assert_all_called=False) as huggingface:
-        huggingface.get(host="huggingface.co").mock(side_effect=httpx.ConnectError("huggingface.co is unreachable"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as huggingface:
+        huggingface.get(host="huggingface.co").mock(
+            side_effect=side_effect_for_respx(httpx.ConnectError("huggingface.co is unreachable"))
+        )
         router = Router(
             model_list=[
                 {

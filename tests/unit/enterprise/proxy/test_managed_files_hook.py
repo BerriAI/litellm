@@ -5,6 +5,7 @@ Regression test for afile_retrieve called without credentials in
 async_post_call_success_hook when processing completed batch responses.
 """
 
+from tests._support.respx_httpx2 import response_for_respx
 import asyncio
 import base64
 import json
@@ -1168,8 +1169,9 @@ async def test_should_skip_non_file_unified_id_on_output_file_id():
 async def test_afile_content_reads_from_the_deployment_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unified-id content retrieval must validate and fetch the s3:// file against the
     deployment's s3_bucket_name, with no AWS_S3_BUCKET_NAME env set."""
-    import httpx
-    import respx
+    import httpx2 as httpx
+
+    from tests._support import respx_httpx2 as respx
 
     import litellm
     from litellm import Router
@@ -1205,7 +1207,7 @@ async def test_afile_content_reads_from_the_deployment_bucket(monkeypatch: pytes
     with respx.mock:
         route = respx.get(
             "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
-        ).mock(return_value=httpx.Response(200, content=b'{"recordId":"req-1"}'))
+        ).mock(return_value=response_for_respx(httpx.Response(200, content=b'{"recordId":"req-1"}')))
 
         response = await managed_files.afile_content(
             file_id=unified_file_id,
@@ -1249,8 +1251,8 @@ def _managed_files_with_deletion_row(unified_file_id, provider_file_id, file_obj
 
 @pytest.mark.asyncio
 async def test_afile_delete_bedrock_uses_deployment_bucket_and_signed_s3_delete(monkeypatch):
-    import httpx
-    import respx
+    import httpx2 as httpx
+    from tests._support import respx_httpx2 as respx
 
     from litellm import Router
 
@@ -1279,7 +1281,7 @@ async def test_afile_delete_bedrock_uses_deployment_bucket_and_signed_s3_delete(
     with respx.mock:
         route = respx.delete(
             "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files/input.jsonl"
-        ).mock(return_value=httpx.Response(204))
+        ).mock(return_value=response_for_respx(httpx.Response(204)))
         response = await managed_files.afile_delete(
             file_id=unified_file_id,
             litellm_parent_otel_span=None,
@@ -1329,8 +1331,8 @@ async def test_afile_content_bedrock_unified_id_end_to_end(monkeypatch):
     Regression test for "BedrockFilesConfig does not support file content
     retrieval" raised on this path.
     """
-    import httpx
-    import respx
+    import httpx2 as httpx
+    from tests._support import respx_httpx2 as respx
 
     import litellm
     from litellm import Router
@@ -1366,7 +1368,7 @@ async def test_afile_content_bedrock_unified_id_end_to_end(monkeypatch):
     expected_url = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-batch-outputs/job-123/input.jsonl.out"
     with respx.mock:
         route = respx.get(expected_url).mock(
-            return_value=httpx.Response(200, content=b'{"recordId": "x"}')
+            return_value=response_for_respx(httpx.Response(200, content=b'{"recordId": "x"}'))
         )
 
         response = await managed_files.afile_content(
@@ -1947,8 +1949,8 @@ async def test_afile_delete_bedrock_unified_id_end_to_end(monkeypatch):
     Regression test for "BedrockFilesConfig does not support file deletion"
     raised on this path.
     """
-    import httpx
-    import respx
+    import httpx2 as httpx
+    from tests._support import respx_httpx2 as respx
 
     import litellm
     from litellm import Router
@@ -1982,7 +1984,7 @@ async def test_afile_delete_bedrock_unified_id_end_to_end(monkeypatch):
 
     expected_url = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files/job-123/input.jsonl"
     with respx.mock:
-        route = respx.delete(expected_url).mock(return_value=httpx.Response(204))
+        route = respx.delete(expected_url).mock(return_value=response_for_respx(httpx.Response(204)))
 
         response = await managed_files.afile_delete(
             file_id=unified_file_id,

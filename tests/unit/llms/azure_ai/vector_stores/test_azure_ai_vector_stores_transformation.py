@@ -1,10 +1,11 @@
 import json
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.azure_ai.vector_stores.transformation import AzureAIVectorStoreConfig
 from litellm.types.utils import EmbeddingResponse
@@ -27,7 +28,7 @@ async def test_basic_search_vector_store(
         "https://azure-kb-search.search.windows.net/indexes/my-vector-index/docs/search?api-version=2024-07-01"
     )
     embedding_route = respx_mock.post(url__regex=r"https://azure-embed\.example\.com/.*/embeddings.*").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -35,10 +36,10 @@ async def test_basic_search_vector_store(
                 "model": "text-embedding-3-large",
                 "usage": {"prompt_tokens": 2, "total_tokens": 2},
             },
-        )
+        ))
     )
     search_route = respx_mock.post(search_url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "value": [
@@ -49,7 +50,7 @@ async def test_basic_search_vector_store(
                     }
                 ]
             },
-        )
+        ))
     )
     base_request_args = {
         "vector_store_id": "my-vector-index",
@@ -149,7 +150,7 @@ def test_transform_falls_back_to_sdk_embedding_without_executor(
 ):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     embedding_route = respx_mock.post(STORE_EMBEDDINGS_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -157,7 +158,7 @@ def test_transform_falls_back_to_sdk_embedding_without_executor(
                 "model": "text-embedding-3-small",
                 "usage": {"prompt_tokens": 2, "total_tokens": 2},
             },
-        )
+        ))
     )
     transform_kwargs = _transform_kwargs(None)
     transform_kwargs["litellm_params"] = {

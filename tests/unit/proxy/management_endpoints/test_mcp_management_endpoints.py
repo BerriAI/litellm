@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Final, List, Literal, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient

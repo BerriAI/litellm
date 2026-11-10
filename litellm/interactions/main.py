@@ -37,7 +37,7 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from functools import partial
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.interactions.background_cost_polling import (

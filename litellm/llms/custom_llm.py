@@ -14,7 +14,7 @@ from typing import (
     Union,
 )
 
-import httpx
+import httpx2 as httpx
 from openai.types.audio.transcription_create_params import FileTypes
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler

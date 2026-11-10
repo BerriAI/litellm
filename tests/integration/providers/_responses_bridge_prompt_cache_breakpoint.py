@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal, TypeAlias, cast
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolUnionParam
 from pydantic import JsonValue, TypeAdapter

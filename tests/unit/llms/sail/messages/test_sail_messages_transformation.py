@@ -1,10 +1,11 @@
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.sail.helpers import MODEL, SAIL_API_BASE, SpendCapture, cost_at, messages_body, sent_body
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
@@ -12,7 +13,9 @@ MESSAGES: Final = [{"role": "user", "content": "hi"}]
 
 @pytest.fixture
 def messages_route(respx_mock: respx.MockRouter) -> respx.Route:
-    return respx_mock.post(f"{SAIL_API_BASE}/messages").mock(return_value=httpx.Response(200, json=messages_body()))
+    return respx_mock.post(f"{SAIL_API_BASE}/messages").mock(
+        return_value=response_for_respx(httpx.Response(200, json=messages_body()))
+    )
 
 
 @pytest.mark.parametrize("service_tier", [None, "auto", "priority", "flex", "balanced", "scale"])

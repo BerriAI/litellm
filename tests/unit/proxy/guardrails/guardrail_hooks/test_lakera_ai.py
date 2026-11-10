@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai import lakeraAI_Moderation
@@ -17,7 +18,7 @@ async def test_prompt_check_appends_replayed_server_tool_call_arguments_to_syste
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "add_function_to_prompt", False)
     route: Final = respx_mock.post("https://api.lakera.ai/v1/prompt_injection").mock(
-        return_value=httpx.Response(200, json={"results": [{"flagged": False}]})
+        return_value=response_for_respx(httpx.Response(200, json={"results": [{"flagged": False}]}))
     )
     moderation: Final = lakeraAI_Moderation(api_key="test-key", moderation_check="pre_call")
 
@@ -64,7 +65,7 @@ async def test_prompt_check_scans_a_replayed_turn_that_only_has_server_tool_call
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "add_function_to_prompt", False)
     route: Final = respx_mock.post("https://api.lakera.ai/v1/prompt_injection").mock(
-        return_value=httpx.Response(200, json={"results": [{"flagged": False}]})
+        return_value=response_for_respx(httpx.Response(200, json={"results": [{"flagged": False}]}))
     )
     moderation: Final = lakeraAI_Moderation(api_key="test-key", moderation_check="pre_call")
 

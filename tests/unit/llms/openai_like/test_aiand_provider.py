@@ -3,10 +3,11 @@ import json
 import time
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -40,7 +41,7 @@ def test_aiand_chat_provider(monkeypatch: pytest.MonkeyPatch):
 def test_aiand_completion_request(respx_mock: respx.MockRouter):
     messages = [{"role": "user", "content": "Hello"}]
     route = respx_mock.post(f"{AIAND_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-test",
@@ -60,7 +61,7 @@ def test_aiand_completion_request(respx_mock: respx.MockRouter):
                     "total_tokens": 2,
                 },
             },
-        )
+        ))
     )
 
     litellm.completion(
@@ -206,7 +207,7 @@ async def test_aiand_anthropic_messages_reach_ai_and_with_the_thinking_budget(mo
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
     thinking: Final = {"type": "enabled", "budget_tokens": 1024}
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(f"{AIAND_API_BASE}/messages").respond(
             200,
             json={

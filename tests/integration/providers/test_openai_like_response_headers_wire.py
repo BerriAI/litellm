@@ -8,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, held
 from integration._support.database import read_rows

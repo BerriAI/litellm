@@ -16,11 +16,13 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from typing_extensions import ReadOnly, TypedDict
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -376,7 +378,9 @@ def _returned_tool_calls(
     native_id: str | None, stream: bool, request_params: Mapping[str, object]
 ) -> tuple[list[Mapping[str, object]], Mapping[str, object]]:
     with respx.mock:
-        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(native_id, stream))
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(
+            return_value=response_for_respx(_gemini_response(native_id, stream))
+        )
         response: Final = litellm.completion(
             model="gemini/gemini-3.5-flash",
             messages=[USER_TURN],
@@ -434,7 +438,7 @@ def test_bounded_tool_call_id_round_trips_to_gemini(client_keeps_provider_fields
     }
 
     with respx.mock:
-        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_answer()))
         litellm.completion(
             model="gemini/gemini-3.5-flash",
             messages=[
@@ -457,7 +461,7 @@ def test_bounded_tool_call_id_round_trips_to_gemini(client_keeps_provider_fields
 def test_tool_result_with_bare_id_matches_call_whose_id_the_client_re_signed():
     bare_id: Final = "call_601401"
     with respx.mock:
-        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_answer()))
         litellm.completion(
             model="gemini/gemini-3.5-flash",
             messages=[
@@ -501,7 +505,7 @@ def _is_tool_use_start(event: Mapping[str, object]) -> bool:
 
 async def _messages_tool_use_blocks(stream: bool) -> list[Mapping[str, object]]:
     with respx.mock:
-        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, stream))
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_response(None, stream)))
         response: Final = await litellm.anthropic.messages.acreate(
             max_tokens=256,
             messages=[USER_TURN],
@@ -537,7 +541,7 @@ SHORT_IDS: Final = MappingProxyType({"thought_signature_in_tool_call_id": False}
 
 def _responses_function_call_items(stream: bool, request_params: Mapping[str, object] = SHORT_IDS) -> list[object]:
     with respx.mock:
-        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, stream))
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_response(None, stream)))
         response: Final = litellm.responses(
             model="gemini/gemini-3.5-flash",
             input=USER_TURN["content"],
@@ -599,7 +603,9 @@ def test_responses_function_call_provider_fields_reach_the_provider_only_with_sh
     }
 
     with respx.mock:
-        route: Final = respx.post(url__regex=r"https://api\.deepseek\.com/.*").mock(return_value=_deepseek_answer())
+        route: Final = respx.post(url__regex=r"https://api\.deepseek\.com/.*").mock(
+            return_value=response_for_respx(_deepseek_answer())
+        )
         litellm.responses(
             model="deepseek/deepseek-v4-flash",
             input=[
@@ -634,7 +640,7 @@ def test_responses_function_call_replays_its_thought_signature_to_gemini(client_
     }
 
     with respx.mock:
-        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_answer()))
         litellm.responses(
             model="gemini/gemini-3.5-flash",
             input=[
@@ -675,8 +681,8 @@ async def _complete(use_async: bool, **request_params: object) -> litellm.ModelR
 
 @pytest.mark.parametrize("use_async", [False, True])
 async def test_request_setting_that_is_not_a_boolean_answers_400(use_async: bool):
-    with respx.mock(assert_all_called=False):
-        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False):
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_response(None, False)))
         with pytest.raises(litellm.BadRequestError, match="thought_signature_in_tool_call_id") as raised:
             await _complete(use_async, thought_signature_in_tool_call_id="maybe")
 
@@ -689,7 +695,7 @@ async def test_request_setting_that_is_not_a_boolean_is_dropped_under_drop_param
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_response(None, False)))
         response: Final = await _complete(use_async, thought_signature_in_tool_call_id="maybe", drop_params=True)
 
     tool_call_id: Final = response.choices[0].message.tool_calls[0].id
@@ -711,7 +717,7 @@ def test_deployment_setting_given_as_a_string_or_number_keeps_ids_bounded(config
         ]
     )
     with respx.mock:
-        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_response(None, False)))
         response: Final = router.completion(model="gemini-agentcore", messages=[USER_TURN], tools=[WEATHER_TOOL])
 
     assert _is_bounded(response.choices[0].message.tool_calls[0].id)
@@ -743,7 +749,7 @@ def test_deployment_setting_survives_a_request_value_that_drop_params_drops():
         ]
     )
     with respx.mock:
-        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+        respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_response(None, False)))
         response: Final = router.completion(
             model="gemini-agentcore",
             messages=[USER_TURN],
@@ -776,8 +782,8 @@ async def test_messages_request_setting_that_is_not_a_boolean_follows_drop_param
     drop_params: bool, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=False) as mocked:
-        mocked.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_response(None, False))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as mocked:
+        mocked.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_response(None, False)))
         request: Final = litellm.anthropic.messages.acreate(
             max_tokens=256,
             messages=[USER_TURN],
@@ -801,7 +807,7 @@ def test_setting_that_is_not_a_boolean_is_ignored_where_nothing_reads_it():
     embedding_vector: Final = [0.25, 0.5]
     with respx.mock:
         route: Final = respx.post("https://api.openai.com/v1/embeddings").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "object": "list",
@@ -809,7 +815,7 @@ def test_setting_that_is_not_a_boolean_is_ignored_where_nothing_reads_it():
                     "model": "text-embedding-3-small",
                     "usage": {"prompt_tokens": 1, "total_tokens": 1},
                 },
-            )
+            ))
         )
         response: Final = litellm.embedding(
             model="openai/text-embedding-3-small",
@@ -839,7 +845,7 @@ TIME_TOOL: Final = {
 def test_tool_results_keep_their_own_names_when_tool_call_ids_share_a_prefix(tool_call_ids: tuple[str, str]):
     called_tools: Final = (("get_weather", tool_call_ids[0]), ("get_time", tool_call_ids[1]))
     with respx.mock:
-        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_answer()))
         litellm.completion(
             model="gemini/gemini-3.5-flash",
             messages=[

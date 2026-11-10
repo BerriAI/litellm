@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import psutil
 from integration._support.client import Gateway, eventually
 from integration._support.process import OwnedProxy, owned_proxy_process

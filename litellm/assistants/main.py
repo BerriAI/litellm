@@ -7,7 +7,7 @@ from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from functools import partial
 from typing import Any, Final, Literal
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted

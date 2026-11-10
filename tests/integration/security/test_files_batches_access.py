@@ -16,7 +16,7 @@ from queue import SimpleQueue
 from typing import Final, Literal
 from urllib.parse import quote, urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 from botocore.auth import S3SigV4Auth
 from botocore.awsrequest import AWSRequest

@@ -17,7 +17,7 @@ from typing import Any, Dict, Final, Literal, Optional, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anyio
-import httpx
+import httpx2 as httpx
 import httpx2
 import pytest
 from fastapi import HTTPException
@@ -39,6 +39,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, TypeAdapter
 from respx import MockRouter
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 import litellm.llms as litellm_llms
 from litellm.caching.caching import DualCache
@@ -5459,7 +5460,7 @@ class TestMCPServerManager:
             is_byok=True,
         )
         manager.registry = {server.server_id: server}
-        route = respx_mock.get(server.spec_path).mock(side_effect=[failure])
+        route = respx_mock.get(server.spec_path).mock(side_effect=side_effect_for_respx([failure]))
         result = await manager.health_check_server(server.server_id)
         assert result.status == expected_status
         assert result.health_check_error == expected_error
@@ -5482,7 +5483,7 @@ class TestMCPServerManager:
             finally:
                 cancelled.set()
 
-        respx_mock.get("https://93.184.216.34/slow.json").mock(side_effect=slow_load)
+        respx_mock.get("https://93.184.216.34/slow.json").mock(side_effect=side_effect_for_respx(slow_load))
         task = asyncio.create_task(_openapi_spec_health("https://93.184.216.34/slow.json", timeout=0.1))
         await asyncio.wait_for(started.wait(), timeout=1)
         if cancel:
@@ -5712,7 +5713,7 @@ class TestMCPServerManager:
         manager.registry[server.server_id] = server
         bodies: Final = (UnreadBody(), UnreadBody())
         route: Final = respx_mock.get(server.url).mock(
-            side_effect=[
+            side_effect=side_effect_for_respx([
                 httpx.Response(
                     response_code,
                     stream=body,
@@ -5723,7 +5724,7 @@ class TestMCPServerManager:
                     },
                 )
                 for body in bodies
-            ]
+            ])
         )
 
         first: Final = await manager.health_check_server(server.server_id)
@@ -5789,7 +5790,7 @@ class TestMCPServerManager:
             url="https://mcp.example.test/secret?token=secret",
         )
         manager.registry[server.server_id] = server
-        route: Final = respx_mock.get(server.url).mock(side_effect=failure)
+        route: Final = respx_mock.get(server.url).mock(side_effect=side_effect_for_respx(failure))
 
         result: Final = await manager.health_check_server(server.server_id)
 
@@ -5842,7 +5843,7 @@ class TestMCPServerManager:
             finally:
                 stopped.set()
 
-        respx_mock.get(server.url).mock(side_effect=slow_response)
+        respx_mock.get(server.url).mock(side_effect=side_effect_for_respx(slow_response))
         task: Final = asyncio.create_task(manager.health_check_server(server.server_id))
         await asyncio.wait_for(started.wait(), timeout=1)
         if cancel:
@@ -5890,7 +5891,7 @@ class TestMCPServerManager:
             for server_id in server_ids
         }
         probe: Final = Probe()
-        route: Final = respx_mock.get(host="health.example.test").mock(side_effect=probe.respond)
+        route: Final = respx_mock.get(host="health.example.test").mock(side_effect=side_effect_for_respx(probe.respond))
         requested_ids: Final = [*server_ids, *reversed(server_ids), *server_ids, "not-registered"]
 
         results: Final = (
@@ -11950,7 +11951,7 @@ class TestMCPToolsListAuthSurfacing:
         one raised during the fetch: MCPUpstreamAuthError with the upstream's own challenge. Before
         the shared choice-point it classified into a challenge-less fault, so single-server routes
         answered 401 without the WWW-Authenticate the client needs to start the OAuth flow."""
-        import httpx
+        import httpx2 as httpx
 
         from litellm.proxy.mcp_server.exceptions import (
             MCPUpstreamAuthError,
@@ -11982,7 +11983,7 @@ class TestMCPToolsListAuthSurfacing:
         """The dcr_bridge challenge suppression must hold on the generic arm too, not only when the
         fetch itself raised MCPUpstreamAuthError: a bridge client following the upstream challenge
         would fail the RFC 9728 resource match against the gateway URL it dialed."""
-        import httpx
+        import httpx2 as httpx
 
         from litellm.proxy.mcp_server.exceptions import (
             MCPUpstreamAuthError,
@@ -16309,7 +16310,7 @@ async def test_openapi_health_coalesces_concurrent_checks_and_reuses_results(res
         await release.wait()
         return httpx.Response(200, json={"paths": {}})
 
-    route = respx_mock.get(server.spec_path).mock(side_effect=serve)
+    route = respx_mock.get(server.spec_path).mock(side_effect=side_effect_for_respx(serve))
     tasks = [asyncio.create_task(manager.health_check_server(server.server_id)) for _ in range(4)]
     await asyncio.wait_for(started.wait(), timeout=1)
     release.set()
@@ -16329,10 +16330,10 @@ async def test_openapi_health_cache_expires_at_thirty_seconds(respx_mock, monkey
     clock = iter([0.0, 29.0, 30.0, 30.0])
     probe = _OpenAPIHealthProbe("https://93.184.216.34/expiry.json", clock=clock.__next__)
     route = respx_mock.get(probe.spec_path).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json={"paths": {}}),
             httpx.Response(503),
-        ]
+        ])
     )
     first = await probe.check()
     assert first[0] == "healthy"
@@ -16391,7 +16392,7 @@ async def test_openapi_health_cancellation_does_not_poison_cache(respx_mock, mon
             await asyncio.Event().wait()
         return httpx.Response(200, json={"paths": {}})
 
-    route = respx_mock.get(server.spec_path).mock(side_effect=serve)
+    route = respx_mock.get(server.spec_path).mock(side_effect=side_effect_for_respx(serve))
     leader = asyncio.create_task(manager.health_check_server(server.server_id))
     await asyncio.wait_for(started.wait(), timeout=1)
     follower = asyncio.create_task(manager.health_check_server(server.server_id)) if already_waiting else None
@@ -16674,7 +16675,8 @@ async def test_tool_listing_rejects_malformed_or_other_missing_static_credential
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None:
-    import respx
+
+    from tests._support import respx_httpx2 as respx
 
     clock: Final = _DiscoveryClock()
     manager: Final = MCPServerManager(discovery_clock=clock)
@@ -16706,7 +16708,7 @@ async def test_discovery_cache_reuses_raw_results_and_expires(kind: str) -> None
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 @pytest.mark.parametrize("outcome", ("unsupported", "rejected", "failure"))
 async def test_discovery_cache_empty_results_and_failures(kind: str, outcome: str) -> None:
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -16751,7 +16753,7 @@ async def test_discovery_cache_retries_failed_pagination_before_caching_complete
 
 @pytest.mark.asyncio
 async def test_discovery_cache_isolates_forwarded_credentials_and_static_auth_callers() -> None:
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -16801,7 +16803,7 @@ async def test_discovery_cache_isolates_keyless_admission_credentials(kind: str,
 
 @pytest.mark.asyncio
 async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> None:
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -16825,7 +16827,7 @@ async def test_discovery_cache_coalesces_and_survives_waiter_cancellation() -> N
 
 @pytest.mark.asyncio
 async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old_results() -> None:
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     manager: Final = MCPServerManager()
     upstream: Final = _DiscoveryUpstream()
@@ -16845,7 +16847,7 @@ async def test_discovery_cache_invalidation_during_fetch_does_not_repopulate_old
 
 @pytest.mark.asyncio
 async def test_discovery_cache_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0")
     manager: Final = MCPServerManager()
@@ -17011,7 +17013,7 @@ async def test_discovery_cache_bounds_detached_fetches_without_dropping_results(
 
 @pytest.mark.asyncio
 async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> None:
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
     from litellm.proxy.mcp_server.outbound_credentials.resolver import UpstreamCredentialProvider
@@ -17088,7 +17090,7 @@ async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> N
 
 @pytest.mark.asyncio
 async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None:
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 

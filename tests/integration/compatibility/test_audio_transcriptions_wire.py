@@ -10,7 +10,7 @@ from email.policy import HTTP
 from hashlib import sha256
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value
 from integration._support.database import read_rows

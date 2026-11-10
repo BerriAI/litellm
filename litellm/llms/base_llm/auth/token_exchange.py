@@ -23,7 +23,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 from urllib.parse import unquote, unquote_plus, urlencode, urlsplit, urlunsplit
 
-import httpx
+import httpx2 as httpx
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 

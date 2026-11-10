@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
 import fastapi
-import httpx
+import httpx2 as httpx
 import pytest
 
 
@@ -163,7 +163,7 @@ class TestProxyInitializationHelpers:
         mock_version.assert_called_once_with("litellm")
         mock_echo.assert_called_once_with("\nLiteLLM: Current Version = 1.0.0\n")
 
-    @patch("httpx.get")
+    @patch("httpx2.get")
     @patch("builtins.print")
     @patch("json.dumps")
     def test_run_health_check(self, mock_dumps, mock_print, mock_get):
@@ -902,7 +902,7 @@ class TestProxyInitializationHelpers:
                 mock_uvicorn_run.assert_not_called()
 
     @patch("uvicorn.run")
-    @patch("httpx.HTTPTransport.handle_request")
+    @patch("httpx2.HTTPTransport.handle_request")
     @patch("atexit.register")
     @patch("subprocess.Popen")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
@@ -922,7 +922,7 @@ class TestProxyInitializationHelpers:
         """--prometheus_metrics_port must spawn `python -m litellm.proxy.prometheus_metrics_server` on --host
         with the shared multiproc dir, wait for its /metrics response, and only then start uvicorn. It must stay off by
         default, refuse to share --port, and abort the proxy when the child dies before serving."""
-        import httpx
+        import httpx2 as httpx
         from click.testing import CliRunner
 
         from litellm.proxy.proxy_cli import run_server
@@ -3096,7 +3096,7 @@ class TestRunServerDbSetup:
     ) -> None:
         """`--health` returns before the config is read, where a server start emits the deprecation line;
         it still prints it, as it did when the notice came before that return."""
-        with patch("httpx.get", return_value=httpx.Response(200, json={})) as mock_get:
+        with patch("httpx2.get", return_value=httpx.Response(200, json={})) as mock_get:
             run_server.main(["--health", "--enforce_prisma_migration_check"], standalone_mode=False)
 
         mock_get.assert_called_once_with(url="http://0.0.0.0:4000/health")

@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Final
 
 import anyio
-import httpx
+import httpx2 as httpx
 import pytest
 from starlette.applications import Starlette
 from starlette.requests import Request

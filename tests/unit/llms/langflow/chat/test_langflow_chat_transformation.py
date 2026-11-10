@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError

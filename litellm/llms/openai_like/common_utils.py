@@ -1,6 +1,6 @@
 from typing import Literal
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 

@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import TypeAdapter
 

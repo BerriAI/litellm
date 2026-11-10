@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_logger
 

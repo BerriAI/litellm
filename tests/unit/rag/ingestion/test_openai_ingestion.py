@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
 
@@ -48,7 +49,7 @@ def attach_file(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     return respx_mock.post(f"{_API_BASE}/vector_stores/vs_1/files").mock(
-        return_value=httpx.Response(200, json=_ATTACHED_FILE)
+        return_value=response_for_respx(httpx.Response(200, json=_ATTACHED_FILE))
     )
 
 
@@ -60,7 +61,9 @@ def attach_file(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -
 async def test_an_uploaded_file_is_attached_to_the_vector_store_with_the_chunking_strategy(
     attach_file: respx.Route, respx_mock: respx.MockRouter, chunking_strategy: object, sent_chunking_strategy: object
 ):
-    respx_mock.post(f"{_API_BASE}/files").mock(return_value=httpx.Response(200, json=_UPLOADED_FILE))
+    respx_mock.post(f"{_API_BASE}/files").mock(
+        return_value=response_for_respx(httpx.Response(200, json=_UPLOADED_FILE))
+    )
 
     stored: Final = await _ingestion(chunking_strategy).store(
         file_content=b"first note",

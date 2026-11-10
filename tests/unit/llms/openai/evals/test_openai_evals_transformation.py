@@ -4,11 +4,13 @@ Unit tests for OpenAI Evals API transformation
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -475,7 +477,9 @@ def test_transform_delete_run_response(config: OpenAIEvalsConfig):
 
 
 def test_create_eval_sends_configuration_and_parses_eval(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post(f"{_API_BASE}/v1/evals").mock(return_value=httpx.Response(200, json=_EVAL_RESPONSE))
+    route: Final = respx_mock.post(f"{_API_BASE}/v1/evals").mock(
+        return_value=response_for_respx(httpx.Response(200, json=_EVAL_RESPONSE))
+    )
 
     response: Final = litellm.create_eval(
         name="Sentiment evaluation",
@@ -501,7 +505,7 @@ def test_create_eval_sends_configuration_and_parses_eval(respx_mock: respx.MockR
 
 def test_get_eval_requests_the_requested_id_and_parses_eval(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.get(f"{_API_BASE}/v1/evals/{_EVAL_ID}").mock(
-        return_value=httpx.Response(200, json=_EVAL_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_EVAL_RESPONSE))
     )
 
     response: Final = litellm.get_eval(eval_id=_EVAL_ID, api_key=_API_KEY, api_base=_API_BASE)
@@ -517,7 +521,7 @@ def test_get_eval_requests_the_requested_id_and_parses_eval(respx_mock: respx.Mo
 
 def test_list_evals_sends_pagination_query_and_parses_page(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.get(f"{_API_BASE}/v1/evals").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -526,7 +530,7 @@ def test_list_evals_sends_pagination_query_and_parses_page(respx_mock: respx.Moc
                 "last_id": _EVAL_ID,
                 "has_more": True,
             },
-        )
+        ))
     )
 
     response: Final = litellm.list_evals(
@@ -548,7 +552,7 @@ def test_list_evals_sends_pagination_query_and_parses_page(respx_mock: respx.Moc
 
 def test_update_eval_sends_name_to_requested_id_and_parses_eval(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{_API_BASE}/v1/evals/{_EVAL_ID}").mock(
-        return_value=httpx.Response(200, json=_EVAL_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_EVAL_RESPONSE))
     )
 
     response: Final = litellm.update_eval(
@@ -574,7 +578,9 @@ async def test_delete_eval_sends_delete_to_requested_id_and_parses_confirmation(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.delete(f"{_API_BASE}/v1/evals/{_EVAL_ID}").mock(
-        return_value=httpx.Response(200, json={"object": "eval.deleted", "deleted": True, "eval_id": _EVAL_ID})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"object": "eval.deleted", "deleted": True, "eval_id": _EVAL_ID})
+        )
     )
 
     response: Final = (

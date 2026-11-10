@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, Scenario, list_value, object_value
 from integration._support.wire import Reply, Request
 from pydantic import JsonValue, TypeAdapter

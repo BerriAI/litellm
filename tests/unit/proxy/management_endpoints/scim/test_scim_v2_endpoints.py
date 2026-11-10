@@ -11,7 +11,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, call
 
 import pytest
 from fastapi import FastAPI, HTTPException
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from pytest_mock import MockerFixture
 
 import litellm.proxy.management_endpoints.scim.scim_v2 as scim_v2_module

@@ -2135,7 +2135,7 @@ def test_provider_specific_header():
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_beta_headers_config")
 async def test_client_anthropic_betas_reach_databricks_claude_filtered_to_the_ones_the_workspace_accepts():
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
@@ -2230,7 +2230,7 @@ async def _databricks_messages_bridge(provider_specific_header: object, upstream
     ids=["chat_completions", "messages_bridge"],
 )
 async def test_client_anthropic_headers_never_reach_databricks_chat_completions(call_databricks):
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request

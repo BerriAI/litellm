@@ -8,7 +8,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, cast
 
-import httpx
+import httpx2 as httpx
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict

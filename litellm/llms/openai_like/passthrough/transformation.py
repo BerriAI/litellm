@@ -2,7 +2,7 @@ import itertools
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from httpx import Response
+from httpx2 import Response
 from pydantic import ConfigDict, ValidationError
 
 import litellm.litellm_core_utils.token_counter as token_counting

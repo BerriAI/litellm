@@ -2,14 +2,17 @@
 Test Azure AI cost calculator, especially Model Router flat cost.
 """
 
+import httpx2 as httpx
 import json
 from datetime import datetime
 from typing import Final
 
 import pytest
-import respx
-from httpx import Response
 
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
+
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -240,11 +243,11 @@ class TestAzureModelRouterCostBreakdown:
             + "\n\n"
         )
         route: Final = respx_mock.post(url__startswith=api_url).mock(
-            return_value=Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 text=stream_body,
                 headers={"content-type": "text/event-stream"},
-            )
+            ))
         )
         messages: Final = [{"role": "user", "content": "hello"}]
         stream: Final = litellm.completion(
@@ -268,7 +271,7 @@ class TestAzureModelRouterCostBreakdown:
     @pytest.mark.respx(assert_all_called=True)
     def test_model_router_completion_reports_routed_cost_plus_flat_fee(self, respx_mock: respx.MockRouter) -> None:
         route: Final = respx_mock.post("https://example-resource.services.ai.azure.com/models/chat/completions").mock(
-            return_value=Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "chatcmpl-router",
@@ -280,7 +283,7 @@ class TestAzureModelRouterCostBreakdown:
                     ],
                     "usage": {"prompt_tokens": 5000, "completion_tokens": 2000, "total_tokens": 7000},
                 },
-            )
+            ))
         )
         routed_prompt_cost, routed_completion_cost = _routed_model_cost()
 

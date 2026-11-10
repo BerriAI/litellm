@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
     from .base_aws_llm import BaseAWSLLM
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm

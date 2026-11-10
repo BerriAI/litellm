@@ -10,7 +10,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from pydantic_core import PydanticSerializationError
 

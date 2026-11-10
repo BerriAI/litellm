@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.budget import readiness_seconds
 from integration._support.client import Gateway, Scenario, eventually

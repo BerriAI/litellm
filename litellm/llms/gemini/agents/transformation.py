@@ -12,7 +12,7 @@ Proxies the Gemini v1beta Agents API:
 from collections.abc import Mapping
 from typing import Any, Final, Protocol
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import decoded_json_object

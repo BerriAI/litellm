@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Final
 from urllib.parse import urlencode, urlparse
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file

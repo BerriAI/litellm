@@ -3,7 +3,7 @@ reports the real per-request cost at the top level of the body."""
 
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

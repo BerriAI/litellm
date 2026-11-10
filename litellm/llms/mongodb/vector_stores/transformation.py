@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
 from urllib.parse import quote, urlsplit
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.exceptions import AuthenticationError, BadRequestError, ServiceUnavailableError, Timeout

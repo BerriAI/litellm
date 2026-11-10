@@ -9,7 +9,7 @@ run code -> delete container; `code_interpreter_tool` combines all three.
 import builtins
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import Field, PrivateAttr
 
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines

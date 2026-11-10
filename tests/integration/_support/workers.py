@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Final, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
-import httpx
+import httpx2 as httpx
 import psycopg
 from psycopg import sql
 from pydantic import TypeAdapter

@@ -32,6 +32,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import litellm.batches.main as bm
 import asyncio
@@ -39,8 +40,9 @@ import datetime
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final
-import httpx
-import respx
+import httpx2 as httpx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 from litellm.integrations.custom_logger import CustomLogger
@@ -724,7 +726,7 @@ def test_resolve_timeout__request_timeout_kwarg_fallback():
 
 
 def test_resolve_timeout__httpx_timeout_returns_float_read():
-    import httpx
+    import httpx2 as httpx
 
     t = httpx.Timeout(99.0, connect=5.0)
     resolved = bm._resolve_timeout(_params(timeout=t), {}, "openai")
@@ -819,7 +821,7 @@ async def test_batch_logging_azure_credentials_regression():
         handle_completed_batch,
     )
     from litellm.types.llms.openai import Batch, HttpxBinaryResponseContent
-    import httpx
+    import httpx2 as httpx
 
     print("\n=== Regression Test: Azure Batch Logging Credentials ===")
 
@@ -1066,31 +1068,35 @@ async def test_acreate_batch_full_crud_and_logging_metadata(
     monkeypatch.setattr(litellm, "callbacks", [recorder])
 
     upload_route: Final = respx_mock.post("https://api.openai.com/v1/files").mock(
-        return_value=httpx.Response(200, json=dict(_OPENAI_FILE_JSON))
+        return_value=response_for_respx(httpx.Response(200, json=dict(_OPENAI_FILE_JSON)))
     )
     create_route: Final = respx_mock.post("https://api.openai.com/v1/batches").mock(
-        return_value=httpx.Response(200, json=dict(_OPENAI_BATCH_JSON))
+        return_value=response_for_respx(httpx.Response(200, json=dict(_OPENAI_BATCH_JSON)))
     )
     retrieve_route: Final = respx_mock.get("https://api.openai.com/v1/batches/batch_abc123").mock(
-        return_value=httpx.Response(200, json=dict(_OPENAI_BATCH_JSON))
+        return_value=response_for_respx(httpx.Response(200, json=dict(_OPENAI_BATCH_JSON)))
     )
     list_batches_route: Final = respx_mock.get("https://api.openai.com/v1/batches").mock(
-        return_value=httpx.Response(200, json={"object": "list", "data": [dict(_OPENAI_BATCH_JSON)]})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"object": "list", "data": [dict(_OPENAI_BATCH_JSON)]})
+        )
     )
     respx_mock.get("https://api.openai.com/v1/files/file-abc123/content").mock(
-        return_value=httpx.Response(200, content=b'{"custom_id": "request-1"}\n')
+        return_value=response_for_respx(httpx.Response(200, content=b'{"custom_id": "request-1"}\n'))
     )
     respx_mock.get("https://api.openai.com/v1/files/file-abc123").mock(
-        return_value=httpx.Response(200, json=dict(_OPENAI_FILE_JSON))
+        return_value=response_for_respx(httpx.Response(200, json=dict(_OPENAI_FILE_JSON)))
     )
     respx_mock.delete("https://api.openai.com/v1/files/file-abc123").mock(
-        return_value=httpx.Response(200, json={"id": "file-abc123", "object": "file", "deleted": True})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"id": "file-abc123", "object": "file", "deleted": True})
+        )
     )
     list_files_route: Final = respx_mock.get("https://api.openai.com/v1/files").mock(
-        return_value=httpx.Response(200, json={"object": "list", "data": [dict(_OPENAI_FILE_JSON)]})
+        return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": [dict(_OPENAI_FILE_JSON)]}))
     )
     cancel_route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_abc123/cancel").mock(
-        return_value=httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"})
+        return_value=response_for_respx(httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"}))
     )
 
     batch_file: Final = (
@@ -1185,10 +1191,12 @@ async def test_delete_batch_output_file(respx_mock: respx.MockRouter, monkeypatc
         "output_file_id": "file-output123",
     }
     respx_mock.get("https://api.openai.com/v1/batches/batch_abc123").mock(
-        return_value=httpx.Response(200, json=batch_with_output)
+        return_value=response_for_respx(httpx.Response(200, json=batch_with_output))
     )
     delete_route: Final = respx_mock.delete("https://api.openai.com/v1/files/file-output123").mock(
-        return_value=httpx.Response(200, json={"id": "file-output123", "object": "file", "deleted": True})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"id": "file-output123", "object": "file", "deleted": True})
+        )
     )
 
     batch: Final = await litellm.aretrieve_batch(

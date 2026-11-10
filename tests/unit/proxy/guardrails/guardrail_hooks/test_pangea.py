@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from typing_extensions import ReadOnly, TypedDict
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import HTTPException
 

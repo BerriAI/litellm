@@ -1,3 +1,4 @@
+
 import json
 import sqlite3
 from collections.abc import Sequence
@@ -7,11 +8,12 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import httpx
-import respx
+import httpx2 as httpx
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
@@ -1420,8 +1422,11 @@ async def test_previous_response_replays_a_thought_signature_kept_out_of_the_id_
     )
     stored: Final = _StoredSpendLogs((_stored_function_call_turn(response_id),))
 
-    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
-        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)),
+        respx.mock,
+    ):
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=response_for_respx(_gemini_answer()))
         await litellm.aresponses(
             model="gemini/gemini-3.5-flash",
             input=[{"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 21}'}],

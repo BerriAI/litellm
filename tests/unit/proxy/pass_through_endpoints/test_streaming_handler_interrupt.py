@@ -7,10 +7,9 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 import litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthrough_logging_handler as tinyfish_handler_module
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthrough_logging_handler import (
@@ -1352,7 +1351,7 @@ class TestTinyFishStreamBilling:
         logging_obj = self._tinyfish_logging_obj()
         tasks_before = set(tinyfish_handler_module._BACKGROUND_BILLING_TASKS)
 
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.get(self.RUNS_URL).respond(
                 json={"run_id": "run-sse-1", "status": "COMPLETED", "num_of_steps": 2, "result": "ok"}
             )
@@ -1387,7 +1386,7 @@ class TestTinyFishStreamBilling:
         logging_obj = self._tinyfish_logging_obj()
         tasks_before = set(tinyfish_handler_module._BACKGROUND_BILLING_TASKS)
 
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.get(self.RUNS_URL).respond(
                 json={"run_id": "run-sse-1", "status": "COMPLETED", "num_of_steps": 2, "result": "ok"}
             )

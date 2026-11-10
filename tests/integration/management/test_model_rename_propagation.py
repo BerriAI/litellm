@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import BaseModel, JsonValue, TypeAdapter
 

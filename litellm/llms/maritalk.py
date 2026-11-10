@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
-from httpx._models import Headers
+from httpx2._models import Headers
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig

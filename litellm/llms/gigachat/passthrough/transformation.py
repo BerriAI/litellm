@@ -4,7 +4,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
@@ -17,7 +17,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 if TYPE_CHECKING:
-    from httpx import URL, Response
+    from httpx2 import URL, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import CostResponseTypes

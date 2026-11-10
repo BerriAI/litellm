@@ -3,7 +3,7 @@ import json
 from typing import Optional
 from unittest.mock import AsyncMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

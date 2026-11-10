@@ -8,9 +8,9 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 
 import litellm

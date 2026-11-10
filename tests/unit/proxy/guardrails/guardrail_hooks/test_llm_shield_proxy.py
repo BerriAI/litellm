@@ -5,7 +5,7 @@ from typing import Final
 from unittest.mock import AsyncMock
 
 import pytest
-from httpx import Request, Response
+from httpx2 import Request, Response
 
 import litellm
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES

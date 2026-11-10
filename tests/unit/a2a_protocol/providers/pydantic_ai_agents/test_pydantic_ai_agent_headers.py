@@ -5,10 +5,11 @@ Tests for Pydantic AI agents header forwarding via agent_extra_headers.
 from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.a2a_protocol.providers.pydantic_ai_agents.config import PydanticAIProviderConfig
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
@@ -225,7 +226,9 @@ def _user_params() -> dict[str, object]:
 @pytest.fixture
 def agent_route(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.Route:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    return respx_mock.post("http://agent.test/").mock(return_value=httpx.Response(200, json=COMPLETED_TASK))
+    return respx_mock.post("http://agent.test/").mock(
+        return_value=response_for_respx(httpx.Response(200, json=COMPLETED_TASK))
+    )
 
 
 @pytest.mark.asyncio

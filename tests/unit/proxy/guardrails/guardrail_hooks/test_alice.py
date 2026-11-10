@@ -3,9 +3,9 @@ import os
 from copy import deepcopy
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-from httpx import Request, Response
+from httpx2 import Request, Response
 
 import litellm
 from litellm.exceptions import GuardrailRaisedException

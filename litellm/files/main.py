@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Coroutine
 from functools import partial
 from typing import Final, Literal, cast
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncOpenAI, OpenAI
 
 # Type aliases for provider parameters

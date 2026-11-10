@@ -5,7 +5,7 @@ import threading
 import uuid
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from a2a.client import A2ACardResolver, ClientConfig, create_client
 from a2a.types import a2a_pb2

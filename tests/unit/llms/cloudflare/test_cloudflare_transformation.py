@@ -4,10 +4,11 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import acompletion, completion
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -353,17 +354,17 @@ def test_completion_cloudflare_stream(sync_mode: bool, _cloudflare_httpx_transpo
     messages: Final = [{"role": "user", "content": "what llm are you"}]
     raw_chunks: Final = _streaming_chunks()
     body: Final = "".join(f"data: {chunk}\n\n" for chunk in raw_chunks) + "data: [DONE]\n\n"
-    with respx.mock(assert_all_called=True) as api:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as api:
         mock_post: Final = MagicMock()
         api.post(f"{FAKE_API_BASE}/chat/completions").mock(
-            side_effect=_mock_post_response(
+            side_effect=side_effect_for_respx(_mock_post_response(
                 mock_post,
                 httpx.Response(
                     200,
                     headers={"content-type": "text/event-stream"},
                     content=body,
                 ),
-            )
+            ))
         )
         response: Final = completion(
             model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
@@ -391,7 +392,7 @@ async def test_cloudflare_stream_keeps_unicode_line_separators_inside_content(
         f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'content': text}}]}, ensure_ascii=False)}\n\n"
         for text in streamed_text
     )
-    with respx.mock(assert_all_called=True) as api:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as api:
         api.post(f"{FAKE_API_BASE}/chat/completions").respond(
             200, headers={"content-type": "text/event-stream"}, content=(body + "data: [DONE]\n\n").encode()
         )

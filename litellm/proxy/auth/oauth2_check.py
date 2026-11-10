@@ -2,7 +2,7 @@ import base64
 import os
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger

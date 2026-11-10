@@ -2,7 +2,7 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import JSON_OBJECT, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request

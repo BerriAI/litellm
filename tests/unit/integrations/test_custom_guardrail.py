@@ -1268,7 +1268,7 @@ class TestCustomGuardrailPassthroughSupport:
 
         This tests Fix #3: TypeError: TypedDict does not support instance and class checks
         """
-        import httpx
+        import httpx2 as httpx
 
         custom_guardrail = CustomGuardrail()
 

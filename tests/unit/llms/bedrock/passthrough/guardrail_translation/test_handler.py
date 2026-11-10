@@ -21,9 +21,9 @@ from itertools import chain
 from typing import ClassVar, Final, Literal, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue
 from typing_extensions import ReadOnly, TypedDict
 

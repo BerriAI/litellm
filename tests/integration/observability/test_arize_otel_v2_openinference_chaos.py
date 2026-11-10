@@ -9,7 +9,7 @@ from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from _openinference_support import (
     CHAT_TOOLS,

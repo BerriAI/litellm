@@ -8,7 +8,7 @@ from hashlib import sha256
 from importlib.resources import files
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, list_value, object_value
 from integration._support.responses_vendor import same_response

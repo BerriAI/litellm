@@ -4,7 +4,7 @@ import json
 from typing import Final
 from urllib.parse import unquote
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, Scenario
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, wire_server

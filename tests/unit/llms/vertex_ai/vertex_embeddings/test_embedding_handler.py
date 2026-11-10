@@ -1,14 +1,16 @@
+
 import json
 from datetime import datetime
 from typing import Final
 
 import google.auth
 import google.auth.credentials
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.vertex_ai.vertex_embeddings.embedding_handler import VertexEmbedding
@@ -74,7 +76,7 @@ def _embedding_rows(vectors: list[object]) -> list[dict[str, object]]:
 async def _embedding_response(
     run_async: bool, endpoint: respx.Route, model: str, payload: object, logging_obj: Logging
 ) -> EmbeddingResponse:
-    endpoint.mock(return_value=_predict_response(payload))
+    endpoint.mock(return_value=response_for_respx(_predict_response(payload)))
     pending: Final = VertexEmbedding().embedding(
         model=model,
         input=["hello", "world"],
@@ -212,7 +214,9 @@ async def test_vertex_embedding_reports_a_predict_object_without_predictions_as_
 
 def test_vertex_embedding_call_returns_the_prediction_vectors(predict_endpoint: respx.Route) -> None:
     predict_endpoint.mock(
-        return_value=_predict_response({"predictions": [_gecko_prediction([0.1, 2], 3), _gecko_prediction([3.5], 4)]})
+        return_value=response_for_respx(
+            _predict_response({"predictions": [_gecko_prediction([0.1, 2], 3), _gecko_prediction([3.5], 4)]})
+        )
     )
 
     response: Final = litellm.embedding(
@@ -230,7 +234,9 @@ def test_vertex_embedding_call_returns_the_prediction_vectors(predict_endpoint: 
 
 async def test_vertex_async_embedding_call_returns_the_prediction_vectors(predict_endpoint: respx.Route) -> None:
     predict_endpoint.mock(
-        return_value=_predict_response({"predictions": [_gecko_prediction([0.1, 2], 3), _gecko_prediction([3.5], 4)]})
+        return_value=response_for_respx(
+            _predict_response({"predictions": [_gecko_prediction([0.1, 2], 3), _gecko_prediction([3.5], 4)]})
+        )
     )
 
     response: Final = await litellm.aembedding(
@@ -259,7 +265,7 @@ MALFORMED_PREDICT_BODIES: Final = [
 def test_vertex_embedding_call_maps_a_malformed_predict_body_to_a_connection_error_without_echoing_it(
     predict_endpoint: respx.Route, body: object
 ) -> None:
-    predict_endpoint.mock(return_value=_predict_response(body))
+    predict_endpoint.mock(return_value=response_for_respx(_predict_response(body)))
 
     with pytest.raises(litellm.APIConnectionError) as failure:
         litellm.embedding(
@@ -276,7 +282,7 @@ def test_vertex_embedding_call_maps_a_malformed_predict_body_to_a_connection_err
 async def test_vertex_async_embedding_call_maps_a_malformed_predict_body_to_a_connection_error_without_echoing_it(
     predict_endpoint: respx.Route, body: object
 ) -> None:
-    predict_endpoint.mock(return_value=_predict_response(body))
+    predict_endpoint.mock(return_value=response_for_respx(_predict_response(body)))
 
     with pytest.raises(litellm.APIConnectionError) as failure:
         await litellm.aembedding(

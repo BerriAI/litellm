@@ -10,10 +10,11 @@ import time
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 
 from litellm.integrations.code_interpreter_interception.handler import (
@@ -1634,7 +1635,7 @@ async def test_a_responses_request_bridged_to_claude_runs_the_code_and_ends_with
     sandbox: Final = FakeSandbox(stdout="42")
     monkeypatch.setattr(litellm, "callbacks", [CodeInterpreterInterceptionLogger(sandbox_config=sandbox)])
     provider: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(
                 200,
                 json=_anthropic_message(
@@ -1650,7 +1651,7 @@ async def test_a_responses_request_bridged_to_claude_runs_the_code_and_ends_with
                 ),
             ),
             httpx.Response(200, json=_anthropic_message([{"type": "text", "text": "The answer is 42."}], "end_turn")),
-        ]
+        ])
     )
 
     response: Final = await litellm.aresponses(

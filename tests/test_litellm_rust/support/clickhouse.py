@@ -3,7 +3,7 @@ from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from tenacity import Retrying, retry_if_exception_type, stop_after_delay, wait_fixed
 

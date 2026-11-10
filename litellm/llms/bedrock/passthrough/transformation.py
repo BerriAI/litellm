@@ -5,8 +5,8 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Optional, cast
 
-import httpx
-from httpx import Response
+import httpx2 as httpx
+from httpx2 import Response
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
@@ -36,7 +36,7 @@ from ..web_identity_session_policy import BEDROCK_AGENT_RUNTIME_SESSION_POLICY, 
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
-    from httpx import URL
+    from httpx2 import URL
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder

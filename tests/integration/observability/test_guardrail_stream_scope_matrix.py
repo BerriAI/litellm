@@ -20,7 +20,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, cast
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 import websockets

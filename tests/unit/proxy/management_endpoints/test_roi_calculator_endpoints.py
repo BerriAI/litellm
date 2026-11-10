@@ -6,7 +6,7 @@ from math import isclose
 from types import MappingProxyType
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request

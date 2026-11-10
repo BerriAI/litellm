@@ -100,7 +100,7 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every_status_surface(
     client, auth_as, monkeypatch, mock_prisma
 ):
-    import httpx
+    import httpx2 as httpx
 
     import litellm
     from litellm.litellm_core_utils.get_model_cost_map import _finalize_model_cost_map, git_blob_id

@@ -12,8 +12,8 @@ from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-import httpcore
-import httpx
+import httpcore2 as httpcore
+import httpx2 as httpx
 import psutil
 import pytest
 import yaml

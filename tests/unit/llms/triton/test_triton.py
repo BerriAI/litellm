@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import litellm
 import pytest
 

@@ -53,7 +53,7 @@ def check_for_async_http_handler(file_path):
         "AsyncHttpHandler",
         "AsyncHTTPHandler",
         "AsyncClient",
-        "httpx.AsyncClient",
+        "httpx2.AsyncClient",
     ]  # Add variations here
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):

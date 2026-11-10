@@ -5,7 +5,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.anthropic_sse import SseEvent, event_types, parse_sse
 from integration._support.client import (

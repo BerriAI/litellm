@@ -17,11 +17,13 @@ from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -658,12 +660,12 @@ def test_v1_model_info_asks_a_wildcard_server_only_for_keys_that_can_call_it(
     monkeypatch.setattr(proxy_server, "user_model", None)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         listing: Final = upstream.get(f"{wildcard_server}/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+            return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
         )
         other_alias_listing: Final = upstream.get(f"{other_alias_server}/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+            return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
         )
         with auth_as(role=LitellmUserRoles.INTERNAL_USER, models=key_models):
             response: Final = client.get("/v1/model/info")

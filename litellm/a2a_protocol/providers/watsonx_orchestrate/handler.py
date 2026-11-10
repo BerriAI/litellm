@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Final, NamedTuple, Protocol
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger

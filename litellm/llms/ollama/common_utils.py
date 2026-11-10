@@ -3,7 +3,7 @@ import io
 from collections.abc import Iterable
 from typing import Final, Protocol, overload
 
-import httpx
+import httpx2 as httpx
 from openai.types.chat import ChatCompletionChunk
 from pydantic import BaseModel, TypeAdapter
 

@@ -8,7 +8,7 @@ from itertools import accumulate
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from _openinference_support import (
     _anthropic_response,

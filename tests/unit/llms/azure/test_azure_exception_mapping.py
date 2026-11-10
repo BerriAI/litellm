@@ -5,11 +5,11 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
-import httpx
+import httpx2 as httpx
 import openai
-import respx
 
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.exceptions import BadRequestError, ContentPolicyViolationError, ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
@@ -20,7 +20,7 @@ from litellm.llms.azure.common_utils import AzureOpenAIError
 def test_azure_401_maps_to_authentication_error():
     route = respx.post(
         url__regex=r"https://azure-bad-key\.openai\.azure\.com/.*/chat/completions.*"
-    ).mock(return_value=httpx.Response(401, json={"error": {"message": "invalid Azure key"}}))
+    ).mock(return_value=response_for_respx(httpx.Response(401, json={"error": {"message": "invalid Azure key"}})))
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:
         litellm.completion(
@@ -45,7 +45,7 @@ async def test_azure_content_policy_stream_ends_with_one_finish_reason(monkeypat
     route = respx.post(
         url__regex=r"https://azure-policy-stream\.openai\.azure\.com/.*/chat/completions.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=(
                 'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":1,"model":"gpt-4.1-mini","choices":[{"index":0,"delta":{"content":"1"},"finish_reason":null}]}\n\n'
@@ -53,7 +53,7 @@ async def test_azure_content_policy_stream_ends_with_one_finish_reason(monkeypat
                 "data: [DONE]\n\n"
             ),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
 
     response = await litellm.acompletion(
@@ -565,7 +565,7 @@ async def test_azure_400_is_classified_by_error_code(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx.post(url__startswith=_AZURE_API_BASE).mock(
-        return_value=_azure_error_response(400, {**_CONTEXT_LENGTH_ERROR, "code": code})
+        return_value=response_for_respx(_azure_error_response(400, {**_CONTEXT_LENGTH_ERROR, "code": code}))
     )
 
     with pytest.raises(BadRequestError) as exc_info:
@@ -579,7 +579,7 @@ async def test_azure_400_is_classified_by_error_code(
 async def test_azure_context_length_code_triggers_context_window_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx.post(url__startswith=_AZURE_API_BASE).mock(
-        return_value=_azure_error_response(400, _CONTEXT_LENGTH_ERROR)
+        return_value=response_for_respx(_azure_error_response(400, _CONTEXT_LENGTH_ERROR))
     )
     router: Final = litellm.Router(
         model_list=[
@@ -601,7 +601,7 @@ async def test_azure_context_length_code_triggers_context_window_fallback(monkey
 
 def _azure_chat_error(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> openai.APIError:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx.post(url__startswith=_AZURE_API_BASE).mock(return_value=response)
+    respx.post(url__startswith=_AZURE_API_BASE).mock(return_value=response_for_respx(response))
     with pytest.raises(openai.APIError) as exc_info:
         litellm.completion(model="azure/gpt-4o", messages=[{"role": "user", "content": "hi"}], **_AZURE_CALL_KWARGS)
     return exc_info.value
@@ -755,7 +755,9 @@ async def test_azure_error_keeps_the_upstream_body_without_the_api_key(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx.post(url__regex=r"https://azure-upstream\.openai\.azure\.com/.*").mock(
-        return_value=httpx.Response(status_code, content=body, headers={"content-type": "application/json"})
+        return_value=response_for_respx(
+            httpx.Response(status_code, content=body, headers={"content-type": "application/json"})
+        )
     )
 
     with pytest.raises(mapped_error) as raised:
@@ -792,7 +794,9 @@ async def test_azure_error_response_keeps_the_upstream_elapsed_time(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx.post(url__regex=r"https://azure-upstream\.openai\.azure\.com/.*").mock(
-        return_value=httpx.Response(400, content=_AZURE_REFUSAL_BODY, headers={"content-type": "application/json"})
+        return_value=response_for_respx(
+            httpx.Response(400, content=_AZURE_REFUSAL_BODY, headers={"content-type": "application/json"})
+        )
     )
 
     with pytest.raises(BadRequestError) as raised:

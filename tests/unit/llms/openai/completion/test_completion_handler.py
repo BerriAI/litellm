@@ -6,14 +6,17 @@ Regression tests for https://github.com/BerriAI/litellm/issues/27410
 """
 
 
+import httpx2 as httpx
 import json
 from typing import Final
 
 import pytest
-import respx
-from httpx import Response
+
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
 
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import atext_completion, text_completion
 
@@ -26,7 +29,7 @@ def setup_env(monkeypatch):
 @pytest.fixture
 def mock_completions_endpoint():
     return respx.post("https://api.openai.com/v1/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "cmpl-test123",
@@ -47,7 +50,7 @@ def mock_completions_endpoint():
                     "total_tokens": 2,
                 },
             },
-        )
+        ))
     )
 
 
@@ -99,11 +102,11 @@ _REJECTION_BODY: Final = '{"error":{"message":"bad prompt","type":"invalid_reque
 @pytest.fixture
 def rejected_completions_endpoint():
     return respx.post("https://api.openai.com/v1/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             400,
             content=_REJECTION_BODY,
             headers={"x-request-id": "req-1", "content-type": "application/json"},
-        )
+        ))
     )
 
 
@@ -146,11 +149,11 @@ async def test_acompletion_surfaces_the_status_and_headers_of_a_rejected_request
 async def test_async_streaming_completion_reports_an_error_event_sent_mid_stream(monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx.post("https://api.openai.com/v1/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text='data: {"error": {"message": "upstream overloaded", "type": "server_error"}}\n\n',
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     with pytest.raises(litellm.InternalServerError) as failed:
         async for _ in await atext_completion(model="gpt-3.5-turbo-instruct", prompt="hello", stream=True):
@@ -163,7 +166,7 @@ async def test_async_streaming_completion_reports_an_error_event_sent_mid_stream
 @respx.mock
 def test_completion_openai_prompt_array_sends_both_prompts() -> None:
     route: Final = respx.post("https://api.openai.com/v1/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "cmpl-test123",
@@ -176,7 +179,7 @@ def test_completion_openai_prompt_array_sends_both_prompts() -> None:
                 ],
                 "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
             },
-        )
+        ))
     )
 
     response: Final = text_completion(
@@ -194,7 +197,7 @@ def test_completion_openai_prompt_array_sends_both_prompts() -> None:
 def test_completion_text_003_token_prompt_array_returns_one_choice_per_prompt() -> None:
     token_prompts: Final = [[2061, 338, 262, 6193, 287, 14362, 30], [2437, 318, 9502, 30]]
     route: Final = respx.post("https://api.fireworks.ai/inference/v1/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "cmpl-token-prompts",
@@ -207,7 +210,7 @@ def test_completion_text_003_token_prompt_array_returns_one_choice_per_prompt() 
                 ],
                 "usage": {"prompt_tokens": 11, "completion_tokens": 2, "total_tokens": 13},
             },
-        )
+        ))
     )
 
     response: Final = text_completion(
@@ -227,7 +230,7 @@ def test_completion_text_003_token_prompt_array_returns_one_choice_per_prompt() 
 @respx.mock
 def test_text_completion_with_echo_returns_prompt_and_token_logprobs() -> None:
     route: Final = respx.post("https://api.openai.com/v1/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "cmpl-test123",
@@ -244,7 +247,7 @@ def test_text_completion_with_echo_returns_prompt_and_token_logprobs() -> None:
                 ],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = text_completion(
@@ -288,7 +291,7 @@ def test_completion_openai_engine_and_model_uses_the_explicit_model(mock_complet
 async def test_async_text_completion_stream_returns_text_and_one_finish_reason(monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx.post("https://api.openai.com/v1/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=(
                 'data: {"id":"cmpl-stream","object":"text_completion","created":1,"model":"gpt-3.5-turbo-instruct","choices":[{"index":0,"text":"hello","finish_reason":null}]}\n\n'
@@ -296,7 +299,7 @@ async def test_async_text_completion_stream_returns_text_and_one_finish_reason(m
                 "data: [DONE]\n\n"
             ),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
 
     stream: Final = await atext_completion(
@@ -317,7 +320,7 @@ async def test_async_text_completion_stream_returns_text_and_one_finish_reason(m
 async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=(
                 'data: {"id":"chatcmpl-stream","object":"chat.completion.chunk","created":1,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}\n\n'
@@ -325,7 +328,7 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
                 "data: [DONE]\n\n"
             ),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
 
     stream: Final = await atext_completion(
@@ -352,7 +355,7 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
 def test_text_completion_stream_forwards_stream_options_and_usage(monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx.post("https://api.openai.com/v1/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=(
                 'data: {"id":"cmpl-stream","object":"text_completion","created":1,"model":"gpt-3.5-turbo-instruct","choices":[{"index":0,"text":"hello","finish_reason":null}]}\n\n'
@@ -360,7 +363,7 @@ def test_text_completion_stream_forwards_stream_options_and_usage(monkeypatch):
                 "data: [DONE]\n\n"
             ),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
 
     chunks: Final = list(

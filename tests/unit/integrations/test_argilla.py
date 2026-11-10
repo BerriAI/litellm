@@ -2,10 +2,11 @@ import asyncio
 import json
 import re
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.argilla import ArgillaLogger
 
@@ -58,10 +59,10 @@ async def test_argilla_logger_sends_the_record_shaped_by_the_configured_field_ma
 ) -> None:
     monkeypatch.setattr(litellm, "argilla_transformation_object", transformation_object)
     respx_mock.get(f"{ARGILLA_BASE_URL}/api/v1/me/datasets", params={"name": "support-chats"}).mock(
-        return_value=httpx.Response(200, json={"items": [{"id": "dataset-403"}]})
+        return_value=response_for_respx(httpx.Response(200, json={"items": [{"id": "dataset-403"}]}))
     )
     bulk_route = respx_mock.post(f"{ARGILLA_BASE_URL}/api/v1/datasets/dataset-403/records/bulk").mock(
-        return_value=httpx.Response(200, json={})
+        return_value=response_for_respx(httpx.Response(200, json={}))
     )
     logger = ArgillaLogger(
         argilla_api_key="argilla-key",

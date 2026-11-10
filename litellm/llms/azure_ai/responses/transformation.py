@@ -2,7 +2,7 @@ import os
 from collections.abc import Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, NoReturn
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm

@@ -1,10 +1,11 @@
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.sail.helpers import MODEL, SAIL_API_BASE, SpendCapture, cost_at, responses_body, sent_body
 
 INPUT: Final = "hi"
@@ -12,7 +13,9 @@ INPUT: Final = "hi"
 
 @pytest.fixture
 def responses_route(respx_mock: respx.MockRouter) -> respx.Route:
-    return respx_mock.post(f"{SAIL_API_BASE}/responses").mock(return_value=httpx.Response(200, json=responses_body()))
+    return respx_mock.post(f"{SAIL_API_BASE}/responses").mock(
+        return_value=response_for_respx(httpx.Response(200, json=responses_body()))
+    )
 
 
 @pytest.mark.parametrize(
@@ -209,7 +212,7 @@ async def test_sail_responses_use_sail_api_base_env_and_key(
 ) -> None:
     monkeypatch.setenv("SAIL_API_BASE", "https://sail-gateway.invalid/v1")
     route: Final = respx_mock.post("https://sail-gateway.invalid/v1/responses").mock(
-        return_value=httpx.Response(200, json=responses_body())
+        return_value=response_for_respx(httpx.Response(200, json=responses_body()))
     )
 
     await litellm.aresponses(model=MODEL, input=INPUT)

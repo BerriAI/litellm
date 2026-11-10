@@ -2,7 +2,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 

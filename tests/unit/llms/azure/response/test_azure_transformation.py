@@ -4,9 +4,10 @@ from copy import deepcopy
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.types.responses import ResponseReasoningItem
 from pydantic import JsonValue, TypeAdapter
 
@@ -24,6 +25,7 @@ from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.proxy.conftest import httpx_transport
 
 
@@ -1042,7 +1044,7 @@ def test_dated_ga_api_version_sends_responses_to_the_unset_api_version_url(
     respx_mock: respx.MockRouter, call_responses: Callable[[str], str | None]
 ) -> None:
     route: Final = respx_mock.post(host="example-resource.openai.azure.com").mock(
-        return_value=httpx.Response(200, json=_COMPLETED_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_COMPLETED_RESPONSE))
     )
 
     text: Final = call_responses("2024-10-21")
@@ -1074,7 +1076,7 @@ def gateway_responses(respx_mock: respx.MockRouter, stream: bool) -> respx.Route
     content_type: Final = "text/event-stream" if stream else "application/json"
     return respx_mock.post(
         "https://gateway.example.com/foundry/openai/openai/v1/responses?api-version=v1"
-    ).mock(return_value=httpx.Response(200, text=body, headers={"content-type": content_type}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, text=body, headers={"content-type": content_type})))
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -1200,7 +1202,7 @@ def test_dated_ga_api_version_sends_response_lifecycle_calls_to_the_unset_api_ve
     respx_mock: respx.MockRouter, operation: str, path_suffix: str
 ) -> None:
     route: Final = respx_mock.route(host="example-resource.openai.azure.com").mock(
-        return_value=httpx.Response(200, json=_LIFECYCLE_BODIES[operation])
+        return_value=response_for_respx(httpx.Response(200, json=_LIFECYCLE_BODIES[operation]))
     )
 
     _call_lifecycle(operation)
@@ -1216,7 +1218,7 @@ def test_chat_completion_keeps_the_dated_ga_api_version(respx_mock: respx.MockRo
     route: Final = respx_mock.post(
         f"{_AZURE_RESOURCE}/openai/deployments/gpt-5.4-nano/chat/completions", params={"api-version": "2024-10-21"}
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-dated",
@@ -1226,7 +1228,7 @@ def test_chat_completion_keeps_the_dated_ga_api_version(respx_mock: respx.MockRo
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "Done."}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -1247,7 +1249,7 @@ def test_responses_api_version_routes_a_dated_chat_deployment_to_its_own_respons
 ) -> None:
     route: Final = respx_mock.post(
         "https://example-resource.openai.azure.com/openai/responses", params={"api-version": "2025-04-01-preview"}
-    ).mock(return_value=httpx.Response(200, json=_COMPLETED_RESPONSE))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_COMPLETED_RESPONSE)))
 
     response: Final = litellm.responses(
         model="azure/gpt-5.4-nano",
@@ -1272,7 +1274,7 @@ def test_responses_api_version_reaches_the_url_when_chat_completion_bridges_to_r
 ) -> None:
     route: Final = respx_mock.post(
         "https://example-resource.openai.azure.com/openai/v1/responses", params={"api-version": "v1"}
-    ).mock(return_value=httpx.Response(200, json=_COMPLETED_RESPONSE))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_COMPLETED_RESPONSE)))
 
     response: Final = litellm.completion(
         model="azure/responses/gpt-5.4-nano",
@@ -1374,7 +1376,7 @@ async def test_azure_responses_api_status_error():
         elif "data" in kwargs:
             captured_request_body = json.loads(kwargs["data"])
 
-        import httpx
+        import httpx2 as httpx
 
         # Create a proper httpx Response object
         response_content = json.dumps(mock_response_data).encode("utf-8")
@@ -1447,7 +1449,7 @@ async def test_azure_responses_api_headers_with_llm_provider_prefix():
     in response._hidden_params["headers"] instead of additional_headers, making them
     accessible via completion.headers in the same way as the completion API.
     """
-    import httpx
+    import httpx2 as httpx
 
     mock_response_data = {
         "id": "resp_123",
@@ -1749,7 +1751,9 @@ async def test_azure_responses_replays_reasoning_history_without_fields_azure_re
             headers={"content-type": "text/event-stream" if stream else "application/json"},
         )
 
-    route: Final = respx_mock.post(host="example-resource.openai.azure.com").mock(side_effect=respond)
+    route: Final = respx_mock.post(host="example-resource.openai.azure.com").mock(
+        side_effect=side_effect_for_respx(respond)
+    )
     request_params: Final = {
         "model": "azure/gpt-6.1-sol",
         "input": history,

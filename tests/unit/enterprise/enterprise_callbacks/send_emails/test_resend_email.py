@@ -2,7 +2,7 @@ import os
 import unittest.mock as mock
 
 import pytest
-from httpx import Response
+from httpx2 import Response
 
 
 import litellm

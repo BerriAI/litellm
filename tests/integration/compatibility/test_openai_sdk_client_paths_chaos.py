@@ -11,7 +11,7 @@ from itertools import product
 from pathlib import Path
 from typing import Final, Literal, TypeAlias
 
-import httpx
+import httpx2 as httpx
 import psutil
 import pytest
 from anthropic import Anthropic

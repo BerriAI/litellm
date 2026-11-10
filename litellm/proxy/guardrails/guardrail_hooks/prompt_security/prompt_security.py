@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
 

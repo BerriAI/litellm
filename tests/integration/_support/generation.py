@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 
-import httpx
+import httpx2 as httpx
 from hypothesis import Phase, settings
 
 from tests.integration._support.client import Gateway

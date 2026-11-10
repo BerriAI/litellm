@@ -4,10 +4,11 @@ import json
 from collections.abc import Iterator
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 import responses
-import respx
+
+from tests._support import respx_httpx2 as respx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 import litellm
 from litellm import Router
 from litellm.router import Deployment, LiteLLM_Params
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -203,7 +205,7 @@ def setup_and_teardown():
 async def test_gemini_pass_through_endpoint_forwards_key_and_body(
     respx_mock: "respx.MockRouter", httpx_transport: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import httpx
+    import httpx2 as httpx
     from fastapi import Request, Response
 
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
@@ -215,10 +217,10 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
     upstream: Final = respx_mock.post(
         url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={"totalTokens": 9},
-        )
+        ))
     )
     body: Final = json.dumps(
         {"contents": [{"parts": [{"text": "The quick brown fox jumps over the lazy dog."}]}]}
@@ -457,7 +459,7 @@ def test_vertex_pass_through_drops_the_configured_anthropic_beta_before_calling_
         proxy_server.general_settings, "vertex_ai_pass_through_drop_anthropic_betas", [_VERTEX_REJECTED_BETA]
     )
     upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{model_path}").mock(
-        return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_VERTEX_CLAUDE_REPLY))
     )
 
     response: Final = vertex_proxy.post(
@@ -486,7 +488,7 @@ def test_vertex_pass_through_matches_a_configured_beta_written_the_way_the_heade
 
     monkeypatch.setitem(proxy_server.general_settings, "vertex_ai_pass_through_drop_anthropic_betas", configured)
     upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_CALLER_PATH}").mock(
-        return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_VERTEX_CLAUDE_REPLY))
     )
 
     response: Final = vertex_proxy.post(
@@ -535,7 +537,7 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
         proxy_server.general_settings, "vertex_ai_pass_through_drop_anthropic_betas", _VERTEX_REJECTED_BETA
     )
     upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_CALLER_PATH}").mock(
-        return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_VERTEX_CLAUDE_REPLY))
     )
 
     response: Final = vertex_proxy.post(

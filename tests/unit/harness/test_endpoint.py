@@ -3,7 +3,7 @@ import sys
 from collections.abc import AsyncIterator
 from typing import Any, Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

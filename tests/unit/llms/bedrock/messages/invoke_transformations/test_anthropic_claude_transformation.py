@@ -12,12 +12,14 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
 import requests_mock as requests_mock_lib
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -3760,7 +3762,9 @@ async def test_reasoning_effort_grid_wire_shapes(
         )
         return
 
-    route: Final = respx_mock.post(url__regex=r"https://.*").mock(return_value=httpx.Response(200, json=response_body))
+    route: Final = respx_mock.post(url__regex=r"https://.*").mock(
+        return_value=response_for_respx(httpx.Response(200, json=response_body))
+    )
 
     match route_name:
         case "anthropic_direct":
@@ -4176,7 +4180,7 @@ async def test_bedrock_invoke_messages_per_turn_control_flag_stays_on_its_own_de
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     bedrock: Final = ScriptedBedrockInvoke(replies=((200, _ANTHROPIC_MESSAGE), (200, _ANTHROPIC_MESSAGE)))
-    respx_mock.post(url__regex=r"https://bedrock-runtime\..*").mock(side_effect=bedrock)
+    respx_mock.post(url__regex=r"https://bedrock-runtime\..*").mock(side_effect=side_effect_for_respx(bedrock))
     router: Final = litellm.Router(
         model_list=[
             {
@@ -4632,7 +4636,7 @@ async def test_bedrock_messages_fallback_to_anthropic_sends_the_tool_names_bedro
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream: Final = BedrockDownAnthropicUp()
-    respx_mock.post(url__regex=r"https://.*").mock(side_effect=upstream)
+    respx_mock.post(url__regex=r"https://.*").mock(side_effect=side_effect_for_respx(upstream))
     router: Final = litellm.Router(
         model_list=[
             {
@@ -4678,7 +4682,7 @@ async def test_bedrock_chat_fallback_to_anthropic_sends_the_tool_bedrock_cleaned
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream: Final = BedrockDownAnthropicUp()
-    respx_mock.post(url__regex=r"https://.*").mock(side_effect=upstream)
+    respx_mock.post(url__regex=r"https://.*").mock(side_effect=side_effect_for_respx(upstream))
     router: Final = litellm.Router(
         model_list=[
             {

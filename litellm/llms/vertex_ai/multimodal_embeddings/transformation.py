@@ -1,6 +1,6 @@
 from typing import Final, cast
 
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 
 from litellm.exceptions import InternalServerError
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

@@ -5,10 +5,11 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -458,7 +459,7 @@ async def test_router_prices_balanced_columns_by_the_same_rules_as_flex(
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     litellm.register_model({TIER_MODEL: {"litellm_provider": "openai", "mode": "chat", **PARITY_ROW}})
     respx_mock.post(f"{TIER_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(200, json=_chat_completion_body())
+        return_value=response_for_respx(httpx.Response(200, json=_chat_completion_body()))
     )
     group: Final = {tier: f"{tier}-{uuid.uuid4().hex}" for tier in ("flex", "balanced")}
     router: Final = litellm.Router(

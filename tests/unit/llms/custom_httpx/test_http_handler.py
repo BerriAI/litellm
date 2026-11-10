@@ -15,9 +15,9 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import certifi
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from aiohttp import ClientResponse, ClientSession, RequestInfo, TCPConnector
 from aiohttp.tracing import Trace
 from multidict import CIMultiDict, CIMultiDictProxy
@@ -43,7 +43,43 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+def test_httpx2_injected_sync_client_masks_provider_error() -> None:
+    def reject(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"]["read"] == 5
+        return httpx.Response(401, json={"error": "invalid key"})
+
+    with httpx.Client(transport=httpx.MockTransport(reject)) as client:
+        handler: Final = HTTPHandler(client=client)
+        with pytest.raises(MaskedHTTPStatusError) as error:
+            handler.post("https://provider.test/chat?key=test-secret", timeout=httpx.Timeout(5))
+
+    assert error.value.response.status_code == 401
+    assert error.value.response.json() == {"error": "invalid key"}
+    assert "test-secret" not in str(error.value.request.url)
+    assert "test-secret" not in str(error.value)
+
+
+@pytest.mark.asyncio
+async def test_httpx2_injected_async_transport_masks_provider_error() -> None:
+    def reject(request: httpx.Request) -> httpx.Response:
+        assert request.extensions["timeout"]["read"] == 5
+        return httpx.Response(401, json={"error": "invalid key"})
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(reject))
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as error:
+            await handler.post("https://provider.test/chat?key=test-secret", timeout=httpx.Timeout(5))
+    finally:
+        await handler.close()
+
+    assert error.value.response.status_code == 401
+    assert error.value.response.json() == {"error": "invalid key"}
+    assert "test-secret" not in str(error.value.request.url)
+    assert "test-secret" not in str(error.value)
 
 
 @pytest.mark.asyncio
@@ -2086,7 +2122,9 @@ async def test_bounded_get_closes_stream_on_cancellation(respx_mock, monkeypatch
         async def aclose(self):
             closed.set()
 
-    respx_mock.get("https://example.com/slow.json").respond(200, stream=SlowStream())
+    respx_mock.get("https://example.com/slow.json").mock(
+        return_value=response_for_respx(httpx.Response(200, stream=SlowStream()))
+    )
     handler = AsyncHTTPHandler()
     try:
         task = asyncio.create_task(handler.get("https://example.com/slow.json", max_response_bytes=100))

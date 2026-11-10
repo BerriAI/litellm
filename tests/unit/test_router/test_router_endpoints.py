@@ -4,10 +4,12 @@ import os
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from litellm import Router
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -699,8 +701,8 @@ _CONTAINER_FILE: Final = {
 
 
 async def _container_file_request(router: Router, container_id: str) -> httpx.Request:
-    with respx.mock(assert_all_called=False) as upstream:
-        route = upstream.route().mock(return_value=httpx.Response(200, json=_CONTAINER_FILE))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+        route = upstream.route().mock(return_value=response_for_respx(httpx.Response(200, json=_CONTAINER_FILE)))
         await router.aretrieve_container_file(container_id=container_id, file_id="cfile_xyz")
     assert route.call_count == 1
     return route.calls.last.request

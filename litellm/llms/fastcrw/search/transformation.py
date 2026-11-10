@@ -11,7 +11,7 @@ fastCRW API Reference: https://fastcrw.com/docs/rest-api
 from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

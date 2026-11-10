@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict, TypeVar, cast
 from urllib.parse import parse_qs, urlencode, urlparse
 
-import httpx
+import httpx2 as httpx
 import orjson
 from fastapi import (
     APIRouter,

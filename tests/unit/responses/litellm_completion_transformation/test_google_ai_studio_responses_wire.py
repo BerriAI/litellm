@@ -2,14 +2,16 @@ import json
 from collections.abc import AsyncIterable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.types.responses.response_create_params import ResponseInputParam
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.proxy.conftest import httpx_transport
 
 pytestmark: Final = pytest.mark.usefixtures(httpx_transport.__name__)
@@ -65,9 +67,9 @@ async def test_web_search_preview_is_sent_as_google_search() -> None:
         },
     }
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(url__regex=_GEMINI_URL).mock(
-            return_value=httpx.Response(status_code=200, json=response_body)
+            return_value=response_for_respx(httpx.Response(status_code=200, json=response_body))
         )
         response: Final = await litellm.aresponses(
             model="gemini/gemini-2.5-flash",
@@ -89,9 +91,9 @@ async def test_web_search_preview_is_sent_as_google_search() -> None:
 async def test_empty_responses_tool_output_reaches_gemini_without_json_text(
     output: str | list[dict[str, str]],
 ) -> None:
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(url__regex=_GEMINI_URL).mock(
-            return_value=httpx.Response(status_code=200, json=_function_call_response("signature"))
+            return_value=response_for_respx(httpx.Response(status_code=200, json=_function_call_response("signature")))
         )
         response: Final = await litellm.aresponses(
             model="gemini/gemini-2.5-flash",
@@ -152,16 +154,16 @@ async def test_media_history_survives_a_streaming_followup(
         ],
         "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 2, "totalTokenCount": 6},
     }
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(url__regex=_GEMINI_URL).mock(
-            side_effect=[
+            side_effect=side_effect_for_respx([
                 httpx.Response(200, json=response_body),
                 httpx.Response(
                     200,
                     content=f"data: {json.dumps(response_body)}\n\n",
                     headers={"content-type": "text/event-stream"},
                 ),
-            ]
+            ])
         )
         response: Final = await litellm.aresponses(
             model="gemini/gemini-2.5-flash",
@@ -217,9 +219,9 @@ async def test_gemini_function_call_preserves_thought_signature() -> None:
     signature: Final = "gemini-thought-signature"
     response_body: Final = _function_call_response(signature)
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(url__regex=_GEMINI_URL).mock(
-            return_value=httpx.Response(status_code=200, json=response_body)
+            return_value=response_for_respx(httpx.Response(status_code=200, json=response_body))
         )
         response: Final = await litellm.aresponses(
             model="gemini/gemini-2.5-flash",
@@ -252,13 +254,13 @@ async def test_gemini_streaming_function_call_preserves_thought_signature() -> N
     response_body: Final = _function_call_response(signature)
     event_stream: Final = f"data: {json.dumps(response_body)}\n\n"
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(url__regex=_GEMINI_URL).mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 status_code=200,
                 content=event_stream,
                 headers={"content-type": "text/event-stream"},
-            )
+            ))
         )
         stream: Final = await litellm.aresponses(
             model="gemini/gemini-2.5-flash",

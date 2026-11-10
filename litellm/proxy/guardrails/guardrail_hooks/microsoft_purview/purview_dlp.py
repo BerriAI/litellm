@@ -14,7 +14,7 @@ from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger

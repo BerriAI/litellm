@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.base_llm.vector_store.transformation import (

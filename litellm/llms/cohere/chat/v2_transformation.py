@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import map_finish_reason

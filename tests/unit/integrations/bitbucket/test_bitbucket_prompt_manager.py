@@ -2,7 +2,7 @@ import json
 import re
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 
@@ -112,7 +112,7 @@ def test_bitbucket_client_get_file_content_success(mock_get):
 def test_bitbucket_client_get_file_content_not_found(mock_get):
     """Test file content retrieval when file doesn't exist."""
     # Mock 404 response
-    import httpx
+    import httpx2 as httpx
 
     mock_response = MagicMock()
     mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -138,7 +138,7 @@ def test_bitbucket_client_get_file_content_not_found(mock_get):
 def test_bitbucket_client_get_file_content_access_denied(mock_get):
     """Test file content retrieval with access denied error."""
     # Mock 403 response
-    import httpx
+    import httpx2 as httpx
 
     mock_response = MagicMock()
     mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
@@ -164,7 +164,7 @@ def test_bitbucket_client_get_file_content_access_denied(mock_get):
 def test_bitbucket_client_get_file_content_auth_failed(mock_get):
     """Test file content retrieval with authentication failure."""
     # Mock 401 response
-    import httpx
+    import httpx2 as httpx
 
     mock_response = MagicMock()
     mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(

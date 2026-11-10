@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from hashlib import sha256
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import psycopg
 import pytest
 from hypothesis import strategies as st

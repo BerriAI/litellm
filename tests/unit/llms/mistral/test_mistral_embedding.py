@@ -1,15 +1,16 @@
 import json
 from typing import Final
 
-import httpx
-import respx
+import httpx2 as httpx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 
 def test_mistral_embedding_uses_mistral_embeddings_endpoint(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post("https://api.mistral.ai/v1/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "embd-migration",
@@ -18,7 +19,7 @@ def test_mistral_embedding_uses_mistral_embeddings_endpoint(respx_mock: respx.Mo
                 "model": "mistral-embed",
                 "usage": {"prompt_tokens": 2, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = litellm.embedding(

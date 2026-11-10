@@ -7,11 +7,13 @@ from typing import Final
 
 import anyio
 import anyio.lowlevel
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import AsyncOpenAI, OpenAI
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
@@ -132,20 +134,20 @@ async def test_a_deployment_whose_stream_times_out_mid_transcript_goes_into_cool
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _transcription_router("https://stalls.example/v1", "https://healthy.example/v1")
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         upstream.post("https://stalls.example/v1/audio/transcriptions").mock(
-            side_effect=lambda request: httpx.Response(
+            side_effect=side_effect_for_respx(lambda request: httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
                 stream=_FirstDeltaThenFails(httpx.ReadTimeout("read timed out")),
-            )
+            ))
         )
         upstream.post("https://healthy.example/v1/audio/transcriptions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
                 content=b'data: {"type":"transcript.text.done","text":"Good morning"}\n\n',
-            )
+            ))
         )
         stalled: Final = await router.atranscription(model="transcriber", file=("sample.wav", b"audio"), stream=True)
         with pytest.raises(litellm.Timeout):

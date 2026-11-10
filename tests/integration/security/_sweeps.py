@@ -79,7 +79,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import quote, urlencode
 
-import httpx
+import httpx2 as httpx
 import psycopg
 from integration._support.client import Gateway
 from integration._support.wire import Request

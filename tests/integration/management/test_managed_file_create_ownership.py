@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, string_value
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario

@@ -11,7 +11,7 @@ import json
 from collections.abc import Callable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler

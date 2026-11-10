@@ -25,7 +25,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias, TypedDict
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger

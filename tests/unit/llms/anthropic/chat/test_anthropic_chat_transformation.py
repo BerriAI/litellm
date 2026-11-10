@@ -8,10 +8,11 @@ from itertools import chain
 from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-from httpx import Headers
+
+from tests._support import respx_httpx2 as respx
+from httpx2 import Headers
 from pydantic import BaseModel, ConfigDict
 
 import litellm
@@ -58,6 +59,7 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionToolCallChunk, Choices, Message, ModelResponse, ServerToolUse, Usage
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -796,7 +798,7 @@ def test_web_search_tool_result_in_provider_specific_fields():
     This ensures users can access the web search results via:
     response.choices[0].message.provider_specific_fields["web_search_results"]
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -1039,7 +1041,7 @@ def test_map_tool_choice_dict_type_function_without_name():
 
 
 def test_transform_response_with_prefix_prompt():
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -3564,7 +3566,7 @@ def test_code_execution_tool_results_extraction():
 
     Related to: https://github.com/BerriAI/litellm/issues/xxxxx
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -3716,7 +3718,7 @@ def test_code_execution_tool_results_in_hidden_params():
     to set provider_specific_fields on the response. Without this, server-side
     code execution results (stdout/stderr) are lost when using responses.create().
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -4146,7 +4148,7 @@ def test_web_search_tool_result_backwards_compatibility():
     Test that web_search_tool_result continues to be stored in web_search_results
     for backwards compatibility, not in tool_results.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -4250,7 +4252,7 @@ def test_compaction_block_in_provider_specific_fields():
     """
     Test that compaction blocks are included in provider_specific_fields.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -4399,7 +4401,7 @@ async def test_native_compaction_wire_roundtrip(
         )
         return httpx.Response(200, json=body)
 
-    route.mock(side_effect=respond)
+    route.mock(side_effect=side_effect_for_respx(respond))
     call: Final = litellm.anthropic.messages.acreate if messages_api else litellm.acompletion
     params: Final = dict(
         model=f"{'openai/' if gateway else ''}anthropic/claude-sonnet-5",
@@ -4894,7 +4896,7 @@ def test_compaction_block_empty_list_not_added():
     """
     Test that empty compaction_blocks list is not added to provider_specific_fields.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -9861,7 +9863,7 @@ async def _send_prompt_caching_request(
 ) -> httpx.Request:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
@@ -9873,7 +9875,7 @@ async def _send_prompt_caching_request(
                 "stop_sequence": None,
                 "usage": {"input_tokens": 12, "output_tokens": 6},
             },
-        )
+        ))
     )
     await litellm.acompletion(
         api_key="mock_api_key",
@@ -9957,7 +9959,7 @@ async def test_litellm_anthropic_prompt_caching_system(
 @pytest.mark.usefixtures("local_beta_headers_config")
 def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg_custom_headers",
@@ -9969,7 +9971,7 @@ def test_completion_forwards_caller_anthropic_beta_header_with_computer_tool(res
                 "stop_sequence": None,
                 "usage": {"input_tokens": 12, "output_tokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -10020,7 +10022,9 @@ def test_completion_adds_the_beta_matching_the_computer_tool_version(
     respx_mock: respx.MockRouter, tool_type: str, expected_beta: str
 ):
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "hi"}], "end_turn"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "hi"}], "end_turn"))
+        )
     )
 
     litellm.completion(
@@ -10047,7 +10051,9 @@ def test_completion_adds_the_beta_matching_the_computer_tool_version(
 @pytest.mark.usefixtures("local_beta_headers_config")
 def test_completion_sends_no_computer_use_beta_for_an_unknown_computer_tool_version(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "hi"}], "end_turn"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_anthropic_message_body([{"type": "text", "text": "hi"}], "end_turn"))
+        )
     )
 
     litellm.completion(
@@ -10088,9 +10094,9 @@ def _anthropic_message_body(content: list[dict[str, object]], stop_reason: str) 
 
 def test_completion_sends_prefix_as_trailing_assistant_turn_and_prepends_it(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json=_anthropic_message_body([{"type": "text", "text": " won the 2022 World Cup."}], "end_turn")
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -10118,7 +10124,7 @@ def test_completion_with_required_tool_choice_and_response_format_returns_tool_c
         answer: str
 
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json=_anthropic_message_body(
                 [
@@ -10131,7 +10137,7 @@ def test_completion_with_required_tool_choice_and_response_format_returns_tool_c
                 ],
                 "tool_use",
             ),
-        )
+        ))
     )
     weather_parameters: Final = {
         "type": "object",
@@ -10211,7 +10217,7 @@ def test_completion_surfaces_response_citations_in_provider_specific_fields(resp
         "citations": {"enabled": True},
     }
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json=_anthropic_message_body(
                 [
@@ -10220,7 +10226,7 @@ def test_completion_surfaces_response_citations_in_provider_specific_fields(resp
                 ],
                 "end_turn",
             ),
-        )
+        ))
     )
 
     response: Final = litellm.completion(

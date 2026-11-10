@@ -3,10 +3,11 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 from litellm.llms.vertex_ai.batches.transformation import VertexAIBatchTransformation
@@ -275,12 +276,12 @@ async def test_vertex_file_upload_create_and_retrieve_batch(
     )
     upload_route: Final = respx_mock.post(
         url__startswith="https://storage.googleapis.com/upload/storage/v1/b/litellm-local/o"
-    ).mock(return_value=httpx.Response(200, json=dict(_MOCK_GCS_FILE_RESPONSE)))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=dict(_MOCK_GCS_FILE_RESPONSE))))
     create_route: Final = respx_mock.post(jobs_url).mock(
-        return_value=httpx.Response(200, json=dict(_MOCK_VERTEX_BATCH_RESPONSE))
+        return_value=response_for_respx(httpx.Response(200, json=dict(_MOCK_VERTEX_BATCH_RESPONSE)))
     )
     retrieve_route: Final = respx_mock.get(f"{jobs_url}/test-batch-id-456").mock(
-        return_value=httpx.Response(200, json=dict(_MOCK_VERTEX_BATCH_RESPONSE))
+        return_value=response_for_respx(httpx.Response(200, json=dict(_MOCK_VERTEX_BATCH_RESPONSE)))
     )
     gcs_object_uri: Final = (
         "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/"

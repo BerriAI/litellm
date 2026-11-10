@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import unquote, urlsplit, urlunsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.bedrock_runtime_peer import PNG_1X1
@@ -52,7 +52,7 @@ _IMAGE_INPUT_RECORDER: Final = """
 import json
 import os
 
-import httpx
+import httpx2 as httpx
 
 from litellm.integrations.custom_logger import CustomLogger
 

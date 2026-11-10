@@ -14,7 +14,7 @@ from base64 import b64encode
 from typing import Final
 from urllib.parse import unquote
 
-import httpx
+import httpx2 as httpx
 from fastapi import APIRouter, HTTPException, Request, Response, status
 
 import litellm

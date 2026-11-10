@@ -180,7 +180,7 @@ def is_exception_related_to_db(e: Exception) -> bool:
     Returns True if the exception is related to the DB
     """
 
-    import httpx
+    import httpx2 as httpx
     from prisma.errors import PrismaError
 
     return isinstance(e, (PrismaError, httpx.TransportError))

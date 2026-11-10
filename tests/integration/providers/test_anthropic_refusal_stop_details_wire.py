@@ -8,7 +8,7 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote, urlsplit
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from cryptography.hazmat.primitives import serialization

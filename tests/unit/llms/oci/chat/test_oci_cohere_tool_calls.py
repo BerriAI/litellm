@@ -1,5 +1,5 @@
 import datetime
-import httpx
+import httpx2 as httpx
 import pytest
 import json
 from unittest.mock import patch, MagicMock

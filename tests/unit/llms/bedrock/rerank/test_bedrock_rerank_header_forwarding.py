@@ -8,7 +8,7 @@ forward_client_headers_to_llm_api were not being passed to Bedrock rerank provid
 import json
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import ValidationError
 
@@ -485,7 +485,7 @@ def test_bedrock_rerank_signs_with_sigv4_even_when_bedrock_api_key_is_set(monkey
 async def test_bedrock_rerank_records_llm_api_duration():
     """The bedrock rerank handler must feed httpx timing into the logging obj, so the
     proxy can emit x-litellm-overhead-duration-ms / x-litellm-timing-* on /rerank."""
-    import httpx
+    import httpx2 as httpx
 
     def handle(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=bedrock_rerank_response)

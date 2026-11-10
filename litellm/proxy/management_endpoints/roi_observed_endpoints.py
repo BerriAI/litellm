@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final
 
-import httpx
+import httpx2 as httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import SecretStr, TypeAdapter, ValidationError

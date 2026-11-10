@@ -5,11 +5,10 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger

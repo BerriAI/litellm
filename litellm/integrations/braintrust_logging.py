@@ -5,7 +5,7 @@ import os
 from datetime import datetime
 from typing import Final, Protocol
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm

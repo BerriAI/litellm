@@ -6,7 +6,7 @@ from datetime import datetime
 from types import MappingProxyType as MappingProxyType  # noqa: PLC0414  # public re-export
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
 
-import httpx
+import httpx2 as httpx
 from pydantic import (
     AfterValidator,
     BaseModel,

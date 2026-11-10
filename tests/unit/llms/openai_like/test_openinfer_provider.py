@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.proxy.auth.model_checks import get_provider_models
@@ -37,7 +36,7 @@ _CHAT_RESPONSE: Final = {
 
 
 def _sent_chat_request(model: str, **params: object) -> tuple[str, str, dict[str, object]]:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(_CHAT_URL).respond(200, json=_CHAT_RESPONSE)
         litellm.completion(
             model=f"openinfer/{model}",
@@ -154,7 +153,7 @@ def test_reasoning_effort_reaches_openinfer_for_reasoning_rows(model: str):
 
 
 def test_responses_request_goes_to_openinfer_natively():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.openinfer.ai/v1/responses").respond(
             200,
             json={
@@ -189,7 +188,7 @@ def test_responses_request_goes_to_openinfer_natively():
 async def test_anthropic_messages_request_goes_to_openinfer_natively(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.openinfer.ai/v1/messages").respond(
             200,
             json={

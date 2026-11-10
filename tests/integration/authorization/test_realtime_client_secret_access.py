@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterator, Mapping
 from hashlib import sha256
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai.types.realtime import ClientSecretCreateResponse
 from pydantic import BaseModel, JsonValue

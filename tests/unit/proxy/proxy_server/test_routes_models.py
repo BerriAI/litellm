@@ -16,10 +16,10 @@ from dataclasses import dataclass, field
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm.integrations.custom_secret_manager import CustomSecretManager
@@ -609,8 +609,10 @@ def test_v1_models_fetches_a_live_openrouter_catalog_without_holding_the_event_l
         response: Final = await listing
         return [str(model["id"]) for model in response["data"]]
 
-    with respx.mock() as respx_mock:
-        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(side_effect=catalog.answer)
+    with respx.mock(using="httpcore2_and_legacy") as respx_mock:
+        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(
+            side_effect=side_effect_for_respx(catalog.answer)
+        )
         listed_ids: Final = asyncio.run(listed_ids_on_a_one_thread_default_pool())
 
     assert catalog_route.calls.last.response.status_code == 200

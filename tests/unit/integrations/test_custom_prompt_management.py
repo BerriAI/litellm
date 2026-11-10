@@ -4,7 +4,7 @@ import unittest
 from typing import List, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

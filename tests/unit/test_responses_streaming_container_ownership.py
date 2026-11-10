@@ -21,9 +21,10 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import httpx
-import respx
+import httpx2 as httpx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 _DELTA = {
@@ -72,9 +73,11 @@ def _stream_through_router(*events):
                 }
             ]
         )
-        with respx.mock() as mock_router:
+        with respx.mock(using="httpcore2_and_legacy") as mock_router:
             mock_router.post("https://api.openai.com/v1/responses").mock(
-                return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+                return_value=response_for_respx(
+                    httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+                )
             )
             stream = await router.aresponses(model="gpt-5.5", input="hi", stream=True)
             chunks = [chunk async for chunk in stream]

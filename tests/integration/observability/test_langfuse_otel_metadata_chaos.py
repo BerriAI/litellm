@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from _langfuse_otel_metadata_support import (
     assert_key_alias,
     langfuse_rig,

@@ -11,7 +11,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, PositiveInt, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm

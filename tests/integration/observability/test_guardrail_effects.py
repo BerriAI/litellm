@@ -17,7 +17,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value

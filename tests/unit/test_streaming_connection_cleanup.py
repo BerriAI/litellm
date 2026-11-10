@@ -7,10 +7,10 @@ import json
 from unittest.mock import MagicMock
 
 import anyio
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.aiohttp_transport import (
@@ -236,7 +236,9 @@ def stream_router(monkeypatch: pytest.MonkeyPatch):
 async def _open_stream(router, primary: _TrackingStream, fallback: _TrackingStream, mock_router):
     for host, body in (("primary", primary), ("fallback", fallback)):
         mock_router.post(f"https://{host}.example/v1/chat/completions").mock(
-            return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=body)
+            return_value=response_for_respx(
+                httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=body)
+            )
         )
     return await router.acompletion(model="test-model", messages=[{"role": "user", "content": "hi"}], stream=True)
 
@@ -247,7 +249,7 @@ async def test_stream_with_fallbacks_closes_stream_on_generator_close(stream_rou
     close the upstream response."""
     primary = _full_stream()
 
-    with respx.mock(assert_all_called=False) as mock_router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as mock_router:
         result = await _open_stream(stream_router, primary, _full_stream(), mock_router)
         async for _ in result:
             break
@@ -261,7 +263,7 @@ async def test_stream_with_fallbacks_closes_stream_on_normal_completion(stream_r
     """The upstream response must be closed even on normal completion."""
     primary = _full_stream()
 
-    with respx.mock(assert_all_called=False) as mock_router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as mock_router:
         result = await _open_stream(stream_router, primary, _full_stream(), mock_router)
         async for _ in result:
             pass
@@ -277,7 +279,7 @@ async def test_stream_with_fallbacks_closes_both_on_fallback_disconnect(stream_r
     primary = _TrackingStream([], fail=True)
     fallback = _full_stream()
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         result = await _open_stream(stream_router, primary, fallback, mock_router)
         async for _ in result:
             break

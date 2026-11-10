@@ -2,10 +2,11 @@ from collections import UserString
 from types import SimpleNamespace
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
@@ -128,7 +129,9 @@ async def test_upload_from_a_url_takes_the_content_type_from_the_response_header
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "user_url_validation", False)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    respx_mock.get(_FILE_URL).mock(return_value=httpx.Response(200, content=b"%PDF-1.7", headers=headers))
+    respx_mock.get(_FILE_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, content=b"%PDF-1.7", headers=headers))
+    )
     ingestion: Final = GeminiRAGIngestion(ingest_options={"vector_store": {"custom_llm_provider": "gemini"}})
 
     uploaded: Final = await ingestion.upload(file_url=_FILE_URL)
@@ -203,15 +206,19 @@ async def test_a_gemini_upstream_error_keeps_its_status_on_the_failed_ingest(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post(f"{_GEMINI_API_BASE}/v1beta/fileSearchStores").mock(
-        return_value=httpx.Response(upstream_statuses.get("create_store", 200), json={"name": _GEMINI_STORE})
-    )
-    respx_mock.post(f"{_GEMINI_API_BASE}/upload/v1beta/{_GEMINI_STORE}:uploadToFileSearchStore").mock(
-        return_value=httpx.Response(
-            upstream_statuses.get("start_upload", 200), headers={"x-goog-upload-url": _GEMINI_UPLOAD_SESSION_URL}
+        return_value=response_for_respx(
+            httpx.Response(upstream_statuses.get("create_store", 200), json={"name": _GEMINI_STORE})
         )
     )
+    respx_mock.post(f"{_GEMINI_API_BASE}/upload/v1beta/{_GEMINI_STORE}:uploadToFileSearchStore").mock(
+        return_value=response_for_respx(httpx.Response(
+            upstream_statuses.get("start_upload", 200), headers={"x-goog-upload-url": _GEMINI_UPLOAD_SESSION_URL}
+        ))
+    )
     respx_mock.put(_GEMINI_UPLOAD_SESSION_URL).mock(
-        return_value=httpx.Response(upstream_statuses.get("upload", 200), json={"name": f"{_GEMINI_STORE}/documents/d"})
+        return_value=response_for_respx(
+            httpx.Response(upstream_statuses.get("upload", 200), json={"name": f"{_GEMINI_STORE}/documents/d"})
+        )
     )
     vector_store: Final = {
         "custom_llm_provider": "gemini",

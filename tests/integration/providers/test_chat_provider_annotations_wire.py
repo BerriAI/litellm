@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterator
 from itertools import chain
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.caching.response_cache_case import await_entry, redis_store

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec

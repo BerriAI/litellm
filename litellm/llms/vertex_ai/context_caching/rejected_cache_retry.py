@@ -3,7 +3,7 @@ from copy import deepcopy
 from functools import partial
 from typing import Final, TypeVar
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.core_helpers import independent_snapshot
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

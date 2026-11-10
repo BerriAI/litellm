@@ -15,10 +15,11 @@ import sys
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 # ---------------------------------------------------------------------------
@@ -415,10 +416,10 @@ async def test_databricks_agent_flat_oauth_send_reaches_the_endpoint_with_the_mi
         )
     )
     token: Final = respx.post(f"{workspace}/oidc/v1/token").mock(
-        return_value=httpx.Response(200, json={"access_token": "flat-minted", "expires_in": 3600})
+        return_value=response_for_respx(httpx.Response(200, json={"access_token": "flat-minted", "expires_in": 3600}))
     )
     endpoint: Final = respx.post(f"{workspace}/serving-endpoints/my-agent/invocations").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": [
@@ -430,7 +431,7 @@ async def test_databricks_agent_flat_oauth_send_reaches_the_endpoint_with_the_mi
                     }
                 ]
             },
-        )
+        ))
     )
 
     with (

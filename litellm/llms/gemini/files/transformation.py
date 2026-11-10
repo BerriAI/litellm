@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Final, Literal, TypedDict
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from openai.types.file_deleted import FileDeleted
 from typing_extensions import ReadOnly, Required
 

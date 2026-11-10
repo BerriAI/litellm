@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-import httpx
+import httpx2 as httpx
 import openai
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 

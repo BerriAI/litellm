@@ -12,7 +12,7 @@ from io import BytesIO
 from typing import Dict, List
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 

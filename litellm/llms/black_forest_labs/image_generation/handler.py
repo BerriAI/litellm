@@ -11,7 +11,7 @@ import time
 from collections.abc import Coroutine, Mapping
 from typing import Final, Protocol, TypedDict
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly
 
 import litellm

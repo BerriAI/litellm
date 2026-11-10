@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, Scenario, object_value
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server

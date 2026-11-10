@@ -20,12 +20,14 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from litellm_enterprise.proxy.common_utils.check_batch_cost import GIVE_UP_POLLING_AFTER
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.constants import MANAGED_OBJECT_STALENESS_CUTOFF_DAYS
 from litellm.types.router import LiteLLM_Params
@@ -367,7 +369,7 @@ class TestCheckBatchCost:
     ):
         """Without the deployment's s3_bucket_name the cost poller cannot read a Bedrock
         batch's output file, and every completed Bedrock batch stays unbilled."""
-        import httpx
+        import httpx2 as httpx
 
         import litellm
 
@@ -411,7 +413,7 @@ class TestCheckBatchCost:
         decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
 
         with (
-            respx.mock(assert_all_called=False) as s3,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as s3,
             patch(
                 "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
                 side_effect=[decoded_id, None],
@@ -445,7 +447,7 @@ class TestCheckBatchCost:
             mock_logging_obj.async_success_handler = AsyncMock()
             mock_logging_cls.return_value = mock_logging_obj
             s3.get(url__regex=r"^https://s3\.us-east-1\.amazonaws\.com/").mock(
-                return_value=httpx.Response(200, content=b'{"recordId":"req-1"}')
+                return_value=response_for_respx(httpx.Response(200, content=b'{"recordId":"req-1"}'))
             )
 
             await check_batch_cost_instance.check_batch_cost()
@@ -570,8 +572,8 @@ class TestCheckBatchCost:
         import base64
         from unittest.mock import patch
 
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -626,13 +628,13 @@ class TestCheckBatchCost:
         )
 
         with (
-            respx.mock(assert_all_called=True) as provider,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as provider,
             patch.object(  # test-quality-ok: the poller builds Logging inline, the only seam to the row it logs
                 Logging, "async_success_handler", autospec=True
             ) as success_handler,
         ):
             provider.get("https://api.openai.com/v1/files/file-output-123/content").mock(
-                return_value=httpx.Response(200, content=f"{output_line}\n".encode())
+                return_value=response_for_respx(httpx.Response(200, content=f"{output_line}\n".encode()))
             )
             await check_batch_cost_instance.check_batch_cost()
 
@@ -1381,8 +1383,8 @@ class TestCheckBatchCost:
         import base64
         from unittest.mock import patch
 
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -1453,16 +1455,18 @@ class TestCheckBatchCost:
         )
 
         with (
-            respx.mock(assert_all_called=True) as provider,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as provider,
             patch.object(  # test-quality-ok: the poller builds Logging inline, the only seam to its handler kwargs
                 Logging, "async_success_handler", new_callable=AsyncMock
             ) as success_handler,
         ):
             provider.get("https://api.openai.com/v1/files/file-output-123/content").mock(
-                return_value=httpx.Response(200, content=f"{succeeded_line}\n{rejected_line}\n".encode())
+                return_value=response_for_respx(
+                    httpx.Response(200, content=f"{succeeded_line}\n{rejected_line}\n".encode())
+                )
             )
             provider.get("https://api.openai.com/v1/files/file-error-456/content").mock(
-                return_value=httpx.Response(200, content=f"{error_file_lines}\n\n".encode())
+                return_value=response_for_respx(httpx.Response(200, content=f"{error_file_lines}\n\n".encode()))
             )
             await check_batch_cost_instance.check_batch_cost()
 
@@ -3328,8 +3332,8 @@ class TestMultiPodBatchCostClaim:
         monkeypatch.setitem(proxy_server.general_settings, "use_spend_logs_ledger", False)
         from datetime import datetime
 
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.caching.caching import DualCache
@@ -3444,7 +3448,7 @@ class TestMultiPodBatchCostClaim:
             patch("litellm.proxy.proxy_server.prisma_client", spend_prisma),
         ):
             respx.get(f"https://api.openai.com/v1/files/{_CLAIM_OUTPUT_FILE_ID}/content").mock(
-                return_value=httpx.Response(200, content=content)
+                return_value=response_for_respx(httpx.Response(200, content=content))
             )
             worker: Final = self._instance(prisma, router)
             await worker.check_batch_cost()
@@ -3485,8 +3489,8 @@ class TestMultiPodBatchCostClaim:
         import base64
         from datetime import datetime
 
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.integrations.custom_logger import CustomLogger
@@ -3563,7 +3567,7 @@ class TestMultiPodBatchCostClaim:
         }
         with respx.mock:
             respx.get(f"https://api.openai.com/v1/files/{_CLAIM_OUTPUT_FILE_ID}/content").mock(
-                return_value=httpx.Response(200, content=content)
+                return_value=response_for_respx(httpx.Response(200, content=content))
             )
             instance: Final = self._instance(prisma, router)
             await instance.check_batch_cost()
@@ -3589,8 +3593,8 @@ class TestMultiPodBatchCostClaim:
     async def test_a_404_for_another_identifier_preserves_recovery(self, error_source: str) -> None:
         import base64
 
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.integrations.custom_logger import CustomLogger
@@ -3653,13 +3657,15 @@ class TestMultiPodBatchCostClaim:
         with respx.mock:
             route: Final = respx.get(f"https://api.openai.com/v1/files/{_CLAIM_OUTPUT_FILE_ID}/content")
             route.mock(
-                side_effect=error if error_source == "output" else None,
-                return_value=None if error_source == "output" else httpx.Response(200, content=output),
+                side_effect=side_effect_for_respx(error if error_source == "output" else None),
+                return_value=response_for_respx(
+                    None if error_source == "output" else httpx.Response(200, content=output)
+                ),
             )
             await self._instance(prisma, router).check_batch_cost()
             assert row.batch_processed is False
             assert recorder.costs == ()
-            route.mock(return_value=httpx.Response(200, content=output))
+            route.mock(return_value=response_for_respx(httpx.Response(200, content=output)))
             await self._instance(prisma, router).check_batch_cost()
             await self._instance(prisma, router).check_batch_cost()
 
@@ -5139,7 +5145,7 @@ async def test_batch_cost_reaches_configured_success_callbacks(
     with (
         ThreadPoolExecutor(max_workers=1) as executor,
         patch("litellm.litellm_core_utils.litellm_logging.executor", executor),
-        respx.mock(assert_all_called=True) as transport,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as transport,
     ):
         transport.get("https://batch.invalid/v1/files/output/content").respond(200, content=output)
         if initialized:

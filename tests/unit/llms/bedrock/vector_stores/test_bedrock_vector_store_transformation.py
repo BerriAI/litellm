@@ -1,11 +1,12 @@
+from tests._support.respx_httpx2 import response_for_respx
 import json
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.llms.bedrock.vector_stores.transformation import BedrockVectorStoreConfig
 
 
@@ -286,7 +287,7 @@ async def test_bedrock_search_with_router(respx_mock: respx.MockRouter, monkeypa
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     retrieve_route = respx_mock.post(BEDROCK_RETRIEVE_URL).mock(
-        return_value=httpx.Response(200, json=BEDROCK_RETRIEVE_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=BEDROCK_RETRIEVE_RESPONSE))
     )
 
     _router = Router(model_list=[])
@@ -359,7 +360,7 @@ async def test_bedrock_search_with_credentials_managed_registry(
     monkeypatch.setattr(litellm, "vector_store_registry", registry)
 
     retrieve_route = respx_mock.post(BEDROCK_RETRIEVE_URL).mock(
-        return_value=httpx.Response(200, json=BEDROCK_RETRIEVE_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=BEDROCK_RETRIEVE_RESPONSE))
     )
 
     _router = Router(model_list=[])

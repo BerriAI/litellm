@@ -1,3 +1,4 @@
+
 import base64
 import binascii
 import json
@@ -6,11 +7,12 @@ from dataclasses import dataclass
 from typing import Final
 
 import google.auth
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import litellm.proxy.proxy_server
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from google.auth.credentials import Credentials
 from pydantic import ValidationError
 
@@ -60,7 +62,7 @@ def test_google_secret_manager_decodes_secret_and_requests_latest_version(
     encoded_secret: Final = base64.b64encode(b"anything").decode("ascii")
     upstream: Final[respx.MockRouter]
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         secret_route: Final = upstream.get(secret_url).respond(
             200,
             json={"payload": {"data": encoded_secret}},
@@ -84,7 +86,7 @@ def test_google_secret_manager_returns_cached_values_without_http(
     secret_manager.cache.set_cache("cached-string", "lite-llm")
     upstream: Final[respx.MockRouter]
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         missing_value: Final = secret_manager.get_secret_from_google_secret_manager("cached-none")
         cached_value: Final = secret_manager.get_secret_from_google_secret_manager("cached-string")
 
@@ -151,7 +153,7 @@ def manager(monkeypatch: pytest.MonkeyPatch) -> GoogleSecretManager:
 )
 @respx.mock
 def test_secret_is_decoded_from_the_access_response(manager: GoogleSecretManager, body: object, expected: str) -> None:
-    route: Final = respx.get(ACCESS_URL).mock(return_value=_access_response(body))
+    route: Final = respx.get(ACCESS_URL).mock(return_value=response_for_respx(_access_response(body)))
 
     secret: Final = manager.get_secret_from_google_secret_manager(SECRET_NAME)
 
@@ -175,7 +177,7 @@ def test_secret_is_decoded_from_the_access_response(manager: GoogleSecretManager
 def test_response_without_secret_data_reports_not_found_and_caches_the_miss(
     manager: GoogleSecretManager, body: object
 ) -> None:
-    respx.get(ACCESS_URL).mock(return_value=_access_response(body))
+    respx.get(ACCESS_URL).mock(return_value=response_for_respx(_access_response(body)))
 
     with pytest.raises(ValueError, match=rf"^secret {SECRET_NAME} not found in Google Secret Manager$") as raised:
         manager.get_secret_from_google_secret_manager(SECRET_NAME)
@@ -208,7 +210,7 @@ def test_response_without_secret_data_reports_not_found_and_caches_the_miss(
 def test_response_that_is_not_a_json_object_is_rejected_without_caching(
     manager: GoogleSecretManager, body: object
 ) -> None:
-    respx.get(ACCESS_URL).mock(return_value=_access_response(body))
+    respx.get(ACCESS_URL).mock(return_value=response_for_respx(_access_response(body)))
 
     with pytest.raises(ValidationError) as raised:
         manager.get_secret_from_google_secret_manager(SECRET_NAME)
@@ -221,7 +223,7 @@ def test_response_that_is_not_a_json_object_is_rejected_without_caching(
 @pytest.mark.parametrize("data", [5, 0, 1.5, True, False, [], [ENCODED_SECRET], {}, {"value": ENCODED_SECRET}])
 @respx.mock
 def test_secret_data_that_is_not_text_is_rejected_without_caching(manager: GoogleSecretManager, data: object) -> None:
-    respx.get(ACCESS_URL).mock(return_value=_access_response({"payload": {"data": data}}))
+    respx.get(ACCESS_URL).mock(return_value=response_for_respx(_access_response({"payload": {"data": data}})))
 
     with pytest.raises(ValidationError) as raised:
         manager.get_secret_from_google_secret_manager(SECRET_NAME)
@@ -244,7 +246,7 @@ def test_secret_data_that_is_not_text_is_rejected_without_caching(manager: Googl
 def test_rejection_of_a_long_response_names_no_position_or_content_from_it(
     manager: GoogleSecretManager, body: object
 ) -> None:
-    respx.get(ACCESS_URL).mock(return_value=_access_response(body))
+    respx.get(ACCESS_URL).mock(return_value=response_for_respx(_access_response(body)))
 
     with pytest.raises(ValidationError) as raised:
         manager.get_secret_from_google_secret_manager(SECRET_NAME)
@@ -267,7 +269,7 @@ def test_rejection_of_a_long_response_names_no_position_or_content_from_it(
 def test_undecodable_secret_text_keeps_raising_the_decoder_error(
     manager: GoogleSecretManager, data: str, error_class: type[Exception]
 ) -> None:
-    respx.get(ACCESS_URL).mock(return_value=_access_response({"payload": {"data": data}}))
+    respx.get(ACCESS_URL).mock(return_value=response_for_respx(_access_response({"payload": {"data": data}})))
 
     with pytest.raises(error_class) as raised:
         manager.get_secret_from_google_secret_manager(SECRET_NAME)
@@ -279,7 +281,9 @@ def test_undecodable_secret_text_keeps_raising_the_decoder_error(
 @pytest.mark.usefixtures("manager")
 @respx.mock
 def test_get_secret_reads_through_the_configured_manager() -> None:
-    respx.get(ACCESS_URL).mock(return_value=_access_response({"payload": {"data": ENCODED_SECRET}}))
+    respx.get(ACCESS_URL).mock(
+        return_value=response_for_respx(_access_response({"payload": {"data": ENCODED_SECRET}}))
+    )
 
     assert get_secret(SECRET_NAME) == SECRET_VALUE
 
@@ -304,7 +308,7 @@ def test_get_secret_falls_back_to_the_environment_when_the_response_is_unusable(
     monkeypatch: pytest.MonkeyPatch, body: object
 ) -> None:
     monkeypatch.setenv(SECRET_NAME, "from-environment")
-    respx.get(ACCESS_URL).mock(return_value=_access_response(body))
+    respx.get(ACCESS_URL).mock(return_value=response_for_respx(_access_response(body)))
 
     assert get_secret(SECRET_NAME) == "from-environment"
 
@@ -322,6 +326,6 @@ def test_get_secret_falls_back_to_the_environment_when_the_response_is_unusable(
 )
 @respx.mock
 def test_get_secret_returns_none_when_the_response_is_unusable_and_the_environment_has_no_value(body: object) -> None:
-    respx.get(ACCESS_URL).mock(return_value=_access_response(body))
+    respx.get(ACCESS_URL).mock(return_value=response_for_respx(_access_response(body)))
 
     assert get_secret(SECRET_NAME) is None

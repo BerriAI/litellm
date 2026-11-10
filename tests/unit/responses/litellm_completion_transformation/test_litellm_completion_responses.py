@@ -4990,7 +4990,7 @@ _ANTHROPIC_WEB_FETCH_TURN: Final[tuple[dict[str, object], ...]] = (
 def _anthropic_turn_on_responses(content: Sequence[Mapping[str, object]]) -> ResponsesAPIResponse:
     from unittest.mock import MagicMock
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 

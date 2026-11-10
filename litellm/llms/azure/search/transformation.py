@@ -32,7 +32,7 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, ValidationError
 
 from litellm.litellm_core_utils.url_utils import ensure_api_route

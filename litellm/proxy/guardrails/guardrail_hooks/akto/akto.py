@@ -8,7 +8,7 @@ from itertools import product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 from pydantic import (
     AliasChoices,

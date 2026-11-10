@@ -40,10 +40,10 @@ from pathlib import PurePath
 from types import MappingProxyType
 
 import dotenv
-import httpx
+import httpx2 as httpx
 import openai
-from httpx import Proxy
-from httpx._utils import get_environment_proxies
+from httpx2 import Proxy
+from httpx2._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # OpenAI parser module is private
 from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config

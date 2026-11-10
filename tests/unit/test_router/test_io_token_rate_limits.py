@@ -9,12 +9,14 @@ from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fakeredis import FakeRedis, FakeServer
 from fakeredis.aioredis import FakeRedis as FakeAsyncRedis
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
@@ -2031,7 +2033,7 @@ async def test_a_cancelled_request_sharing_one_logging_object_hands_back_every_r
                 await asyncio.Event().wait()
         return httpx.Response(200, json=_anthropic_reply())
 
-    respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=upstream)
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=side_effect_for_respx(upstream))
     router: Final = _router_with_io_limits()
     first_minute: Final = _current_minute()
     call: Final["asyncio.Task[object]"] = asyncio.create_task(
@@ -2162,9 +2164,9 @@ async def test_a_stream_cancelled_before_its_first_chunk_hands_back_its_reservat
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     reading_first_chunk: Final = asyncio.Event()
     respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=_FirstChunkNeverArrives(reading_first_chunk)
-        )
+        ))
     )
     router: Final = _router_with_io_limits()
     first_minute: Final = _current_minute()

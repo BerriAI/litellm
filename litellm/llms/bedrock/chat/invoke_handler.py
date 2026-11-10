@@ -3,7 +3,7 @@ import types
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm

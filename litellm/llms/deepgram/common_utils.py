@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs, urlparse, urlsplit, urlunsplit
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.constants import DEEPGRAM_DEFAULT_API_BASE, DEEPGRAM_LISTEN_DEFAULT_MODEL, DEEPGRAM_SPEAK_DEFAULT_MODEL

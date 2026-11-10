@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal, overload
 
-import httpx
+import httpx2 as httpx
 import jwt
 from fastapi import Request, status
 from fastapi_sso.sso.base import DiscoveryDocument, OpenID, ReusedOauthClientWarning, SSOBase, SSOLoginError

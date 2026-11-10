@@ -4,7 +4,7 @@ Common utilities for Volcengine LLM provider
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 

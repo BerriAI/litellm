@@ -12,7 +12,7 @@ import aiohttp
 import aiohttp.abc
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
-import httpx
+import httpx2 as httpx
 import pytest
 
 

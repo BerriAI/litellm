@@ -9,7 +9,7 @@ from itertools import chain
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import (

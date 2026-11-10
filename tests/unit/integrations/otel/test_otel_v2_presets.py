@@ -2,12 +2,13 @@
 event loop: the preset does no network I/O, and a custom exporter mints the JWT
 lazily on its first export (in the BatchSpanProcessor worker thread)."""
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
 import requests_mock
-import respx
+from tests._support import respx_httpx2 as respx
 from opentelemetry.sdk.trace.export import SpanExportResult
 
 from litellm.integrations.otel.plumbing import providers
@@ -93,7 +94,7 @@ def _agentops_exporter():
 
 def test_agentops_exporter_mints_the_jwt_once_on_first_export_and_sends_it_with_every_batch():
     pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-    with respx.mock() as auth, requests_mock.Mocker() as collector:
+    with respx.mock(using="httpcore2_and_legacy") as auth, requests_mock.Mocker() as collector:
         token_route = auth.post(_AGENTOPS_AUTH_ENDPOINT).respond(200, json={"token": "jwt-xyz"})
         collector.post(_AGENTOPS_ENDPOINT, status_code=200)
         exporter = _agentops_exporter()
@@ -111,8 +112,8 @@ def test_agentops_exporter_mints_the_jwt_once_on_first_export_and_sends_it_with_
 
 def test_agentops_exporter_still_exports_without_auth_when_the_jwt_fetch_fails():
     pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-    with respx.mock() as auth, requests_mock.Mocker() as collector:
-        auth.post(_AGENTOPS_AUTH_ENDPOINT).mock(side_effect=httpx.ConnectError("auth down"))
+    with respx.mock(using="httpcore2_and_legacy") as auth, requests_mock.Mocker() as collector:
+        auth.post(_AGENTOPS_AUTH_ENDPOINT).mock(side_effect=side_effect_for_respx(httpx.ConnectError("auth down")))
         collector.post(_AGENTOPS_ENDPOINT, status_code=200)
 
         result = _agentops_exporter().export(())

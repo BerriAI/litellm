@@ -4,8 +4,8 @@ import re
 from collections.abc import AsyncIterator, Collection, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
-import httpx
-from httpx import Response
+import httpx2 as httpx
+from httpx2 import Response
 from pydantic import TypeAdapter, ValidationError
 
 import litellm

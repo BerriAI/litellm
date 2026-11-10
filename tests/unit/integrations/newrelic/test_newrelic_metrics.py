@@ -10,7 +10,7 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from httpx import HTTPStatusError, Request, Response
+from httpx2 import HTTPStatusError, Request, Response
 
 from litellm.integrations.newrelic.newrelic_metrics import (
     NewRelicMetricsLogger,

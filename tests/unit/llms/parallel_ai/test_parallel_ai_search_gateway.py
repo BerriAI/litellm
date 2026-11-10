@@ -6,7 +6,7 @@ from collections.abc import Iterator
 from typing import Final
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi.testclient import TestClient
 

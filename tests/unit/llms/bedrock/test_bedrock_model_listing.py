@@ -6,7 +6,7 @@ from functools import reduce
 from typing import Final
 from urllib.parse import parse_qsl, quote
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.bedrock.common_utils import BedrockError, BedrockModelInfo

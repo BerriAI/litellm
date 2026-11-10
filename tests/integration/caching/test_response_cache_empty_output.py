@@ -20,7 +20,7 @@ from functools import partial
 from hashlib import sha256
 from typing import Final, TypeAlias, TypeVar
 
-import httpx
+import httpx2 as httpx
 import pytest
 from anthropic import Anthropic, AsyncAnthropic
 from openai import AsyncOpenAI, InternalServerError, OpenAI

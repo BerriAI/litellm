@@ -6,13 +6,15 @@ from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import AnyValue
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
@@ -408,7 +410,7 @@ async def test_langfuse_logging_vllm_embedding(
     route, trace_id = langfuse_export
     embedding_url: Final = "http://my-fake-vllm.com/v1/embeddings"
     upstream: Final = respx_mock.post(embedding_url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -416,7 +418,7 @@ async def test_langfuse_logging_vllm_embedding(
                 "model": "BAAI/bge-small-en-v1.5",
                 "usage": {"prompt_tokens": 10, "total_tokens": 10},
             },
-        )
+        ))
     )
     await litellm.aembedding(
         model="hosted_vllm/BAAI/bge-small-en-v1.5",

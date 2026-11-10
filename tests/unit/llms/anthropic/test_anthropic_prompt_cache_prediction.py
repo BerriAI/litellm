@@ -1,3 +1,4 @@
+
 import json
 import logging
 from collections.abc import Mapping
@@ -5,9 +6,9 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue
 
 import litellm
@@ -202,7 +203,7 @@ async def test_environment_credential_matches_native_count_and_observed_scope(
     target: Final = resolve_prediction_target(deployment.litellm_params)
     assert isinstance(target, NativePredictionTarget)
     body: Final = _body()
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         native: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(
             200,
             json={
@@ -568,7 +569,7 @@ async def test_native_count_preserves_settings_and_requires_every_prefix(
             api_base=target.api_base,
         )
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         endpoint: Final = "https://gateway.example/v1/messages/count_tokens"
         routes: Final = tuple(
             upstream.post(endpoint, json={**body, "model": _MODEL}).respond(

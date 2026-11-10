@@ -8,7 +8,7 @@ import json
 import uuid
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, eventually
 from integration.compatibility._a2a_peers import legacy_send, peer, posts, register, spend_rows, sse_frames

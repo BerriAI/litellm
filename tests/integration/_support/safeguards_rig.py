@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import yaml
 from integration._support.client import (
     Gateway,

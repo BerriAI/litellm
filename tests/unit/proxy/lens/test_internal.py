@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import jwt
 import pytest
 from fastapi import FastAPI, Header, HTTPException

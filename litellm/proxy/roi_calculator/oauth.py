@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, Protocol, TypeAlias, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 from oauthlib.oauth2 import WebApplicationClient
 from pydantic import ConfigDict, Field, SecretStr, TypeAdapter

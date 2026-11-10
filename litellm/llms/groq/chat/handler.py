@@ -5,7 +5,7 @@ Handles the chat completion request for groq
 from collections.abc import Callable
 from typing import cast
 
-from httpx._config import Timeout
+from httpx2._config import Timeout
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import AllMessageValues

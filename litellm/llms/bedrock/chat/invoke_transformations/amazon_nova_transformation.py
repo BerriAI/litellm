@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import reduce
 from typing import TYPE_CHECKING, Final, TypeVar
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging

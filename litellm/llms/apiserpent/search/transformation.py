@@ -11,7 +11,7 @@ APISerpent API Reference: https://apiserpent.com/docs
 from typing import Final, Literal, cast
 from urllib.parse import urlencode
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items

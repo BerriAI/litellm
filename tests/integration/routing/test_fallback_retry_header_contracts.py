@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 

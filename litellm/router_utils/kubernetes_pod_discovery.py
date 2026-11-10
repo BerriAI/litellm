@@ -23,7 +23,7 @@ from typing import (
     cast,  # noqa: TID251  # typeshed lacks proxy_bypass_environment
 )
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_router_logger
 from litellm.constants import (

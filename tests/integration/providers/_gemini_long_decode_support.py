@@ -9,7 +9,7 @@ from functools import reduce
 from types import MappingProxyType
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, string_value
 from integration._support.database import read_rows

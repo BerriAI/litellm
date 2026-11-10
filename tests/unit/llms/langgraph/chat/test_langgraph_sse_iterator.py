@@ -1,7 +1,7 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.langgraph.chat.sse_iterator import LangGraphSSEStreamIterator

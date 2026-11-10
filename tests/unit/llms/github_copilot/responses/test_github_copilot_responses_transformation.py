@@ -9,7 +9,7 @@ Source: litellm/llms/github_copilot/responses/transformation.py
 
 from unittest.mock import patch, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map

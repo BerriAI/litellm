@@ -15,10 +15,10 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 if TYPE_CHECKING:
     from litellm.proxy.auth.login_throttle import LoginThrottle
 
@@ -55,6 +55,7 @@ from litellm.proxy.auth.login_utils import (
     is_env_credential_login_enabled,
     screen_login_password_for_breach,
 )
+from tests._support.respx_httpx2 import response_for_respx
 from tests._master_key import MASTER_KEY
 
 # Successful DB-user logins schedule the background HIBP screen; disable it so
@@ -2003,7 +2004,7 @@ class TestDisableEnvCredentialLogin:
         password = "Str0ng!Passw0rd"
         sha1 = hashlib.sha1(password.encode("utf-8"), usedforsecurity=False).hexdigest().upper()
         respx.get(f"https://api.pwnedpasswords.com/range/{sha1[:5]}").mock(
-            return_value=httpx.Response(200, text="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:41")
+            return_value=response_for_respx(httpx.Response(200, text="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:41"))
         )
 
         mock_user = LiteLLM_UserTable(

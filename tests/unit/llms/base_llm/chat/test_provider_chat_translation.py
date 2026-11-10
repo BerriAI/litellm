@@ -6,13 +6,15 @@ import struct
 import zlib
 from typing import Callable, Final, Iterable, Literal, Mapping, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from respx import MockRouter
 from typing_extensions import ReadOnly, TypedDict
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -558,16 +560,16 @@ def _register(
     json_via_tool: bool = False,
 ) -> respx.Route:
     for url in _PNG_URLS:
-        respx_mock.get(url).mock(return_value=httpx.Response(200, content=_PNG_BYTES))
+        respx_mock.get(url).mock(return_value=response_for_respx(httpx.Response(200, content=_PNG_BYTES)))
     target: Final = case["stream_url"] if stream else case["url"]
     if json_via_tool:
-        return respx_mock.post(target).mock(side_effect=_json_responder(case, text))
+        return respx_mock.post(target).mock(side_effect=side_effect_for_respx(_json_responder(case, text)))
     if case["shape"] == "gemini" and stream:
-        return respx_mock.post(url__startswith=target).mock(return_value=_stream_canned(case, text))
+        return respx_mock.post(url__startswith=target).mock(return_value=response_for_respx(_stream_canned(case, text)))
     if stream and case["id"].startswith("groq"):
-        return respx_mock.post(target).mock(return_value=_canned_response(case, text))
+        return respx_mock.post(target).mock(return_value=response_for_respx(_canned_response(case, text)))
     return respx_mock.post(target).mock(
-        return_value=_stream_canned(case, text) if stream else _canned_response(case, text)
+        return_value=response_for_respx(_stream_canned(case, text) if stream else _canned_response(case, text))
     )
 
 

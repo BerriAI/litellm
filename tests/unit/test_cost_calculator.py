@@ -6,12 +6,14 @@ from collections.abc import Iterator, Mapping
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.types.completion_usage import CompletionUsage
 from pydantic import BaseModel
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY
@@ -742,9 +744,9 @@ def test_completion_cost_orders_candidates_without_extra_huggingface_config_requ
         usage=usage,
     )
 
-    with respx.mock(assert_all_called=False) as huggingface:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as huggingface:
         huggingface.get(host="huggingface.co").mock(
-            return_value=httpx.Response(200, json={"max_position_embeddings": 4096})
+            return_value=response_for_respx(httpx.Response(200, json={"max_position_embeddings": 4096}))
         )
         cost: Final = completion_cost(
             completion_response=response,
@@ -767,9 +769,9 @@ def test_completion_cost_skips_huggingface_config_request_with_custom_pricing(
         usage=usage,
     )
 
-    with respx.mock(assert_all_called=False) as huggingface:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as huggingface:
         huggingface.get(host="huggingface.co").mock(
-            return_value=httpx.Response(200, json={"max_position_embeddings": 4096})
+            return_value=response_for_respx(httpx.Response(200, json={"max_position_embeddings": 4096}))
         )
         cost: Final = completion_cost(
             completion_response=response,
@@ -9685,7 +9687,9 @@ def _custom_pricing_upstream(request: httpx.Request) -> httpx.Response:
 @pytest.mark.usefixtures("isolated_pricing_registry")
 @respx.mock
 async def test_custom_pricing_matches_response_usage(async_mode: bool) -> None:
-    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_custom_pricing_upstream)
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(_custom_pricing_upstream)
+    )
     request: Final = {
         "model": f"openai/{_CUSTOM_PRICING_MODEL}",
         "messages": [{"role": "user", "content": "How are you?"}],
@@ -9708,7 +9712,9 @@ def test_router_cache_only_pricing_preserves_uncached_token_charges(rate: float,
         {_CUSTOM_PRICING_MODEL: {**_CUSTOM_PRICING_RATES, "litellm_provider": "openai", "mode": "chat"}},
         persist_across_reloads=False,
     )
-    respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_custom_pricing_upstream)
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(_custom_pricing_upstream)
+    )
     router: Final = litellm.Router(
         model_list=[
             {
@@ -9733,7 +9739,9 @@ def test_router_cache_only_pricing_preserves_uncached_token_charges(rate: float,
 @pytest.mark.usefixtures("isolated_pricing_registry")
 @respx.mock
 def test_streamed_custom_pricing_cost_matches_non_streamed_cost() -> None:
-    respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_custom_pricing_upstream)
+    respx.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(_custom_pricing_upstream)
+    )
     request: Final = {
         "model": f"openai/{_CUSTOM_PRICING_MODEL}",
         "messages": [{"role": "user", "content": "Hi"}],
@@ -9790,7 +9798,7 @@ def test_fireworks_completion_cost_uses_registered_rate(monkeypatch: pytest.Monk
         {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "litellm_provider": "fireworks_ai", "mode": "chat"},
     )
     respx.post("https://api.fireworks.ai/inference/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-fireworks",
@@ -9802,7 +9810,7 @@ def test_fireworks_completion_cost_uses_registered_rate(monkeypatch: pytest.Monk
                 ],
                 "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -10004,7 +10012,7 @@ async def test_custom_pricing_cost_reaches_success_callback(
         "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
     }
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=response_data)
+        return_value=response_for_respx(httpx.Response(200, json=response_data))
     )
     request: Final = {
         "model": model,

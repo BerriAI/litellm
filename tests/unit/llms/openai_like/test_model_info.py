@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import Final
 from unittest.mock import Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.caching.in_memory_cache import InMemoryCache

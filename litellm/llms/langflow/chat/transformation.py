@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger

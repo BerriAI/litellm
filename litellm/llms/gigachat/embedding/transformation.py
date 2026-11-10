@@ -11,7 +11,7 @@ import types
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm import LlmProviders

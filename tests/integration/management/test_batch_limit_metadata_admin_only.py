@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, Scenario, delete_key_if_present, object_value, string_value
 from integration._support.database import read_rows

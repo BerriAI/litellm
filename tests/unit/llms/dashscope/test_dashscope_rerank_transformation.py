@@ -6,9 +6,9 @@ import json
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
 import litellm
@@ -477,7 +477,7 @@ def test_rerank_sends_an_explicit_base_over_the_rerank_env(
     monkeypatch.setenv("DASHSCOPE_API_BASE", "https://dashscope-intl.aliyuncs.com")
     monkeypatch.setenv(rerank_env, DEFAULT_RERANK_URL)
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.post("https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks").respond(
             200, json={"id": "r1", "results": [{"index": 0, "relevance_score": 0.9}], "usage": {"total_tokens": 5}}
         )

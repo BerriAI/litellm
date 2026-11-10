@@ -779,7 +779,7 @@ async def test_the_openapi_arm_drops_a_custom_slot_across_origins():
     """End to end on the hook the OpenAPI arm installs: same origin keeps the credential, a redirect
     to another host does not carry it.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.mcp import credential_redirect_hook
 
@@ -833,7 +833,7 @@ async def test_the_shared_guard_reads_the_url_from_the_request_context():
     """The hook is one stable object so the client stays cacheable, which means the origin it guards
     against has to arrive per request rather than being closed over.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server.openapi_to_mcp_generator import (
         _drop_credential_across_origin,

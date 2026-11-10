@@ -5,11 +5,13 @@ from collections.abc import Iterator
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from prometheus_client import REGISTRY
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -337,8 +339,8 @@ class TestRouterEmbeddingBatchLimit:
         embeddings_url: Final = f"{_OPENAI_EMBED_BASE}/embeddings"
         empty_ok: Final = httpx.Response(200, json={"object": "list", "data": [], "model": "x", "usage": {}})
 
-        with respx.mock(assert_all_called=False) as respx_mock:
-            route: Final = respx_mock.post(embeddings_url).mock(return_value=empty_ok)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(embeddings_url).mock(return_value=response_for_respx(empty_ok))
             with pytest.raises(litellm.BadRequestError, match="max_embedding_batch_size=2"):
                 await _call_embedding(
                     router,
@@ -380,9 +382,11 @@ class TestRouterEmbeddingBatchLimit:
             deployment_id="embed-batch-capped",
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             route: Final = respx_mock.post(f"{_OPENAI_EMBED_BASE}/embeddings").mock(
-                return_value=httpx.Response(200, json={"object": "list", "data": [], "model": "x", "usage": {}})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"object": "list", "data": [], "model": "x", "usage": {}})
+                )
             )
             with pytest.raises(litellm.BadRequestError, match="3 inputs") as excinfo:
                 await _call_embedding(
@@ -472,12 +476,12 @@ class TestRouterEmbeddingBatchLimit:
             litellm_params={"metadata": {}, "proxy_server_request": {}}, optional_params={}
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             capped_route: Final = respx_mock.post(f"{_OPENAI_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             fallback_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             await _call_embedding(
                 router,
@@ -522,9 +526,11 @@ class TestRouterEmbeddingBatchLimit:
             deployment_id="embed-batch-capped",
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             respx_mock.post(f"{_OPENAI_EMBED_BASE}/embeddings").mock(
-                return_value=httpx.Response(200, json={"object": "list", "data": [], "model": "x", "usage": {}})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"object": "list", "data": [], "model": "x", "usage": {}})
+                )
             )
             with pytest.raises(litellm.BadRequestError, match="3 inputs"):
                 await router.aembedding(
@@ -542,9 +548,9 @@ class TestRouterEmbeddingBatchLimit:
             deployment_id="vllm-embed-uncapped",
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(100)
+                return_value=response_for_respx(_vllm_embedding_response(100))
             )
             await _call_embedding(router, sync=sync, model="embed", input=["a"] * 100)
             assert len(json.loads(route.calls.last.request.content)["input"]) == 100
@@ -578,12 +584,12 @@ class TestRouterEmbeddingBatchLimit:
             num_retries=0,
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             for _ in range(5):
                 await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
@@ -652,12 +658,12 @@ class TestRouterEmbeddingBatchLimit:
             num_retries=0,
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
-                return_value=httpx.Response(429, json={"error": {"message": "rate limited"}})
+                return_value=response_for_respx(httpx.Response(429, json={"error": {"message": "rate limited"}}))
             )
             with pytest.raises(litellm.RateLimitError):
                 await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
@@ -687,12 +693,12 @@ class TestRouterEmbeddingBatchLimit:
             num_retries=0,
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
-                return_value=httpx.Response(429, json={"error": {"message": "rate limited"}})
+                return_value=response_for_respx(httpx.Response(429, json={"error": {"message": "rate limited"}}))
             )
             with pytest.raises(litellm.RateLimitError):
                 await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
@@ -719,8 +725,10 @@ class TestRouterEmbeddingBatchLimit:
         embeddings_url: Final = f"{_VLLM_EMBED_BASE}/embeddings"
         extra_body: Final = {"truncate": "END", "input": ["a", "b", "c"]}
 
-        with respx.mock(assert_all_called=False) as respx_mock:
-            route: Final = respx_mock.post(embeddings_url).mock(return_value=_vllm_embedding_response(3))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(embeddings_url).mock(
+                return_value=response_for_respx(_vllm_embedding_response(3))
+            )
             with pytest.raises(litellm.BadRequestError, match="3 inputs"):
                 await _call_embedding(
                     router,
@@ -753,8 +761,10 @@ class TestRouterEmbeddingBatchLimit:
         )
         embeddings_url: Final = f"{_VLLM_EMBED_BASE}/embeddings"
 
-        with respx.mock(assert_all_called=False) as respx_mock:
-            route: Final = respx_mock.post(embeddings_url).mock(return_value=_vllm_embedding_response(3))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(embeddings_url).mock(
+                return_value=response_for_respx(_vllm_embedding_response(3))
+            )
             with pytest.raises(litellm.BadRequestError, match="3 inputs"):
                 await router.aembedding(model="embed", input="ok")
             assert route.call_count == 0
@@ -769,8 +779,10 @@ class TestRouterEmbeddingBatchLimit:
         )
         embeddings_url: Final = f"{_VLLM_EMBED_BASE}/embeddings"
 
-        with respx.mock(assert_all_called=False) as respx_mock:
-            route: Final = respx_mock.post(embeddings_url).mock(return_value=_vllm_embedding_response(2))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(embeddings_url).mock(
+                return_value=response_for_respx(_vllm_embedding_response(2))
+            )
             await router.aembedding(model="embed", input="ok", extra_body={"input": ["a", "b"]})
             assert route.call_count == 1
             assert json.loads(route.calls.last.request.content)["input"] == ["a", "b"]
@@ -785,8 +797,10 @@ class TestRouterEmbeddingBatchLimit:
         )
         embeddings_url: Final = f"{_VLLM_EMBED_BASE}/embeddings"
 
-        with respx.mock(assert_all_called=False) as respx_mock:
-            route: Final = respx_mock.post(embeddings_url).mock(return_value=_vllm_embedding_response(3))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(embeddings_url).mock(
+                return_value=response_for_respx(_vllm_embedding_response(3))
+            )
             with pytest.raises(litellm.BadRequestError, match="3 inputs"):
                 await _call_embedding(
                     router,
@@ -841,8 +855,8 @@ class TestRouterEmbeddingBatchLimit:
         embeddings_url: Final = f"{_OPENAI_EMBED_BASE}/embeddings"
         empty_ok: Final = httpx.Response(200, json={"object": "list", "data": [], "model": "x", "usage": {}})
 
-        with respx.mock(assert_all_called=False) as respx_mock:
-            route: Final = respx_mock.post(embeddings_url).mock(return_value=empty_ok)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(embeddings_url).mock(return_value=response_for_respx(empty_ok))
             with pytest.raises(litellm.BadRequestError, match="max_embedding_batch_size=2"):
                 await _call_embedding(
                     router,
@@ -881,12 +895,12 @@ class TestRouterEmbeddingBatchLimit:
             num_retries=0,
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             with pytest.raises(litellm.BadRequestError, match="max_embedding_batch_size=2"):
                 await router.aembedding(model="embed", input=["a", "b", "c"], metadata={"tags": ["team-a"]})
@@ -921,12 +935,12 @@ class TestRouterEmbeddingBatchLimit:
             num_retries=0,
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
-                return_value=httpx.Response(429, json={"error": {"message": "rate limited"}})
+                return_value=response_for_respx(httpx.Response(429, json={"error": {"message": "rate limited"}}))
             )
             with pytest.raises(litellm.RateLimitError):
                 await router.aembedding(model="embed", input=["a", "b", "c"], metadata={"tags": ["team-b"]})
@@ -966,12 +980,12 @@ class TestRouterEmbeddingBatchLimit:
             num_retries=0,
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             capped_route: Final = respx_mock.post(f"{_VLLM_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             uncapped_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
-                return_value=httpx.Response(429, json={"error": {"message": "rate limited"}})
+                return_value=response_for_respx(httpx.Response(429, json={"error": {"message": "rate limited"}}))
             )
             with pytest.raises(litellm.RateLimitError):
                 await _call_embedding(
@@ -1013,12 +1027,12 @@ class TestRouterEmbeddingBatchLimit:
             num_retries=0,
         )
 
-        with respx.mock(assert_all_called=False) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
             capped_route: Final = respx_mock.post(f"{_OPENAI_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             fallback_route: Final = respx_mock.post(f"{_UNCAPPED_EMBED_BASE}/embeddings").mock(
-                return_value=_vllm_embedding_response(3)
+                return_value=response_for_respx(_vllm_embedding_response(3))
             )
             await _call_embedding(router, sync=sync, model="embed", input=["a", "b", "c"])
             assert (capped_route.call_count, fallback_route.call_count) == (0, 1)

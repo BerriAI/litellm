@@ -4,7 +4,7 @@ from itertools import chain, repeat
 from typing import Final, TypeAlias
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows

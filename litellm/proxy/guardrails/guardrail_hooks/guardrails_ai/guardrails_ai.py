@@ -67,7 +67,7 @@ class GuardrailsAI(CustomGuardrail):
         super().__init__(supported_event_hooks=list(self.get_supported_event_hooks()), **kwargs)
 
     async def make_guardrails_ai_api_request(self, llm_output: str, request_data: dict) -> GuardrailsAIResponse:
-        from httpx import URL
+        from httpx2 import URL
 
         data: Final = {
             "llmOutput": llm_output,
@@ -96,7 +96,7 @@ class GuardrailsAI(CustomGuardrail):
         return _json_response
 
     async def make_guardrails_ai_api_request_pre_call_request(self, text_input: str, request_data: dict) -> str:
-        from httpx import URL
+        from httpx2 import URL
 
         # This branch of code does not work with current version of GuardrailsAI API (as of July 2025), and it is unclear if it ever worked.
         # Use guardrails_ai_api_input_format: "llmOutput" config line for all guardrails (which is the default anyway)

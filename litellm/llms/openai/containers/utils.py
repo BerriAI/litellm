@@ -2,7 +2,7 @@
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 
 def join_container_api_base_path(api_base: str, path_suffix: str) -> str:

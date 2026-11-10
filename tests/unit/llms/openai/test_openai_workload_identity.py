@@ -8,12 +8,14 @@ from functools import partial
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import DEFAULT_MAX_RETRIES as OPENAI_SDK_DEFAULT_MAX_RETRIES
 from openai import APIStatusError, AsyncOpenAI, OpenAI
 
+from tests._support.respx_httpx2 import request_for_respx, response_for_respx, side_effect_for_respx
 import litellm
 from litellm.containers import alist_container_files, aretrieve_container, list_container_files
 from litellm.integrations.custom_secret_manager import CustomSecretManager
@@ -63,9 +65,7 @@ def mock_sdk_token_exchange_transport(monkeypatch: pytest.MonkeyPatch) -> None:
         import httpx2
 
         def handle_exchange(request: httpx2.Request) -> httpx2.Response:
-            response: Final = respx.mock.handler(
-                httpx.Request(request.method, str(request.url), headers=dict(request.headers), content=request.content)
-            )
+            response: Final = respx.mock.handler(request_for_respx(request))
             return httpx2.Response(response.status_code, headers=dict(response.headers), content=response.content)
 
         monkeypatch.setattr(
@@ -96,7 +96,7 @@ def wif_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> OpenAIWorkloadId
 
 def mock_token_exchange(access_token: str = "exchanged-bearer-token") -> respx.Route:
     return respx.post(TOKEN_EXCHANGE_URL).mock(
-        return_value=httpx.Response(200, json={"access_token": access_token, "expires_in": 3600})
+        return_value=response_for_respx(httpx.Response(200, json={"access_token": access_token, "expires_in": 3600}))
     )
 
 
@@ -285,7 +285,7 @@ class TestClientConstruction:
     def test_request_carries_exchanged_bearer(self, wif_env: OpenAIWorkloadIdentityConfig) -> None:
         mock_token_exchange()
         completion_route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "chatcmpl-wif",
@@ -301,7 +301,7 @@ class TestClientConstruction:
                     ],
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 },
-            )
+            ))
         )
         client = OpenAIChatCompletion().get_openai_client(is_async=False, api_key=None, api_base=None)
         assert isinstance(client, OpenAI)
@@ -383,7 +383,9 @@ def deployment_config(deployment_wif: dict[str, str]) -> OpenAIWorkloadIdentityC
 
 
 def mock_chat_completions() -> respx.Route:
-    return respx.post(CHAT_COMPLETIONS_URL).mock(return_value=httpx.Response(200, json=CHAT_COMPLETION_BODY))
+    return respx.post(CHAT_COMPLETIONS_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=CHAT_COMPLETION_BODY))
+    )
 
 
 def mock_streaming_chat_completions() -> respx.Route:
@@ -394,7 +396,9 @@ def mock_streaming_chat_completions() -> respx.Route:
     )
     body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
     return respx.post(CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+        )
     )
 
 
@@ -602,7 +606,7 @@ class TestDeploymentClientConstruction:
     ) -> None:
         mock_token_exchange("process-transport-bearer")
         models_route: Final = respx.get(MODELS_URL).mock(
-            return_value=httpx.Response(200, json={"object": "list", "data": []})
+            return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": []}))
         )
         caller_transport: Final = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(418)))
 
@@ -733,7 +737,7 @@ class TestDeploymentClientConstruction:
     def test_embedding_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("embedding-bearer")
         embeddings_route: Final = respx.post(EMBEDDINGS_URL).mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "object": "list",
@@ -741,7 +745,7 @@ class TestDeploymentClientConstruction:
                     "model": "text-embedding-3-small",
                     "usage": {"prompt_tokens": 1, "total_tokens": 1},
                 },
-            )
+            ))
         )
 
         litellm.embedding(model="openai/text-embedding-3-small", input=["hi"], **deployment_wif)
@@ -910,7 +914,9 @@ class TestDiscoverModels:
     @staticmethod
     def mock_models() -> respx.Route:
         return respx.get(MODELS_URL).mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o-mini"}, {"id": "gpt-4.1"}]})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"data": [{"id": "gpt-4o-mini"}, {"id": "gpt-4.1"}]})
+            )
         )
 
     @respx.mock
@@ -965,7 +971,7 @@ class TestDiscoverModels:
     def test_empty_static_key_never_borrows_the_env_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-env-key-that-must-stay-home")
         foreign_models: Final = respx.get("https://third-party.example/v1/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "other-model"}]})
+            return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "other-model"}]}))
         )
 
         assert OpenAIGPTConfig().get_models(api_key="", api_base="https://third-party.example") == ["other-model"]
@@ -1114,7 +1120,9 @@ def mock_streaming_text_completions() -> respx.Route:
     )
     body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
     return respx.post(COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, content=body, headers={"content-type": "text/event-stream"})
+        )
     )
 
 
@@ -1126,7 +1134,9 @@ class TestDeploymentNonChatSurfaces:
     @respx.mock
     def test_image_generation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("image-bearer")
-        route: Final = respx.post(IMAGES_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+        route: Final = respx.post(IMAGES_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=IMAGE_BODY))
+        )
 
         response: Final = litellm.image_generation(model="openai/gpt-image-2", prompt="a cat", **deployment_wif)
 
@@ -1137,7 +1147,9 @@ class TestDeploymentNonChatSurfaces:
     @pytest.mark.asyncio
     async def test_async_image_generation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("aimage-bearer")
-        route: Final = respx.post(IMAGES_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+        route: Final = respx.post(IMAGES_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=IMAGE_BODY))
+        )
 
         response: Final = await litellm.aimage_generation(model="openai/gpt-image-2", prompt="a cat", **deployment_wif)
 
@@ -1147,7 +1159,9 @@ class TestDeploymentNonChatSurfaces:
     @respx.mock
     def test_image_variation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("variation-bearer")
-        route: Final = respx.post(IMAGE_VARIATIONS_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+        route: Final = respx.post(IMAGE_VARIATIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=IMAGE_BODY))
+        )
 
         response: Final = litellm.image_variation(
             model="openai/dall-e-2", image=b"png-bytes", custom_llm_provider="openai", **deployment_wif
@@ -1160,7 +1174,9 @@ class TestDeploymentNonChatSurfaces:
     @pytest.mark.asyncio
     async def test_async_image_variation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("avariation-bearer")
-        route: Final = respx.post(IMAGE_VARIATIONS_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+        route: Final = respx.post(IMAGE_VARIATIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=IMAGE_BODY))
+        )
 
         response: Final = await litellm.aimage_variation(
             model="openai/dall-e-2", image=b"png-bytes", custom_llm_provider="openai", **deployment_wif
@@ -1173,7 +1189,9 @@ class TestDeploymentNonChatSurfaces:
     def test_speech_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("speech-bearer")
         route: Final = respx.post(SPEECH_URL).mock(
-            return_value=httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+            return_value=response_for_respx(
+                httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+            )
         )
 
         response: Final = litellm.speech(model="openai/gpt-4o-mini-tts", input="hi", voice="alloy", **deployment_wif)
@@ -1186,7 +1204,9 @@ class TestDeploymentNonChatSurfaces:
     async def test_async_speech_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("aspeech-bearer")
         route: Final = respx.post(SPEECH_URL).mock(
-            return_value=httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+            return_value=response_for_respx(
+                httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+            )
         )
 
         response: Final = await litellm.aspeech(
@@ -1199,7 +1219,9 @@ class TestDeploymentNonChatSurfaces:
     @respx.mock
     def test_transcription_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str], tmp_path: Path) -> None:
         mock_token_exchange("transcribe-bearer")
-        route: Final = respx.post(TRANSCRIPTIONS_URL).mock(return_value=httpx.Response(200, json={"text": "hi"}))
+        route: Final = respx.post(TRANSCRIPTIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"text": "hi"}))
+        )
         audio: Final = tmp_path / "tone.wav"
         audio.write_bytes(b"RIFF....WAVE")
 
@@ -1217,7 +1239,9 @@ class TestDeploymentNonChatSurfaces:
         self, deployment_wif: dict[str, str], tmp_path: Path
     ) -> None:
         mock_token_exchange("atranscribe-bearer")
-        route: Final = respx.post(TRANSCRIPTIONS_URL).mock(return_value=httpx.Response(200, json={"text": "hi"}))
+        route: Final = respx.post(TRANSCRIPTIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"text": "hi"}))
+        )
         audio: Final = tmp_path / "tone.wav"
         audio.write_bytes(b"RIFF....WAVE")
 
@@ -1232,7 +1256,9 @@ class TestDeploymentNonChatSurfaces:
     @respx.mock
     def test_moderation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("moderation-bearer")
-        route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+        route: Final = respx.post(MODERATIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=MODERATION_BODY))
+        )
 
         response: Final = litellm.moderation(input="hi", model="omni-moderation-latest", **deployment_wif)
 
@@ -1242,7 +1268,9 @@ class TestDeploymentNonChatSurfaces:
     @respx.mock
     def test_moderation_ignores_unrelated_kwargs_it_never_validated(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("moderation-bearer")
-        route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+        route: Final = respx.post(MODERATIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=MODERATION_BODY))
+        )
 
         response: Final = litellm.moderation(
             input="hi", model="omni-moderation-latest", api_version=20240101, **deployment_wif
@@ -1255,7 +1283,9 @@ class TestDeploymentNonChatSurfaces:
     @pytest.mark.asyncio
     async def test_async_moderation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("amoderation-bearer")
-        route: Final = respx.post(MODERATIONS_URL).mock(return_value=httpx.Response(200, json=MODERATION_BODY))
+        route: Final = respx.post(MODERATIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=MODERATION_BODY))
+        )
 
         response: Final = await litellm.amoderation(input="hi", model="omni-moderation-latest", **deployment_wif)
 
@@ -1265,7 +1295,9 @@ class TestDeploymentNonChatSurfaces:
     @respx.mock
     def test_text_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("text-bearer")
-        route: Final = respx.post(COMPLETIONS_URL).mock(return_value=httpx.Response(200, json=TEXT_COMPLETION_BODY))
+        route: Final = respx.post(COMPLETIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=TEXT_COMPLETION_BODY))
+        )
 
         response: Final = litellm.text_completion(
             model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", **deployment_wif
@@ -1278,7 +1310,9 @@ class TestDeploymentNonChatSurfaces:
     @pytest.mark.asyncio
     async def test_async_text_completion_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("atext-bearer")
-        route: Final = respx.post(COMPLETIONS_URL).mock(return_value=httpx.Response(200, json=TEXT_COMPLETION_BODY))
+        route: Final = respx.post(COMPLETIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json=TEXT_COMPLETION_BODY))
+        )
 
         response: Final = await litellm.atext_completion(
             model="text-completion-openai/gpt-3.5-turbo-instruct", prompt="hi", **deployment_wif
@@ -1474,7 +1508,9 @@ class TestDeploymentNonChatSurfaces:
         invoke: Callable[[dict[str, str]], object],
     ) -> None:
         mock_token_exchange("managed-bearer")
-        route: Final = respx.route(method=method, url__startswith=url).mock(return_value=response)
+        route: Final = respx.route(method=method, url__startswith=url).mock(
+            return_value=response_for_respx(response)
+        )
 
         invoke({"custom_llm_provider": "openai", **deployment_wif})
 
@@ -1485,13 +1521,17 @@ class TestDeploymentNonChatSurfaces:
     async def test_async_managed_object_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("amanaged-bearer")
         files_route: Final = respx.get(url__startswith=FILES_URL).mock(
-            return_value=httpx.Response(200, json={"object": "list", "data": [FILE_BODY]})
+            return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": [FILE_BODY]}))
         )
         batches_route: Final = respx.get(url__startswith=BATCHES_URL).mock(
-            return_value=httpx.Response(200, json={"object": "list", "data": [BATCH_BODY], "has_more": False})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"object": "list", "data": [BATCH_BODY], "has_more": False})
+            )
         )
         jobs_route: Final = respx.get(url__startswith=FINE_TUNING_JOBS_URL).mock(
-            return_value=httpx.Response(200, json={"object": "list", "data": [FINE_TUNING_JOB_BODY], "has_more": False})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"object": "list", "data": [FINE_TUNING_JOB_BODY], "has_more": False})
+            )
         )
 
         await litellm.afile_list(custom_llm_provider="openai", **deployment_wif)
@@ -1507,7 +1547,7 @@ class TestDeploymentNonChatSurfaces:
     async def test_repeated_managed_object_calls_exchange_the_token_once(self, deployment_wif: dict[str, str]) -> None:
         exchange_route: Final = mock_token_exchange("once-bearer")
         files_route: Final = respx.get(url__startswith=FILES_URL).mock(
-            return_value=httpx.Response(200, json={"object": "list", "data": [FILE_BODY]})
+            return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": [FILE_BODY]}))
         )
 
         for _ in range(3):
@@ -1521,10 +1561,10 @@ class TestDeploymentNonChatSurfaces:
     def test_run_thread_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("run-bearer")
         create_route: Final = respx.post(f"{THREADS_URL}/thread-1/runs").mock(
-            return_value=httpx.Response(200, json=RUN_BODY)
+            return_value=response_for_respx(httpx.Response(200, json=RUN_BODY))
         )
         poll_route: Final = respx.get(url__startswith=f"{THREADS_URL}/thread-1/runs/run-1").mock(
-            return_value=httpx.Response(200, json=RUN_BODY)
+            return_value=response_for_respx(httpx.Response(200, json=RUN_BODY))
         )
 
         response: Final = litellm.run_thread(
@@ -1540,10 +1580,10 @@ class TestDeploymentNonChatSurfaces:
     async def test_async_assistant_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("aassistant-bearer")
         assistants_route: Final = respx.get(url__startswith=ASSISTANTS_URL).mock(
-            return_value=httpx.Response(200, json={"object": "list", "data": [ASSISTANT_BODY]})
+            return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": [ASSISTANT_BODY]}))
         )
         threads_route: Final = respx.post(url__startswith=THREADS_URL).mock(
-            return_value=httpx.Response(200, json=THREAD_BODY)
+            return_value=response_for_respx(httpx.Response(200, json=THREAD_BODY))
         )
 
         await litellm.aget_assistants(custom_llm_provider="openai", **deployment_wif)
@@ -1556,7 +1596,7 @@ class TestDeploymentNonChatSurfaces:
     def test_container_file_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("container-files-bearer")
         route: Final = respx.get(f"{CONTAINERS_URL}/cntr_1/files").mock(
-            return_value=httpx.Response(200, json={"object": "list", "data": [], "has_more": False})
+            return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": [], "has_more": False}))
         )
 
         response: Final = list_container_files(container_id="cntr_1", custom_llm_provider="openai", **deployment_wif)
@@ -1568,7 +1608,7 @@ class TestDeploymentNonChatSurfaces:
     def test_repeated_moderation_calls_exchange_the_token_once(self, deployment_wif: dict[str, str]) -> None:
         exchange_route: Final = mock_token_exchange("once-bearer")
         moderation_route: Final = respx.post(MODERATIONS_URL).mock(
-            return_value=httpx.Response(200, json=MODERATION_BODY)
+            return_value=response_for_respx(httpx.Response(200, json=MODERATION_BODY))
         )
 
         for _ in range(3):
@@ -1679,7 +1719,7 @@ class TestDeploymentKeyBesideIdentity:
     ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-shared")
         exchange: Final = mock_token_exchange()
-        route: Final = respx.route(url__startswith=url).mock(return_value=response)
+        route: Final = respx.route(url__startswith=url).mock(return_value=response_for_respx(response))
 
         invoke({"api_key": "sk-shared", **deployment_wif})
 
@@ -1697,7 +1737,7 @@ class TestDeploymentKeyBesideIdentity:
     ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-shared")
         exchange: Final = mock_token_exchange()
-        route: Final = respx.route(url__startswith=url).mock(return_value=response)
+        route: Final = respx.route(url__startswith=url).mock(return_value=response_for_respx(response))
 
         invoke(deployment_wif)
 
@@ -1717,7 +1757,7 @@ class TestDeploymentKeyBesideIdentity:
         monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
         monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
         exchange: Final = mock_token_exchange()
-        route: Final = respx.route(url__startswith=url).mock(return_value=response)
+        route: Final = respx.route(url__startswith=url).mock(return_value=response_for_respx(response))
 
         invoke(deployment_wif)
 
@@ -1761,7 +1801,9 @@ class TestCountTokensFromDeployment:
     @pytest.mark.asyncio
     async def test_keyless_deployment_counts_with_the_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
         mock_token_exchange("count-bearer")
-        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 7}))
+        )
 
         assert await self.count(deployment_wif) == 7
         assert bearer_of(route) == "Bearer count-bearer"
@@ -1773,7 +1815,9 @@ class TestCountTokensFromDeployment:
     ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
         exchange: Final = mock_token_exchange()
-        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 7}))
+        )
 
         await self.count(deployment_wif)
 
@@ -1788,7 +1832,9 @@ class TestCountTokensFromDeployment:
     ) -> None:
         monkeypatch.setattr(litellm, module_key, "sk-module-level")
         exchange: Final = mock_token_exchange()
-        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 7}))
+        )
 
         await self.count(deployment_wif)
 
@@ -1799,7 +1845,9 @@ class TestCountTokensFromDeployment:
     @pytest.mark.asyncio
     async def test_deployment_key_wins_without_an_exchange(self, deployment_wif: dict[str, str]) -> None:
         exchange: Final = mock_token_exchange()
-        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 7}))
+        )
 
         await self.count({"api_key": "sk-count", **deployment_wif})
 
@@ -1820,7 +1868,9 @@ class TestCountTokensFromDeployment:
         monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
         monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
         exchange: Final = mock_token_exchange()
-        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 7}))
+        )
 
         assert await self.count({key: deployment_wif[key] for key in identity_keys}) == 7
         assert bearer_of(route) == "Bearer sk-from-vault"
@@ -1830,7 +1880,9 @@ class TestCountTokensFromDeployment:
     @pytest.mark.asyncio
     async def test_partial_deployment_identity_answers_a_401_naming_the_gap_without_a_count_call(self) -> None:
         exchange: Final = mock_token_exchange()
-        route: Final = respx.post(INPUT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 7}))
+        route: Final = respx.post(INPUT_TOKENS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 7}))
+        )
 
         result: Final = await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o-mini",
@@ -1855,7 +1907,7 @@ def mock_token_exchange_naming_its_thread(event_loop_thread: int) -> respx.Route
         minted_on: Final = "event-loop" if threading.get_ident() == event_loop_thread else "worker-thread"
         return httpx.Response(200, json={"access_token": f"minted-on-{minted_on}", "expires_in": 3600})
 
-    return respx.post(TOKEN_EXCHANGE_URL).mock(side_effect=respond)
+    return respx.post(TOKEN_EXCHANGE_URL).mock(side_effect=side_effect_for_respx(respond))
 
 
 LOOP_BOUND_ROUTES: Final = (
@@ -1944,7 +1996,7 @@ class TestTokenExchangeLeavesTheEventLoopFree:
         invoke: Callable[[dict[str, str]], Awaitable[object]],
     ) -> None:
         mock_token_exchange_naming_its_thread(threading.get_ident())
-        upstream: Final = respx.route(method=method, url=url).mock(return_value=response)
+        upstream: Final = respx.route(method=method, url=url).mock(return_value=response_for_respx(response))
 
         await invoke(deployment_wif)
 
@@ -1964,7 +2016,7 @@ class TestCountTokens:
         monkeypatch.setattr(litellm, "openai_key", None)
         mock_token_exchange()
         count_route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 12})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 12}))
         )
         result: Final = await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o",
@@ -1988,7 +2040,9 @@ class TestCountTokens:
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         monkeypatch.setattr(litellm, "api_key", None)
         monkeypatch.setattr(litellm, "openai_key", None)
-        respx.post(TOKEN_EXCHANGE_URL).mock(return_value=httpx.Response(400, json={"error": "invalid_grant"}))
+        respx.post(TOKEN_EXCHANGE_URL).mock(
+            return_value=response_for_respx(httpx.Response(400, json={"error": "invalid_grant"}))
+        )
         count_route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens")
         result: Final = await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o",

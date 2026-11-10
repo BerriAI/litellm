@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import httpx
+import httpx2 as httpx
 
 
 def timeout_to_seconds(timeout: float | httpx.Timeout | None) -> float | None:

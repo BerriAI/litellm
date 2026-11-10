@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Final, Literal
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 

@@ -52,8 +52,8 @@ from litellm._logging import verbose_logger
 from litellm.proxy.utils import model_dump_with_preserved_fields
 import logging
 import json
-import httpx
-import respx
+import httpx2 as httpx
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 from contextlib import nullcontext
 from litellm._internal_context import current_service_target, in_post_response_phase, internal_sub_call

@@ -363,7 +363,7 @@ async def test_malformed_answers_shape_fails_open():
 
 @pytest.mark.asyncio
 async def test_http_status_error_includes_status_and_undecodable_body():
-    import httpx
+    import httpx2 as httpx
 
     response = MagicMock()
     response.status_code = 503

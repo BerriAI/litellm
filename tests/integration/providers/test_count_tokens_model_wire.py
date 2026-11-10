@@ -7,7 +7,7 @@ from typing import Final
 from uuid import uuid4
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 from anthropic.types import MessageCountTokensToolParam, MessageTokensCount
 from integration._support.bedrock_runtime_peer import target_of

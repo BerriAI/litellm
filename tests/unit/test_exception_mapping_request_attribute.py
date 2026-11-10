@@ -28,7 +28,7 @@ object doesn't have a request attribute, which was the root cause of the bug.
 """
 
 import pytest
-import httpx
+import httpx2 as httpx
 from unittest.mock import patch
 
 import litellm

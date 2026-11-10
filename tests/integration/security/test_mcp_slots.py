@@ -32,7 +32,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Final, Literal
 from urllib.parse import parse_qs, urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows

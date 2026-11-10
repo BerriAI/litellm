@@ -9,7 +9,7 @@ Mistral -> OpenAI file object mapping. Runs against canned httpx responses.
 
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai.types.file_deleted import FileDeleted
 

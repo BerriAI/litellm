@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from prisma.errors import DataError as PrismaDataError
 from prisma.errors import RawQueryError
@@ -496,7 +496,7 @@ async def test_update_daily_spend_does_not_retry_post_send_ambiguous_errors():
     # on the pooled connection, so retrying stacks a second set of increments
     # into it and one commit applies both. Post-send failures must drop the
     # batch (loudly), never retry it.
-    import httpx
+    import httpx2 as httpx
 
     def raise_read_timeout():
         raise httpx.ReadTimeout("ambiguous")
@@ -522,7 +522,7 @@ async def test_update_daily_spend_does_not_retry_post_send_ambiguous_errors():
 async def test_update_daily_spend_retries_connect_errors(monkeypatch):
     # ConnectError proves the statements never reached the database, so it is
     # the one failure the writer may retry.
-    import httpx
+    import httpx2 as httpx
 
     outcomes = iter([httpx.ConnectError("down"), None])
 

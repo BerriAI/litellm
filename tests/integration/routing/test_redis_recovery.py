@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
-import httpx
+import httpx2 as httpx
 import psycopg
 import pytest
 from psycopg import sql

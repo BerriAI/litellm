@@ -5,7 +5,7 @@ import uuid
 from typing import Final
 from unittest.mock import Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

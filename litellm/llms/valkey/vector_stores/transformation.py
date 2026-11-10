@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NoReturn
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict
 
 import litellm

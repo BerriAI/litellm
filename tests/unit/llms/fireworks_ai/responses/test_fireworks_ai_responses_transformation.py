@@ -5,9 +5,10 @@ from typing import Final, TypedDict, cast
 from unittest.mock import MagicMock, patch
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.types.responses import (
     EasyInputMessage,
     ResponseFunctionToolCall,
@@ -19,6 +20,7 @@ from openai.types.responses.response_input_param import FunctionCallOutput
 from openai.types.responses.tool_param import Mcp
 from typing_extensions import ReadOnly
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.fireworks_ai.responses.transformation import FireworksAIResponsesAPIConfig
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
@@ -83,7 +85,9 @@ def _mock_http_client(response_body: Mapping[str, object]) -> MagicMock:
 
 
 def _fireworks_responses_route(model: str) -> respx.Route:
-    return respx.post(FIREWORKS_RESPONSES_URL).mock(return_value=httpx.Response(200, json=_fireworks_response(model)))
+    return respx.post(FIREWORKS_RESPONSES_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_fireworks_response(model)))
+    )
 
 
 def _routed_body(route: respx.Route) -> Mapping[str, object]:

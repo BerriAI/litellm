@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Final
 from ._lazy_imports_registry import LITELLM_ATTRIBUTES, UTILS_ATTRIBUTES
 
 if TYPE_CHECKING:
-    import httpx
+    import httpx2 as httpx
 
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
@@ -83,7 +83,7 @@ def _submodule(module_path: str) -> Callable[[], object]:
 
 
 def _request_timeout() -> "float | httpx.Timeout | None":
-    import httpx
+    import httpx2 as httpx
 
     timeout: Final = _cached("litellm", "request_timeout")
     return timeout if isinstance(timeout, (int, float, httpx.Timeout)) else None

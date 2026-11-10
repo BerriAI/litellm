@@ -8,15 +8,17 @@ query parameter.  Flat credential query params (e.g. ?api_key=…) are no
 longer accepted — they would appear in server logs.
 """
 
+from tests._support.respx_httpx2 import response_for_respx
 import asyncio
 import json
 from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import Request
 from fastapi.datastructures import Headers, QueryParams
 from fastapi.testclient import TestClient
@@ -502,7 +504,7 @@ def test_create_agent_route_forwards_googles_create_body(proxy_client: TestClien
         "tools": [{"type": "code_execution"}],
     }
     upstream: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/agents").mock(
-        return_value=httpx.Response(200, json=google_body)
+        return_value=response_for_respx(httpx.Response(200, json=google_body))
     )
 
     response: Final = proxy_client.post(

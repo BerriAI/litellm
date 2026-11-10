@@ -25,7 +25,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse

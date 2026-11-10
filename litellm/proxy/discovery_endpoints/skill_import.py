@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Final
 from urllib.parse import quote, unquote, urlsplit
 
-import httpx
+import httpx2 as httpx
 
 from litellm.proxy.discovery_endpoints.agent_skills_archive import (
     MAX_ARCHIVE_ENTRIES,

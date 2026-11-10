@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm

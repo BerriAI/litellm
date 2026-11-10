@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, gateway_from_environment, object_value
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario

@@ -8,7 +8,7 @@ import litellm
 @pytest.mark.parametrize("mock_response", ["", "Hello"])
 @pytest.mark.parametrize("stream", [False, True])
 def test_completion_mock_response(mock_response: str, stream: bool) -> None:
-    with patch("httpx.Client.send", side_effect=AssertionError("Unexpected HTTP request")):
+    with patch("httpx2.Client.send", side_effect=AssertionError("Unexpected HTTP request")):
         response = litellm.completion(
             model="openai/gpt-4o-mini",
             messages=[{"role": "user", "content": "hi"}],
@@ -28,10 +28,10 @@ def test_completion_mock_response(mock_response: str, stream: bool) -> None:
 async def test_acompletion_mock_response(mock_response: str, stream: bool) -> None:
     with (
         patch(
-            "httpx.AsyncClient.send",
+            "httpx2.AsyncClient.send",
             side_effect=AssertionError("Unexpected HTTP request"),
         ),
-        patch("httpx.Client.send", side_effect=AssertionError("Unexpected HTTP request")),
+        patch("httpx2.Client.send", side_effect=AssertionError("Unexpected HTTP request")),
     ):
         response = await litellm.acompletion(
             model="openai/gpt-4o-mini",

@@ -2,7 +2,7 @@ import zoneinfo
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import polars as pl
 import pytest
 

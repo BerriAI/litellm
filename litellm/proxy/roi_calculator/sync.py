@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, Protocol, runtime_checkable
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, Field, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, Unpack
 

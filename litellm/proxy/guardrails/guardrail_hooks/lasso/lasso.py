@@ -20,7 +20,7 @@ except ImportError:
     ULID_AVAILABLE = False
 
 try:
-    import httpx
+    import httpx2 as httpx
 
     HTTPX_AVAILABLE = True
 except ImportError:

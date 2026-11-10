@@ -3,7 +3,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support import codex_vendor as cv
 from integration._support.client import Gateway, gateway_from_environment, object_value, string_value

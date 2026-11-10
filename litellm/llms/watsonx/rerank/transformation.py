@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import join_api_base

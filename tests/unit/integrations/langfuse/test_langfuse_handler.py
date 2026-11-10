@@ -1,10 +1,10 @@
+from tests._support.respx_httpx2 import side_effect_for_respx
 from collections.abc import Iterator
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
 from litellm.litellm_core_utils.specialty_caches.dynamic_logging_cache import DynamicLoggingCache
@@ -13,8 +13,8 @@ from litellm.types.utils import StandardCallbackDynamicParams
 
 @pytest.fixture(autouse=True)
 def langfuse_api_unreachable() -> Iterator[respx.MockRouter]:
-    with respx.mock(assert_all_called=False) as router:
-        router.route().mock(side_effect=httpx.ConnectError("langfuse is unreachable"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as router:
+        router.route().mock(side_effect=side_effect_for_respx(httpx.ConnectError("langfuse is unreachable")))
         yield router
 
 

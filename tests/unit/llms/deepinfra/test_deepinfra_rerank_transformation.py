@@ -6,7 +6,7 @@ Based on the test patterns from other rerank providers and the current DeepInfra
 import json
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.deepinfra.rerank.transformation import DeepinfraRerankConfig

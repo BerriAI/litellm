@@ -11,7 +11,7 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.llms.oci.chat.generic import (

@@ -385,7 +385,7 @@ async def test_a2a_completion_bridge_bedrock_agentcore(respx_mock, monkeypatch):
     import litellm
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    import httpx
+    import httpx2 as httpx
     from a2a.compat.v0_3.types import MessageSendParams, SendStreamingMessageRequest
     from uuid import uuid4
 

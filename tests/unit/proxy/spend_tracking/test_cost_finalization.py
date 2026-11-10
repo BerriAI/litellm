@@ -299,7 +299,7 @@ async def test_existing_calculator_prices_usage_before_finalizing(logging_obj: L
 async def test_guardrail_json_response_uses_finalized_header_when_cost_is_known(
     logging_obj: Logging, monkeypatch: pytest.MonkeyPatch, known_cost: bool
 ) -> None:
-    import httpx
+    import httpx2 as httpx
 
     from fastapi import Response
     from litellm.caching.dual_cache import DualCache
@@ -346,7 +346,7 @@ async def test_malformed_passthrough_logging_preserves_response_dispatch_contrac
     logging_obj: Logging, inline: bool
 ) -> None:
 
-    import httpx
+    import httpx2 as httpx
     from litellm.llms.anthropic.common_utils import AnthropicError
     from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
     from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
@@ -573,7 +573,7 @@ async def test_redacted_completed_call_preserves_usage_and_search_allowance(
 async def test_guardrail_json_rejection_retains_completed_provider_usage(
     logging_obj: Logging, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import httpx
+    import httpx2 as httpx
 
     from litellm.caching.dual_cache import DualCache
     from litellm.integrations.custom_guardrail import CustomGuardrail

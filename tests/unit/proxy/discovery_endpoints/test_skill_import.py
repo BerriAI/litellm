@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Final, NoReturn
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.proxy.discovery_endpoints.agent_skills_archive import (

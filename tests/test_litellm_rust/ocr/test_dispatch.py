@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Final, NoReturn
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

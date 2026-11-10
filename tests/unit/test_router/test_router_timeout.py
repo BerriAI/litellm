@@ -8,11 +8,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
@@ -23,6 +23,7 @@ from litellm.types.llms.openai import AllMessageValues
 import time
 from unittest.mock import patch, MagicMock
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
@@ -172,7 +173,9 @@ async def test_live_responses_stream_through_the_router_fails_at_the_stream_time
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=slow_upstream_answer())
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=side_effect_for_respx(slow_upstream_answer())
+    )
     router: Final = Router(
         model_list=[{"model_name": "gpt", "litellm_params": {"model": "openai/gpt-4.1", "api_key": "fake"}}],
         timeout=UPSTREAM_FIRST_BYTE_SECONDS * 2,
@@ -339,7 +342,7 @@ async def test_stream_a_deployment_hook_answers_in_one_piece_gets_the_longer_lim
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [_AnswersStreamsInOnePiece()])
     respx_mock.post(url__regex=r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*").mock(
-        side_effect=slow_upstream_answer(answer)
+        side_effect=side_effect_for_respx(slow_upstream_answer(answer))
     )
     router: Final = Router(
         model_list=[
@@ -409,7 +412,7 @@ async def test_native_live_stream_cut_at_the_stream_timeout_is_not_blamed_on_the
     failure_details: Final = _FailureDetails()
     monkeypatch.setattr(litellm, "callbacks", [failure_details])
     respx_mock.post(url__regex=r"https://(bedrock-runtime\.us-east-1\.amazonaws\.com|api\.openai\.com)/.*").mock(
-        side_effect=slow_upstream_answer()
+        side_effect=side_effect_for_respx(slow_upstream_answer())
     )
     router: Final = Router(
         model_list=[
@@ -451,7 +454,7 @@ async def test_bedrock_timeout_preserves_the_provider_timeout_error(
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     model_id: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     route: Final = respx_mock.post(url__regex=r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/.*").mock(
-        side_effect=httpx.ReadTimeout("upstream timeout")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("upstream timeout"))
     )
     router: Final = Router(
         model_list=[
@@ -490,10 +493,10 @@ def test_stream_timeout_uses_the_configured_fallback(
         )
     )
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.ReadTimeout("primary stream timed out"),
             httpx.Response(200, text=stream_body),
-        ]
+        ])
     )
     router: Final = Router(
         model_list=[
@@ -530,7 +533,7 @@ def test_openai_timeout_raises_provider_timeout_for_scripted_failure(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=httpx.ReadTimeout("scripted upstream timeout")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("scripted upstream timeout"))
     )
 
     with pytest.raises(openai.APITimeoutError):
@@ -558,7 +561,7 @@ async def test_anthropic_timeout_raises_for_sync_and_streaming(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        side_effect=httpx.ReadTimeout("scripted Anthropic timeout")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("scripted Anthropic timeout"))
     )
     request_kwargs: Final = {
         "model": "anthropic/claude-haiku-4-5-20251001",
@@ -594,7 +597,7 @@ def test_openai_router_timeout_raises_after_httpx_read_timeout(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=httpx.ReadTimeout("scripted OpenAI timeout")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("scripted OpenAI timeout"))
     )
     router: Final = Router(
         model_list=[
@@ -625,7 +628,7 @@ def test_azure_router_timeout_raises_after_httpx_read_timeout(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://azure.example.com/openai/deployments/gpt-4o-mini/chat/completions").mock(
-        side_effect=httpx.ReadTimeout("scripted Azure timeout")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("scripted Azure timeout"))
     )
     router: Final = Router(
         model_list=[

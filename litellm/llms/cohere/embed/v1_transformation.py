@@ -5,7 +5,7 @@ Legacy /v1/embedding transformation logic for Bedrock Cohere.
 from collections.abc import Sized
 from typing import Final, Protocol
 
-import httpx
+import httpx2 as httpx
 
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

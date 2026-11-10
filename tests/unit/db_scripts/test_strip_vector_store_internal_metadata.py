@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 _SCRIPT: Final = Path(__file__).resolve().parents[3] / "db_scripts" / "strip_vector_store_internal_metadata.py"

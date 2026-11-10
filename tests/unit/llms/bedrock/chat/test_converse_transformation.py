@@ -8,10 +8,10 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm._logging import verbose_logger
 from litellm import ModelResponse, Router, completion
@@ -33,6 +33,7 @@ from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.conftest import NativeStructuredOutputKey
 
 
@@ -373,14 +374,14 @@ def test_bedrock_json_schema_description_is_sent_in_request(respx_mock: respx.Ro
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.amazon.nova-pro-v1%3A0/converse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
     litellm.completion(
         model="bedrock/us.amazon.nova-pro-v1:0",
@@ -464,14 +465,14 @@ def test_bedrock_nova_top_k_aliases_are_forwarded(parameter: str, respx_mock: re
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.amazon.nova-pro-v1%3A0/converse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
     litellm.completion(
         model="bedrock/us.amazon.nova-pro-v1:0",
@@ -508,14 +509,14 @@ def test_bedrock_model_id_arn_sets_converse_url_and_region(
 ) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", "ap-south-1")
     route: Final = respx_mock.post(expected_url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -540,14 +541,14 @@ def test_bedrock_application_profile_model_and_model_id_use_same_route(respx_moc
         "https://bedrock-runtime.eu-central-1.amazonaws.com/model/"
         "arn%3Aaws%3Abedrock%3Aeu-central-1%3A000000000000%3Aapplication-inference-profile%2Fprofile-id/converse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "profile"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
     model_args: Final = {
         "messages": [{"role": "user", "content": "select the application profile"}],
@@ -576,14 +577,14 @@ def _routed_profile_request_body(
     respx_mock: respx.Router, litellm_params: dict, model_info: dict, **completion_kwargs: object
 ) -> dict:
     route: Final = respx_mock.post(_PROFILE_ARN_CONVERSE_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
     router: Final = litellm.Router(
         model_list=[
@@ -721,14 +722,14 @@ def test_bedrock_cross_region_inference_profile_keeps_prefix_in_converse_url(res
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1%3A0/converse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "routed"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -747,14 +748,14 @@ def test_bedrock_cross_region_inference_profile_keeps_prefix_in_converse_url(res
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_converse_like_proxy_uses_bearer_api_key(respx_mock: respx.Router) -> None:
     route: Final = respx_mock.post("https://some-api-url/models").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
     response: Final = litellm.completion(
         model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
@@ -1281,14 +1282,14 @@ def test_a_router_deployment_of_a_model_the_cost_map_does_not_list_drops_lookaro
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.newvendor.model-1/converse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
     router: Final = Router(
         model_list=[
@@ -11344,14 +11345,14 @@ def test_bedrock_nova_model_selects_converse_route(model: str, respx_mock: respx
     route: Final = respx_mock.post(
         re.compile(r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/.+/converse")
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "converse"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
     response: Final = litellm.completion(
         model=model,
@@ -11463,14 +11464,14 @@ async def test_bedrock_nova_grounding_request_transformation(async_mode: bool) -
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_converse_drops_empty_stop_sequence(respx_mock: respx.Router) -> None:
     route: Final = respx_mock.post(re.compile(r"https://[^/]+/.*/converse(?:\?.*)?")).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
     response: Final = litellm.completion(
         model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -11492,17 +11493,17 @@ def test_bedrock_converse_drops_empty_stop_sequence(respx_mock: respx.Router) ->
 def test_bedrock_image_url_sync_client_fetches_and_inlines_image(respx_mock: respx.Router) -> None:
     image_bytes: Final = b"synthetic-image-content"
     respx_mock.get("https://1.1.1.1/image.png").mock(
-        return_value=httpx.Response(200, content=image_bytes, headers={"content-type": "image/png"})
+        return_value=response_for_respx(httpx.Response(200, content=image_bytes, headers={"content-type": "image/png"}))
     )
     bedrock_route: Final = respx_mock.post(re.compile(r"https://[^/]+/.*/converse(?:\?.*)?")).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "a synthetic image"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 2, "totalTokens": 3},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -11752,7 +11753,7 @@ def test_a_malformed_caller_output_config_gets_bedrocks_own_400(
     model: str, respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
     route: Final = respx_mock.post(url__regex=r"/converse$").mock(
-        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_TYPE_ERROR})
+        return_value=response_for_respx(httpx.Response(400, json={"message": _BEDROCK_SCHEMA_TYPE_ERROR}))
     )
 
     with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_TYPE_ERROR)):
@@ -11797,7 +11798,7 @@ def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_
 ) -> None:
     monkeypatch.setitem(litellm.model_cost["us.anthropic.claude-opus-4-8"], "supports_native_structured_output", False)
     route: Final = respx_mock.post(url__regex=r"/converse$").mock(
-        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+        return_value=response_for_respx(httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL}))
     )
 
     with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
@@ -11824,7 +11825,7 @@ def test_a_default_native_schema_rejection_retries_with_the_json_tool(
     respx_mock: respx.Router, local_model_cost_map: None, model: str
 ) -> None:
     route: Final = respx_mock.post(url__regex=r"/converse$").mock(
-        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+        return_value=response_for_respx(httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL}))
     )
 
     with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
@@ -11852,7 +11853,7 @@ def test_an_unforceable_tool_native_schema_rejection_retries_with_the_json_tool(
     respx_mock: respx.Router, local_model_cost_map: None
 ) -> None:
     route: Final = respx_mock.post(url__regex=r"/converse$").mock(
-        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+        return_value=response_for_respx(httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL}))
     )
 
     with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
@@ -11908,7 +11909,7 @@ def test_a_deployment_with_a_batch_control_plane_endpoint_keeps_it_out_of_chat_r
 ) -> None:
     route: Final = respx_mock.post(
         url__regex=r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/.+/(converse|invoke)$"
-    ).mock(side_effect=_bedrock_chat_answer)
+    ).mock(side_effect=side_effect_for_respx(_bedrock_chat_answer))
 
     response: Final = litellm.completion(
         model=f"{route_prefix}us.anthropic.claude-haiku-4-5-20251001-v1:0",

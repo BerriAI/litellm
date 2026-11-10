@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import httpx2 as httpx
 from aiohttp import ClientResponse
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig

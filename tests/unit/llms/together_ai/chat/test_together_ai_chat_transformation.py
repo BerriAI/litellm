@@ -3,7 +3,7 @@ import logging
 from collections.abc import Iterator, Mapping, Sequence
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

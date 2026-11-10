@@ -1,3 +1,4 @@
+from tests._support.respx_httpx2 import response_for_respx
 import datetime
 import ipaddress
 import json
@@ -10,9 +11,10 @@ from pathlib import Path
 from typing import Final
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -459,7 +461,7 @@ def test_hosted_vllm_wildcard_lists_the_server_models_without_an_api_key(monkeyp
 
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     models_route: Final = respx.get("http://vllm-without-key.test:8000/v1/models").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "data": [
@@ -468,7 +470,7 @@ def test_hosted_vllm_wildcard_lists_the_server_models_without_an_api_key(monkeyp
                     {"id": "openai/gpt-oss-20b"},
                 ]
             },
-        )
+        ))
     )
 
     listed: Final = get_known_models_from_wildcard(
@@ -493,7 +495,7 @@ def test_hosted_vllm_wildcard_sends_the_configured_api_key_as_a_bearer_token(mon
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     models_route: Final = respx.get(
         "http://vllm-with-key.test:8000/v1/models", headers={"Authorization": "Bearer vllm-test-key"}
-    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})))
 
     listed: Final = get_known_models_from_wildcard(
         "hosted_vllm/*",
@@ -515,11 +517,11 @@ def test_hosted_vllm_wildcard_without_api_base_lists_the_server_chat_would_call(
     monkeypatch.setenv("HOSTED_VLLM_API_KEY", "hosted-vllm-env-key")
     monkeypatch.setenv("VLLM_API_BASE", "http://vllm-passthrough-env.test:8000")
     passthrough_server_route: Final = respx.get("http://vllm-passthrough-env.test:8000/v1/models").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "model-on-the-passthrough-server"}]})
+        return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "model-on-the-passthrough-server"}]}))
     )
     respx.get(
         "http://hosted-vllm-env.test:8000/v1/models", headers={"Authorization": "Bearer hosted-vllm-env-key"}
-    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})))
 
     listed: Final = get_known_models_from_wildcard(
         "hosted_vllm/*", LiteLLM_Params(model="hosted_vllm/*", custom_llm_provider="hosted_vllm")
@@ -540,7 +542,7 @@ def test_hosted_vllm_wildcard_listing_does_not_wait_the_completion_timeout_on_a_
 
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     models_route: Final = respx.get("http://vllm-timeout.test:8000/v1/models").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
     )
 
     get_known_models_from_wildcard(
@@ -562,7 +564,7 @@ def test_hosted_vllm_wildcard_listing_sends_the_deployment_extra_headers(monkeyp
     respx.get(
         "http://vllm-behind-gateway.test:8000/v1/models",
         headers={"X-Tenant": "team-a", "Authorization": "Bearer vllm-test-key"},
-    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})))
 
     listed: Final = get_known_models_from_wildcard(
         "hosted_vllm/*",
@@ -588,7 +590,7 @@ def test_vllm_wildcard_never_lists_the_ids_of_a_configured_vllm_server(monkeypat
     monkeypatch.setenv("VLLM_API_BASE", "http://vllm-library-env.test:8000")
     monkeypatch.setenv("VLLM_API_KEY", "vllm-library-env-key")
     server_route: Final = respx.get(url__regex=r"http://vllm-library(-env)?\.test:8000/.*").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "model-only-a-server-serves"}]})
+        return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "model-only-a-server-serves"}]}))
     )
 
     listed: Final = get_known_models_from_wildcard(
@@ -696,7 +698,7 @@ def test_custom_prefix_over_a_litellm_proxy_wildcard_lists_upstream_models_under
 
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     respx.get("http://upstream-proxy.test:4000/v1/models").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "claude-sonnet"}]})
+        return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "claude-sonnet"}]}))
     )
 
     listed: Final = get_known_models_from_wildcard(
@@ -1134,7 +1136,7 @@ def test_expand_wildcard_alias_without_a_slash_lists_and_filters_by_its_own_patt
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     api_base: Final = f"http://vllm-alias-{request.node.callspec.id}.test:8000/v1"
     listing: Final = respx.get(f"{api_base}/models").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
     )
     deployment: Final = {"model_name": "qwen-*", "litellm_params": {"model": "hosted_vllm/*", "api_base": api_base}}
 
@@ -1456,7 +1458,11 @@ def test_get_complete_model_list_discovers_litellm_proxy_wildcard_models_by_defa
     catalog: Final = respx.get(
         "http://upstream-discovery.test:4000/gateway/v1/models",
         headers={"Authorization": "Bearer test-upstream-key"},
-    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "chat-model"}, {"id": "vendor/chat-model"}]}))
+    ).mock(
+        return_value=response_for_respx(
+            httpx.Response(200, json={"data": [{"id": "chat-model"}, {"id": "vendor/chat-model"}]})
+        )
+    )
     router: Final = Router(
         model_list=[
             {
@@ -1494,13 +1500,13 @@ def test_litellm_proxy_discovery_cache_is_scoped_to_the_upstream_key_and_gateway
     monkeypatch.setattr(litellm, "check_provider_endpoint", False)
     first: Final = respx.get(
         "http://first-proxy.test:4000/v1/models", headers={"Authorization": "Bearer test-first-key"}
-    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "first-key-model"}]}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "first-key-model"}]})))
     second: Final = respx.get(
         "http://first-proxy.test:4000/v1/models", headers={"Authorization": "Bearer test-second-key"}
-    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "second-key-model"}]}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "second-key-model"}]})))
     other_gateway: Final = respx.get(
         "http://other-proxy.test:4000/v1/models", headers={"Authorization": "Bearer test-first-key"}
-    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "other-gateway-model"}]}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "other-gateway-model"}]})))
     deployment: Final = LiteLLM_Params(
         model="litellm_proxy/*", api_base="http://first-proxy.test:4000/v1", api_key="test-first-key"
     )
@@ -1528,7 +1534,7 @@ def test_undeployed_litellm_proxy_wildcard_does_not_list_the_environment_gateway
     monkeypatch.setenv("LITELLM_PROXY_API_BASE", "http://environment-proxy.test:4000")
     monkeypatch.setenv("LITELLM_PROXY_API_KEY", "test-environment-key")
     catalog: Final = respx.get("http://environment-proxy.test:4000/v1/models").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "environment-only-model"}]})
+        return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "environment-only-model"}]}))
     )
     listed: Final = get_complete_model_list(
         key_models=["litellm_proxy/*"],
@@ -1573,7 +1579,7 @@ def test_partial_bedrock_wildcard_filters_the_discovered_ids(monkeypatch: pytest
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "modelSummaries": [
@@ -1581,19 +1587,19 @@ def test_partial_bedrock_wildcard_filters_the_discovered_ids(monkeypatch: pytest
                     {"modelId": "amazon.nova-micro-v1:0"},
                 ]
             },
-        )
+        ))
     )
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "inferenceProfileSummaries": [
                     {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE"}
                 ]
             },
-        )
+        ))
     )
     deployment: Final = LiteLLM_Params(
         model="bedrock/anthropic.*",
@@ -1620,18 +1626,22 @@ def test_partial_bedrock_wildcard_lists_nothing_when_no_discovered_id_carries_it
     region: Final = "ap-southeast-2"
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
-    ).mock(return_value=httpx.Response(200, json={"modelSummaries": [{"modelId": "amazon.nova-micro-v1:0"}]}))
+    ).mock(
+        return_value=response_for_respx(
+            httpx.Response(200, json={"modelSummaries": [{"modelId": "amazon.nova-micro-v1:0"}]})
+        )
+    )
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "inferenceProfileSummaries": [
                     {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE"}
                 ]
             },
-        )
+        ))
     )
     deployment: Final = LiteLLM_Params(
         model="bedrock/anthropic.*",
@@ -1667,9 +1677,9 @@ def test_openrouter_wildcard_lists_the_live_catalog_with_each_vendor_namespace(
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
     respx.get("https://openrouter.ai/api/v1/models/user").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json={"data": [{"id": "openai/gpt-5.4-mini"}, {"id": "anthropic/claude-haiku-5-5"}]}
-        )
+        ))
     )
 
     assert (
@@ -1689,7 +1699,7 @@ def test_key_granted_openrouter_wildcard_without_an_openrouter_deployment_lists_
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-environment-only")
     catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
+        return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]}))
     )
     router: Final = Router(
         model_list=[{"model_name": "or-team/*", "litellm_params": {"model": "openrouter/*", "api_key": "sk-or-team"}}]
@@ -1718,7 +1728,7 @@ def test_key_granted_hosted_vllm_wildcard_without_a_hosted_vllm_deployment_lists
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://hosted-vllm-environment-only.test:8000/v1")
     environment_server: Final = respx.get("http://hosted-vllm-environment-only.test:8000/v1/models").mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}]})
+        return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "qwen2.5"}]}))
     )
     router: Final = Router(
         model_list=[
@@ -1750,9 +1760,11 @@ def _openai_catalog_behind_a_catch_all(
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         respx_mock.get("https://api.openai.com/v1/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"data": [{"id": "gpt-4o"}, {"id": "gpt-4o-mini"}]})
+            )
         )
         yield Router(
             model_list=[
@@ -1820,9 +1832,11 @@ def _openrouter_catalog_beside_a_named_deployment(
 
     monkeypatch.setattr(litellm, "check_provider_endpoint", True)
     monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         respx_mock.get("https://openrouter.ai/api/v1/models/user").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": catalog_id} for catalog_id in catalog]})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"data": [{"id": catalog_id} for catalog_id in catalog]})
+            )
         )
         yield Router(
             model_list=[
@@ -1908,7 +1922,7 @@ def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_m
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "modelSummaries": [
@@ -1916,19 +1930,19 @@ def test_custom_prefix_that_starts_a_discovered_id_still_prefixes_every_listed_m
                     {"modelId": "amazon.nova-micro-v1:0"},
                 ]
             },
-        )
+        ))
     )
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/inference-profiles", params={"typeEquals": "SYSTEM_DEFINED"}
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "inferenceProfileSummaries": [
                     {"inferenceProfileId": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "status": "ACTIVE"}
                 ]
             },
-        )
+        ))
     )
     deployment: Final = LiteLLM_Params(
         model="bedrock/*",

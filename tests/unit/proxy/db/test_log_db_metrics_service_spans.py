@@ -8,7 +8,7 @@ from typing import Final, NotRequired, TypedDict
 from typing_extensions import ReadOnly
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult

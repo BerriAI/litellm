@@ -27,7 +27,7 @@ from typing import (
 )
 from uuid import NAMESPACE_URL, uuid5
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted

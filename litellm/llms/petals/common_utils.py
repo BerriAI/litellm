@@ -1,4 +1,4 @@
-from httpx import Headers
+from httpx2 import Headers
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 

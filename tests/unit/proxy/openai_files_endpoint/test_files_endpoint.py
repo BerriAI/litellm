@@ -5,12 +5,14 @@ from urllib.parse import quote
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import pytest
-import respx
-import httpx
+
+from tests._support import respx_httpx2 as respx
+import httpx2 as httpx
 from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
 
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm.constants import ANTHROPIC_DEFAULT_FILE_LIST_LIMIT
@@ -769,9 +771,9 @@ def batch_upload_seams(mocker: MockerFixture, monkeypatch):
         "litellm.acreate_file", new=mocker.AsyncMock(return_value=uploaded)
     )
     try:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             upstream_files_route = upstream.get("http://vllm.test/v1/files").mock(
-                return_value=httpx.Response(404, json={"detail": "Not Found"})
+                return_value=response_for_respx(httpx.Response(404, json={"detail": "Not Found"}))
             )
             yield stored, provider_upload, upstream_files_route
     finally:
@@ -872,7 +874,7 @@ def test_upload_for_a_litellm_executed_model_goes_to_the_provider_unless_the_ser
     batch_upload_seams, upstream_answer: httpx.Response | httpx.ConnectError, purpose: str
 ):
     stored, provider_upload, upstream_files_route = batch_upload_seams
-    upstream_files_route.mock(side_effect=[upstream_answer])
+    upstream_files_route.mock(side_effect=side_effect_for_respx([upstream_answer]))
 
     response = _upload_batch_file({"x-litellm-model": "my-vllm"}, {"purpose": purpose})
 
@@ -994,7 +996,7 @@ def test_create_file_and_call_chat_completion_e2e(
     3. Assert the file is used in the chat completion
     """
     # Create and enable respx mock instance
-    mock = respx.mock()
+    mock = respx.mock(using="httpcore2_and_legacy")
     mock.start()
     try:
         from litellm.types.llms.openai import OpenAIFileObject
@@ -1030,7 +1032,7 @@ def test_create_file_and_call_chat_completion_e2e(
         gemini_route = mock.post(
             url__regex=r".*generativelanguage\.googleapis\.com.*"
         ).mock(
-            return_value=respx.MockResponse(status_code=200, json=mock_gemini_response),
+            return_value=response_for_respx(respx.MockResponse(status_code=200, json=mock_gemini_response)),
         )
 
         # Print updated mock setup
@@ -2294,7 +2296,7 @@ def test_get_file_content_forwards_upstream_download_headers(monkeypatch, llm_ro
     upstream_filename: Final = "mydata.jsonl"
     upstream_request_id: Final = "req_upstream_123"
     upstream_route: Final = respx.get("https://api.openai.com/v1/files/file-abc123/content").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             content=body,
             headers={
@@ -2303,7 +2305,7 @@ def test_get_file_content_forwards_upstream_download_headers(monkeypatch, llm_ro
                 "content-disposition": f'attachment; filename="{upstream_filename}"',
                 "x-request-id": upstream_request_id,
             },
-        )
+        ))
     )
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -4188,9 +4190,9 @@ def test_get_file_content_model_routed_reads_from_the_deployment_bucket(
         user_id="test-user",
     )
     try:
-        with respx.mock(assert_all_called=False) as s3:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as s3:
             s3_read: Final = s3.get(url__regex=r"https://.*amazonaws\.com/.*").mock(
-                return_value=httpx.Response(200, content=b'{"recordId":"req-1"}')
+                return_value=response_for_respx(httpx.Response(200, content=b'{"recordId":"req-1"}'))
             )
             response = client.get(
                 f"/v1/files/{encoded_id}/content",
@@ -5182,7 +5184,7 @@ def _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, hook):
         [{"custom_llm_provider": "openai", "api_key": "sk-test"}],
     )
     return respx.post("https://api.openai.com/v1/files").mock(
-        return_value=respx.MockResponse(
+        return_value=response_for_respx(respx.MockResponse(
             status_code=200,
             json={
                 "id": "file-hooked",
@@ -5193,7 +5195,7 @@ def _setup_create_file_over_pre_call_hook(monkeypatch, llm_router, hook):
                 "purpose": "user_data",
                 "status": "uploaded",
             },
-        )
+        ))
     )
 
 

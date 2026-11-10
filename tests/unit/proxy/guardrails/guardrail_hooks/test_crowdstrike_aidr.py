@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from typing import Final, cast
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError

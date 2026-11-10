@@ -3,7 +3,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import litellm
 import openai
 import pytest

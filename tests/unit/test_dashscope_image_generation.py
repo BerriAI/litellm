@@ -8,9 +8,9 @@ Run in docker: pytest tests/unit/test_dashscope_image_generation.py -v
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
 import litellm
@@ -570,7 +570,7 @@ def test_image_generation_resolves_from_the_configured_base_not_the_chat_default
     monkeypatch.setenv("DASHSCOPE_API_BASE_IMAGE", image_base_env)
     image_url: Final = "https://dashscope-result.oss.aliyuncs.com/t.png"
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.post(expected_url).respond(
             200, json={"output": {"choices": [{"message": {"content": [{"image": image_url}]}}]}}
         )

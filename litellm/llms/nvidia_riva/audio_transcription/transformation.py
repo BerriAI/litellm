@@ -14,7 +14,7 @@ Reference: https://docs.nvidia.com/deeplearning/riva/user-guide/docs/asr/asr-ove
 from collections.abc import Sequence
 from typing import Final, TypedDict
 
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 from typing_extensions import ReadOnly
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

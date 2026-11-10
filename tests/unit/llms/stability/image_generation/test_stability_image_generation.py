@@ -7,7 +7,7 @@ Tests the transformation of OpenAI-compatible requests/responses to Stability AI
 import json
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import ValidationError
 

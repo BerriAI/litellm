@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.cohere.embed.transformation import (
@@ -174,10 +175,10 @@ async def test_embedding_with_extra_headers_are_sent_to_cohere(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.cohere.ai/v2/embed").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={"embeddings": {"float": [[0.1, 0.2]]}, "meta": {"billed_units": {"input_tokens": 1}}},
-        )
+        ))
     )
     request: Final = {
         "model": "cohere/embed-english-v3.0",

@@ -7,7 +7,7 @@ to the best available model. It has specific cost tracking requirements.
 
 from typing import TYPE_CHECKING, Final
 
-from httpx import Response
+from httpx2 import Response
 
 from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj

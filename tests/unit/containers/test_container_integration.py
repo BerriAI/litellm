@@ -3,7 +3,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-import httpx
+import httpx2 as httpx
 
 
 import litellm

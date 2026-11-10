@@ -7,7 +7,7 @@ Why separate file? Make it easy to see how transformation works
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm

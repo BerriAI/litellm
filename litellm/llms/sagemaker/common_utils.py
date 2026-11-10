@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
 from typing import Final, Protocol
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 

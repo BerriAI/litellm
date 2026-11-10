@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Final, Literal, Protocol
 from urllib.parse import parse_qs, urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value
 from integration._support.process import owned_proxy_process

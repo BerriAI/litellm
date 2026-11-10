@@ -19,11 +19,12 @@ from typing import Final
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, call, create_autospec, mock_open, patch
 
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 import click
 import fastapi.routing
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from fastapi import FastAPI, HTTPException, Request
@@ -10285,7 +10286,8 @@ class TestLazyFeatureMiddleware:
         """An app that never registered the provider passthrough routes 404s a
         provider request; behind the middleware the same request registers the
         routes and is forwarded to the provider with the configured key."""
-        import respx
+
+        from tests._support import respx_httpx2 as respx
         from fastapi import FastAPI
 
         from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeatureMiddleware
@@ -10299,9 +10301,9 @@ class TestLazyFeatureMiddleware:
         target_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-virtual")
         mw = LazyFeatureMiddleware(target_app, fastapi_app=target_app, features=(feat,))
 
-        with respx.mock() as upstream:
+        with respx.mock(using="httpcore2_and_legacy") as upstream:
             route = upstream.get("https://api.mistral.ai/v1/models").mock(
-                return_value=httpx.Response(200, json={"object": "list", "data": []})
+                return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": []}))
             )
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=target_app), base_url="http://t") as bare:
                 assert (await bare.get("/mistral/v1/models")).status_code == 404

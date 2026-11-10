@@ -2,7 +2,7 @@ from datetime import date
 from typing import Final, Protocol
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 
 from litellm.proxy.roi_calculator.github import GitHub, GitHubPullListItem
 from litellm.types.roi_calculator import ROIPullEvidence, ROISettings

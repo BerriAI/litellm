@@ -21,7 +21,7 @@ from functools import lru_cache
 from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Protocol, TypeVar, cast
 
-from httpx import Response, Timeout
+from httpx2 import Response, Timeout
 from openai import AsyncStream as OpenAIAsyncStream
 from openai import Stream as OpenAIStream
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -2465,7 +2465,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(result, ModelResponse) or not isinstance(result, (BaseModel, dict)):
             return None
         try:
-            import httpx
+            import httpx2 as httpx
 
             completion_response = result.model_dump(by_alias=True) if isinstance(result, BaseModel) else dict(result)
             return litellm.VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
@@ -5372,7 +5372,7 @@ class Logging(LiteLLMLoggingBaseClass):
         - For Non-streaming responses, we need to transform the response to a ModelResponse object.
         - For streaming responses, anthropic_messages handler calls success_handler with a assembled ModelResponse.
         """
-        import httpx
+        import httpx2 as httpx
 
         if self.stream and isinstance(result, ModelResponse) or isinstance(result, ModelResponse):
             return result
@@ -5492,7 +5492,7 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         Handles logging for Google GenAI generate content responses.
         """
-        import httpx
+        import httpx2 as httpx
 
         httpx_response: Final[Response | None] = self.model_call_details.get("httpx_response", None)
         if httpx_response is None:

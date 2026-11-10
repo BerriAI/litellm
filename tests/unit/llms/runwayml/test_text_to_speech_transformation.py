@@ -5,10 +5,11 @@ Test RunwayML text-to-speech transformation
 from collections.abc import Iterator
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.runwayml.text_to_speech.transformation import (
     RunwayMLTextToSpeechConfig,
@@ -28,15 +29,15 @@ async def test_async_speech_polls_the_runwayml_task_with_the_caller_key_and_retu
     respx_mock: respx.MockRouter, httpx_transport: None
 ) -> None:
     respx_mock.post("https://api.dev.runwayml.com/v1/text_to_speech").mock(
-        return_value=httpx.Response(200, json={"id": "task_1", "status": "PENDING"})
+        return_value=response_for_respx(httpx.Response(200, json={"id": "task_1", "status": "PENDING"}))
     )
     poll: Final = respx_mock.get("https://api.dev.runwayml.com/v1/tasks/task_1").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json={"id": "task_1", "status": "SUCCEEDED", "output": ["https://storage.example.com/a1.mp3"]}
-        )
+        ))
     )
     respx_mock.get("https://storage.example.com/a1.mp3").mock(
-        return_value=httpx.Response(200, content=b"ID3runway-audio")
+        return_value=response_for_respx(httpx.Response(200, content=b"ID3runway-audio"))
     )
 
     speech: Final = await litellm.aspeech(

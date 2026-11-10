@@ -1,7 +1,7 @@
 import json
 from collections.abc import Sequence
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

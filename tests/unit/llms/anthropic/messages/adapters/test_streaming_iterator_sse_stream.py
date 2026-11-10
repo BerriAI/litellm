@@ -8,7 +8,7 @@ wrapper's chunks/messages/model so disconnect-time partial billing can read them
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging

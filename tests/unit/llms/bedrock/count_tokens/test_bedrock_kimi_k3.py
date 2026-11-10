@@ -11,11 +11,13 @@ from itertools import product
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 import tiktoken
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
@@ -355,11 +357,13 @@ def test_responses_custom_tool_counts_like_the_function_tool_inference_sends(pai
     assert counted == kimi_k3_tokens(pair_encoding, MODEL, messages, [_WEATHER, *sent_to_inference])
 
 
-def test_counting_a_request_with_an_image_url_never_downloads_the_image(
-    pair_encoding: tiktoken.Encoding, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+def test_counting_a_request_with_an_image_url_never_downloads_the_image(respx_mock: respx.MockRouter,
+    pair_encoding: tiktoken.Encoding, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "user_url_validation", False)
-    image: Final = respx_mock.get("https://images.example/cat.png").mock(return_value=httpx.Response(200))
+    image: Final = respx_mock.get("https://images.example/cat.png").mock(
+        return_value=response_for_respx(httpx.Response(200))
+    )
     messages: Final = [
         {
             "role": "user",
@@ -543,8 +547,8 @@ def test_offline_mode_and_disabled_downloads_never_ask_hugging_face_for_the_toke
     monkeypatch.setattr(huggingface_hub.utils._detect_agent, "_registry", None)
     monkeypatch.setenv("LITELLM_OFFLINE_MODE", offline_mode)
     monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", disable_download)
-    with respx.mock(assert_all_called=False) as router:
-        hub: Final = router.route(host="huggingface.co").mock(return_value=httpx.Response(503))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as router:
+        hub: Final = router.route(host="huggingface.co").mock(return_value=response_for_respx(httpx.Response(503)))
         with contextlib.suppress(Exception):
             HUGGING_FACE_SOURCE.ranks_path()
     assert hub.called is asks_hub
@@ -558,8 +562,8 @@ def test_offline_mode_reads_the_tokenizer_from_the_hugging_face_cache(monkeypatc
     cached.write_bytes(b"cached ranks")
     monkeypatch.setattr(huggingface_hub.constants, "HF_HUB_CACHE", str(tmp_path))
     monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
-    with respx.mock(assert_all_called=False) as router:
-        hub: Final = router.route(host="huggingface.co").mock(return_value=httpx.Response(503))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as router:
+        hub: Final = router.route(host="huggingface.co").mock(return_value=response_for_respx(httpx.Response(503)))
         path: Final = HUGGING_FACE_SOURCE.ranks_path()
     assert Path(path).read_bytes() == b"cached ranks"
     assert not hub.called

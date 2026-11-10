@@ -130,7 +130,7 @@ class TestGenericOAuth2Credential:
 
     def test_token_request(self):
         """Test that GenericOAuth2Credential makes correct OAuth2 request."""
-        with patch("httpx.post") as mock_post:
+        with patch("httpx2.post") as mock_post:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "access_token": "oauth2-token",
@@ -156,7 +156,7 @@ class TestGenericOAuth2Credential:
 
     def test_token_caching(self):
         """Test that GenericOAuth2Credential caches tokens."""
-        with patch("httpx.post") as mock_post:
+        with patch("httpx2.post") as mock_post:
             mock_response = Mock()
             mock_response.json.return_value = {
                 "access_token": "oauth2-token",

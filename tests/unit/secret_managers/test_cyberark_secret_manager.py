@@ -4,11 +4,13 @@ from pathlib import Path
 from typing import Final, TypedDict, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 import yaml
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 import litellm.proxy.proxy_server
 from litellm._uuid import uuid
@@ -122,10 +124,10 @@ async def test_async_write_retries_policy_load_conflict(monkeypatch: pytest.Monk
     endpoint: Final = fixture["endpoint"]
     _respond(respx.post(endpoint + fixture["authenticate_path"]), content=fixture["token_json"].encode())
     policy_route: Final = respx.post(endpoint + fixture["policy_path"]).mock(
-        side_effect=[httpx.Response(409), httpx.Response(409), httpx.Response(201)]
+        side_effect=side_effect_for_respx([httpx.Response(409), httpx.Response(409), httpx.Response(201)])
     )
     value_route: Final = respx.post(endpoint + secret["path"]).mock(
-        side_effect=lambda _: httpx.Response(201 if policy_route.call_count == 3 else 404)
+        side_effect=side_effect_for_respx(lambda _: httpx.Response(201 if policy_route.call_count == 3 else 404))
     )
 
     result: Final = await manager.async_write_secret(secret["name"], "v")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # legacy secret manager API is untyped
@@ -155,7 +157,7 @@ async def test_async_write_does_not_retry_non_conflict_policy_failures(
     if isinstance(policy_outcome, int):
         _respond(policy_route, status_code=policy_outcome)
     else:
-        policy_route.mock(side_effect=policy_outcome)
+        policy_route.mock(side_effect=side_effect_for_respx(policy_outcome))
     value_route: Final = _respond(respx.post(endpoint + secret["path"]), status_code=201)
 
     await manager.async_write_secret(secret["name"], "v")  # pyright: ignore[reportUnknownMemberType]  # legacy secret manager API is untyped
@@ -181,7 +183,9 @@ async def test_concurrent_async_writes_load_policy_one_at_a_time(monkeypatch: py
             await asyncio.sleep(0.05)
         return httpx.Response(201)
 
-    policy_route: Final = respx.post(endpoint + fixture["policy_path"]).mock(side_effect=load_policy)
+    policy_route: Final = respx.post(endpoint + fixture["policy_path"]).mock(
+        side_effect=side_effect_for_respx(load_policy)
+    )
     respx.post(url__startswith=endpoint + "/secrets/").respond(status_code=201)  # pyright: ignore[reportUnknownMemberType]  # respx route stubs leave response builder partially unknown
 
     results: Final = await asyncio.gather(

@@ -2,11 +2,12 @@ import uuid
 from collections.abc import Iterator
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.sail.helpers import SAIL_API_BASE, SpendCapture, chat_completion_body
 
 
@@ -34,5 +35,5 @@ def spend_capture(monkeypatch: pytest.MonkeyPatch) -> SpendCapture:
 @pytest.fixture
 def chat_route(respx_mock: respx.MockRouter) -> respx.Route:
     return respx_mock.post(f"{SAIL_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(200, json=chat_completion_body())
+        return_value=response_for_respx(httpx.Response(200, json=chat_completion_body()))
     )

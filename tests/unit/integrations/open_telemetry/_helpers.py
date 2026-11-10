@@ -92,7 +92,7 @@ class HttpStatusException(Exception):
 
 def make_httpx_status_error(status_code: int, body: str = "upstream error"):
     """Real httpx.HTTPStatusError — what providers emit on 4xx/5xx upstream."""
-    import httpx
+    import httpx2 as httpx
 
     request = httpx.Request("POST", "https://upstream.example/v1/x")
     response = httpx.Response(

@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from pydantic import JsonValue, TypeAdapter

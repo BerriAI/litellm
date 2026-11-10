@@ -5,10 +5,11 @@ from copy import deepcopy
 from functools import partial
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.llms import compaction as native
 from litellm.router_api import RoutingContext
@@ -143,9 +144,13 @@ def answer_reply(request: httpx.Request, expected_model: str = "arbitrary-answer
 
 @pytest.fixture
 def wire() -> Iterator[tuple[respx.Route, respx.Route]]:
-    with respx.mock(assert_all_called=False) as transport:
-        compactor: Final = transport.post("https://compact.test/v1/messages").mock(return_value=native_reply())
-        answer: Final = transport.route(method="POST", host="answer.test").mock(side_effect=answer_reply)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as transport:
+        compactor: Final = transport.post("https://compact.test/v1/messages").mock(
+            return_value=response_for_respx(native_reply())
+        )
+        answer: Final = transport.route(method="POST", host="answer.test").mock(
+            side_effect=side_effect_for_respx(answer_reply)
+        )
         yield compactor, answer
 
 
@@ -179,7 +184,7 @@ async def test_all_surfaces_compact_and_keep_selected_answerer(
         return httpx.Response(500, json={"error": {"message": "retry answer"}}) if answer.call_count == 0 else answer_reply(request)
 
     if retry:
-        answer.mock(side_effect=answer_after_retry)
+        answer.mock(side_effect=side_effect_for_respx(answer_after_retry))
 
     async def execute(
         protocol: native.CompactionProtocol, request: Mapping[str, object], parent_model: str | None = None
@@ -263,8 +268,8 @@ async def test_uncompactable_overflow_uses_explicit_context_fallback(
     wire: tuple[respx.Route, respx.Route], surface: Surface,
 ) -> None:
     compactor, answer = wire
-    compactor.mock(return_value=httpx.Response(200, json={**native_reply().json(),
-        "content": [{"type": "text", "text": "MAPLE-47"}], "stop_reason": "end_turn"}))
+    compactor.mock(return_value=response_for_respx(httpx.Response(200, json={**native_reply().json(),
+        "content": [{"type": "text", "text": "MAPLE-47"}], "stop_reason": "end_turn"})))
     payload: Final = {"input" if surface == "responses" else "messages": [
         {"role": "user", "content": "Answer with MAPLE-47. Detail. " * 150},
     ]}
@@ -280,8 +285,8 @@ async def test_no_native_compactor_respects_explicit_escalation(
     monkeypatch.setitem(litellm.model_cost["summary-fixture"], "supports_anthropic_compaction", False)
     router: Final = make_router(settings={"enable_context_window_escalation": escalate})
     compactor, answer = wire
-    compactor.mock(return_value=httpx.Response(200, json={**native_reply().json(),
-        "content": [{"type": "text", "text": "MAPLE-47"}], "stop_reason": "end_turn"}))
+    compactor.mock(return_value=response_for_respx(httpx.Response(200, json={**native_reply().json(),
+        "content": [{"type": "text", "text": "MAPLE-47"}], "stop_reason": "end_turn"})))
     if not escalate:
         with pytest.raises(litellm.ContextWindowExceededError, match="No configured compactor"):
             await invoke(router, "chat", history("chat"))
@@ -307,7 +312,7 @@ async def test_undersized_native_compactor_does_not_block_explicit_escalation(
         }, model_info={"id": "wide-answer", "max_input_tokens": 32000, "max_output_tokens": 64},
     ))
     compactor, answer = wire
-    answer.mock(side_effect=partial(answer_reply, expected_model="wide-answer"))
+    answer.mock(side_effect=side_effect_for_respx(partial(answer_reply, expected_model="wide-answer")))
     await invoke(router, surface, history(surface))
     assert compactor.call_count == 0 and answer.call_count == 1
     assert json.loads(answer.calls[0].request.content)["model"] == "wide-answer"
@@ -326,7 +331,7 @@ async def test_bad_native_result_never_reaches_answerer(
         "too large " * 2000 if failure == "oversized" else "MAPLE-47", signed=failure != "unsigned",
         truncated=failure == "truncated",
     )
-    compactor.mock(return_value=reply)
+    compactor.mock(return_value=response_for_respx(reply))
     with pytest.raises((litellm.BadRequestError, litellm.InternalServerError)):
         await invoke(make_router(), surface, history(surface))
     assert compactor.call_count == 1 and answer.call_count == 0

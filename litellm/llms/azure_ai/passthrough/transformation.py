@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm._lazy_imports import get_default_encoding
@@ -34,7 +34,7 @@ from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CallTypes, EmbeddingResponse, ImageResponse, StandardPassThroughResponseObject
 
 if TYPE_CHECKING:
-    from httpx import URL, Response
+    from httpx2 import URL, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse

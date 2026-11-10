@@ -8,7 +8,7 @@ or beta access to the Skills API.
 
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.constants import ANTHROPIC_SKILLS_API_BETA_VERSION

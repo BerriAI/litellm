@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment

@@ -5,7 +5,7 @@ import time
 from collections.abc import Mapping
 from typing import Final, Protocol, cast  # noqa: TID251  # pins untyped clients and caches to local Protocols
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

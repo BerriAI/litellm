@@ -9,14 +9,15 @@ Verifies that:
 - Handler passes litellm_params and allows api_base=None
 """
 
+from tests._support.respx_httpx2 import response_for_respx
 import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 SAMPLE_ARN = "arn:aws:bedrock-agentcore:us-west-2:123456789:runtime/my_agent"
 SAMPLE_MODEL = f"bedrock/agentcore/{SAMPLE_ARN}"
 SAMPLE_PARAMS = {
@@ -406,9 +407,11 @@ class TestRequestScopedRuntimeSession:
             BedrockAgentCoreA2AConfig,
         )
 
-        with respx.mock(assert_all_called=True) as router:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
             route = router.post(url__regex=r".*/invocations.*").mock(
-                return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": "req-001", "result": {}})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"jsonrpc": "2.0", "id": "req-001", "result": {}})
+                )
             )
             await BedrockAgentCoreA2AConfig().handle_non_streaming(
                 request_id="req-001",
@@ -427,9 +430,11 @@ class TestRequestScopedRuntimeSession:
             BedrockAgentCoreA2AConfig,
         )
 
-        with respx.mock(assert_all_called=True) as router:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
             route = router.post(url__regex=r".*/invocations.*").mock(
-                return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": "req-001", "result": {}})
+                return_value=response_for_respx(
+                    httpx.Response(200, json={"jsonrpc": "2.0", "id": "req-001", "result": {}})
+                )
             )
             events = [
                 event
@@ -543,9 +548,11 @@ class TestStreaming:
             'data: {"jsonrpc": "2.0", "id": "req-001", "result": {"kind": "task", "id": "t1"}}\n\n'
             'data: {"jsonrpc": "2.0", "id": "req-001", "result": {"kind": "status-update", "final": true}}\n\n'
         )
-        with respx.mock(assert_all_called=True) as router:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
             route = router.post(url__regex=r".*/invocations.*").mock(
-                return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
+                return_value=response_for_respx(
+                    httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
+                )
             )
             events = [
                 event
@@ -573,13 +580,13 @@ class TestStreaming:
             "id": "req-001",
             "result": {"kind": "artifact-update", "artifact": {"parts": [{"kind": "text", "text": "a\u2028b\u2029c"}]}},
         }
-        with respx.mock(assert_all_called=True) as router:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
             router.post(url__regex=r".*/invocations.*").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     200,
                     headers={"content-type": "text/event-stream"},
                     text=f"data: {json.dumps(event, ensure_ascii=False)}\n\n",
-                )
+                ))
             )
             events: Final = [
                 streamed
@@ -684,11 +691,11 @@ class TestStreamingContentType:
             BedrockAgentCoreA2AConfig,
         )
 
-        with respx.mock(assert_all_called=True) as router:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
             router.post(url__regex=r".*/invocations.*").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     200, headers=response_headers, content=b'{"jsonrpc": "2.0", "id": "req-001", "result": {}}'
-                )
+                ))
             )
             events = [
                 event

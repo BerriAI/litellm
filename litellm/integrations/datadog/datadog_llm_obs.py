@@ -14,7 +14,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm

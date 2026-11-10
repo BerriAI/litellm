@@ -14,7 +14,7 @@ from litellm.types.utils import CallTypes
 from ..base_utils import BaseLLMModelInfo
 
 if TYPE_CHECKING:
-    from httpx import URL, Headers, Response
+    from httpx2 import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesTerminalEvent
@@ -157,7 +157,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         """
         from urllib.parse import urlencode
 
-        import httpx
+        import httpx2 as httpx
 
         base: Final = base_target_url.rstrip("/")
         endpoint = endpoint.lstrip("/")

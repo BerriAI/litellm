@@ -11,7 +11,7 @@ from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import JSON_OBJECT, gateway_from_environment
 from integration._support.openai_wire import chat_reply

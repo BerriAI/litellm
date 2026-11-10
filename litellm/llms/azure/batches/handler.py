@@ -5,7 +5,7 @@ Azure Batches API Handler
 from collections.abc import Coroutine
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncOpenAI, OpenAI
 
 from litellm.llms.azure.azure import AsyncAzureOpenAI, AzureOpenAI

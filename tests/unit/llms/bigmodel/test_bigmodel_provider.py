@@ -8,12 +8,14 @@ from functools import partial
 from itertools import chain
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.types.responses import Response as OpenAIResponse
 from pydantic import JsonValue
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.bigmodel.chat.transformation import BigModelChatConfig
 from litellm.llms.bigmodel.common_utils import get_bigmodel_url
@@ -544,7 +546,7 @@ def test_openai_routes_bigmodel_does_not_serve_send_no_request(
     call: Callable[[], object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
-    upstream: Final = respx.route().mock(return_value=httpx.Response(200, json={}))
+    upstream: Final = respx.route().mock(return_value=response_for_respx(httpx.Response(200, json={})))
     with contextlib.suppress(Exception):
         call()
     assert not upstream.called
@@ -606,7 +608,9 @@ def test_prompt_too_long_and_unsafe_content_raise_the_errors_fallbacks_catch(
 async def test_streamed_prompt_too_long_and_unsafe_content_raise_the_errors_fallbacks_catch(
     code: int, error_class: type[Exception], is_async: bool
 ) -> None:
-    respx.post(f"{BASE}/api/v1/responses").respond(json={"code": code, "msg": "rejected by BigModel", "success": False})
+    respx.post(f"{BASE}/api/v1/responses").respond(
+        json={"code": code, "msg": "rejected by BigModel", "success": False}
+    )
     params: Final = {"model": f"bigmodel/{MODEL}", "input": "Hello", "stream": True}
 
     async def call() -> None:
@@ -726,7 +730,7 @@ async def test_responses_stream_labeled_json_without_a_length_yields_events_befo
     completed: Final = {"type": "response.completed", "sequence_number": 1, "response": response_payload()}
     gate: Final = asyncio.Event()
     respx.post(f"{BASE}/api/v1/responses").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "application/json"},
             stream=_GatedStream(
@@ -734,7 +738,7 @@ async def test_responses_stream_labeled_json_without_a_length_yields_events_befo
                 f"event: response.completed\ndata: {json.dumps(completed)}\n\n".encode(),
                 gate,
             ),
-        )
+        ))
     )
 
     stream: Final = await asyncio.wait_for(
@@ -1001,11 +1005,11 @@ async def test_messages_stream_preserves_native_events() -> None:
     ).encode()
     upstream: Final = _ByteChunks(tuple(content[index : index + 7] for index in range(0, len(content), 7)))
     respx.post(f"{BASE}/api/anthropic/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             stream=upstream,
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     stream: Final = await litellm.anthropic.messages.acreate(
         model=f"bigmodel/{MODEL}",

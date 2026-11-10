@@ -34,8 +34,8 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from dataclasses import dataclass
 from typing import Annotated, Final, Literal
 
-import httpx
 import httpx2
+import httpx2 as httpx
 from pydantic import ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 

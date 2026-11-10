@@ -9,11 +9,13 @@ import json
 from typing import Final
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.hosted_vllm.embedding.transformation import (
@@ -351,7 +353,7 @@ async def test_hosted_vllm_embedding_sends_model_and_parses_usage(
     respx_mock: respx.MockRouter, sync_mode: bool
 ) -> None:
     route: Final = respx_mock.post(_API_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -359,7 +361,7 @@ async def test_hosted_vllm_embedding_sends_model_and_parses_usage(
                 "model": _UPSTREAM_MODEL,
                 "usage": {"prompt_tokens": 4, "total_tokens": 4},
             },
-        )
+        ))
     )
 
     response: Final = await _embed(sync_mode, respx_mock, "hello vLLM")
@@ -377,7 +379,7 @@ async def test_hosted_vllm_embedding_preserves_order_for_multiple_inputs(
     respx_mock: respx.MockRouter, sync_mode: bool
 ) -> None:
     route: Final = respx_mock.post(_API_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -389,7 +391,7 @@ async def test_hosted_vllm_embedding_preserves_order_for_multiple_inputs(
                 "model": _UPSTREAM_MODEL,
                 "usage": {"prompt_tokens": 9, "total_tokens": 9},
             },
-        )
+        ))
     )
     inputs: Final = ["first sentence", "second sentence", "third sentence"]
 
@@ -402,7 +404,7 @@ async def test_hosted_vllm_embedding_preserves_order_for_multiple_inputs(
 
 def test_hosted_vllm_embedding_sends_api_key_as_bearer_token(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_API_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -410,7 +412,7 @@ def test_hosted_vllm_embedding_sends_api_key_as_bearer_token(respx_mock: respx.M
                 "model": _UPSTREAM_MODEL,
                 "usage": {"prompt_tokens": 2, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = litellm.embedding(
@@ -428,7 +430,7 @@ def test_hosted_vllm_embedding_sends_api_key_as_bearer_token(respx_mock: respx.M
 
 def test_hosted_vllm_embedding_repeats_identical_input_and_result(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_API_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -436,7 +438,7 @@ def test_hosted_vllm_embedding_repeats_identical_input_and_result(respx_mock: re
                 "model": _UPSTREAM_MODEL,
                 "usage": {"prompt_tokens": 8, "total_tokens": 8},
             },
-        )
+        ))
     )
     input_text: Final = "repeated embedding input"
 

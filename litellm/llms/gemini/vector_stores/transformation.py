@@ -8,7 +8,7 @@ and Google Gemini's File Search API.
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import join_api_base

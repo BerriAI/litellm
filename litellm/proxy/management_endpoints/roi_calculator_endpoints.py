@@ -10,7 +10,7 @@ from typing import (
     cast,  # noqa: TID251  # PrismaWrapper dynamically delegates database methods
 )
 
-import httpx
+import httpx2 as httpx
 from apscheduler.schedulers.asyncio import (  # pyright: ignore[reportMissingTypeStubs]  # no upstream stubs
     AsyncIOScheduler,
 )

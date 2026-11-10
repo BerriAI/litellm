@@ -25,10 +25,10 @@ from typing import (
 )
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-import httpx
+import httpx2 as httpx
 from h2.events import ConnectionTerminated
-from httpx import USE_CLIENT_DEFAULT
-from httpx._types import FileContent
+from httpx2 import USE_CLIENT_DEFAULT
+from httpx2._types import FileContent
 from openai.types.file_deleted import FileDeleted
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
@@ -6319,7 +6319,7 @@ class BaseLLMHTTPHandler:
         Used when an interceptor forced stream=False to run the agentic loop on
         the non-streaming path, but the caller originally asked for streaming.
         """
-        import httpx
+        import httpx2 as httpx
 
         from litellm.responses.streaming_iterator import (
             MockResponsesAPIStreamingIterator,

@@ -8,7 +8,7 @@ to the cooldown set.
 
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

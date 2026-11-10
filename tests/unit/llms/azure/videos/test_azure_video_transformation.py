@@ -4,7 +4,7 @@ import sys
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock, patch, Mock, mock_open
 import pytest
-import httpx
+import httpx2 as httpx
 
 # Add the parent directory to the system path
 sys.path.insert(

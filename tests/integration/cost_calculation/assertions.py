@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import JSON_OBJECT
 from integration.cost_calculation.conftest import (
     CostBreakdown,

@@ -1,10 +1,11 @@
 import json
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.types.utils import LiteLLMFineTuningJob
 
@@ -39,7 +40,9 @@ PROVIDER_JOB: Final = {
 async def test_create_sends_the_model_without_the_provider_prefix(
     monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str, route: str, prefixed: bool
 ) -> None:
-    sent: Final = respx.post(url__startswith=route).mock(return_value=httpx.Response(200, json=PROVIDER_JOB))
+    sent: Final = respx.post(url__startswith=route).mock(
+        return_value=response_for_respx(httpx.Response(200, json=PROVIDER_JOB))
+    )
 
     async with httpx.AsyncClient() as session:
         monkeypatch.setattr(litellm, "aclient_session", session)
@@ -73,7 +76,9 @@ async def test_create_with_api_version_reaches_the_provider_and_only_azure_gets_
     sent_api_version: str | None,
     is_async: bool,
 ) -> None:
-    sent: Final = respx.post(url__startswith=route).mock(return_value=httpx.Response(200, json=PROVIDER_JOB))
+    sent: Final = respx.post(url__startswith=route).mock(
+        return_value=response_for_respx(httpx.Response(200, json=PROVIDER_JOB))
+    )
     request: Final = {
         "model": BASE_MODEL,
         "training_file": "file-abc123",

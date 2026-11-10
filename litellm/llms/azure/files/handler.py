@@ -1,7 +1,7 @@
 from collections.abc import Coroutine
 from typing import Any, Final, cast
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from openai.types.file_deleted import FileDeleted
 

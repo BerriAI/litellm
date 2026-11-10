@@ -2,7 +2,7 @@ import weakref
 from collections.abc import AsyncIterator, Callable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 HTTP2_STREAMS_PER_CONNECTION: Final = 100
 

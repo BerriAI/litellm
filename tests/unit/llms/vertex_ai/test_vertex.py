@@ -6,8 +6,9 @@ import sys
 from types import SimpleNamespace
 from typing import Final
 
-import httpx
-import respx
+import httpx2 as httpx
+
+from tests._support import respx_httpx2 as respx
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 
@@ -20,6 +21,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import Router, get_optional_params
 from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
@@ -1576,7 +1578,7 @@ def test_litellm_completion_vertex_exception(
         "locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             400,
             json={
                 "error": {
@@ -1585,7 +1587,7 @@ def test_litellm_completion_vertex_exception(
                     "status": "INVALID_ARGUMENT",
                 }
             },
-        )
+        ))
     )
 
     with pytest.raises(litellm.BadRequestError) as exc_info:
@@ -1611,7 +1613,7 @@ def test_router_completion_vertex_exception(
         "locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             429,
             json={
                 "error": {
@@ -1620,7 +1622,7 @@ def test_router_completion_vertex_exception(
                     "status": "RESOURCE_EXHAUSTED",
                 }
             },
-        )
+        ))
     )
     router: Final = Router(
         model_list=[
@@ -1677,7 +1679,7 @@ async def test_completion_fine_tuned_model(
         "locations/us-central1/endpoints/4965075652664360960:generateContent"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json=_vertex_gemini_response("A canvas vast"))
+        return_value=response_for_respx(httpx.Response(200, json=_vertex_gemini_response("A canvas vast")))
     )
 
     response: Final = await litellm.acompletion(
@@ -1718,7 +1720,7 @@ def test_gemini_finetuned_endpoint(
         "locations/us-central1/endpoints/4965075652664360960:generateContent"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json=_vertex_gemini_response())
+        return_value=response_for_respx(httpx.Response(200, json=_vertex_gemini_response()))
     )
 
     litellm.completion(
@@ -1746,7 +1748,7 @@ def test_gemini_nullable_object_tool_schema_httpx(
         "publishers/google/models/gemini-3.5-flash:generateContent"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json=_vertex_gemini_response())
+        return_value=response_for_respx(httpx.Response(200, json=_vertex_gemini_response()))
     )
 
     litellm.completion(
@@ -1830,7 +1832,7 @@ def test_gemini_pro_grounding(
         "locations/us-central1/publishers/google/models/gemini-1.0-pro-001:generateContent"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "candidates": [
@@ -1859,7 +1861,7 @@ def test_gemini_pro_grounding(
                     "totalTokenCount": 3,
                 },
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -1915,7 +1917,7 @@ def test_gemini_pro_httpx_custom_api_base(
     response_body: dict[str, object],
 ) -> None:
     route: Final = respx_mock.post(f"{_CUSTOM_API_BASE}:{endpoint}").mock(
-        return_value=httpx.Response(200, json=response_body)
+        return_value=response_for_respx(httpx.Response(200, json=response_body))
     )
 
     response: Final = litellm.completion(
@@ -2011,7 +2013,7 @@ def test_signed_s3_url_with_format(
         "locations/us-central1/publishers/google/models/gemini-2.0-flash-001:generateContent"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json=_vertex_gemini_response())
+        return_value=response_for_respx(httpx.Response(200, json=_vertex_gemini_response()))
     )
 
     litellm.completion(
@@ -2061,7 +2063,7 @@ async def test_vertex_ai_deepseek(
         "https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/"
         "locations/us-central1/endpoints/openapi/chat/completions"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "choices": [
@@ -2078,7 +2080,7 @@ async def test_vertex_ai_deepseek(
                 },
                 "model": "deepseek-ai/deepseek-r1-0528-maas",
             },
-        )
+        ))
     )
 
     await litellm.acompletion(
@@ -2106,7 +2108,7 @@ def test_vertex_ai_response_id(
         "locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "responseId": "vertex_ai_response_123",
@@ -2125,7 +2127,7 @@ def test_vertex_ai_response_id(
                     "totalTokenCount": 18,
                 },
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -2154,7 +2156,7 @@ async def test_vertexai_embedding_finetuned(
         "locations/us-central1/endpoints/1004708436694269952:predict"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "predictions": [
@@ -2162,7 +2164,7 @@ async def test_vertexai_embedding_finetuned(
                     [[-0.000431762, -0.04416759, -0.03443353]],
                 ]
             },
-        )
+        ))
     )
     inputs: Final = ["good morning from litellm", "this is another item"]
 
@@ -2209,7 +2211,7 @@ async def test_vertexai_model_garden_model_completion(
         {"role": "user", "content": "What is your name?"},
     ]
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chat-vertex-model-garden",
@@ -2229,7 +2231,7 @@ async def test_vertexai_model_garden_model_completion(
                     "total_tokens": 5,
                 },
             },
-        )
+        ))
     )
 
     response: Final = await litellm.acompletion(
@@ -2291,7 +2293,7 @@ async def test_partner_models_httpx_ai21(
         }
     ]
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chat-ai21",
@@ -2322,7 +2324,7 @@ async def test_partner_models_httpx_ai21(
                 },
                 "model": "jamba-1.5-mini@001",
             },
-        )
+        ))
     )
 
     response: Final = await litellm.acompletion(
@@ -2370,9 +2372,9 @@ async def test_gemini_context_caching_anthropic_format(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     cache_list_route: Final = respx_mock.get(
         url__regex=r".*cachedContents.*"
-    ).mock(return_value=httpx.Response(200, json={"cachedContents": []}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json={"cachedContents": []})))
     cache_route: Final = respx_mock.post(url__regex=r".*cachedContents.*").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "name": "cachedContents/test-cache",
@@ -2380,11 +2382,11 @@ async def test_gemini_context_caching_anthropic_format(
                 "expireTime": "2024-08-26T22:36:15Z",
                 "usageMetadata": {"totalTokenCount": 323383},
             },
-        )
+        ))
     )
     generation_route: Final = respx_mock.post(
         url__regex=r".*generateContent.*"
-    ).mock(return_value=httpx.Response(200, json=_vertex_gemini_response()))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_vertex_gemini_response())))
     messages: Final = [
         {
             "role": "system",
@@ -2486,7 +2488,7 @@ async def test_anthropic_message_via_anthropic_messages(
     route: Final = respx_mock.post(
         url__regex=r".*claude-3-5-sonnet@20240620.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg-vertex",
@@ -2497,7 +2499,7 @@ async def test_anthropic_message_via_anthropic_messages(
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 4, "output_tokens": 5},
             },
-        )
+        ))
     )
     messages: Final = [{"role": "user", "content": "List 5 cookie recipes"}]
     call_params: Final = {
@@ -2541,7 +2543,7 @@ def test_gemini_fine_tuned_model_request_consistency(
 ) -> None:
     route: Final = respx_mock.post(
         url__regex=r".*publishers/google/models/.*:generateContent"
-    ).mock(return_value=httpx.Response(200, json=_vertex_gemini_response()))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_vertex_gemini_response())))
     messages: Final = [
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What is the weather?"},
@@ -2660,7 +2662,7 @@ def test_gemini_pro_json_schema_args_sent_httpx(
     enforce_validation: bool,
 ) -> None:
     route: Final = respx_mock.post(url__regex=rf".*/{re.escape(endpoint)}$").mock(
-        return_value=httpx.Response(200, json=_recipes_response(model, invalid_response))
+        return_value=response_for_respx(httpx.Response(200, json=_recipes_response(model, invalid_response)))
     )
     call: Final = functools.partial(
         litellm.completion,
@@ -2721,7 +2723,7 @@ def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
     monkeypatch.setattr(litellm, "enable_json_schema_validation", enforce_validation)
     route: Final = respx_mock.post(url__regex=rf".*/{re.escape(endpoint)}$").mock(
-        return_value=httpx.Response(200, json=_recipes_response(model, invalid_response))
+        return_value=response_for_respx(httpx.Response(200, json=_recipes_response(model, invalid_response)))
     )
     call: Final = functools.partial(
         litellm.completion,
@@ -2783,7 +2785,7 @@ async def test_gemini_pro_json_schema_httpx_content_policy_error(
     )
     route: Final = respx_mock.post(
         url__regex=r".*gemini-2.5-flash-lite:generateContent"
-    ).mock(return_value=httpx.Response(200, json=response_body))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=response_body)))
 
     response: Final = await litellm.acompletion(
         model="vertex_ai_beta/gemini-2.5-flash-lite",
@@ -2808,7 +2810,7 @@ def test_litellm_api_base(
 ) -> None:
     monkeypatch.setattr(litellm, "api_base", "https://litellm.com")
     route: Final = respx_mock.post(url__regex=r"https://litellm\.com.*").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json=(
                 _vertex_gemini_response()
@@ -2819,7 +2821,7 @@ def test_litellm_api_base(
                     ]
                 }
             ),
-        )
+        ))
     )
 
     if route_type == "completion":
@@ -2854,7 +2856,7 @@ def test_vertex_anthropic_completion(
     route: Final = respx_mock.post(
         url__regex=r".*claude-sonnet-4-6@default.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg-vertex",
@@ -2872,7 +2874,7 @@ def test_vertex_anthropic_completion(
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 2, "output_tokens": 3},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -2913,7 +2915,7 @@ def test_vertex_gemini_streaming_returns_text_and_finish_reason(
             r"gemini-2\.5-flash-lite:streamGenerateContent.*"
         )
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=(
                 'data: {"candidates":[{"content":{"parts":[{"text":"Vertex streams "}],'
@@ -2922,7 +2924,7 @@ def test_vertex_gemini_streaming_returns_text_and_finish_reason(
                 '"role":"model"},"index":0,"finishReason":"STOP"}]}\n\n'
             ),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
 
     stream: Final = litellm.completion(

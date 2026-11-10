@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -32,7 +33,7 @@ def test_hosted_vllm_resolves_vllm_passthrough_config() -> None:
 @pytest.mark.asyncio
 async def test_allm_passthrough_route_hosted_vllm_sends_normalized_model(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        return_value=response_for_respx(httpx.Response(200, json={"ok": True}))
     )
     client: Final = AsyncHTTPHandler()
     response: Final = await allm_passthrough_route(
@@ -56,7 +57,7 @@ async def test_allm_passthrough_route_hosted_vllm_sends_normalized_model(respx_m
 @pytest.mark.asyncio
 async def test_allm_passthrough_route_hosted_vllm_sends_deployment_api_key(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        return_value=response_for_respx(httpx.Response(200, json={"ok": True}))
     )
     response: Final = await allm_passthrough_route(
         method="POST",
@@ -78,7 +79,7 @@ async def test_allm_passthrough_route_hosted_vllm_reaches_v1_paths_under_an_api_
     respx_mock: respx.MockRouter, endpoint: str
 ) -> None:
     route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        return_value=response_for_respx(httpx.Response(200, json={"ok": True}))
     )
     response: Final = await allm_passthrough_route(
         method="POST",
@@ -100,7 +101,7 @@ async def test_allm_passthrough_route_hosted_vllm_sends_no_auth_for_a_keyless_de
     monkeypatch.setenv("VLLM_API_KEY", "sk-vllm-route-only")
     monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
     route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        return_value=response_for_respx(httpx.Response(200, json={"ok": True}))
     )
     response: Final = await allm_passthrough_route(
         method="POST",
@@ -129,7 +130,7 @@ async def test_allm_passthrough_route_keyless_hosted_vllm_without_api_base_sends
     monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
     monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
     route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        return_value=response_for_respx(httpx.Response(200, json={"ok": True}))
     )
     response: Final = await allm_passthrough_route(
         method="POST",
@@ -154,7 +155,7 @@ async def test_allm_passthrough_route_keyless_hosted_vllm_matches_the_vllm_api_b
     monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
     monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
     route: Final = respx_mock.post(url__regex=rf"^{_API_BASE}/+v1/chat/completions$").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        return_value=response_for_respx(httpx.Response(200, json={"ok": True}))
     )
     response: Final = await allm_passthrough_route(
         method="POST",
@@ -178,7 +179,7 @@ async def test_allm_passthrough_route_unusable_vllm_api_key_sends_no_authorizati
     monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
     monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
     route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        return_value=response_for_respx(httpx.Response(200, json={"ok": True}))
     )
     response: Final = await allm_passthrough_route(
         method="POST",
@@ -213,7 +214,7 @@ async def test_allm_passthrough_route_hosted_vllm_on_the_vllm_api_base_sends_its
     monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
     monkeypatch.setenv("HOSTED_VLLM_API_KEY", "sk-hosted-env")
     route: Final = respx_mock.post(f"{_API_BASE}/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        return_value=response_for_respx(httpx.Response(200, json={"ok": True}))
     )
     response: Final = await allm_passthrough_route(
         method="POST",

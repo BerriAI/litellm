@@ -5,12 +5,14 @@ from types import ModuleType, SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 import responses
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm._version import version
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -131,7 +133,9 @@ def test_completions_uses_databricks_sdk_if_api_key_and_base_not_specified(
         "system_fingerprint": None,
     }
     url: Final = f"{SDK_HOST}/serving-endpoints/chat/completions"
-    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=upstream_response))
+    route: Final = respx_mock.post(url).mock(
+        return_value=response_for_respx(httpx.Response(200, json=upstream_response))
+    )
     messages: Final = [{"role": "user", "content": "How are you?"}]
 
     response: Final = litellm.completion(
@@ -182,7 +186,9 @@ def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(
         },
     }
     url: Final = f"{SDK_HOST}/serving-endpoints/embeddings"
-    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=upstream_response))
+    route: Final = respx_mock.post(url).mock(
+        return_value=response_for_respx(httpx.Response(200, json=upstream_response))
+    )
     inputs: Final = ["Hello", "World"]
 
     response: Final = litellm.embedding(

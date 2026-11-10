@@ -11,7 +11,7 @@ to skip it.
 import asyncio
 from typing import Any, Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 

@@ -11,10 +11,11 @@ from typing import Final
 
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.workload_identity import _workload_identity_auth
@@ -1134,7 +1135,9 @@ async def test_openai_moderation_sends_the_federated_bearer_when_only_workload_i
     monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
     _workload_identity_auth.cache_clear()
     respx.post("https://auth.openai.com/oauth/token").mock(
-        return_value=httpx.Response(200, json={"access_token": "guardrail-bearer", "expires_in": 3600})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"access_token": "guardrail-bearer", "expires_in": 3600})
+        )
     )
     endpoint: Final = _ModerationsEndpointThatRecordsTheAuthorization()
     http_client: Final = AsyncHTTPHandler()
@@ -1169,7 +1172,9 @@ async def test_openai_moderation_federates_with_the_identity_in_its_own_guardrai
     monkeypatch.setenv("GUARDRAIL_IDENTITY_PROVIDER_ID", "idp_guardrail_config")
     _workload_identity_auth.cache_clear()
     exchange: Final = respx.post("https://auth.openai.com/oauth/token").mock(
-        return_value=httpx.Response(200, json={"access_token": "guardrail-config-bearer", "expires_in": 3600})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"access_token": "guardrail-config-bearer", "expires_in": 3600})
+        )
     )
     endpoint: Final = _ModerationsEndpointThatRecordsTheAuthorization()
     http_client: Final = AsyncHTTPHandler()

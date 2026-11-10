@@ -24,8 +24,8 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 import base64
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, json_contains

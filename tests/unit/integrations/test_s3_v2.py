@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.s3_v2 import S3BatchUploadError, S3Logger
@@ -30,6 +30,7 @@ from collections import defaultdict
 from litellm._logging import verbose_logger
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 _real_sleep: Final = asyncio.sleep
@@ -2817,7 +2818,9 @@ def test_prompts_only_constructor_kwarg_applies_to_sync_upload(monkeypatch: pyte
     assert element is not None
     assert payload["response"] == _chat_payload()["response"]
 
-    put_route = respx.put(url__regex=r"https://test-bucket\.s3\..*").mock(return_value=httpx.Response(200))
+    put_route = respx.put(url__regex=r"https://test-bucket\.s3\..*").mock(
+        return_value=response_for_respx(httpx.Response(200))
+    )
     logger.upload_data_to_s3(element)
 
     body = json.loads(put_route.calls.last.request.content)

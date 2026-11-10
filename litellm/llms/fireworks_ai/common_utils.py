@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from httpx import Headers
+from httpx2 import Headers
 
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.secret_managers.main import get_secret_str

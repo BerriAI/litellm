@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, call
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import HTTPException
 from prisma import Base64, models as prisma_models

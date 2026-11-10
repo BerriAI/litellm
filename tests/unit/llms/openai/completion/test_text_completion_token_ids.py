@@ -4,11 +4,14 @@ Tests the fix for https://github.com/BerriAI/litellm/issues/17118
 """
 
 
+import httpx2 as httpx
 import pytest
-import respx
-from httpx import Response
+
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
 
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import text_completion
 
@@ -53,7 +56,7 @@ class TestTextCompletionTokenIds:
 
         # Mock the OpenAI completions endpoint
         respx.post("https://api.openai.com/v1/completions").mock(
-            return_value=Response(200, json=text_completion_response)
+            return_value=response_for_respx(httpx.Response(200, json=text_completion_response))
         )
 
         response = text_completion(
@@ -97,7 +100,7 @@ class TestTextCompletionTokenIds:
         }
 
         respx.post("https://api.openai.com/v1/completions").mock(
-            return_value=Response(200, json=batch_response)
+            return_value=response_for_respx(httpx.Response(200, json=batch_response))
         )
 
         response = text_completion(

@@ -5,7 +5,7 @@ from operator import attrgetter
 from types import MappingProxyType
 from typing import Final, TypeAlias, cast, get_type_hints
 
-import httpx
+import httpx2 as httpx
 import pytest
 from aiohttp import ClientSession
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI

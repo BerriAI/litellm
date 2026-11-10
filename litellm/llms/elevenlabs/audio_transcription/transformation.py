@@ -5,7 +5,7 @@ Translates from OpenAI's `/v1/audio/transcriptions` to ElevenLabs's `/v1/speech-
 from collections.abc import Iterable, Mapping
 from typing import Final, Protocol
 
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

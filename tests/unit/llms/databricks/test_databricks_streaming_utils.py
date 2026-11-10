@@ -10,10 +10,11 @@ set. `chunk_parser` previously did `choices[0]` unconditionally, raising
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 
@@ -122,7 +123,9 @@ def test_stream_usage_after_finish_chunk_reaches_the_caller(respx_mock: respx.Mo
         )
     )
     respx_mock.post("http://upstream.test/chat/completions").mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        )
     )
 
     stream: Final = litellm.completion(

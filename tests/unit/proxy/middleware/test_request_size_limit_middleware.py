@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from starlette.responses import JSONResponse
 from starlette.testclient import TestClient

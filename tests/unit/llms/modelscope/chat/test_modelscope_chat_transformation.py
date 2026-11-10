@@ -11,10 +11,11 @@ import os
 
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import completion
 from litellm.llms.modelscope.chat.transformation import ModelScopeChatConfig
@@ -303,7 +304,7 @@ class TestModelScopeConfig:
                 },
             )
 
-        respx_mock.post(f"{api_base}/chat/completions").mock(side_effect=capture_request)
+        respx_mock.post(f"{api_base}/chat/completions").mock(side_effect=side_effect_for_respx(capture_request))
 
         response = completion(
             model=f"modelscope/{DEFAULT_MODEL}",
@@ -358,7 +359,7 @@ class TestModelScopeConfig:
                 },
             )
 
-        respx_mock.post(f"{api_base}/chat/completions").mock(side_effect=capture_request)
+        respx_mock.post(f"{api_base}/chat/completions").mock(side_effect=side_effect_for_respx(capture_request))
 
         response = completion(
             model=f"modelscope/{DEFAULT_MODEL}",

@@ -1,23 +1,24 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 
 def test_firecrawl_search_request_body(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FIRECRAWL_API_KEY", "test-api-key")
     route: Final = respx_mock.post("https://api.firecrawl.dev/v2/search").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "success": True,
                 "data": {"web": [{"title": "Test Title", "url": "https://example.com", "markdown": "Test content"}]},
             },
-        )
+        ))
     )
 
     response: Final = litellm.search(query="test query", search_provider="firecrawl", max_results=10, country="US")

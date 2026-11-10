@@ -4,8 +4,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 
@@ -83,7 +82,7 @@ def test_coralbricks_endpoint_support_matches_providers_json():
 
 
 def test_coralbricks_chat_completion_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://inference.coralbricks.ai/v1/chat/completions").respond(
             200,
             json={
@@ -118,7 +117,7 @@ def test_coralbricks_chat_completion_request():
 
 
 def test_coralbricks_responses_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://inference.coralbricks.ai/v1/responses").respond(
             200,
             json={
@@ -161,7 +160,7 @@ def test_coralbricks_responses_request():
 async def test_coralbricks_anthropic_messages_request(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://inference.coralbricks.ai/v1/messages").respond(
             200,
             json={
@@ -229,7 +228,7 @@ def _expected_cost(
 
 def test_coralbricks_chat_completion_cost_includes_cache_write_and_free_cached_read():
     rates: Final = _coralbricks_rates()
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post("https://inference.coralbricks.ai/v1/chat/completions").respond(
             200,
             json={
@@ -278,7 +277,7 @@ def test_coralbricks_chat_completion_cost_includes_cache_write_and_free_cached_r
 
 def test_coralbricks_responses_cost_includes_cache_write_and_free_cached_read():
     rates: Final = _coralbricks_rates()
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post("https://inference.coralbricks.ai/v1/responses").respond(
             200,
             json={
@@ -334,7 +333,7 @@ async def test_coralbricks_anthropic_messages_cost_includes_cache_write_and_free
     rates: Final = _coralbricks_rates()
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post("https://inference.coralbricks.ai/v1/messages").respond(
             200,
             json={
@@ -412,7 +411,7 @@ def test_coralbricks_cost_map_rows_declare_same_endpoints_as_providers_json():
 
 
 def _billed_chat_cost(model_id: str) -> float:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post("https://inference.coralbricks.ai/v1/chat/completions").respond(
             200,
             json={
@@ -505,7 +504,7 @@ def test_coralbricks_streaming_chat_cost_includes_cache_write_and_free_cached_re
         + "\n\n"
         + "data: [DONE]\n\n"
     )
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://inference.coralbricks.ai/v1/chat/completions").respond(
             200, headers={"content-type": "text/event-stream"}, content=stream_body
         )

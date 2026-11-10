@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment, object_value, string_value

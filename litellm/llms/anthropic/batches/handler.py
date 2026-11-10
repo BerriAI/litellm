@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,

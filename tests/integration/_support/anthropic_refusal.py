@@ -454,7 +454,7 @@ class Ledger:
 
 
 _HIDDEN_PARAMS_PROBE: Final = """
-import httpx
+import httpx2 as httpx
 from litellm.integrations.custom_logger import CustomLogger
 
 

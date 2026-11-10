@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
@@ -60,7 +59,7 @@ def test_api_base_alone_selects_the_provider_and_keeps_an_explicit_key(monkeypat
 
 
 def test_chat_forwards_reasoning_effort_and_bills_cached_tokens(local_model_cost_map: None) -> None:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(CHAT_URL).respond(
             200,
             json=_chat_response(
@@ -111,7 +110,7 @@ def test_legacy_fields_the_gateway_rejects_are_refused_or_dropped(
             **{param: value},
         )
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(CHAT_URL).respond(
             200, json=_chat_response({"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
         )
@@ -137,7 +136,7 @@ def test_legacy_fields_the_gateway_rejects_are_refused_or_dropped(
 def test_params_the_gateway_accepts_are_forwarded_without_drop_params(
     local_model_cost_map: None, params: dict[str, object]
 ) -> None:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(CHAT_URL).respond(
             200, json=_chat_response({"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
         )
@@ -166,7 +165,7 @@ def test_drop_params_drops_a_reasoning_effort_level_the_model_does_not_declare(
     local_model_cost_map: None, effort: str | dict[str, str], drop_params: bool, forwarded: str | None
 ) -> None:
     assert "high" not in litellm.model_cost["clf_ai_gateway/qwen3.8-27b"]["reasoning_effort_levels"]
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(CHAT_URL).respond(
             200, json=_chat_response({"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
         )
@@ -181,7 +180,7 @@ def test_drop_params_drops_a_reasoning_effort_level_the_model_does_not_declare(
 
 
 def test_a_reasoning_effort_dict_without_a_level_is_refused_unless_dropped(local_model_cost_map: None) -> None:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(CHAT_URL).respond(
             200, json=_chat_response({"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2})
         )

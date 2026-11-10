@@ -3,7 +3,7 @@ import importlib
 import json
 import time
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

@@ -9,7 +9,7 @@ API Reference: https://platform.stability.ai/docs/api-reference
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import join_api_base

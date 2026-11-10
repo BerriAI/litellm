@@ -25,7 +25,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-import httpx
+import httpx2 as httpx
 
 
 # ---------------------------------------------------------------------------

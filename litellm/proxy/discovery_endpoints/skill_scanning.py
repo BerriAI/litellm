@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from pydantic import ValidationError
 

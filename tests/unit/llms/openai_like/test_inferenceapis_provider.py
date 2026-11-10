@@ -1,10 +1,9 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -76,7 +75,7 @@ def test_inferenceapis_cost_map_rows_only_list_registered_endpoints():
 
 
 def test_inferenceapis_chat_completion_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(f"{INFERENCEAPIS_API_BASE}/chat/completions").respond(
             200, json=_chat_completion_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
         )
@@ -101,7 +100,7 @@ def test_inferenceapis_chat_completion_request():
 def test_inferenceapis_chat_completion_reads_key_and_base_from_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("INFERENCEAPIS_API_KEY", "inferenceapis-env-key")
     monkeypatch.setenv("INFERENCEAPIS_API_BASE", "https://inferenceapis.internal.example/v1")
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://inferenceapis.internal.example/v1/chat/completions").respond(
             200, json=_chat_completion_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
         )
@@ -112,7 +111,7 @@ def test_inferenceapis_chat_completion_reads_key_and_base_from_env(monkeypatch: 
 
 
 def test_inferenceapis_chat_completion_sends_provider_specific_params_in_the_body():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(f"{INFERENCEAPIS_API_BASE}/chat/completions").respond(
             200, json=_chat_completion_body({"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7})
         )
@@ -131,7 +130,7 @@ def test_inferenceapis_chat_completion_sends_provider_specific_params_in_the_bod
 
 
 def test_inferenceapis_context_length_error_raises_context_window_exceeded():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(f"{INFERENCEAPIS_API_BASE}/chat/completions").respond(
             400,
             json={
@@ -152,7 +151,7 @@ def test_inferenceapis_context_length_error_raises_context_window_exceeded():
 
 
 def test_inferenceapis_responses_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(f"{INFERENCEAPIS_API_BASE}/responses").respond(
             200,
             json={
@@ -190,7 +189,7 @@ def test_inferenceapis_responses_request():
 
 @pytest.mark.asyncio
 async def test_inferenceapis_anthropic_messages_request_is_sent_natively():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(f"{INFERENCEAPIS_API_BASE}/messages").respond(
             200,
             json={
@@ -224,7 +223,7 @@ async def test_inferenceapis_anthropic_messages_request_is_sent_natively():
 
 @pytest.mark.asyncio
 async def test_inferenceapis_anthropic_messages_context_length_error_raises_context_window_exceeded():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(f"{INFERENCEAPIS_API_BASE}/messages").respond(
             400,
             json={
@@ -248,7 +247,7 @@ async def test_inferenceapis_anthropic_messages_context_length_error_raises_cont
 
 def test_inferenceapis_chat_completion_cost_bills_cached_tokens_at_cache_read_rate():
     row: Final = litellm.model_cost[INFERENCEAPIS_MODEL]
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         upstream.post(f"{INFERENCEAPIS_API_BASE}/chat/completions").respond(
             200,
             json=_chat_completion_body(

@@ -15,12 +15,12 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Optional, TypeAlias, TypedDict, TypeVar
 
 import certifi
-import httpx
+import httpx2 as httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
-from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
-from httpx._config import DEFAULT_LIMITS
-from httpx._types import CertTypes, RequestFiles
-from httpx._utils import get_environment_proxies
+from httpx2 import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
+from httpx2._config import DEFAULT_LIMITS
+from httpx2._types import CertTypes, RequestFiles
+from httpx2._utils import get_environment_proxies
 from pydantic import TypeAdapter
 
 import litellm

@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value

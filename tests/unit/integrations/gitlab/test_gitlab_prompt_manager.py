@@ -158,7 +158,7 @@ def test_gitlab_client_get_file_content_not_found(mock_get):
 @patch("litellm.integrations.gitlab.gitlab_client.HTTPHandler.get")
 def test_gitlab_client_get_file_content_access_denied(mock_get):
     """403 raises a helpful message."""
-    import httpx
+    import httpx2 as httpx
 
     resp = MagicMock()
     resp.status_code = 403
@@ -175,7 +175,7 @@ def test_gitlab_client_get_file_content_access_denied(mock_get):
 @patch("litellm.integrations.gitlab.gitlab_client.HTTPHandler.get")
 def test_gitlab_client_get_file_content_auth_failed(mock_get):
     """401 raises auth error."""
-    import httpx
+    import httpx2 as httpx
 
     resp = MagicMock()
     resp.status_code = 401

@@ -1,9 +1,10 @@
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 
@@ -13,9 +14,9 @@ def test_base_http_handler_sends_a_caller_extra_body_over_the_request_unchanged(
     monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "True")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route = respx_mock.post(url__regex=r"https://api\.deepseek\.com/.*chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json={"id": "c", "object": "chat.completion", "created": 0, "model": "m", "choices": []}
-        )
+        ))
     )
 
     litellm.completion(

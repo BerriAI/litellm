@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Final
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue
 
 import litellm
@@ -26,6 +27,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicFinishReason
 from litellm.types.router import GenericLiteLLMParams
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.anthropic.test_anthropic_wif import (
     ScriptedPoster,
     make_engine,
@@ -451,7 +453,7 @@ async def test_a_json_provider_gets_safeguards_and_the_beta_together_unless_drop
     drop_params the request transform itself drops the beta along with the field."""
     import json
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -703,9 +705,9 @@ def test_a_first_party_messages_request_never_fetches_the_remote_beta_headers_co
     monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
     monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
 
-    with respx.mock(assert_all_called=False) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as router:
         remote_config: Final = router.get(litellm.anthropic_beta_headers_url).mock(
-            return_value=httpx.Response(200, json={})
+            return_value=response_for_respx(httpx.Response(200, json={}))
         )
         request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
             model="claude-opus-4-8",

@@ -10,8 +10,8 @@ from math import log
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 from pydantic import BaseModel, Field, StrictBool, StrictInt, StrictStr, TypeAdapter, ValidationError
 
 import litellm

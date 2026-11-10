@@ -4,7 +4,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import override
 

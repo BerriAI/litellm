@@ -5,7 +5,7 @@ Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm

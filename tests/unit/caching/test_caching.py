@@ -9,10 +9,11 @@ from datetime import timedelta
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import acompletion, aembedding, completion, embedding
 import litellm.caching.redis_cache as redis_cache_module
@@ -1125,7 +1126,11 @@ def test_enable_cache_serves_a_repeated_bedrock_titan_embedding_from_the_local_c
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     route: Final = respx.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
-    ).mock(return_value=httpx.Response(200, json={"embedding": [0.25, -0.5, 0.75], "inputTextTokenCount": 6}))
+    ).mock(
+        return_value=response_for_respx(
+            httpx.Response(200, json={"embedding": [0.25, -0.5, 0.75], "inputTextTokenCount": 6})
+        )
+    )
     request: Final = {
         "model": "bedrock/amazon.titan-embed-text-v2:0",
         "input": "good morning from litellm, attempting to embed data",

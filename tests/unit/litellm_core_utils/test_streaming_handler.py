@@ -16,7 +16,7 @@ from types import CodeType, FrameType, MappingProxyType, TracebackType
 from typing import AsyncIterator, Callable, Final, Iterator, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk
@@ -1294,7 +1294,7 @@ async def test_bridged_stream_mid_stream_fallback_error_is_rebuilt_around_the_pr
 @pytest.mark.asyncio
 @pytest.mark.parametrize("merge_reasoning", [True, False], ids=["merged_into_content", "kept_as_reasoning"])
 async def test_mid_stream_break_after_reasoning_disqualifies_continuation(logging_obj: Logging, merge_reasoning: bool):
-    import httpx
+    import httpx2 as httpx
 
     from litellm.exceptions import MidStreamFallbackError
 
@@ -1979,7 +1979,7 @@ import sys
 
 sys.path.insert(0, sys.argv[1])
 
-import httpx
+import httpx2 as httpx
 from openai import OpenAI
 
 import litellm
@@ -2124,7 +2124,7 @@ async def test_async_streaming_read_timeout_triggers_midstream_fallback(
     which bypassed _handle_stream_fallback_error and prevented stream_timeout
     from triggering fallbacks the way connection-phase timeout does.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.exceptions import MidStreamFallbackError
 
@@ -5773,7 +5773,7 @@ async def test_transport_read_error_after_finish_reason_ends_stream_gracefully(
     logging_obj: Logging,
 ):
     """A trailing connection reset after the provider's finish chunk must not fail the stream."""
-    import httpx
+    import httpx2 as httpx
 
     completion_stream = TransportErrorAfterChunksIterator(
         model_responses=[
@@ -5813,7 +5813,7 @@ async def test_transport_read_error_before_finish_reason_raises(logging_obj: Log
     transport used to swallow mid-stream connection resets, so the wrapper saw a
     clean end-of-stream and fabricated finish_reason "stop".
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.exceptions import MidStreamFallbackError
 

@@ -4,11 +4,13 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
@@ -111,7 +113,7 @@ async def test_all_routes_use_model_protocol_and_preserve_session(
         return httpx.Response(200, json=upstream_reply(upstream, model))
 
     with respx.mock(using="httpx") as transport:
-        transport.post().mock(side_effect=respond)
+        transport.post().mock(side_effect=side_effect_for_respx(respond))
         kwargs: Final = {
             "model": f"opencode_go/{model}",
             "api_key": "fake-go-key",
@@ -241,7 +243,7 @@ async def test_gemini_streams_text_and_usage_through_all_routes(go_catalog: None
         )
 
     with respx.mock(using="httpx") as transport:
-        transport.post().mock(side_effect=respond)
+        transport.post().mock(side_effect=side_effect_for_respx(respond))
         kwargs: Final = {"model": "opencode_go/fixture-gemini", "api_key": "fake-go-key", "stream": True}
         if ingress == "chat":
             stream: Final = await litellm.acompletion(
@@ -465,7 +467,9 @@ async def test_reported_list_cost_is_billed_instead_of_rows(
     model: Final = f"fixture-{upstream.split('/')[0]}"
     with respx.mock(using="httpx") as transport:
         transport.post().mock(
-            return_value=httpx.Response(200, json=go_priced_reply(upstream, model, GO_REPORTED_USAGE))
+            return_value=response_for_respx(
+                httpx.Response(200, json=go_priced_reply(upstream, model, GO_REPORTED_USAGE))
+            )
         )
         kwargs: Final = {"model": f"opencode_go/{model}", "api_key": "fake-go-key"}
         if ingress == "chat":
@@ -483,7 +487,9 @@ async def test_rows_price_the_request_when_no_list_cost_is_reported(
 ) -> None:
     with respx.mock(using="httpx") as transport:
         transport.post().mock(
-            return_value=httpx.Response(200, json=go_priced_reply("chat/completions", "fixture-chat", usage_extra))
+            return_value=response_for_respx(
+                httpx.Response(200, json=go_priced_reply("chat/completions", "fixture-chat", usage_extra))
+            )
         )
         response: Final = await litellm.acompletion(
             model="opencode_go/fixture-chat", api_key="fake-go-key", messages=[{"role": "user", "content": "hello"}]
@@ -508,7 +514,7 @@ async def test_chat_stream_bills_the_final_usage_chunks_list_cost(
     }
     with respx.mock(using="httpx") as transport:
         transport.post().mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
                 text=sse(
@@ -520,7 +526,7 @@ async def test_chat_stream_bills_the_final_usage_chunks_list_cost(
                         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, **GO_REPORTED_USAGE},
                     },
                 ),
-            )
+            ))
         )
         stream: Final = await litellm.acompletion(
             model="opencode_go/fixture-chat",
@@ -541,7 +547,7 @@ async def test_responses_stream_bills_the_completed_events_list_cost(
     completed: Final = go_priced_reply("responses", "fixture-responses", GO_REPORTED_USAGE)
     with respx.mock(using="httpx") as transport:
         transport.post().mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 headers={"content-type": "text/event-stream"},
                 text=sse(
@@ -555,7 +561,7 @@ async def test_responses_stream_bills_the_completed_events_list_cost(
                     },
                     {"type": "response.completed", "response": completed, "sequence_number": 2},
                 ),
-            )
+            ))
         )
         stream: Final = await litellm.aresponses(
             model="opencode_go/fixture-responses", api_key="fake-go-key", input="hello", stream=True

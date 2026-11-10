@@ -25,8 +25,8 @@ from datetime import datetime, timezone
 from functools import partial
 from typing import Final
 
-import httpx
 import httpx2
+import httpx2 as httpx
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger

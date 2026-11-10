@@ -2,11 +2,13 @@ from collections.abc import Iterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
@@ -258,7 +260,7 @@ async def test_duckduckgo_search_response_structure_and_max_results(
     respx_mock: respx.MockRouter, httpx_transport: None
 ) -> None:
     route: Final = respx_mock.get(url__startswith="https://api.duckduckgo.com/").mock(
-        return_value=httpx.Response(200, json=_DDG_INSTANT_ANSWER)
+        return_value=response_for_respx(httpx.Response(200, json=_DDG_INSTANT_ANSWER))
     )
 
     response: Final = await litellm.asearch(query="india", search_provider="duckduckgo", max_results=5)
@@ -286,7 +288,7 @@ async def test_duckduckgo_search_response_structure_and_max_results(
 
 def test_duckduckgo_sync_search_returns_typed_results_without_a_limit(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.get(url__startswith="https://api.duckduckgo.com/").mock(
-        return_value=httpx.Response(200, json=_DDG_INSTANT_ANSWER)
+        return_value=response_for_respx(httpx.Response(200, json=_DDG_INSTANT_ANSWER))
     )
 
     response: Final = litellm.search(query="india", search_provider="duckduckgo")

@@ -5,8 +5,7 @@ from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 from litellm.llms.github_copilot.authenticator import Authenticator, github_api_headers
 from litellm.llms.github_copilot.common_utils import GetAccessTokenError, GetDeviceCodeError
 
@@ -97,7 +96,7 @@ def test_get_api_base_uses_user_endpoint_and_memoizes_per_access_token(
     logged_in_token_dir: tuple[Path, str],
 ) -> None:
     _, token = logged_in_token_dir
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         route: Final = router.get(COPILOT_USER_URL).respond(json={"endpoints": {"api": TENANT_API}})
         auth: Final = Authenticator()
         assert auth.get_api_base() == TENANT_API
@@ -111,19 +110,19 @@ def test_get_api_base_uses_user_endpoint_and_memoizes_per_access_token(
 def test_get_api_base_returns_none_when_user_lookup_fails(
     logged_in_token_dir: tuple[Path, str], status_code: int
 ) -> None:
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.get(COPILOT_USER_URL).respond(status_code=status_code)
         assert Authenticator().get_api_base() is None
 
 
 def test_get_api_base_retries_after_failed_user_lookup(logged_in_token_dir: tuple[Path, str]) -> None:
     auth: Final = Authenticator()
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         failed_lookup: Final = router.get(COPILOT_USER_URL).respond(status_code=503)
         assert auth.get_api_base() is None
     assert failed_lookup.call_count == 1
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         successful_lookup: Final = router.get(COPILOT_USER_URL).respond(json={"endpoints": {"api": TENANT_API}})
         assert auth.get_api_base() == TENANT_API
     assert successful_lookup.call_count == 1
@@ -132,7 +131,7 @@ def test_get_api_base_retries_after_failed_user_lookup(logged_in_token_dir: tupl
 def test_get_api_base_returns_none_when_user_lookup_response_has_no_endpoint(
     logged_in_token_dir: tuple[Path, str],
 ) -> None:
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.get(COPILOT_USER_URL).respond(json={"endpoints": {}})
         assert Authenticator().get_api_base() is None
 
@@ -140,7 +139,7 @@ def test_get_api_base_returns_none_when_user_lookup_response_has_no_endpoint(
 def test_get_api_base_returns_none_when_user_lookup_endpoints_are_not_a_mapping(
     logged_in_token_dir: tuple[Path, str],
 ) -> None:
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.get(COPILOT_USER_URL).respond(json={"endpoints": []})
         assert Authenticator().get_api_base() is None
 
@@ -148,7 +147,7 @@ def test_get_api_base_returns_none_when_user_lookup_endpoints_are_not_a_mapping(
 def test_get_api_base_rejects_untrusted_user_endpoint(
     logged_in_token_dir: tuple[Path, str],
 ) -> None:
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.get(COPILOT_USER_URL).respond(json={"endpoints": {"api": "https://attacker.example"}})
         assert Authenticator().get_api_base() is None
 

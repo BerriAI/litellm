@@ -86,7 +86,7 @@ async def test_update_end_user_spend_retries_on_connect_error(
     sent) retries with jittered backoff; once retries are exhausted the
     original exception bubbles up via ``_raise_failed_update_spend_exception``.
     """
-    import httpx
+    import httpx2 as httpx
     import litellm.proxy.utils as utils_mod
 
     sleeps: list[float] = []
@@ -118,7 +118,7 @@ async def test_update_end_user_spend_does_not_retry_post_send_ambiguous_errors(
 ) -> None:
     """Post-send errors are ambiguous and retrying can double-apply increments
     (see DB_RETRY_SAFE_ERROR_TYPES); they must raise on the first attempt."""
-    import httpx
+    import httpx2 as httpx
 
     err = getattr(httpx, ambiguous_error_name)("ambiguous")
     mock_prisma_client.db.tx = MagicMock(side_effect=err)
@@ -350,7 +350,7 @@ async def test_update_spend_logs_failure_raises_after_retries(
     """When all retries exhaust the underlying DB error, the helper raises
     via ``_raise_failed_update_spend_exception``.
     """
-    import httpx
+    import httpx2 as httpx
     import litellm.proxy.utils as utils_mod
 
     async def _fake_sleep(_: float) -> None:

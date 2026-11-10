@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Final
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm import stream_chunk_builder

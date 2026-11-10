@@ -345,7 +345,7 @@ async def test_posthog_atexit_flushes_internal_queue():
     """
     from unittest.mock import Mock, patch
 
-    import httpx
+    import httpx2 as httpx
 
     posthog_logger = PostHogLogger()
 
@@ -553,7 +553,7 @@ async def test_sync_callback_not_affected_by_atexit():
         callback_invoked_immediately = True
 
     with patch.object(PostHogLogger, "log_success_event", mock_log_success):
-        with patch("httpx.Client.post") as mock_post:
+        with patch("httpx2.Client.post") as mock_post:
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.raise_for_status = Mock()

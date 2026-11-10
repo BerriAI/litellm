@@ -7,10 +7,11 @@ from collections.abc import Callable, Generator, Mapping
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -673,7 +674,7 @@ _EMBEDDING_API_BASE: Final = "https://embeddings.example.test/v1"
 
 def _strict_embedding_route(respx_mock: respx.MockRouter) -> respx.Route:
     return respx_mock.post(f"{_EMBEDDING_API_BASE}/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -681,7 +682,7 @@ def _strict_embedding_route(respx_mock: respx.MockRouter) -> respx.Route:
                 "model": "embed-model",
                 "usage": {"prompt_tokens": 2, "total_tokens": 2},
             },
-        )
+        ))
     )
 
 

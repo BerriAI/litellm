@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import BaseModel, SecretStr
 

@@ -7,7 +7,7 @@ Google PSE API Reference: https://developers.google.com/custom-search/v1/referen
 from collections.abc import Iterable, Mapping
 from typing import Final, Literal, TypedDict
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

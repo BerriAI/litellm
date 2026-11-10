@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict
 
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig, ir_to_systemone_request

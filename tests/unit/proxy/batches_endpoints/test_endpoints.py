@@ -39,11 +39,13 @@ from pathlib import Path
 from typing import Any, Dict, Final, Optional
 from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
 import litellm.proxy.proxy_server as proxy_server
@@ -249,9 +251,9 @@ def harness(monkeypatch: pytest.MonkeyPatch):
         stack.enter_context(patch.object(endpoints, "is_known_model", is_known_model))
         stack.enter_context(patch.object(litellm, "acreate_batch", litellm_acreate))
         stack.enter_context(patch.object(litellm, "enable_loadbalancing_on_batch_endpoints", False))
-        upstream = stack.enter_context(respx.mock(assert_all_called=False))
+        upstream = stack.enter_context(respx.mock(using="httpcore2_and_legacy", assert_all_called=False))
         upstream_files_route = upstream.get(f"{CREDS['my-vllm']['api_base']}/files").mock(
-            return_value=httpx.Response(404, json={"detail": "Not Found"})
+            return_value=response_for_respx(httpx.Response(404, json={"detail": "Not Found"}))
         )
         stack.enter_context(patch.object(proxy_server, "llm_router", router))
         stack.enter_context(patch.object(proxy_server, "proxy_logging_obj", logging))
@@ -908,7 +910,9 @@ async def test_create__unified_executed_provider_without_database_400(harness):
 @pytest.mark.asyncio
 async def test_create__unified_executed_provider_with_its_own_files_api_goes_to_the_provider(harness, executed_runner):
     runner, factory = executed_runner
-    harness.upstream_files_route.mock(return_value=httpx.Response(200, json={"object": "list", "data": []}))
+    harness.upstream_files_route.mock(
+        return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": []}))
+    )
     set_body(
         harness,
         {
@@ -961,7 +965,9 @@ async def test_create__raw_file_with_executed_model_400_with_upload_guidance(har
 
 
 async def _create_with_model_headers(harness: Harness, *models: str):
-    harness.upstream_files_route.mock(return_value=httpx.Response(200, json={"object": "list", "data": []}))
+    harness.upstream_files_route.mock(
+        return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": []}))
+    )
     set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
     request: Final = Request(
         {
@@ -1005,7 +1011,7 @@ async def test_create__the_same_model_header_twice_still_routes_to_that_model(ha
 async def test_create__raw_file_with_executed_model_is_forwarded_unless_the_server_lacks_a_files_api(
     harness, upstream_answer
 ):
-    harness.upstream_files_route.mock(side_effect=[upstream_answer])
+    harness.upstream_files_route.mock(side_effect=side_effect_for_respx([upstream_answer]))
     set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
 
     await call_create(harness, headers={"x-litellm-model": "my-vllm"})

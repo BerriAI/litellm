@@ -5,10 +5,11 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.ollama.completion.handler import (
     _process_ollama_embedding_response,
@@ -175,7 +176,9 @@ async def test_ollama_embeddings_ignore_a_trailing_slash_on_api_base(
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     route: Final = respx.post("http://gateway.example.com/ollama/api/embed").mock(
-        return_value=httpx.Response(200, json={"embeddings": [[0.1, 0.2], [0.3, 0.4]], "prompt_eval_count": 2})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"embeddings": [[0.1, 0.2], [0.3, 0.4]], "prompt_eval_count": 2})
+        )
     )
 
     response: Final = (

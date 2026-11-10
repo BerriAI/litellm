@@ -3,7 +3,7 @@ import time
 from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from httpx._models import Headers, Response
+from httpx2._models import Headers, Response
 from pydantic import BaseModel, TypeAdapter
 
 import litellm

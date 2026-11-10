@@ -4,12 +4,14 @@ import uuid
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-from fastapi import HTTPException
-from httpx import Request, Response
 
+from tests._support import respx_httpx2 as respx
+from fastapi import HTTPException
+from httpx2 import Request, Response
+
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -1441,7 +1443,7 @@ async def test_callback(
         ]
     }
     route: Final = respx_mock.post("https://server.lasso.security/gateway/v3/classify").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(
                 200,
                 json={
@@ -1492,7 +1494,7 @@ async def test_callback(
                     "findings": {},
                 },
             ),
-        )
+        ))
     )
 
     with pytest.raises(HTTPException) as excinfo:
@@ -1536,7 +1538,7 @@ async def test_api_error_handling_legacy_messages(
     }
 
     route: Final = respx_mock.post("https://server.lasso.security/gateway/v3/classify").mock(
-        side_effect=httpx.ConnectError(error_message)
+        side_effect=side_effect_for_respx(httpx.ConnectError(error_message))
     )
 
     with pytest.raises(LassoGuardrailAPIError) as excinfo:
@@ -1593,7 +1595,9 @@ async def test_post_call_scan_sends_server_tool_calls_as_tool_use_entries(
         default_on=True,
     )
     route: Final = respx_mock.post("https://server.lasso.security/gateway/v3/classify").mock(
-        return_value=httpx.Response(200, json={"violations_detected": False, "deputies": {}, "findings": {}})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"violations_detected": False, "deputies": {}, "findings": {}})
+        )
     )
     response: Final = _reply_with_web_search_call(
         '{"query": "persimmon"}',
@@ -1655,7 +1659,7 @@ async def test_post_call_masking_rewrites_server_tool_call_arguments(
         default_on=True,
     )
     respx_mock.post("https://server.lasso.security/gateway/v3/classifix").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "violations_detected": True,
@@ -1673,7 +1677,7 @@ async def test_post_call_masking_rewrites_server_tool_call_arguments(
                     }
                 ],
             },
-        )
+        ))
     )
 
     result: Final = await lasso_guardrail.async_post_call_success_hook(
@@ -1729,7 +1733,9 @@ async def test_pre_call_scan_sends_replayed_server_tool_calls_as_tool_use_entrie
         default_on=True,
     )
     route: Final = respx_mock.post("https://server.lasso.security/gateway/v3/classify").mock(
-        return_value=httpx.Response(200, json={"violations_detected": False, "deputies": {}, "findings": {}})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"violations_detected": False, "deputies": {}, "findings": {}})
+        )
     )
 
     await lasso_guardrail.async_pre_call_hook(
@@ -1769,7 +1775,7 @@ async def test_pre_call_masking_rewrites_replayed_server_tool_call_arguments(
         default_on=True,
     )
     respx_mock.post("https://server.lasso.security/gateway/v3/classifix").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "violations_detected": True,
@@ -1789,7 +1795,7 @@ async def test_pre_call_masking_rewrites_replayed_server_tool_call_arguments(
                     {"role": "user", "content": "summarize it"},
                 ],
             },
-        )
+        ))
     )
 
     result: Final = await lasso_guardrail.async_pre_call_hook(

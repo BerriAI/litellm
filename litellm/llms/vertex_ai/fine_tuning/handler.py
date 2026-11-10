@@ -4,7 +4,7 @@ from collections.abc import Coroutine
 from datetime import datetime
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 import litellm

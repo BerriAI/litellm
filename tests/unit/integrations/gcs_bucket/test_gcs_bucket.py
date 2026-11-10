@@ -8,11 +8,12 @@ from unittest.mock import Mock
 import google.auth
 import google.auth.credentials
 import google.auth.transport
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -271,8 +272,12 @@ async def test_unbatched_gcs_logs_upload_individual_success_and_failure_objects(
         uploaded_requests.put_nowait(request)
         return httpx.Response(200)
 
-    with respx.mock(base_url="https://storage.googleapis.com", assert_all_called=False) as router:
-        upload_route: Final = router.post("/upload/storage/v1/b/test-bucket/o").mock(side_effect=capture_upload)
+    with respx.mock(
+        using="httpcore2_and_legacy", base_url="https://storage.googleapis.com", assert_all_called=False
+    ) as router:
+        upload_route: Final = router.post("/upload/storage/v1/b/test-bucket/o").mock(
+            side_effect=side_effect_for_respx(capture_upload)
+        )
         logger: Final = GCSBucketLogger(bucket_name="test-bucket")
         logger.async_httpx_client = AsyncHTTPHandler()
         success_payload: Final = {

@@ -3,7 +3,7 @@ import traceback
 from unittest import mock
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import Request, Response
 from fastapi.testclient import TestClient

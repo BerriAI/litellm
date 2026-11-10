@@ -1,6 +1,6 @@
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

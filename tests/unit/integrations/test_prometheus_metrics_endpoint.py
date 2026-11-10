@@ -8,7 +8,7 @@ import time
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from prometheus_client import CollectorRegistry, Gauge
 from prometheus_client.metrics_core import GaugeMetricFamily

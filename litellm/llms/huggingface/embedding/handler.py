@@ -3,7 +3,7 @@ import os
 from collections.abc import Iterator
 from typing import Final, Literal, Protocol, get_args, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 import litellm

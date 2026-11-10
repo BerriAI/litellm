@@ -14,7 +14,7 @@ from queue import SimpleQueue
 from typing import Final
 
 import grpc
-import httpx
+import httpx2 as httpx
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization

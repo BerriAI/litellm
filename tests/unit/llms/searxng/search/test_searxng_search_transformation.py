@@ -8,7 +8,7 @@ requiring a live SearXNG instance.
 from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import ValidationError
 

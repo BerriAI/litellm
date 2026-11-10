@@ -8,7 +8,7 @@ from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 from openai.types.batch import Errors
 from openai.types.batch_error import BatchError
 from openai.types.batch_request_counts import BatchRequestCounts

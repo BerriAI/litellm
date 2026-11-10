@@ -10,10 +10,11 @@ Source: litellm/llms/perplexity/responses/transformation.py
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -615,7 +616,7 @@ async def test_aresponses_rejects_moderation_for_perplexity_without_drop_params(
     monkeypatch.setattr(litellm, "drop_params", False)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/responses").mock(
-        return_value=httpx.Response(200, json=_SUCCESS_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_SUCCESS_RESPONSE))
     )
 
     with pytest.raises(litellm.UnsupportedParamsError):

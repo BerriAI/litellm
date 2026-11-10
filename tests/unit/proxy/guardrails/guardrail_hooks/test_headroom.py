@@ -26,11 +26,13 @@ import json
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
@@ -2385,11 +2387,11 @@ async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_openai_tool_call_payload()),
             httpx.Response(200, json=_openai_tool_call_payload("a" * 24)),
             httpx.Response(200, json=_openai_text_payload(final_answer)),
-        ]
+        ])
     )
 
     with patch.object(
@@ -2438,11 +2440,11 @@ async def test_streaming_responses_resolves_ccr_retrieval_end_to_end(
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_openai_responses_retrieve_call_payload()),
             httpx.Response(200, json=_openai_responses_retrieve_call_payload("a" * 24)),
             httpx.Response(200, json=_openai_responses_text_payload(final_answer)),
-        ]
+        ])
     )
 
     with patch.object(
@@ -2493,10 +2495,10 @@ def test_sync_streaming_responses_resolves_ccr_retrieval_end_to_end(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     upstream = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_openai_responses_retrieve_call_payload()),
             httpx.Response(200, json=_openai_responses_text_payload(final_answer)),
-        ]
+        ])
     )
 
     with patch.object(

@@ -14,7 +14,7 @@ import time
 from collections.abc import Iterable, Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from openai.types.file_deleted import FileDeleted
 from pydantic import ConfigDict, TypeAdapter
 

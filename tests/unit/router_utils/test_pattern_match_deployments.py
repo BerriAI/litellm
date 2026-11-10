@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Final
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import TypeAdapter
 

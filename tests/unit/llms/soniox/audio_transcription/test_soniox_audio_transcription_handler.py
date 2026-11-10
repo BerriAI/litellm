@@ -5,7 +5,7 @@ import json
 from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler

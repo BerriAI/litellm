@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.a2a_protocol.card_resolver import (

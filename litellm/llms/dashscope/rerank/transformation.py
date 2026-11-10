@@ -29,7 +29,7 @@ Docs - https://help.aliyun.com/zh/model-studio/text-rerank-api
 from collections.abc import Iterable, Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid

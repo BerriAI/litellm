@@ -4,11 +4,12 @@ from typing import Final
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
 import responses
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.databricks.agent.responses_output import (
     AgentResponse,
@@ -472,7 +473,7 @@ def test_stream_iterator_surfaces_agent_errors() -> None:
 @respx.mock
 async def test_acompletion_posts_responses_input_to_model_serving(httpx_transport: None) -> None:
     route = respx.post(INVOCATIONS_URL).mock(
-        return_value=httpx.Response(200, json={"object": "response", "output": [MESSAGE_ITEM]})
+        return_value=response_for_respx(httpx.Response(200, json={"object": "response", "output": [MESSAGE_ITEM]}))
     )
     response = await litellm.acompletion(
         model="databricks_agent/my-agent",
@@ -497,7 +498,9 @@ async def test_acompletion_names_the_endpoint_in_the_body_for_the_unified_respon
 ) -> None:
     monkeypatch.setenv("DATABRICKS_API_BASE", UNIFIED_URL)
     monkeypatch.setenv("DATABRICKS_API_KEY", "pat-env")
-    route = respx.post(UNIFIED_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    route = respx.post(UNIFIED_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     response = await litellm.acompletion(
         model="databricks_agent/my-agent",
         messages=[{"role": "user", "content": "ping"}],
@@ -510,7 +513,9 @@ async def test_acompletion_names_the_endpoint_in_the_body_for_the_unified_respon
 
 @respx.mock
 async def test_acompletion_forwards_extra_headers_and_keeps_the_minted_token(httpx_transport: None) -> None:
-    route = respx.post(APP_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    route = respx.post(APP_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     await litellm.acompletion(
         model="databricks_agent/agent",
         messages=[{"role": "user", "content": "ping"}],
@@ -530,7 +535,9 @@ async def test_acompletion_streams_output_text_deltas(httpx_transport: None) -> 
         {"type": "response.output_item.done", "item": MESSAGE_ITEM},
     ]
     route = respx.post(INVOCATIONS_URL).mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse(events))
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_sse(events))
+        )
     )
     stream = await litellm.acompletion(
         model="databricks_agent/my-agent",
@@ -555,7 +562,9 @@ async def test_acompletion_authenticates_with_the_env_service_principal(
     else:
         monkeypatch.setenv("DATABRICKS_API_KEY", env_pat)
     responses.post(TOKEN_URL, json={"access_token": "m2m-token"})
-    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    route = respx.post(INVOCATIONS_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     response = await litellm.acompletion(
         model="databricks_agent/my-agent",
         messages=[{"role": "user", "content": "ping"}],
@@ -576,7 +585,9 @@ async def test_unsupported_openai_params_follow_drop_params(httpx_transport: Non
             frequency_penalty=0.2,
         )
     with respx.mock:
-        route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+        route = respx.post(INVOCATIONS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+        )
         await litellm.acompletion(
             model="databricks_agent/my-agent",
             messages=messages,
@@ -593,7 +604,9 @@ async def test_unsupported_openai_params_follow_drop_params(httpx_transport: Non
 async def test_acompletion_sends_sampling_params_in_the_responses_agent_shape(
     httpx_transport: None, token_limit: dict[str, int]
 ) -> None:
-    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    route = respx.post(INVOCATIONS_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     await litellm.acompletion(
         model="databricks_agent/my-agent",
         messages=[{"role": "user", "content": "ping"}],
@@ -617,7 +630,9 @@ async def test_acompletion_sends_sampling_params_in_the_responses_agent_shape(
 async def test_acompletion_sends_string_metadata_and_refuses_other_values_unless_dropped(
     httpx_transport: None,
 ) -> None:
-    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    route = respx.post(INVOCATIONS_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     request: Final = {
         "model": "databricks_agent/my-agent",
         "messages": [{"role": "user", "content": "ping"}],
@@ -647,7 +662,9 @@ async def test_acompletion_sends_string_metadata_and_refuses_other_values_unless
 async def test_acompletion_refuses_extra_body_model_or_input_unless_dropped(
     httpx_transport: None, pinned: Mapping[str, object]
 ) -> None:
-    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    route = respx.post(INVOCATIONS_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     request: Final = {
         "model": "databricks_agent/my-agent",
         "messages": [{"role": "user", "content": "ping"}],
@@ -674,7 +691,9 @@ async def test_acompletion_reuses_the_env_service_principal_token_until_the_secr
 ) -> None:
     monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
     token = responses.post(TOKEN_URL, json={"access_token": "m2m-token", "expires_in": 3600})
-    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    route = respx.post(INVOCATIONS_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     request: Final = {
         "model": "databricks_agent/my-agent",
         "messages": [{"role": "user", "content": "ping"}],
@@ -697,7 +716,9 @@ async def test_acompletion_mints_a_fresh_env_token_when_it_expires_within_the_re
 ) -> None:
     monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
     token = responses.post(TOKEN_URL, json={"access_token": "m2m-token", "expires_in": 30})
-    respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    respx.post(INVOCATIONS_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     request: Final = {
         "model": "databricks_agent/my-agent",
         "messages": [{"role": "user", "content": "ping"}],
@@ -714,7 +735,9 @@ async def test_acompletion_resolves_os_environ_api_base_and_api_key(
 ) -> None:
     monkeypatch.setenv("MY_DBX_HOST", WORKSPACE)
     monkeypatch.setenv("MY_DBX_PAT", "pat-from-env")
-    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    route = respx.post(INVOCATIONS_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     response = await litellm.acompletion(
         model="databricks_agent/my-agent",
         messages=[{"role": "user", "content": "ping"}],

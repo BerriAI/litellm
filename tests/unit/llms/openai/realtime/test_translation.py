@@ -1,7 +1,7 @@
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.azure.realtime.http_transformation import AzureRealtimeHTTPConfig

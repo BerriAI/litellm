@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import Gateway
@@ -665,7 +665,7 @@ def test_sdk_progress_and_cancellation_reach_upstream_without_losing_session(
     from pathlib import Path
     from threading import Event
 
-    import httpx
+    import httpx2 as httpx
     import httpx2
     import yaml
     from integration._support.asgi import asgi_server

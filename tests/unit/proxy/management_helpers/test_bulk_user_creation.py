@@ -2,7 +2,7 @@ import json
 from contextlib import asynccontextmanager
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, ConfigDict, ValidationError

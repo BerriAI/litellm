@@ -7,13 +7,15 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from starlette.routing import WebSocketRoute
 from starlette.websockets import WebSocket
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.proxy._types import Litellm_EntityType, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
@@ -229,9 +231,14 @@ def openai_wif_token_file(monkeypatch, tmp_path):
 async def test_openai_websocket_uses_workload_identity_token_without_static_key(openai_wif_token_file):
     websocket = _FakeWebSocket("/openai_passthrough/v1/realtime", "model=gpt-realtime")
 
-    with patch(GET_CREDENTIALS, return_value=None), respx.mock(assert_all_called=True) as upstream:
+    with (
+        patch(GET_CREDENTIALS, return_value=None),
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream,
+    ):
         upstream.post(TOKEN_EXCHANGE_URL).mock(
-            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+            )
         )
         served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), ENABLED)
 
@@ -258,8 +265,11 @@ async def test_openai_websocket_closes_cleanly_when_workload_identity_exchange_f
         openai_wif_token_file.unlink()
     websocket = _FakeWebSocket("/openai_passthrough/v1/realtime", "model=gpt-realtime")
 
-    with patch(GET_CREDENTIALS, return_value=None), respx.mock(assert_all_called=False) as upstream:
-        upstream.post(TOKEN_EXCHANGE_URL).mock(side_effect=exchange_outcome)
+    with (
+        patch(GET_CREDENTIALS, return_value=None),
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream,
+    ):
+        upstream.post(TOKEN_EXCHANGE_URL).mock(side_effect=side_effect_for_respx(exchange_outcome))
         served = await _serve(websocket, "v1/realtime", UserAPIKeyAuth(), ENABLED)
 
     assert websocket.closed == (1011, "OpenAI workload identity token exchange failed")

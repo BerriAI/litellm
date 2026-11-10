@@ -3,8 +3,7 @@ import json
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 
@@ -96,7 +95,7 @@ def test_hostinger_router_model_cost_and_capabilities(model: str):
 
 
 def test_hostinger_router_chat_completions_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/chat/completions").respond(
             200,
             json={
@@ -134,7 +133,7 @@ def test_hostinger_router_chat_completions_streaming_request():
         'data: {"id":"chatcmpl_hostinger","object":"chat.completion.chunk","created":1789550000,"model":"claude-sonnet-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":1,"total_tokens":5}}\n\n',
         "data: [DONE]\n\n",
     ]
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/chat/completions").respond(
             200,
             headers={"content-type": "text/event-stream"},
@@ -156,7 +155,7 @@ def test_hostinger_router_chat_completions_streaming_request():
 
 
 def test_hostinger_router_responses_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/responses").respond(
             200,
             json={
@@ -202,7 +201,7 @@ EMBEDDING_RESPONSE: Final = {
 
 
 def test_hostinger_router_embeddings_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         response: Final = litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -219,7 +218,7 @@ def test_hostinger_router_embeddings_request():
 
 
 def test_hostinger_router_embeddings_send_extra_headers_as_http_headers():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -237,7 +236,7 @@ def test_hostinger_router_embeddings_send_extra_headers_as_http_headers():
 
 
 def test_hostinger_router_embeddings_extra_headers_replace_key_headers_of_any_case():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -254,7 +253,7 @@ def test_hostinger_router_embeddings_extra_headers_replace_key_headers_of_any_ca
 
 @pytest.mark.parametrize(("configured", "sent"), [(12345, "12345"), (1.5, "1.5")])
 def test_hostinger_router_embeddings_send_numeric_extra_headers_as_text(configured: int | float, sent: str):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -268,7 +267,7 @@ def test_hostinger_router_embeddings_send_numeric_extra_headers_as_text(configur
 
 @pytest.mark.parametrize("configured", [True, None, ["a", "b"]])
 def test_hostinger_router_embeddings_refuse_non_text_extra_headers(configured: object):
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         with pytest.raises(litellm.UnsupportedParamsError, match="X-Debug") as refused:
             litellm.embedding(
@@ -284,7 +283,7 @@ def test_hostinger_router_embeddings_refuse_non_text_extra_headers(configured: o
 
 @pytest.mark.parametrize("configured", [True, None, ["a", "b"]])
 def test_hostinger_router_embeddings_drop_non_text_extra_headers_under_drop_params(configured: object):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -316,7 +315,7 @@ TRANSPORT_EXTRA_HEADERS: Final = [
 
 @pytest.mark.parametrize(("name", "configured"), TRANSPORT_EXTRA_HEADERS)
 def test_hostinger_router_embeddings_ignore_transport_extra_headers(name: str, configured: str):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -338,7 +337,7 @@ MALFORMED_HEADER_NAMES: Final = ["Host:evil.example", "X Note", "X-Caf\u00e9"]
 
 @pytest.mark.parametrize("name", MALFORMED_HEADER_NAMES)
 def test_hostinger_router_embeddings_refuse_malformed_extra_header_names(name: str):
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         with pytest.raises(litellm.UnsupportedParamsError) as refused:
             litellm.embedding(
@@ -355,7 +354,7 @@ def test_hostinger_router_embeddings_refuse_malformed_extra_header_names(name: s
 
 @pytest.mark.parametrize("name", MALFORMED_HEADER_NAMES)
 def test_hostinger_router_embeddings_drop_malformed_extra_header_names_under_drop_params(name: str):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -373,7 +372,7 @@ def test_hostinger_router_embeddings_drop_malformed_extra_header_names_under_dro
 
 @pytest.mark.parametrize("configured", ["a\r\nHost: evil.example", "line\nbreak", "caf\u00e9", "a\x7fb"])
 def test_hostinger_router_embeddings_drop_extra_header_values_http_cannot_carry(configured: str):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -393,7 +392,7 @@ def test_hostinger_router_embeddings_drop_extra_header_values_http_cannot_carry(
     [(" x ", "x"), ("\t", ""), (" a\tb ", "a\tb"), ("env-secret\n", "env-secret"), ("\r\n x \r\n", "x")],
 )
 def test_hostinger_router_embeddings_trim_whitespace_around_extra_header_values(configured: str, sent: str):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -419,7 +418,7 @@ def test_hostinger_router_embeddings_extra_headers_stay_with_their_request():
         ]
     )
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         router.embedding(
             model="shared", input=["first"], extra_headers={"Authorization": "Bearer caller-a", "X-Leak": "a"}
@@ -436,7 +435,7 @@ def test_hostinger_router_embeddings_extra_headers_stay_with_their_request():
 
 @pytest.mark.parametrize("param", ["headers", "extra_headers"])
 def test_hostinger_router_embeddings_send_headers_given_as_name_value_pairs(param: str):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -452,7 +451,7 @@ def test_hostinger_router_embeddings_send_headers_given_as_name_value_pairs(para
 
 @pytest.mark.parametrize("param", ["headers", "extra_headers"])
 def test_hostinger_router_embeddings_refuse_headers_that_are_not_an_object(param: str):
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         with pytest.raises(litellm.UnsupportedParamsError, match=rf"\b{param} must be a JSON object") as refused:
             litellm.embedding(
@@ -468,7 +467,7 @@ def test_hostinger_router_embeddings_refuse_headers_that_are_not_an_object(param
 
 @pytest.mark.parametrize("param", ["headers", "extra_headers"])
 def test_hostinger_router_embeddings_drop_headers_that_are_not_an_object_under_drop_params(param: str):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         litellm.embedding(
             model="hostinger_router/text-embedding-3-small",
@@ -489,7 +488,7 @@ def test_hostinger_router_embeddings_never_borrow_another_providers_key(monkeypa
     monkeypatch.setenv("OPENAI_LIKE_API_KEY", "other-provider-key")
     monkeypatch.setenv("OPENAI_API_KEY", "other-provider-key")
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/embeddings").respond(200, json=EMBEDDING_RESPONSE)
         with pytest.raises(litellm.BadRequestError, match="Missing API Key"):
             litellm.embedding(model="hostinger_router/text-embedding-3-small", input=["Say hello"])
@@ -506,7 +505,7 @@ def test_json_provider_without_embeddings_endpoint_refuses_embeddings():
         if not JSONProviderRegistry.supports_embeddings(slug) and slug not in litellm.provider_list
     )
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         route: Final = upstream.route().respond(200, json=EMBEDDING_RESPONSE)
         with pytest.raises(litellm.BadRequestError):
             litellm.embedding(model=f"{slug}/text-embedding-3-small", input=["Say hello"], api_key="test-key")
@@ -518,7 +517,7 @@ def test_json_provider_without_embeddings_endpoint_refuses_embeddings():
 async def test_hostinger_router_anthropic_messages_request(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://router.hostinger.com/v1/messages").respond(
             200,
             json={
@@ -574,7 +573,7 @@ async def test_hostinger_router_messages_bridge_models_without_native_messages(
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         native: Final = upstream.post("https://router.hostinger.com/v1/messages").respond(
             403, json=UNSUPPORTED_ENDPOINT
         )
@@ -595,7 +594,7 @@ async def test_hostinger_router_messages_bridge_models_without_native_messages(
 
 
 def test_hostinger_router_responses_bridge_models_without_native_responses():
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         native: Final = upstream.post("https://router.hostinger.com/v1/responses").respond(
             403, json=UNSUPPORTED_ENDPOINT
         )
@@ -648,7 +647,7 @@ async def test_hostinger_router_endpoint_opt_in_stays_with_its_own_deployment(
         ]
     )
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         native_messages: Final = upstream.post("https://router.hostinger.com/v1/messages").respond(
             403, json=UNSUPPORTED_ENDPOINT
         )
@@ -690,7 +689,7 @@ async def test_hostinger_router_deployment_cache_ttl_opt_in_keeps_one_hour_ttl(m
     )
     one_hour_cache: Final = {"type": "ephemeral", "ttl": "1h"}
 
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         native: Final = upstream.post("https://router.hostinger.com/v1/messages").respond(
             200, json=ANTHROPIC_MESSAGE_RESPONSE
         )

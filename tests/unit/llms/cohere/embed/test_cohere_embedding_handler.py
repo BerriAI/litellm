@@ -1,9 +1,10 @@
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 BEDROCK_COHERE_INVOKE_URL: Final = (
@@ -18,7 +19,7 @@ async def test_bedrock_cohere_embedding_sends_the_caller_timeout(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post(BEDROCK_COHERE_INVOKE_URL).mock(
-        return_value=httpx.Response(200, json=COHERE_EMBED_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=COHERE_EMBED_RESPONSE))
     )
     request: Final = {
         "model": "bedrock/cohere.embed-english-v3",

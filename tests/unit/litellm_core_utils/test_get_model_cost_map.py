@@ -278,7 +278,7 @@ import functools
 import random
 from datetime import datetime, timezone
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.get_model_cost_map import (
     ModelCostMapReloaded,
@@ -1075,7 +1075,7 @@ class TestGetModelCostMapFallback:
     def test_should_use_local_map_when_env_var_set(self):
         """LITELLM_LOCAL_MODEL_COST_MAP=True should skip remote fetch entirely."""
         with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP": "True"}):
-            with patch("httpx.get") as mock_get:
+            with patch("httpx2.get") as mock_get:
                 result = get_model_cost_map("https://fake-url.com/model_prices.json")
                 mock_get.assert_not_called()
 
@@ -1119,7 +1119,7 @@ class TestBadHostedModelCostMap:
         mock_response.raise_for_status = MagicMock()
         mock_response.json.side_effect = json.JSONDecodeError("bad json", "", 0)
 
-        with patch("httpx.get", return_value=mock_response):
+        with patch("httpx2.get", return_value=mock_response):
             fallback_map = get_model_cost_map("https://fake-url.com/bad.json")
 
         original = litellm.model_cost
@@ -1145,7 +1145,7 @@ class TestBadHostedModelCostMap:
         mock_http.raise_for_status = MagicMock()
         mock_http.json.side_effect = json.JSONDecodeError("bad json", "", 0)
 
-        with patch("httpx.get", return_value=mock_http):
+        with patch("httpx2.get", return_value=mock_http):
             fallback_map = get_model_cost_map("https://fake-url.com/bad.json")
 
         original = litellm.model_cost

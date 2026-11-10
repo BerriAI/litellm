@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from typing import Final, Literal, Protocol, TypeAlias, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

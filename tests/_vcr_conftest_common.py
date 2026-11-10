@@ -229,7 +229,7 @@ VCR_FIXED_MULTIPART_BOUNDARY = "vcr-static-boundary"
 
 def pin_httpx_multipart_boundary(monkeypatch) -> None:
     try:
-        import httpx._multipart as _httpx_multipart
+        import httpx2._multipart as _httpx_multipart
     except ImportError:
         return
 

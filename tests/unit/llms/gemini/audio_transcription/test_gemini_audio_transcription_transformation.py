@@ -2,10 +2,11 @@ import base64
 import json
 import traceback
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.llms.gemini.audio_transcription.transformation import (
     GeminiAudioTranscriptionConfig,
@@ -291,10 +292,10 @@ class TestNonCompletedInteractionThroughRouter:
     @respx.mock
     async def test_retry_recovers_an_incomplete_interaction(self, router):
         route = respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            side_effect=[
+            side_effect=side_effect_for_respx([
                 httpx.Response(200, json=self._interaction("incomplete")),
                 httpx.Response(200, json=COMPLETED_RESPONSE),
-            ]
+            ])
         )
         response = await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
         assert route.call_count == 2
@@ -305,7 +306,7 @@ class TestNonCompletedInteractionThroughRouter:
     @pytest.mark.parametrize("status", ["incomplete", "failed", "cancelled", "in_progress", None])
     async def test_non_completed_interaction_retries_then_fails_without_transcript(self, router, status):
         route = respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(200, json=self._interaction(status))
+            return_value=response_for_respx(httpx.Response(200, json=self._interaction(status)))
         )
         with pytest.raises(litellm.APIConnectionError) as excinfo:
             await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))
@@ -319,7 +320,7 @@ class TestNonCompletedInteractionThroughRouter:
         payload = self._interaction("incomplete")
         payload["steps"][0]["content"] = "sensitive transcript text"
         respx.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-            return_value=httpx.Response(200, json=payload)
+            return_value=response_for_respx(httpx.Response(200, json=payload))
         )
         with pytest.raises(litellm.APIConnectionError) as excinfo:
             await router.atranscription(model="transcribe", file=("call.wav", AUDIO_BYTES, "audio/wav"))

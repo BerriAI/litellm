@@ -9,7 +9,7 @@ API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import override
 

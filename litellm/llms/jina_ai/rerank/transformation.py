@@ -9,7 +9,7 @@ Docs - https://jina.ai/reranker
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
-from httpx import URL, Response
+from httpx2 import URL, Response
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid

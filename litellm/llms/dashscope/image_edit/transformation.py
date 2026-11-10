@@ -1,8 +1,8 @@
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 from pydantic import TypeAdapter
 from typing_extensions import override
 

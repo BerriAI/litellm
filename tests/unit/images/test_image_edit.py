@@ -4,12 +4,14 @@ from collections.abc import Iterator, Mapping
 from datetime import datetime
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, override
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -110,7 +112,7 @@ async def test_bfl_image_edit_missing_image_returns_bad_request(image: list[File
 
 def test_openai_image_edit_sync_accepts_bytesio_images(respx_mock: respx.MockRouter, httpx_transport: None) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
-        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_EDIT_RESPONSE))
     )
 
     result: Final = litellm.image_edit(
@@ -130,7 +132,7 @@ def test_openai_image_edit_without_a_model_leaves_model_out_of_the_request(
     respx_mock: respx.MockRouter, httpx_transport: None
 ) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
-        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_EDIT_RESPONSE))
     )
 
     litellm.image_edit(
@@ -147,7 +149,7 @@ def test_openai_image_edit_without_a_model_leaves_model_out_of_the_request(
 @pytest.mark.asyncio
 async def test_openai_image_edit_accepts_bytesio_images(respx_mock: respx.MockRouter, httpx_transport: None) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
-        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_EDIT_RESPONSE))
     )
 
     result: Final = await litellm.aimage_edit(
@@ -168,7 +170,7 @@ async def test_openai_image_edit_accepts_mixed_bytes_and_bytesio(
     respx_mock: respx.MockRouter, httpx_transport: None
 ) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
-        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_EDIT_RESPONSE))
     )
 
     result: Final = await litellm.aimage_edit(
@@ -193,7 +195,7 @@ async def test_azure_image_edit_logs_deployment_model_and_positive_cost(
     monkeypatch.setattr(litellm, "callbacks", [logger])
     route: Final = respx_mock.post(
         url__startswith="https://fake.openai.azure.com/openai/deployments/CUSTOM_AZURE_DEPLOYMENT_NAME/images/edits"
-    ).mock(return_value=httpx.Response(200, json=_EDIT_RESPONSE))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_EDIT_RESPONSE)))
 
     result: Final = await litellm.aimage_edit(
         prompt="combine the reference images",
@@ -227,7 +229,7 @@ async def test_router_image_edit_returns_the_provider_image(
     respx_mock: respx.MockRouter, httpx_transport: None
 ) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
-        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_EDIT_RESPONSE))
     )
     router: Final = litellm.Router(
         model_list=[
@@ -270,7 +272,9 @@ async def test_an_edit_bills_the_deployment_price_at_its_size_on_a_logging_objec
 ) -> None:
     monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_BASE_IMAGE", raising=False)
-    respx_mock.post(_DASHSCOPE_IMAGE_URL).mock(return_value=httpx.Response(200, json=_DASHSCOPE_EDIT_RESPONSE))
+    respx_mock.post(_DASHSCOPE_IMAGE_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_DASHSCOPE_EDIT_RESPONSE))
+    )
     logging_made_before_routing: Final = Logging(
         model="qwen-image-edit",
         messages=[],
@@ -314,7 +318,7 @@ async def test_a_fal_edit_bills_the_deployment_price_per_image_on_a_logging_obje
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FAL_AI_API_BASE", raising=False)
-    respx_mock.post(_FAL_EDIT_URL).mock(return_value=httpx.Response(200, json=_FAL_EDIT_RESPONSE))
+    respx_mock.post(_FAL_EDIT_URL).mock(return_value=response_for_respx(httpx.Response(200, json=_FAL_EDIT_RESPONSE)))
     logging_made_before_routing: Final = Logging(
         model="flux-edit",
         messages=[],

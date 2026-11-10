@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Final
 
 import boto3
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from botocore.config import Config

@@ -4,7 +4,7 @@ import uuid
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support import claude_code as cc
 from integration._support.client import Gateway, eventually

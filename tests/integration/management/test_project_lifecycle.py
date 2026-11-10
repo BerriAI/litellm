@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import psutil
 import psycopg
 import pytest

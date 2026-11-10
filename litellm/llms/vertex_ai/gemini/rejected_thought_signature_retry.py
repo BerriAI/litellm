@@ -1,7 +1,7 @@
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from typing import Final, TypeVar
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm import verbose_logger

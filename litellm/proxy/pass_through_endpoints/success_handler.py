@@ -8,7 +8,7 @@ from typing import Any, Final
 from urllib.parse import urlparse
 
 import anyio
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER

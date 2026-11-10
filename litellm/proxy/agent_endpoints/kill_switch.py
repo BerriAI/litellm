@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger

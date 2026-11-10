@@ -9,9 +9,10 @@ from itertools import pairwise
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import BaseModel
 
 import litellm
@@ -42,6 +43,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
 )
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -2311,7 +2313,7 @@ def test_gemini_finish_reason(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "candidates": [
@@ -2319,7 +2321,7 @@ def test_gemini_finish_reason(respx_mock: respx.MockRouter) -> None:
                 ],
                 "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
             },
-        )
+        ))
     )
     response: Final = completion(
         model="gemini/gemini-2.5-flash",
@@ -2340,7 +2342,7 @@ def test_gemini_image_generation(respx_mock: respx.MockRouter) -> None:
             r"gemini-2\.5-flash-image:generateContent.*"
         )
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "candidates": [
@@ -2360,7 +2362,7 @@ def test_gemini_image_generation(respx_mock: respx.MockRouter) -> None:
                     "totalTokenCount": 2,
                 },
             },
-        )
+        ))
     )
     response: Final = completion(
         model="gemini/gemini-2.5-flash-image",
@@ -2419,7 +2421,7 @@ def _gemini_sse(*events: dict[str, object]) -> httpx.Response:
 @pytest.mark.respx(assert_all_called=True)
 async def test_gemini_image_generation_async(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash-image:generateContent").mock(
-        return_value=httpx.Response(200, json=GEMINI_IMAGE_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=GEMINI_IMAGE_RESPONSE))
     )
 
     response: Final = await litellm.acompletion(
@@ -2442,7 +2444,7 @@ async def test_gemini_image_generation_async(respx_mock: respx.MockRouter) -> No
 @pytest.mark.respx(assert_all_called=True)
 async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash-image:streamGenerateContent?alt=sse").mock(
-        return_value=_gemini_sse(
+        return_value=response_for_respx(_gemini_sse(
             {
                 "candidates": [
                     {
@@ -2463,7 +2465,7 @@ async def test_gemini_image_generation_async_stream(respx_mock: respx.MockRouter
                 "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 1290, "totalTokenCount": 1303},
                 "modelVersion": "gemini-2.5-flash-image",
             },
-        )
+        ))
     )
 
     response: Final = await litellm.acompletion(
@@ -2492,7 +2494,7 @@ def test_gemini_thinking(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "candidates": [
@@ -2500,7 +2502,7 @@ def test_gemini_thinking(respx_mock: respx.MockRouter) -> None:
                 ],
                 "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
             },
-        )
+        ))
     )
     response: Final = completion(
         model="gemini/gemini-2.5-flash",
@@ -2534,7 +2536,7 @@ def test_gemini_with_empty_function_call_arguments(respx_mock: respx.MockRouter)
     route: Final = respx_mock.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "candidates": [
@@ -2542,7 +2544,7 @@ def test_gemini_with_empty_function_call_arguments(respx_mock: respx.MockRouter)
                 ],
                 "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
             },
-        )
+        ))
     )
     completion(
         model="gemini/gemini-2.5-flash",
@@ -2573,7 +2575,7 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
         },
     }
     respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:streamGenerateContent?alt=sse").mock(
-        return_value=_gemini_sse(
+        return_value=response_for_respx(_gemini_sse(
             {
                 "candidates": [
                     {
@@ -2588,7 +2590,7 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
                 "usageMetadata": {"promptTokenCount": 80, "candidatesTokenCount": 10, "totalTokenCount": 90},
                 "modelVersion": "gemini-2.5-flash",
             }
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -2616,7 +2618,7 @@ def test_gemini_tool_use(respx_mock: respx.MockRouter) -> None:
 @pytest.mark.respx(assert_all_called=True)
 def test_system_message_with_no_user_message(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:generateContent").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "candidates": [
@@ -2624,7 +2626,7 @@ def test_system_message_with_no_user_message(respx_mock: respx.MockRouter) -> No
                 ],
                 "usageMetadata": {"promptTokenCount": 6, "candidatesTokenCount": 5, "totalTokenCount": 11},
             },
-        )
+        ))
     )
 
     response: Final = completion(
@@ -2654,7 +2656,7 @@ def test_url_context(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "candidates": [
@@ -2666,7 +2668,7 @@ def test_url_context(respx_mock: respx.MockRouter) -> None:
                 ],
                 "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
             },
-        )
+        ))
     )
     response: Final = completion(
         model="gemini/gemini-2.5-flash",
@@ -2686,7 +2688,7 @@ def test_gemini_openai_web_search_tool_to_google_search(respx_mock: respx.MockRo
     route: Final = respx_mock.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash:generateContent.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "candidates": [
@@ -2698,7 +2700,7 @@ def test_gemini_openai_web_search_tool_to_google_search(respx_mock: respx.MockRo
                 ],
                 "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 7, "totalTokenCount": 15},
             },
-        )
+        ))
     )
     response: Final = completion(
         model="gemini/gemini-2.5-flash",
@@ -2737,7 +2739,7 @@ GEMINI_GROUNDING_METADATA: Final = {
 @pytest.mark.respx(assert_all_called=True)
 def test_gemini_with_grounding(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:streamGenerateContent?alt=sse").mock(
-        return_value=_gemini_sse(
+        return_value=response_for_respx(_gemini_sse(
             {
                 "candidates": [
                     {"content": {"role": "model", "parts": [{"text": "The capital of France is Paris."}]}, "index": 0}
@@ -2755,7 +2757,7 @@ def test_gemini_with_grounding(respx_mock: respx.MockRouter) -> None:
                 ],
                 "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 7, "totalTokenCount": 15},
             },
-        )
+        ))
     )
 
     chunks: Final = list(
@@ -7794,7 +7796,7 @@ def _generate_content_body() -> dict:
 def test_generate_content_transform_uses_reported_model_version():
     """The served modelVersion must win over the requested name so downstream
     pricing sees what actually ran."""
-    import httpx
+    import httpx2 as httpx
 
     body = {**_generate_content_body(), "modelVersion": "gemini-x-served"}
     response: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
@@ -7809,7 +7811,7 @@ def test_generate_content_transform_uses_reported_model_version():
 
 
 def test_generate_content_transform_falls_back_to_requested_model():
-    import httpx
+    import httpx2 as httpx
 
     response: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
         completion_response=_generate_content_body(),
@@ -7865,7 +7867,7 @@ def test_served_model_version_reaches_assembled_stream_through_custom_stream_wra
 
 
 def test_generate_content_transform_strips_version_suffix_from_model_version():
-    import httpx
+    import httpx2 as httpx
 
     body: Final = {**_generate_content_body(), "modelVersion": "gemini-3.8-flash-001@default"}
     response: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
@@ -9016,7 +9018,7 @@ def test_gemini_exception_message_format():
     This addresses issue #14586 where Gemini API errors were incorrectly showing as
     VertexAIException instead of GeminiException due to incorrect exception mapping.
     """
-    import httpx
+    import httpx2 as httpx
     from unittest.mock import Mock
     from litellm.litellm_core_utils.exception_mapping_utils import exception_type
     from litellm import BadRequestError
@@ -9383,7 +9385,7 @@ def test_gemini_image_size_limit_exceeded(monkeypatch):
     deterministically exercises the size-limit rejection path without any
     external network dependency.
     """
-    from httpx import Request, Response
+    from httpx2 import Request, Response
 
     from litellm.litellm_core_utils.prompt_templates import image_handling
 

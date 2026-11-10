@@ -1,7 +1,7 @@
 import logging
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai import Timeout as SDKTimeout
 from pydantic import ValidationError

@@ -8,8 +8,8 @@ Reference: https://platform.minimax.io/docs
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
-from httpx import Headers
+import httpx2 as httpx
+from httpx2 import Headers
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

@@ -16,7 +16,7 @@ from typing import Final, Literal
 from urllib.parse import urlsplit
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import jwt
 import openai
 import psutil

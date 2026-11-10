@@ -17,7 +17,7 @@ from email.parser import BytesParser
 from email.policy import HTTP
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai import OpenAI
 from openai.types.realtime import (

@@ -6,7 +6,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Final, Protocol
 
-import httpx
+import httpx2 as httpx
 from websockets.exceptions import ConnectionClosedOK
 
 from litellm.rust_bridge import _native

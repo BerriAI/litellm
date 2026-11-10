@@ -226,7 +226,7 @@ def test_transform_response_with_service_tier():
     """Test that serviceTier from Bedrock response is mapped to service_tier in OpenAI format."""
     from unittest.mock import Mock
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -277,7 +277,7 @@ def test_transform_response_with_service_tier_default():
     """Test that serviceTier='default' is correctly mapped."""
     from unittest.mock import Mock
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -326,7 +326,7 @@ def test_transform_response_with_service_tier_flex():
     """Test that serviceTier='flex' is correctly mapped."""
     from unittest.mock import Mock
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 
@@ -375,7 +375,7 @@ def test_transform_response_without_service_tier():
     """Test that responses without serviceTier don't have service_tier attribute."""
     from unittest.mock import Mock
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.types.utils import ModelResponse
 

@@ -10,7 +10,7 @@ from typing import Any, Optional, Union
 from collections.abc import AsyncIterator, Callable, Iterator
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 

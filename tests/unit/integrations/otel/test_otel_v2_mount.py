@@ -23,7 +23,7 @@ from fastapi import FastAPI, HTTPException, Request, Response  # noqa: E402  # o
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.routing import Route  # noqa: E402
-import httpx  # noqa: E402
+import httpx2 as httpx  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from opentelemetry.instrumentation.propagators import (  # noqa: E402
     ResponsePropagator,

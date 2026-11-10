@@ -1,5 +1,6 @@
 """Tests for MCP OAuth discoverable endpoints"""
 
+from tests._support.respx_httpx2 import response_for_respx
 import hashlib
 import json
 import time
@@ -18,7 +19,7 @@ from litellm.types.mcp import MCPAuth
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    import httpx
+    import httpx2 as httpx
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
     from fastapi import APIRouter
     from respx import MockRouter
@@ -5947,7 +5948,7 @@ async def test_register_bridge_relay_requires_redirect_uris():
 async def test_register_bridge_relay_surfaces_upstream_error_not_500():
     """A bridge relay registration the upstream rejects must surface the upstream status and its
     RFC 7591 error body to the client, not a bare 500 that hides the real reason."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server.discoverable_endpoints import (
         register_client_with_server,
@@ -5996,7 +5997,7 @@ async def test_register_non_bridge_upstream_error_relays_status_not_500():
     """A non-bridge DCR rejection must relay the upstream status and RFC 7591 error body just like
     the bridge relay arm; a raw HTTPStatusError would escape to the global handler and surface as an
     opaque 500 that hides the real reason from the create-flow UI."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server.discoverable_endpoints import (
         register_client_with_server,
@@ -7303,7 +7304,7 @@ async def test_bridge_refresh_upstream_invalid_grant_maps_to_invalid_grant():
     """When the sealed upstream refresh token has been revoked or expired at the IdP, the upstream returns
     400 invalid_grant. The bridge refresh path maps that to an RFC 6749 invalid_grant response so the OAuth
     client re-runs authorization_code, rather than surfacing the opaque upstream error it cannot act on."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server.discoverable_endpoints import exchange_token_with_server
     from litellm.types.mcp import MCPAuth
@@ -7356,7 +7357,7 @@ async def test_bridge_refresh_upstream_error_detection_parses_json_not_substring
     of the body. An upstream error whose code is not invalid_grant (here invalid_client, with the string
     invalid_grant only inside error_description) must NOT be mistaken for a dead refresh token: it renders
     as the classified upstream rejection rather than triggering a spurious authorization_code re-run."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server.discoverable_endpoints import exchange_token_with_server
     from litellm.types.mcp import MCPAuth
@@ -8578,7 +8579,7 @@ async def test_resolve_active_litellm_key_transport_error_over_permanent_fault_i
     """A reconnect that dies on a missing engine binary raises the transport error last, with the
     BinaryNotFoundError as __context__. The binary is what blocks recovery, so the key read is "faulted",
     not the "unavailable" that the outer ConnectError alone would suggest."""
-    import httpx
+    import httpx2 as httpx
     from prisma.engine.errors import BinaryNotFoundError
 
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -9482,7 +9483,7 @@ async def test_token_exchange_authorization_code_passes_no_refresh_ownership(mon
 
 
 def _upstream_token_response(status_code: int, *, json_body: object = None, text_body: str = "") -> "httpx.Response":
-    import httpx
+    import httpx2 as httpx
 
     request = httpx.Request("POST", "https://oauth2.googleapis.com/token")
     if json_body is not None:
@@ -9657,7 +9658,7 @@ async def test_token_exchange_relays_rejection_when_http_client_raises():
     at call time, so in production the rejection escapes from the post call itself rather than from the
     explicit raise_for_status; the relay must catch it there too (proven live: a mock returning the
     error response passed while the real proxy still 500ed)."""
-    import httpx
+    import httpx2 as httpx
 
     rejection = _upstream_token_response(
         401, json_body={"error": "invalid_client", "error_description": "The OAuth client was not found."}
@@ -9718,7 +9719,7 @@ async def test_token_exchange_relays_rejection_when_http_client_raises():
 async def test_register_relays_rejection_when_http_client_raises():
     """Same live mechanism as the token exchange: the DCR rejection escapes from the post call itself,
     so the register relay must catch it there, not only from the explicit raise_for_status."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server.discoverable_endpoints import (
         register_client_with_server,
@@ -9781,7 +9782,7 @@ async def test_token_exchange_never_relays_out_of_contract_body_to_client():
 async def test_register_never_relays_out_of_contract_body_to_client():
     """Same trust boundary for DCR: a non-RFC7591 rejection body is logged server-side and the
     client detail names only the status."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server.discoverable_endpoints import (
         register_client_with_server,
@@ -9830,7 +9831,7 @@ async def test_token_exchange_unreadable_body_still_renders_oauth_fault():
     """An upstream whose failure body cannot be read (unconsumed stream, lying content-encoding)
     makes response.text/.json raise; the classifier must stay total so the caller still gets the
     §5.2-shaped 502 instead of the opaque 500 this change set out to remove."""
-    import httpx
+    import httpx2 as httpx
 
     unreadable = httpx.Response(
         400,
@@ -11418,7 +11419,7 @@ async def test_token_exchange_authenticates_with_the_sealed_clients_own_auth_met
     sealed public client (no method) keeps the body-credential path."""
     import base64
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server.discoverable_endpoints import (
         exchange_token_with_server,
@@ -12776,7 +12777,7 @@ async def test_dcr_refusal_is_actionable_without_upstream_body(
 ) -> None:
     from typing import Final
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server.discoverable_endpoints import (
         mint_ephemeral_dcr_client,
@@ -12789,12 +12790,13 @@ async def test_dcr_refusal_is_actionable_without_upstream_body(
         server_id=f"refused-{auth_type}-{dcr_bridge}-{flow}-{upstream_status}",
         client_id=None,
     )
-    import respx
+
+    from tests._support import respx_httpx2 as respx
 
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     with respx.mock as upstream:
         registration: Final = upstream.post(server.registration_url).mock(
-            return_value=httpx.Response(upstream_status, text="Forbidden private upstream details")
+            return_value=response_for_respx(httpx.Response(upstream_status, text="Forbidden private upstream details"))
         )
         operation: Final = (
             mint_ephemeral_dcr_client(_bridge_mock_request(), server)
@@ -12989,7 +12991,7 @@ async def test_oauth_exchange_stores_token_for_validated_jwt_user(
     owner_state: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy._types import MCPTransport
     from litellm.proxy.mcp_server import discoverable_endpoints
@@ -13564,7 +13566,7 @@ async def test_signed_oauth_callback_honors_credential_write_policy(
     admin_only: bool,
     cimd: bool,
 ) -> None:
-    import httpx
+    import httpx2 as httpx
 
     import litellm
     from litellm.caching.llm_caching_handler import LLMClientCache
@@ -14440,8 +14442,8 @@ async def test_registration_losing_conditional_write_reuses_only_a_matching_winn
 async def test_register_preserves_client_application_type_only_for_bridge_relay(
     auth_type: MCPAuth, metadata: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import httpx
-    import respx
+    import httpx2 as httpx
+    from tests._support import respx_httpx2 as respx
     from fastapi import FastAPI
 
     from litellm.proxy.mcp_server.discoverable_endpoints import router
@@ -14483,8 +14485,8 @@ async def test_register_preserves_client_application_type_only_for_bridge_relay(
 async def test_register_rejects_invalid_application_type_before_upstream(
     application_type: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import httpx
-    import respx
+    import httpx2 as httpx
+    from tests._support import respx_httpx2 as respx
     from fastapi import FastAPI
 
     from litellm.proxy.mcp_server.discoverable_endpoints import router
@@ -14495,7 +14497,7 @@ async def test_register_rejects_invalid_application_type_before_upstream(
     app.include_router(router)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         registration: Final = upstream.post(server.registration_url).respond(
             201, json={"client_id": "must-not-register"}
         )
@@ -14516,8 +14518,8 @@ async def test_register_rejects_invalid_application_type_before_upstream(
 async def test_register_application_type_keeps_no_registration_endpoint_fallback(
     client_id: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import httpx
-    import respx
+    import httpx2 as httpx
+    from tests._support import respx_httpx2 as respx
     from fastapi import FastAPI
 
     from litellm.proxy.mcp_server.discoverable_endpoints import router
@@ -14737,7 +14739,7 @@ def test_cimd_preserves_existing_identity_and_other_auth_modes(monkeypatch, upda
 
 @pytest.mark.asyncio
 async def test_cimd_document_is_public_and_binds_configured_origin(monkeypatch):
-    import httpx
+    import httpx2 as httpx
     from fastapi import FastAPI
 
     from litellm.proxy.mcp_server import discoverable_endpoints as endpoints

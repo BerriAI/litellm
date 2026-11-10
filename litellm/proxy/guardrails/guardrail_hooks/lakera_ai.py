@@ -13,7 +13,7 @@ import json
 import sys
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 
 import litellm

@@ -5,9 +5,10 @@ from collections.abc import Iterable
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import BaseModel, TypeAdapter
 
 import litellm
@@ -20,6 +21,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import StandardLoggingPayload, Usage
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.proxy.conftest import httpx_transport
 
 pytestmark: Final = pytest.mark.usefixtures(httpx_transport.__name__)
@@ -299,13 +301,13 @@ async def test_responses_exposes_provider_rate_limit_headers(sync_mode: bool) ->
         "x-ratelimit-reset-requests": "1s",
     }
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         mock_router.post(_OPENAI_URL).mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 status_code=200,
                 json=_response_body("resp_rate_limit"),
                 headers=response_headers,
-            )
+            ))
         )
         response: Final = (
             litellm.responses(model="openai/gpt-4o", api_key="sk-test", input="hi")
@@ -326,8 +328,10 @@ async def test_responses_exposes_provider_rate_limit_headers(sync_mode: bool) ->
 async def test_responses_converts_created_at_to_int_and_forwards_store() -> None:
     response_body: Final = _response_body("resp_store", store=True, created_at=_CREATED_AT + 0.75)
 
-    with respx.mock() as mock_router:
-        mock_router.post(_OPENAI_URL).mock(return_value=httpx.Response(status_code=200, json=response_body))
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        mock_router.post(_OPENAI_URL).mock(
+            return_value=response_for_respx(httpx.Response(status_code=200, json=response_body))
+        )
         response: Final = await litellm.aresponses(
             model="openai/gpt-4o",
             api_key="sk-test",
@@ -351,9 +355,9 @@ def test_chat_completion_bridges_responses_only_model_tools() -> None:
         {"type": "code_interpreter", "container": {"type": "auto"}},
     ]
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(_OPENAI_URL).mock(
-            return_value=httpx.Response(status_code=200, json=_response_body("resp_bridge"))
+            return_value=response_for_respx(httpx.Response(status_code=200, json=_response_body("resp_bridge")))
         )
         response: Final = litellm.completion(
             model="openai/gpt-5.5-pro",
@@ -389,9 +393,9 @@ async def test_codex_chat_completion_uses_responses_endpoint(sync_mode: bool) ->
     )
     messages: Final = [{"role": "user", "content": "Hey!"}]
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(_OPENAI_URL).mock(
-            return_value=httpx.Response(status_code=200, json=_response_body("resp_codex"))
+            return_value=response_for_respx(httpx.Response(status_code=200, json=_response_body("resp_codex")))
         )
         response: Final = (
             router.completion(model="openai-codex-mini-latest", messages=messages)
@@ -433,8 +437,10 @@ def test_codex_chat_completion_stream_strips_cache_control_and_transforms_tools(
         }
     ]
 
-    with respx.mock() as mock_router:
-        route: Final = mock_router.post(_OPENAI_URL).mock(return_value=_sse_reply(_response_sse("resp_codex_stream")))
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        route: Final = mock_router.post(_OPENAI_URL).mock(
+            return_value=response_for_respx(_sse_reply(_response_sse("resp_codex_stream")))
+        )
         stream: Final = litellm.completion(
             model="openai/gpt-5.3-codex",
             api_key="sk-test",
@@ -484,9 +490,9 @@ async def test_responses_mcp_followup_forwards_approval_and_previous_id() -> Non
     ]
     approval: Final = [{"type": "mcp_approval_response", "approve": True, "approval_request_id": "approval_123"}]
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(_OPENAI_URL).mock(
-            return_value=httpx.Response(status_code=200, json=_response_body("resp_mcp"))
+            return_value=response_for_respx(httpx.Response(status_code=200, json=_response_body("resp_mcp")))
         )
         first_response: Final = await litellm.aresponses(
             model="openai/gpt-4o",
@@ -521,12 +527,12 @@ async def test_responses_standard_logging_matches_final_response(
 ) -> None:
     capture: Final = _install_capture(monkeypatch)
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         mock_router.post(_OPENAI_URL).mock(
             return_value=(
-                _sse_reply(_response_sse("resp_logging"))
+                response_for_respx(_sse_reply(_response_sse("resp_logging"))
                 if mode == "stream"
-                else httpx.Response(status_code=200, json=_response_body("resp_logging"))
+                else httpx.Response(status_code=200, json=_response_body("resp_logging")))
             )
         )
         response: Final = await _async_logged_openai_response(mode)
@@ -541,8 +547,10 @@ async def test_responses_standard_logging_matches_final_response(
 def test_sync_stream_standard_logging_matches_final_response(monkeypatch: pytest.MonkeyPatch) -> None:
     capture: Final = _install_capture(monkeypatch)
 
-    with respx.mock() as mock_router:
-        mock_router.post(_OPENAI_URL).mock(return_value=_sse_reply(_response_sse("resp_sync_logging")))
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        mock_router.post(_OPENAI_URL).mock(
+            return_value=response_for_respx(_sse_reply(_response_sse("resp_sync_logging")))
+        )
         stream: Final = litellm.responses(model="openai/gpt-4o-mini", api_key="sk-test", input="hi", stream=True)
         response: Final = _completed_response(tuple(stream))
         requests: Final = tuple(mock_router.calls)
@@ -556,8 +564,10 @@ def test_sync_stream_standard_logging_matches_final_response(monkeypatch: pytest
 @pytest.mark.parametrize("sync_mode", (True, False))
 @pytest.mark.asyncio
 async def test_responses_stream_emits_valid_events(sync_mode: bool) -> None:
-    with respx.mock() as mock_router:
-        route: Final = mock_router.post(_OPENAI_URL).mock(return_value=_sse_reply(_response_sse("resp_stream")))
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        route: Final = mock_router.post(_OPENAI_URL).mock(
+            return_value=response_for_respx(_sse_reply(_response_sse("resp_stream")))
+        )
         events: Final = (
             tuple(litellm.responses(model="openai/gpt-4o", api_key="sk-test", input="hi", stream=True))
             if sync_mode
@@ -591,8 +601,10 @@ async def test_responses_stream_error_event_raises_bad_request() -> None:
         },
     }
 
-    with respx.mock() as mock_router:
-        route: Final = mock_router.post(_OPENAI_URL).mock(return_value=_sse_reply(_sse((created, error_event))))
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        route: Final = mock_router.post(_OPENAI_URL).mock(
+            return_value=response_for_respx(_sse_reply(_sse((created, error_event))))
+        )
         stream: Final = await litellm.aresponses(
             model="openai/gpt-5-mini", api_key="sk-test", input="oversized prompt", stream=True
         )
@@ -620,9 +632,9 @@ def _alias_router() -> litellm.Router:
 @pytest.mark.parametrize("sync_mode", (True, False))
 async def test_router_responses_alias_uses_underlying_model(sync_mode: bool) -> None:
     router: Final = _alias_router()
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(_OPENAI_URL).mock(
-            return_value=httpx.Response(status_code=200, json=_response_body("resp_router_alias"))
+            return_value=response_for_respx(httpx.Response(status_code=200, json=_response_body("resp_router_alias")))
         )
         response: Final = (
             router.responses(model="openai-offline-alias", input="hi")
@@ -641,8 +653,10 @@ async def test_router_responses_alias_uses_underlying_model(sync_mode: bool) -> 
 @pytest.mark.parametrize("sync_mode", (True, False))
 async def test_router_responses_alias_stream_uses_underlying_model(sync_mode: bool) -> None:
     router: Final = _alias_router()
-    with respx.mock() as mock_router:
-        route: Final = mock_router.post(_OPENAI_URL).mock(return_value=_sse_reply(_response_sse("resp_router_stream")))
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        route: Final = mock_router.post(_OPENAI_URL).mock(
+            return_value=response_for_respx(_sse_reply(_response_sse("resp_router_stream")))
+        )
         events: Final = (
             tuple(router.responses(model="openai-offline-alias", input="hi", stream=True))
             if sync_mode

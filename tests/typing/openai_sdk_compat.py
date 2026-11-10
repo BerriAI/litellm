@@ -1,6 +1,6 @@
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 from openai import HttpxBinaryResponseContent as SDKBinaryResponse
 from openai import Timeout as SDKTimeout

@@ -30,7 +30,7 @@ from math import ceil
 from types import MappingProxyType
 from typing import Final
 
-from httpx import HTTPStatusError, Response
+from httpx2 import HTTPStatusError, Response
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger

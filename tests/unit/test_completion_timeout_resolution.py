@@ -4,7 +4,7 @@ import os
 import sys
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai import Timeout as SDKTimeout
 

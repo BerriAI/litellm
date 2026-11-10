@@ -6,7 +6,7 @@ from typing import (
     Literal,
 )
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 

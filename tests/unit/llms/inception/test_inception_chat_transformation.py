@@ -6,7 +6,7 @@ import json
 import os
 from unittest import mock
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.llms.inception.chat.transformation import InceptionChatConfig
@@ -66,7 +66,7 @@ def test_inception_chat_sends_diffusion_params_in_body():
             ).encode(),
         )
 
-    with mock.patch("httpx.Client.send", new=fake_send):
+    with mock.patch("httpx2.Client.send", new=fake_send):
         litellm.completion(
             model="inception/mercury-2",
             messages=[{"role": "user", "content": "hi"}],
@@ -125,7 +125,7 @@ def test_inception_chat_response_surfaces_reasoning_and_usage():
             ).encode(),
         )
 
-    with mock.patch("httpx.Client.send", new=fake_send):
+    with mock.patch("httpx2.Client.send", new=fake_send):
         r = litellm.completion(
             model="inception/mercury-2",
             messages=[{"role": "user", "content": "hi"}],
@@ -269,7 +269,7 @@ def test_inception_completion_targets_inception_endpoint():
             },
         }
     ]
-    with mock.patch("httpx.Client.send", new=fake_send):
+    with mock.patch("httpx2.Client.send", new=fake_send):
         response = litellm.completion(
             model="inception/mercury-2",
             messages=[{"role": "user", "content": "hello"}],

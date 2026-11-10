@@ -33,10 +33,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cas
 from urllib.parse import ParseResult, urlparse
 
 import anyio
-import httpx
 import httpx2
+import httpx2 as httpx
 from fastapi import HTTPException
-from httpx import HTTPStatusError
+from httpx2 import HTTPStatusError
 from mcp import ReadResourceResult, Resource
 from mcp.shared.auth import OAuthMetadata
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams

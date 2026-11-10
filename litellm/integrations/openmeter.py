@@ -6,7 +6,7 @@ import os
 from collections.abc import Mapping
 from typing import Final, Protocol
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger

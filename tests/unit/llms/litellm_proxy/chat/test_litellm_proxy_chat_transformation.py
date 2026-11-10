@@ -5,9 +5,10 @@ from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types import CreateEmbeddingResponse, Embedding
@@ -17,6 +18,7 @@ import litellm
 from litellm import completion
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests._vcr_conftest_common import rewound_new_episodes_cassette
 from tests.capturing_transport import CapturingTransport
 
@@ -46,7 +48,11 @@ def test_proxy_model_discovery_preserves_the_api_base_path_and_upstream_namespac
     respx.get(
         f"http://upstream-listing.test:4000{models_path}",
         headers={"Authorization": "Bearer test-proxy-key"},
-    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "chat-model"}, {"id": "vendor/chat-model"}]}))
+    ).mock(
+        return_value=response_for_respx(
+            httpx.Response(200, json={"data": [{"id": "chat-model"}, {"id": "vendor/chat-model"}]})
+        )
+    )
 
     assert LiteLLMProxyChatConfig().get_models(
         api_base=f"http://upstream-listing.test:4000{base_path}", api_key="test-proxy-key"
@@ -654,7 +660,9 @@ async def test_litellm_gateway_image_generation_direct(is_async):
 
 @pytest.mark.respx(assert_all_called=False)
 def test_litellm_gateway_from_sdk_with_thinking_param(respx_mock):
-    respx_mock.route(host="0.0.0.0", port=4000).mock(side_effect=httpx.ConnectError("[Errno 61] Connection refused"))
+    respx_mock.route(host="0.0.0.0", port=4000).mock(
+        side_effect=side_effect_for_respx(httpx.ConnectError("[Errno 61] Connection refused"))
+    )
     with pytest.raises(Exception, match=re.escape("Connection error.")) as exc_info:
         response = litellm.completion(
             model="litellm_proxy/anthropic.claude-sonnet-4-5-20250929-v1:0",

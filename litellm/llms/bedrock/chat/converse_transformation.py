@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
 

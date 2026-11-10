@@ -3,7 +3,7 @@ import uuid
 from typing import Final
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI

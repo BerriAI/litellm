@@ -14,12 +14,14 @@ from pathlib import Path
 from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import Router
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -240,7 +242,7 @@ class TestUseResponsesApiBridgeFlag:
         respx_mock: respx.MockRouter,
     ):
         upstream: Final = respx_mock.post(upstream_url).mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 status_code=200,
                 json={
                     "id": "chatcmpl-123",
@@ -252,7 +254,7 @@ class TestUseResponsesApiBridgeFlag:
                     ],
                     "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
                 },
-            )
+            ))
         )
 
         response: Final = litellm.responses(
@@ -274,7 +276,7 @@ class TestUseResponsesApiBridgeFlag:
 
     def test_bridge_drops_client_metadata_even_when_allowed_openai_params_names_it(self, respx_mock: respx.MockRouter):
         upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 status_code=200,
                 json={
                     "id": "chatcmpl-123",
@@ -286,7 +288,7 @@ class TestUseResponsesApiBridgeFlag:
                     ],
                     "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
                 },
-            )
+            ))
         )
 
         response: Final = litellm.responses(
@@ -307,7 +309,7 @@ class TestUseResponsesApiBridgeFlag:
 
     def test_bridge_merges_instructions_and_developer_input_for_databricks(self, respx_mock: respx.MockRouter):
         upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 status_code=200,
                 json={
                     "id": "chatcmpl-123",
@@ -319,7 +321,7 @@ class TestUseResponsesApiBridgeFlag:
                     ],
                     "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
                 },
-            )
+            ))
         )
 
         response: Final = litellm.responses(
@@ -348,7 +350,7 @@ class TestUseResponsesApiBridgeFlag:
 
     def test_bridge_drops_client_metadata_for_provider_without_native_config(self, respx_mock: respx.MockRouter):
         upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 status_code=200,
                 json={
                     "id": "chatcmpl-123",
@@ -360,7 +362,7 @@ class TestUseResponsesApiBridgeFlag:
                     ],
                     "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
                 },
-            )
+            ))
         )
 
         response: Final = litellm.responses(
@@ -392,7 +394,7 @@ class TestUseResponsesApiBridgeFlag:
             "https://example-resource.openai.azure.com/openai/deployments/my-deployment/chat/completions",
             params={"api-version": "2024-10-21"},
         ).mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 status_code=200,
                 json={
                     "id": "chatcmpl-123",
@@ -404,7 +406,7 @@ class TestUseResponsesApiBridgeFlag:
                     ],
                     "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
                 },
-            )
+            ))
         )
 
         litellm.responses(
@@ -720,7 +722,7 @@ _RESPONSES: Final[Mapping[str, JsonValue]] = {"id": "dep-1", "mode": "responses"
 
 def _databricks_chat_upstream(respx_mock: respx.MockRouter) -> respx.Route:
     return respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             json={
                 "id": "chatcmpl-123",
@@ -732,7 +734,7 @@ def _databricks_chat_upstream(respx_mock: respx.MockRouter) -> respx.Route:
                 ],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
             },
-        )
+        ))
     )
 
 
@@ -900,7 +902,7 @@ def test_a_chat_pinned_responses_prefixed_router_deployment_reaches_the_response
     so the prefix has to win over that row too, or the request goes to Chat Completions as ``responses/gpt-5.6``."""
     monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
     responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "resp_1",
@@ -919,7 +921,7 @@ def test_a_chat_pinned_responses_prefixed_router_deployment_reaches_the_response
                 ],
                 "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
     router: Final = Router(
         model_list=[

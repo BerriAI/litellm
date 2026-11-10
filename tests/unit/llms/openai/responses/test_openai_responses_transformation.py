@@ -6,9 +6,10 @@ from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.types.responses.response_compaction_item import ResponseCompactionItem
 from pydantic import JsonValue, TypeAdapter
 
@@ -36,6 +37,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import Choices, Message, ModelResponse
+from tests._support.respx_httpx2 import side_effect_for_respx
 from tests.unit.proxy.conftest import httpx_transport
 import time
 
@@ -4872,12 +4874,12 @@ async def test_aresponses_forwards_previous_response_id_to_openai() -> None:
     )
     provider_url: Final = "https://api.openai.com/v1/responses"
 
-    with respx.mock() as router:
+    with respx.mock(using="httpcore2_and_legacy") as router:
         route: Final = router.post(provider_url).mock(
-            side_effect=[
+            side_effect=side_effect_for_respx([
                 httpx.Response(status_code=200, json=response_payloads[0]),
                 httpx.Response(status_code=200, json=response_payloads[1]),
-            ]
+            ])
         )
         first_response: Final = await litellm.aresponses(
             model="openai/gpt-4o",

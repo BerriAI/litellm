@@ -3,7 +3,7 @@ import json
 from collections.abc import Callable
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server

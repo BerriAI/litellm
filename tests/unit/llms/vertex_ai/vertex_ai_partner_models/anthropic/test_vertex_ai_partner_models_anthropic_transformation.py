@@ -6,9 +6,10 @@ from collections.abc import Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from google.oauth2.credentials import Credentials
 
 import litellm
@@ -23,6 +24,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 )
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -601,7 +603,7 @@ async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
         "https://us-east5-aiplatform.googleapis.com/v1/projects/test-project/locations/us-east5/"
         "publishers/anthropic/models/claude-3-5-sonnet-v2@20241022:rawPredict"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg-cache",
@@ -612,7 +614,7 @@ async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 4, "output_tokens": 1},
             },
-        )
+        ))
     )
     cached_block: Final = {
         "type": "text",

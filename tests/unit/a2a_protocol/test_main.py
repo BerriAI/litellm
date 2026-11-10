@@ -7,9 +7,10 @@ import json
 from collections.abc import AsyncGenerator, Callable, Coroutine, Iterator, Mapping
 from typing import Final, TypeAlias
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import BaseModel, ConfigDict
 
 pytest.importorskip("a2a.compat.v0_3.conversions")
@@ -21,6 +22,7 @@ from a2a.compat.v0_3.types import (
     SendStreamingMessageRequest,
 )
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.a2a_protocol.main import (
@@ -998,8 +1000,10 @@ async def test_agentcore_send_bills_a_task_reply_at_the_agents_token_prices(
             "artifacts": [{"artifactId": "a1", "parts": [{"kind": "text", "text": _LONG_AGENT_REPLY}]}],
         },
     }
-    with respx.mock(assert_all_called=True) as router:
-        router.post(url__regex=r".*/invocations.*").mock(return_value=httpx.Response(200, json=task_reply))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post(url__regex=r".*/invocations.*").mock(
+            return_value=response_for_respx(httpx.Response(200, json=task_reply))
+        )
         await asend_message(
             request=SendMessageRequest(id="bridge-send", params=_bridge_message_params()),
             litellm_params={**_AGENTCORE_PARAMS, **_PER_TOKEN_PRICES},
@@ -1019,8 +1023,8 @@ async def test_agentcore_stream_bills_every_appended_reply_chunk(
     extra_fields: Mapping[str, object], a2a_spend_recorder: _A2ASpendRecorder, respx_reachable_httpx: None
 ) -> None:
     events: Final = tuple({**event, **extra_fields} for event in _agentcore_appended_chunks(_LONG_AGENT_REPLY, 40))
-    with respx.mock(assert_all_called=True) as router:
-        router.post(url__regex=r".*/invocations.*").mock(return_value=_sse(*events))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post(url__regex=r".*/invocations.*").mock(return_value=response_for_respx(_sse(*events)))
         await _drain_bridge_stream({**_AGENTCORE_PARAMS, **_PER_TOKEN_PRICES})
 
     spend: Final = await a2a_spend_recorder.logged_spend()
@@ -1044,8 +1048,10 @@ _PYDANTIC_COMPLETED_TASK: Final[Mapping[str, object]] = {
 async def test_pydantic_ai_stream_bills_the_whole_chunked_reply(
     a2a_spend_recorder: _A2ASpendRecorder, respx_reachable_httpx: None
 ) -> None:
-    with respx.mock(assert_all_called=True) as router:
-        router.post("http://127.0.0.1:9/").mock(return_value=httpx.Response(200, json=_PYDANTIC_COMPLETED_TASK))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post("http://127.0.0.1:9/").mock(
+            return_value=response_for_respx(httpx.Response(200, json=_PYDANTIC_COMPLETED_TASK))
+        )
         await _drain_bridge_stream({"custom_llm_provider": "pydantic_ai_agents", **_PER_TOKEN_PRICES})
 
     spend: Final = await a2a_spend_recorder.logged_spend()
@@ -1119,8 +1125,10 @@ async def test_stream_the_client_drops_still_bills_the_agents_price(
     respx_reachable_httpx: None,
 ) -> None:
     _ = await _seed_shared_a2a_client(rpc_stream_events=_LANGGRAPH_STREAM_EVENTS)
-    with respx.mock(assert_all_called=False) as router:
-        router.post("http://127.0.0.1:9/").mock(return_value=httpx.Response(200, json=_PYDANTIC_COMPLETED_TASK))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as router:
+        router.post("http://127.0.0.1:9/").mock(
+            return_value=response_for_respx(httpx.Response(200, json=_PYDANTIC_COMPLETED_TASK))
+        )
         await drop_stream(open_stream())
 
     spend: Final = await a2a_spend_recorder.logged_spend()
@@ -1184,8 +1192,8 @@ async def test_agentcore_error_reply_is_not_billed_at_the_agents_price(
     upstream_reply: httpx.Response, a2a_spend_recorder: _A2ASpendRecorder, respx_reachable_httpx: None
 ) -> None:
     agent_params: Final = {**_AGENTCORE_PARAMS, "cost_per_query": 0.25}
-    with respx.mock(assert_all_called=True) as router:
-        router.post(url__regex=r".*/invocations.*").mock(return_value=upstream_reply)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post(url__regex=r".*/invocations.*").mock(return_value=response_for_respx(upstream_reply))
         if upstream_reply.headers["content-type"] == "text/event-stream":
             await _drain_bridge_stream(agent_params)
         else:

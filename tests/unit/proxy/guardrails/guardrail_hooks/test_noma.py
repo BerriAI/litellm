@@ -4,7 +4,7 @@ import os
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

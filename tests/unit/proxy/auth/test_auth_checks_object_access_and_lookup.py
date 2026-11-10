@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 from datetime import datetime, timedelta, timezone
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import Request, status
 

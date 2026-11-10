@@ -12,7 +12,7 @@ share an origin with the original request URL.
 
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 

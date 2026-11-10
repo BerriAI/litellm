@@ -14,7 +14,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping

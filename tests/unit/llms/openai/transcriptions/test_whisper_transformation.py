@@ -8,7 +8,7 @@ import json
 import traceback
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.openai.transcriptions.whisper_transformation import (

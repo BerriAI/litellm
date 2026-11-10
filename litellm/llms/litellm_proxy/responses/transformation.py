@@ -7,7 +7,7 @@ This config enables pass-through behavior to the proxy's /v1/responses endpoint.
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.url_utils import join_api_base

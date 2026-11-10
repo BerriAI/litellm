@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import orjson
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -66,7 +66,7 @@ def tavily(monkeypatch: pytest.MonkeyPatch) -> Iterator[respx.Route]:
         True,
     )
     litellm.in_memory_llm_clients_cache.flush_cache()
-    with respx.mock(assert_all_called=False) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as mock:
         yield mock.post(TAVILY_SEARCH_URL).respond(200, json={"results": [TAVILY_RESULT]})
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -253,7 +253,7 @@ def test_router_search_fallback_target_must_be_granted(
         ),
     )
     litellm.in_memory_llm_clients_cache.flush_cache()
-    with respx.mock(assert_all_called=False) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as mock:
         failing_tool: Final = mock.post(url__regex=r"https://api\.exa\.ai/.*").respond(500, json={"error": "down"})
         fallback_tool: Final = mock.post(TAVILY_SEARCH_URL).respond(200, json={"results": [TAVILY_RESULT]})
         response: Final = _client(_standalone_key(key_search_tools)).post(

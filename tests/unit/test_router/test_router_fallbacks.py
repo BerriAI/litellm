@@ -6,13 +6,14 @@ import logging
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm import Router
 import os
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
@@ -519,7 +520,7 @@ def test_async_fallbacks(caplog, respx_mock: respx.MockRouter, monkeypatch):
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={
                 "error": {
@@ -528,7 +529,7 @@ def test_async_fallbacks(caplog, respx_mock: respx.MockRouter, monkeypatch):
                     "code": "invalid_api_key",
                 }
             },
-        )
+        ))
     )
     verbose_router_logger.setLevel(level=logging.INFO)
     verbose_logger.setLevel(logging.CRITICAL + 1)
@@ -672,10 +673,10 @@ async def test_static_fallback_routes_after_service_unavailable(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _fallback_router()
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             _fallback_unavailable_response(),
             _fallback_chat_response("backup", "served by backup"),
-        )
+        ))
     )
 
     response: Final = await router.acompletion(
@@ -690,10 +691,10 @@ async def test_static_fallback_routes_after_service_unavailable(
 def test_dynamic_fallback_routes_sync_request(respx_mock: respx.MockRouter) -> None:
     router: Final = _fallback_router(fallbacks=[])
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             _fallback_unavailable_response(),
             _fallback_chat_response("backup", "served by backup"),
-        )
+        ))
     )
 
     response: Final = router.completion(
@@ -714,10 +715,10 @@ async def test_dynamic_fallback_routes_async_request(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _fallback_router(fallbacks=[])
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             _fallback_unavailable_response(),
             _fallback_chat_response("backup", "served by backup"),
-        )
+        ))
     )
 
     response: Final = await router.acompletion(
@@ -738,7 +739,7 @@ async def test_disable_fallbacks_stops_after_primary_error(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _fallback_router()
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        return_value=_fallback_unavailable_response()
+        return_value=response_for_respx(_fallback_unavailable_response())
     )
 
     with pytest.raises(litellm.ServiceUnavailableError):
@@ -758,10 +759,10 @@ async def test_fallback_preserves_original_messages(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _fallback_router()
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             _fallback_unavailable_response(),
             _fallback_chat_response("backup", "served by backup"),
-        )
+        ))
     )
     messages: Final = [{"role": "user", "content": "preserve this prompt"}]
 
@@ -802,7 +803,7 @@ async def test_embedding_fallback_routes_after_primary_error(
         num_retries=0,
     )
     route: Final = respx_mock.post("https://fallback-migration.local/v1/embeddings").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             _fallback_unavailable_response(401),
             httpx.Response(
                 200,
@@ -813,7 +814,7 @@ async def test_embedding_fallback_routes_after_primary_error(
                     "usage": {"prompt_tokens": 1, "total_tokens": 1},
                 },
             ),
-        )
+        ))
     )
 
     if sync_mode:
@@ -857,10 +858,10 @@ def test_model_id_fallback_returns_selected_deployment(
         num_retries=0,
     )
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             _fallback_unavailable_response(),
             _fallback_chat_response("backup", "fallback by deployment id"),
-        )
+        ))
     )
 
     response: Final = router.completion(
@@ -880,10 +881,10 @@ async def test_default_fallback_serves_after_primary_error(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _fallback_router(fallbacks=[], default_fallbacks=["backup"])
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             _fallback_unavailable_response(),
             _fallback_chat_response("backup", "served by default fallback"),
-        )
+        ))
     )
 
     response: Final = await router.acompletion(
@@ -954,7 +955,7 @@ async def test_fallback_request_does_not_retry_primary_when_retries_are_disabled
         num_retries=0,
     )
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        return_value=_fallback_unavailable_response()
+        return_value=response_for_respx(_fallback_unavailable_response())
     )
 
     with pytest.raises(litellm.ServiceUnavailableError):
@@ -972,11 +973,11 @@ async def test_default_and_model_fallbacks_do_not_repeat_failed_models(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _fallback_router(default_fallbacks=["primary"])
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             _fallback_unavailable_response(401),
             _fallback_unavailable_response(),
             _fallback_chat_response("primary", "unexpected repeat"),
-        )
+        ))
     )
 
     with pytest.raises(litellm.AuthenticationError):
@@ -996,7 +997,7 @@ async def test_unknown_default_fallback_raises_after_primary_failure(
     monkeypatch.setattr(litellm, "expose_router_debug_in_errors", True)
     router: Final = _fallback_router(fallbacks=[], default_fallbacks=["missing"])
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        return_value=_fallback_unavailable_response()
+        return_value=response_for_respx(_fallback_unavailable_response())
     )
 
     with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
@@ -1057,10 +1058,10 @@ async def test_responses_context_error_uses_the_configured_fallback_before_outpu
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _fallback_router(fallbacks=[{"primary": ["missing"]}] if context_fallback else None)
     route: Final = respx_mock.post("https://fallback-migration.local/v1/responses").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             _context_error_response_stream(event_type=event_type),
             _context_error_response_stream(completed=True),
-        )
+        ))
     )
     stream: Final = await router.aresponses(
         model="primary",
@@ -1102,7 +1103,7 @@ async def test_responses_context_error_does_not_restart_committed_or_disabled_st
         },
     }.get(barrier)
     route: Final = respx_mock.post("https://fallback-migration.local/v1/responses").mock(
-        return_value=_context_error_response_stream(preceding_event=preceding)
+        return_value=response_for_respx(_context_error_response_stream(preceding_event=preceding))
     )
     stream: Final = await router.aresponses(
         model="primary", input="oversized prompt", stream=True, disable_fallbacks=barrier == "disabled"
@@ -1141,10 +1142,10 @@ async def test_chat_context_error_falls_back_after_role_only_but_not_after_outpu
         "choices": [{"index": 0, "delta": {"role": "assistant", "content": "backup answer"}, "finish_reason": "stop"}],
     }
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(200, content=f"data: {json.dumps(first_chunk)}\n\ndata: {json.dumps(error)}\n\n".encode()),
             httpx.Response(200, content=f"data: {json.dumps(backup)}\n\ndata: [DONE]\n\n".encode()),
-        )
+        ))
     )
     request: Final = {
         "model": "primary", "messages": [{"role": "user", "content": "oversized prompt"}], "stream": True,
@@ -1262,7 +1263,7 @@ async def test_context_fallback_precedence_is_specific_to_the_requested_group(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = _context_fallback_precedence_router(context_key, ordered)
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(
                 400,
                 json={
@@ -1274,7 +1275,7 @@ async def test_context_fallback_precedence_is_specific_to_the_requested_group(
                 },
             ),
             _fallback_chat_response(expected_model, f"served by {expected_model}"),
-        )
+        ))
     )
 
     response: Final = (
@@ -1309,7 +1310,7 @@ async def test_context_fallback_exhaustion_preserves_the_selected_chain(
         json={"error": {"message": "This model's maximum context length is 10 tokens"}},
     )
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(refusal, refusal, _fallback_chat_response("generic", "generic answer"))
+        side_effect=side_effect_for_respx((refusal, refusal, _fallback_chat_response("generic", "generic answer")))
     )
 
     if matching_context:
@@ -1342,11 +1343,11 @@ async def test_ordered_fallback_failures_preserve_the_original_context_error(
     backup_error: Final = litellm.RateLimitError if backup_status == 429 else litellm.ServiceUnavailableError
     expected_error: Final = litellm.ContextWindowExceededError if context_error else backup_error
     route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(400 if context_error else 503, json={"error": {"message": original_message}}),
             httpx.Response(backup_status, json={"error": {"message": "ordered deployment unavailable"}}),
             httpx.Response(backup_status, json={"error": {"message": "generic deployment unavailable"}}),
-        )
+        ))
     )
 
     request: Final = (

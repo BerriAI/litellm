@@ -22,7 +22,7 @@ from typing import (
 )
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 import yaml
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Required

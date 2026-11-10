@@ -2,10 +2,11 @@ import json
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 
@@ -67,11 +68,11 @@ async def test_async_gemini_streaming_tool_call_arguments_are_valid(
     route: Final = respx.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-lite:streamGenerateContent.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=_sse_body(chunks),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
 
     stream: Final = await litellm.acompletion(
@@ -163,11 +164,11 @@ async def test_gemini_streaming_legacy_function_call_arguments_are_valid(
     respx.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-lite:streamGenerateContent.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=_sse_body(chunks),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     messages: Final = [{"role": "user", "content": "What is the weather in Boston?"}]
     functions: Final = [

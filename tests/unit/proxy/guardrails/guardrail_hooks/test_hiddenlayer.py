@@ -1,3 +1,4 @@
+import httpx2 as httpx
 import asyncio
 import os
 import threading
@@ -9,10 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import requests
 import responses
-import respx
-from fastapi import HTTPException
-from httpx import HTTPStatusError, Request, Response
 
+from tests._support import respx_httpx2 as respx
+from fastapi import HTTPException
+from httpx2 import HTTPStatusError, Request, Response
+
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import ModelResponse
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1201,7 +1204,7 @@ async def test_jwt_refresh_allows_other_coroutines_to_run_before_it_finishes(
         return 200, {}, '{"access_token": "fresh"}'
 
     def evaluate(request: Request) -> Response:
-        return Response(
+        return httpx.Response(
             401 if request.headers["Authorization"] == "Bearer expired" else 200,
             json=successful_body,
         )
@@ -1210,7 +1213,9 @@ async def test_jwt_refresh_allows_other_coroutines_to_run_before_it_finishes(
         await refresh_started.wait()
         release_refresh.set()
 
-    route: Final = respx_mock.route(method="POST", host="api.hiddenlayer.ai").mock(side_effect=evaluate)
+    route: Final = respx_mock.route(method="POST", host="api.hiddenlayer.ai").mock(
+        side_effect=side_effect_for_respx(evaluate)
+    )
     peer: Final = asyncio.create_task(other_request())
     with responses.RequestsMock() as auth:
         auth.add_callback(

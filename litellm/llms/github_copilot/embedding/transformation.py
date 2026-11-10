@@ -15,7 +15,7 @@ from typing import (
     cast,  # noqa: TID251  # narrows untyped request dicts at the session boundary
 )
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger

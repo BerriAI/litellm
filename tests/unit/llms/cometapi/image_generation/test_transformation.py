@@ -1,6 +1,6 @@
 from unittest.mock import Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import ValidationError
 

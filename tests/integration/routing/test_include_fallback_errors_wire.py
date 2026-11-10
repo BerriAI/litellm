@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import unquote
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.anthropic_sse import error_body, message_json, message_stream, parse_sse, stream_reply

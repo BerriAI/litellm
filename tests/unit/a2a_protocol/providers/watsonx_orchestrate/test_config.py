@@ -3,10 +3,11 @@ import re
 from typing import Final
 from unittest.mock import ANY
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.a2a_protocol.providers.watsonx_orchestrate.config import WatsonxOrchestrateA2AConfig
 from litellm.a2a_protocol.providers.watsonx_orchestrate.handler import WXOLitellmParams
@@ -36,10 +37,10 @@ def _a2a_params() -> dict[str, object]:
 
 def _mock_wxo_route(respx_mock: respx.MockRouter, url: str) -> respx.Route:
     respx_mock.post("https://iam.cloud.ibm.com/identity/token").mock(
-        return_value=httpx.Response(200, json={"access_token": "tok", "expires_in": 0})
+        return_value=response_for_respx(httpx.Response(200, json={"access_token": "tok", "expires_in": 0}))
     )
     return respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json={"status": "completed", "results": "wxo says hi"})
+        return_value=response_for_respx(httpx.Response(200, json={"status": "completed", "results": "wxo says hi"}))
     )
 
 

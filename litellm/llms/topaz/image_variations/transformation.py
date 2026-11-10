@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Final
 
 from aiohttp import ClientResponse
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import (

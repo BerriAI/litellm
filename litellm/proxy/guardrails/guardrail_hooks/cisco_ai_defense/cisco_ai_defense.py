@@ -25,7 +25,7 @@ from datetime import datetime
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 from typing_extensions import TypedDict, Unpack
 

@@ -5,7 +5,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, BeforeValidator, ConfigDict, TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 from typing_extensions import assert_never

@@ -11,7 +11,7 @@ from typing import (
     cast,  # noqa: TID251  # adapter protocols cover untyped cache and HTTP handler methods
 )
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.caching.in_memory_cache import InMemoryCache

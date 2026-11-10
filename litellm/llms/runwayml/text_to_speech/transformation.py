@@ -9,7 +9,7 @@ import time
 from collections.abc import Coroutine, Sequence
 from typing import TYPE_CHECKING, Any, Final, TypedDict, Union
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly
 
 import litellm

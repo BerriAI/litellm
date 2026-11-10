@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-from httpx._types import RequestFiles
+from httpx2._types import RequestFiles
 
 from litellm.images.utils import image_to_data_url
 from litellm.litellm_core_utils.url_utils import join_api_base

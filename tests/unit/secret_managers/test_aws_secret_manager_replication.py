@@ -6,7 +6,7 @@ All tests are mocked — no real AWS credentials required.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2

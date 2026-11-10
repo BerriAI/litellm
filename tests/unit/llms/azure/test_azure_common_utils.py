@@ -13,12 +13,13 @@ from typing import Awaitable, Callable, Final, Optional
 from urllib.parse import parse_qs
 from unittest.mock import ANY, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 import requests
 from azure.core.pipeline.transport import RequestsTransport
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.azure.common_utils import (
     BaseAzureLLM,
@@ -2446,7 +2447,7 @@ def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(mo
     http client it was handed, so treating the wrapper as litellm's to close would
     close the caller's shared session out from under them.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.caching.evicted_client_closer import EvictedClientCloser
     from litellm.caching.llm_caching_handler import LLMClientCache
@@ -2882,7 +2883,7 @@ def _azure_chat_with_oidc_token(
     monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
     monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
     respx_mock.post(f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/token").mock(
-        return_value=httpx.Response(entra_status_code, json=entra_body, headers=entra_headers)
+        return_value=response_for_respx(httpx.Response(entra_status_code, json=entra_body, headers=entra_headers))
     )
     return litellm.completion(
         model="azure/gpt-4.1",
@@ -2975,11 +2976,12 @@ def test_token_provider_error_without_azure_core_installed_keeps_the_generic_tok
 
 
 def test_image_generation_with_an_api_key_ignores_a_non_callable_azure_ad_token_provider():
-    import respx
+
+    from tests._support import respx_httpx2 as respx
 
     with respx.mock:
         image_route: Final = respx.post(url__startswith="https://litellm-qa.openai.azure.com").mock(
-            return_value=httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aGk="}]})
+            return_value=response_for_respx(httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aGk="}]}))
         )
         response: Final = litellm.image_generation(
             model="azure/gpt-image-1",

@@ -4,7 +4,7 @@ import os
 from typing import Final
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 import yaml
 
 import litellm

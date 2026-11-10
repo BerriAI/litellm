@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Annotated, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.constants import XAI_API_BASE

@@ -5,11 +5,13 @@ from typing import Final, Literal, TypedDict
 
 from typing_extensions import ReadOnly
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 import litellm.proxy.proxy_server as proxy_server
 from litellm.caching.caching import DualCache
@@ -58,7 +60,7 @@ def _slack_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _webhook(respx_mock: respx.MockRouter) -> respx.Route:
-    return respx_mock.post(_WEBHOOK).mock(return_value=httpx.Response(200, text="ok"))
+    return respx_mock.post(_WEBHOOK).mock(return_value=response_for_respx(httpx.Response(200, text="ok")))
 
 
 def _posted_texts(route: respx.Route) -> tuple[str, ...]:
@@ -127,7 +129,7 @@ async def test_a_queued_alert_is_posted_by_the_periodic_flush_without_a_manual_f
         delivered.set()
         return httpx.Response(200, text="ok")
 
-    route: Final = respx_mock.post(_WEBHOOK).mock(side_effect=deliver)
+    route: Final = respx_mock.post(_WEBHOOK).mock(side_effect=side_effect_for_respx(deliver))
     slack_alerting: Final = SlackAlerting(alerting_threshold=1, internal_usage_cache=DualCache(), alerting=["slack"])
     slack_alerting.flush_interval = 0
     slack_alerting.update_values(alerting=["slack"])
@@ -174,7 +176,7 @@ async def test_daily_report_lists_router_latency_after_success_and_failures_afte
 ) -> None:
     webhook: Final = _webhook(respx_mock)
     respx_mock.post(f"{_DAILY_BASE}/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(
                 200,
                 json={
@@ -198,7 +200,7 @@ async def test_daily_report_lists_router_latency_after_success_and_failures_afte
                     }
                 },
             ),
-        )
+        ))
     )
     model_id: Final = "daily-report-deployment"
     slack_alerting: Final = SlackAlerting(

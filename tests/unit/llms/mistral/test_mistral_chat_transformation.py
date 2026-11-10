@@ -1,3 +1,5 @@
+
+from tests._support.respx_httpx2 import response_for_respx
 import copy
 import json
 import logging
@@ -6,9 +8,9 @@ from typing import Final, List, cast
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from openai import AsyncOpenAI
 
 from litellm._logging import verbose_logger
@@ -1932,7 +1934,7 @@ def test_allowlisted_prompt_cache_key_reaches_a_gateway_in_front_of_mistral(resp
     import litellm
 
     gateway_route: Final = respx_mock.post("https://gateway.example.com/mistral/v1/chat/completions").mock(
-        return_value=_chat_completion_reply()
+        return_value=response_for_respx(_chat_completion_reply())
     )
 
     litellm.completion(
@@ -1955,7 +1957,7 @@ async def test_prompt_cache_key_is_dropped_from_an_async_codestral_call_to_anoth
     import litellm
 
     azure_route: Final = respx_mock.post(f"{AZURE_HOSTED_MISTRAL_API_BASE}/chat/completions").mock(
-        return_value=_chat_completion_reply()
+        return_value=response_for_respx(_chat_completion_reply())
     )
 
     await litellm.acompletion(
@@ -1981,7 +1983,7 @@ async def test_prompt_cache_key_rejection_for_an_async_codestral_call_names_code
     import litellm
 
     azure_route: Final = respx_mock.post(f"{AZURE_HOSTED_MISTRAL_API_BASE}/chat/completions").mock(
-        return_value=_chat_completion_reply()
+        return_value=response_for_respx(_chat_completion_reply())
     )
 
     with pytest.raises(litellm.BadRequestError, match=r"codestral does not support parameters: \['prompt_cache_key'\]"):
@@ -2006,7 +2008,7 @@ async def test_async_codestral_call_sends_an_uploaded_file_by_its_id(respx_mock:
 
     codestral_api_base: Final = "https://codestral.mistral.ai/v1"
     codestral_route: Final = respx_mock.post(f"{codestral_api_base}/chat/completions").mock(
-        return_value=_chat_completion_reply()
+        return_value=response_for_respx(_chat_completion_reply())
     )
 
     await litellm.acompletion(
@@ -2036,7 +2038,7 @@ def test_prompt_cache_key_rejection_for_a_sync_codestral_call_is_an_unsupported_
     import litellm
 
     azure_route: Final = respx_mock.post(f"{AZURE_HOSTED_MISTRAL_API_BASE}/chat/completions").mock(
-        return_value=_chat_completion_reply()
+        return_value=response_for_respx(_chat_completion_reply())
     )
 
     with pytest.raises(

@@ -19,11 +19,13 @@ from types import MappingProxyType
 from typing import Final, cast
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import litellm.utils as litellm_utils
 from litellm._internal_context import is_internal_call
@@ -407,22 +409,22 @@ async def test_aquery_forwards_filters_to_vector_store_search(
     top_level_filter: Final = json.loads(top_level_filter_json) if top_level_filter_json is not None else None
     expected_filter: Final = json.loads(expected_filter_json) if expected_filter_json is not None else None
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         search_route: Final = respx_mock.post("https://example.com/v1/vector_stores/vs_test_123/search").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 content='{"object":"vector_store.search_results.page","search_query":"q","data":[]}',
-            )
+            ))
         )
         respx_mock.post("https://example.com/v1/chat/completions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 content=(
                     '{"id":"chatcmpl-test","object":"chat.completion","created":1,"model":"gpt-4o-mini",'
                     '"choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],'
                     '"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
                 ),
-            )
+            ))
         )
         response: Final = await litellm.aquery(
             model="openai/gpt-4o-mini",

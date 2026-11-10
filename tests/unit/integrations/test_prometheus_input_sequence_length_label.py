@@ -242,7 +242,7 @@ async def test_logger_distinguishes_missing_usage_from_reported_zero(
 async def test_upstream_total_only_usage_has_unknown_input_length(
     monkeypatch: pytest.MonkeyPatch, total_tokens: int | None, prompt_tokens: int
 ):
-    import httpx
+    import httpx2 as httpx
 
     from litellm.litellm_core_utils.litellm_logging import Logging, StandardLoggingPayloadSetup
     from litellm.proxy.pass_through_endpoints.upstream_usage_headers import apply_upstream_reported_usage

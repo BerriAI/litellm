@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import PROVIDER_REQUEST_ID_HEADERS

@@ -1,13 +1,15 @@
+
 import json
 from typing import Final, Mapping, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue
 from respx import MockRouter
 from typing_extensions import ReadOnly, TypedDict
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 
@@ -150,7 +152,7 @@ def _assert_translated_request(case: _Case, body: Mapping[str, JsonValue]) -> No
 @pytest.mark.parametrize("sync_mode", (True, False))
 @pytest.mark.asyncio
 async def test_basic_rerank(case: _Case, sync_mode: bool, respx_mock: MockRouter) -> None:
-    route: Final = respx_mock.post(case["url"]).mock(return_value=_canned_response(case))
+    route: Final = respx_mock.post(case["url"]).mock(return_value=response_for_respx(_canned_response(case)))
     if sync_mode:
         response: Final = litellm.rerank(
             **dict(case["kwargs"]),

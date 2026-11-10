@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qsl, urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from google import genai

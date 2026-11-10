@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from scripts.seed_tracing_fixtures import JSON_OBJECT, spend_fixtures
@@ -409,7 +409,7 @@ async def seed(profile: Profile = "default", timeout_seconds: float = 120) -> in
             headers={"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"},
             timeout=timeout_seconds,
         ) as client,
-        Prisma(http={"timeout": httpx.Timeout(600)}) as database,
+        Prisma(http={"timeout": 600.0}) as database,
     ):
         await database.litellm_spendlogs.delete_many(where={"request_id": {"startswith": REQUEST_ID_PREFIX}})
         await database.litellm_spendlogs.create_many(data=[postgres_row(log, template, now) for log in logs])

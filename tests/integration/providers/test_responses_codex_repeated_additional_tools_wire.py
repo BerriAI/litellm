@@ -3,7 +3,7 @@ import uuid
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter

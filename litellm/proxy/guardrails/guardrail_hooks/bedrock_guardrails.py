@@ -22,7 +22,7 @@ from itertools import accumulate, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, Protocol, cast
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 

@@ -2,7 +2,7 @@ import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

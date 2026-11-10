@@ -17,7 +17,7 @@ assertions deterministic without touching production transform logic.
 import time
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 

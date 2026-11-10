@@ -1,4 +1,4 @@
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import ValidationError
 
@@ -61,7 +61,7 @@ class TestOVHCloudDurationFieldMigration:
         mock_response = MagicMock()
         mock_response.json.return_value = {"text": "silence", "seconds": 0.0}
         result = config.transform_audio_transcription_response(mock_response)
-        assert result._hidden_params["duration"] == 0.0        
+        assert result._hidden_params["duration"] == 0.0
 
 
 def _transform(payload: object) -> TranscriptionResponse:

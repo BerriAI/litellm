@@ -14,7 +14,7 @@ from typing import Final, Protocol, TypeVar, cast
 from urllib.parse import parse_qs
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import jwt
 import openai
 import psutil

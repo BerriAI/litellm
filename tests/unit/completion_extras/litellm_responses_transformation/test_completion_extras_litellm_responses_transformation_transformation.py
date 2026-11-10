@@ -11,9 +11,10 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast, get_args
 from unittest.mock import ANY, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.types.responses import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,
@@ -24,6 +25,7 @@ from openai.types.responses.response_reasoning_item import (
     Summary,
 )
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
@@ -69,9 +71,9 @@ def test_completion_over_responses_maps_anthropic_search_tool_to_openai_tool_sea
         },
     ]
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json=response_body)
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
         )
 
         litellm.completion(
@@ -131,8 +133,10 @@ def test_a_summary_alias_beside_an_extra_body_effort_reaches_the_responses_api(
         "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
     }
 
-    with respx.mock(assert_all_called=True) as router:
-        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
+        )
         litellm.completion(
             model=model,
             messages=[{"role": "user", "content": "ping"}],
@@ -176,8 +180,10 @@ def test_auto_summary_sends_the_level_the_target_accepts(
         "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
     }
 
-    with respx.mock(assert_all_called=True) as router:
-        upstream: Final = router.post(url).mock(return_value=httpx.Response(200, json=response_body))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        upstream: Final = router.post(url).mock(
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
+        )
         if endpoint == "chat_completions":
             litellm.completion(
                 model=model,
@@ -342,8 +348,8 @@ async def test_bridged_chat_call_is_logged_with_the_callers_call_type(
     response_body: Final = _searched_responses_body(model)
     request: Final = _bridged_request(model, provider_kwargs, stream=False)
 
-    with respx.mock(assert_all_called=True) as router:
-        router.post(url__startswith=url).mock(return_value=httpx.Response(200, json=response_body))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post(url__startswith=url).mock(return_value=response_for_respx(httpx.Response(200, json=response_body)))
         if caller == "acompletion":
             await litellm.acompletion(**request)
         else:
@@ -373,11 +379,11 @@ async def test_bridged_chat_stream_is_logged_as_the_chat_completion_it_streamed(
     response_body: Final = _searched_responses_body(model)
     request: Final = _bridged_request(model, provider_kwargs, stream=True)
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.post(url__startswith=url).mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200, text=_responses_sse(response_body), headers={"content-type": "text/event-stream"}
-            )
+            ))
         )
         served_ids: Final = await _served_chunk_ids(caller, request)
         logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
@@ -419,9 +425,9 @@ async def test_bridged_structured_output_call_is_logged_with_the_json_document_t
         "response_format": {"type": "json_object"},
     }
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.post(url__startswith="https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json=response_body)
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
         )
         served: Final = await litellm.acompletion(**request) if caller == "acompletion" else litellm.completion(**request)
         logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
@@ -445,9 +451,9 @@ async def _logged_text_completion(
     response_body: Final = _searched_responses_body("openai/gpt-5.3-codex")
     request: Final = {"model": "openai/gpt-5.3-codex", "prompt": "ping", "api_key": "test-key"}
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.post(url__startswith="https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json=response_body)
+            return_value=response_for_respx(httpx.Response(200, json=response_body))
         )
         served: Final = (
             await litellm.atext_completion(**request) if caller == "acompletion" else litellm.text_completion(**request)
@@ -509,8 +515,10 @@ async def test_bridged_messages_call_is_logged_as_anthropic_messages_under_the_i
         else httpx.Response(200, json=response_body)
     )
 
-    with respx.mock(assert_all_called=True) as router:
-        router.post(url__startswith="https://api.openai.com/v1/responses").mock(return_value=upstream)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post(url__startswith="https://api.openai.com/v1/responses").mock(
+            return_value=response_for_respx(upstream)
+        )
         served: Final = await litellm.anthropic.messages.acreate(
             model="openai/gpt-5.3-codex",
             max_tokens=64,
@@ -541,13 +549,13 @@ async def test_bridged_chat_stream_keeps_the_upstream_headers_when_its_output_ca
     response_body: Final = {**_searched_responses_body("openai/gpt-5.3-codex"), "output": []}
     request: Final = _bridged_request("openai/gpt-5.3-codex", {}, stream=True)
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.post(url__startswith="https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 text=_responses_sse(response_body),
                 headers={"content-type": "text/event-stream", "x-request-id": "req_upstream"},
-            )
+            ))
         )
         await _served_chunk_ids(caller, request)
         logged: Final = await asyncio.to_thread(recorder.seen_by_caller[caller].get, timeout=10)
@@ -3930,11 +3938,11 @@ async def test_streamed_reasoning_signature_reaches_messages_clients_and_never_c
     from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.post(url__startswith="https://example.invalid/openai/responses").mock(
-            side_effect=lambda _request: httpx.Response(
+            side_effect=side_effect_for_respx(lambda _request: httpx.Response(
                 200, text=_signed_reasoning_sse(), headers={"content-type": "text/event-stream"}
-            )
+            ))
         )
         chat_stream: Final = await litellm.acompletion(
             model="azure/gpt-6-sol",

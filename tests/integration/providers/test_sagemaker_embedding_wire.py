@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 import yaml

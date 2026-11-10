@@ -24,7 +24,7 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -175,7 +175,7 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
 async def test_tracing_config_automatically_exports_spend_without_a_storage_dependency(
     shutdown_error: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.tracing_runtime import manage_tracing
     from litellm.tracing.exporter import LensExporter

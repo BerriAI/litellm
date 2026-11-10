@@ -1,3 +1,4 @@
+
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -5,11 +6,12 @@ from dataclasses import dataclass, field
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import ModelResponse, Router
 from litellm.proxy._types import UserAPIKeyAuth
@@ -709,8 +711,10 @@ def test_get_available_models_for_user_fetches_a_live_catalog_without_holding_th
         await catalog.release_from_the_loop()
         return await listing
 
-    with respx.mock() as respx_mock:
-        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(side_effect=catalog.answer)
+    with respx.mock(using="httpcore2_and_legacy") as respx_mock:
+        catalog_route: Final = respx_mock.get(f"{OPENROUTER_BASE}/models/user").mock(
+            side_effect=side_effect_for_respx(catalog.answer)
+        )
         models: Final = asyncio.run(list_models_on_a_one_thread_default_pool())
 
     assert catalog_route.calls.last.response.status_code == 200
