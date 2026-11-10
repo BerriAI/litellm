@@ -1860,27 +1860,13 @@ class CustomerBase(LiteLLMPydanticObjectBase):
     blocked: bool = False
 
 
-_CUSTOMER_BUDGET_FIELDS: Final = frozenset(
-    (
-        "tpm_limit",
-        "rpm_limit",
-        "budget_duration",
-        "soft_budget",
-        "max_parallel_requests",
-        "model_max_budget",
-        "model_tpm_limit",
-        "model_rpm_limit",
-    )
-)
-
-
 def reject_unknown_customer_fields(request: type[BaseModel], values: object) -> object:
     if not isinstance(values, dict):
         return values
     unknown: Final = tuple(sorted(str(key) for key in values if key not in request.model_fields))  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # raw request body
     if not unknown:
         return values
-    on_budget: Final = tuple(field for field in unknown if field in _CUSTOMER_BUDGET_FIELDS)
+    on_budget: Final = tuple(field for field in unknown if field in BudgetNewRequest.model_fields)
     hint: Final = (
         f" {', '.join(on_budget)}: these live on the customer's budget object, update it with /budget/update."
         if on_budget
