@@ -15644,7 +15644,7 @@ def _tokenizer_load_slot(
     )
 
 
-async def _tokenizer_after_provider_error(
+async def _tokenizer_within_load_wait(
     model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
 ) -> SelectTokenizerResponse | BaseException:
     loop: Final = asyncio.get_running_loop()
@@ -15666,7 +15666,7 @@ async def _tokenizer_after_provider_error(
             asyncio.shield(load.outcome),
             timeout=max(load.started_at + TOKENIZER_LOAD_WAIT_SECONDS - loop.time(), 0),
         )
-    except Exception as e:  # noqa: BLE001  # a tokenizer that cannot be read, loaded in time, or loaded at all answers the provider's error
+    except Exception as e:  # noqa: BLE001  # each caller decides what a tokenizer that cannot be read, loaded in time, or loaded at all answers
         return e
     return outcome.tokenizer
 
@@ -15674,12 +15674,23 @@ async def _tokenizer_after_provider_error(
 async def _tokenizer_or_provider_error(
     model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure
 ) -> SelectTokenizerResponse:
-    tokenizer: Final = await _tokenizer_after_provider_error(model, custom_tokenizer)
+    tokenizer: Final = await _tokenizer_within_load_wait(model, custom_tokenizer)
     if not isinstance(tokenizer, BaseException):
         return tokenizer
     if not _answers_provider_error(tokenizer):
         raise tokenizer.with_traceback(None)
     raise _provider_error_after_failed_estimate(provider_failure, tokenizer) from tokenizer
+
+
+async def _tokenizer_or_tiktoken_after_load_wait(model: str) -> SelectTokenizerResponse:
+    tokenizer: Final = await _tokenizer_within_load_wait(model, None)
+    match tokenizer:
+        case asyncio.TimeoutError() | _TokenizerLoadsBusy():
+            return {"type": "openai_tokenizer", "tokenizer": litellm.utils.get_default_encoding()}
+        case BaseException():
+            raise tokenizer.with_traceback(None)
+        case _:
+            return tokenizer
 
 
 async def _local_token_estimate(
@@ -15692,9 +15703,11 @@ async def _local_token_estimate(
     provider_failure: ProviderCountFailure | None,
 ) -> _LocalTokenEstimate:
     tokenizer: Final = (
-        await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
-        if provider_failure is None
-        else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
+        await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
+        if provider_failure is not None
+        else await _tokenizer_or_tiktoken_after_load_wait(model)
+        if custom_tokenizer is None
+        else await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
     )
     count: Final = offload_token_count(litellm.token_counter)(
         model=template_model,

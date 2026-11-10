@@ -5296,6 +5296,54 @@ async def test_token_counter_counts_a_custom_named_deployment_like_the_base_mode
     assert named.total_tokens == served.total_tokens
 
 
+def test_custom_named_llama_deployment_counts_with_tiktoken_while_its_tokenizer_download_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "my-llama",
+                    "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"},
+                }
+            ]
+        ),
+    )
+    real_select_tokenizer: Final = litellm.utils.select_tokenizer
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    downloads: Final[list[str]] = []
+
+    def hanging_download(model: str, custom_tokenizer: object = None) -> SelectTokenizerResponse:
+        downloads.append(model)
+        download_started.set()
+        hub_released.wait(10)
+        return real_select_tokenizer(model="gpt-5.4-mini")
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", hanging_download)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def tokenizer_type() -> str:
+        response: Final = await token_counter(
+            request=TokenCountRequest(model="my-llama", messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    async def burst_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            burst: Final = asyncio.gather(*(tokenizer_type() for _ in range(20)))
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            return tuple(await asyncio.wait_for(burst, 8))
+        finally:
+            hub_released.set()
+
+    assert set(_run_on_skippable_clock(burst_past_the_wait)) == {"openai_tokenizer"}
+    assert downloads == ["meta-llama/Llama-3.3-70B-Instruct"]
+
+
 _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {"model": "count-log-gpt", "messages": [{"role": "user", "content": "Hello, how many tokens is this?"}]}
 )
