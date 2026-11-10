@@ -108,6 +108,7 @@ from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: F401 
 )
 from litellm.proxy.mcp_server.catalog import _configuration_identity, _DiscoveryCache, _DiscoveryKey
 from litellm.proxy.mcp_server.contracts import OperationContext
+from litellm.proxy.mcp_server.dynamic_url import dynamic_url_header, server_for_request, skips_dynamic_url_listing
 from litellm.proxy.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
@@ -235,6 +236,7 @@ from litellm.types.mcp import (
     without_header,
 )
 from litellm.types.mcp_server.mcp_server_manager import (
+    MCPDynamicURL,
     MCPInfo,
     MCPOAuthMetadata,
     MCPServer,
@@ -467,6 +469,7 @@ class MCPServerConfig(TypedDict, total=False):
     timeout: float
     max_concurrent_requests: int
     rpm: ReadOnly[int | None]
+    dynamic_url: ReadOnly[object]
 
 
 class _ProtectedResourceMetadataPayload(TypedDict, total=False):
@@ -532,6 +535,23 @@ def _config_per_server_oauth_discovery(
             "auth_type oauth2 with oauth2_flow authorization_code and without delegate_auth_to_upstream."
         )
     return enabled
+
+
+_DYNAMIC_URL_ADAPTER: Final[TypeAdapter[MCPDynamicURL | None]] = TypeAdapter(MCPDynamicURL | None)
+
+
+def _config_dynamic_url(server_config: MCPServerConfig, server_ref: str) -> MCPDynamicURL | None:
+    dynamic_url: Final = _DYNAMIC_URL_ADAPTER.validate_python(server_config.get("dynamic_url"))
+    if dynamic_url is None:
+        return None
+    if server_config.get("url") or server_config.get("spec_path"):
+        raise ValueError(
+            f"Invalid config for MCP server '{server_ref}': dynamic_url takes the URL from each request, "
+            "so url and spec_path must not be set."
+        )
+    if server_config.get("transport", MCPTransport.http) not in (MCPTransport.http, MCPTransport.sse):
+        raise ValueError(f"Invalid config for MCP server '{server_ref}': dynamic_url needs transport http or sse.")
+    return dynamic_url
 
 
 def _pinned_config_server_id(raw_server_id: object, server_name: str) -> str | None:
@@ -2459,7 +2479,7 @@ class MCPServerManager:
 
     def _remember_upstream_initialize_instructions(self, server: MCPServer, client: MCPClient) -> None:
         raw: Final[str | None] = getattr(client, "_last_initialize_instructions", None)
-        if raw and str(raw).strip():
+        if raw and str(raw).strip() and server.dynamic_url is None:
             self._upstream_initialize_instructions_by_server_id[server.server_id] = str(raw).strip()
 
     async def ensure_upstream_initialize_instructions_cached(self, server: MCPServer) -> None:
@@ -2861,6 +2881,7 @@ class MCPServerManager:
                 rpm=server_config.get("rpm", None),
                 token_validation=server_config.get("token_validation", None),
                 oauth_identity_binding=server_config.get("oauth_identity_binding", None),
+                dynamic_url=_config_dynamic_url(server_config, server_name),
             )
             self.assign_unique_short_prefix(new_server)
             _warn_overlapping_tool_policies(new_server)
@@ -3095,6 +3116,8 @@ class MCPServerManager:
         )
 
     def server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
+        if server.dynamic_url is not None:
+            return True
         owned: Final = self.owned_mapping_values(server)
         mapped_owners: Final = (
             self.tool_name_to_mcp_server_name_mapping.get(spelling)
@@ -4390,7 +4413,7 @@ class MCPServerManager:
     ) -> MCPClient:
         self.catalog.assert_current(server)
         record_auth_resolution(server.server_id, AuthResolution.unresolved)
-        resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
+        resolved_server: Final = server_for_request(await self.ensure_oauth_metadata_discovered(server), raw_headers)
         return await prepare_upstream_client(
             resolved_server,
             provider=cred_provider or self._cred_provider,
@@ -4478,7 +4501,7 @@ class MCPServerManager:
             global_mcp_tool_registry,
         )
 
-        if self._skip_blocked_stdio_listing(server, "tool"):
+        if self._skip_blocked_stdio_listing(server, "tool") or skips_dynamic_url_listing(server, raw_headers):
             if params is not None and params.cursor is not None:
                 raise RuntimeError("Upstream catalog is unavailable")
             return ListToolsResult(tools=[])
@@ -4710,10 +4733,11 @@ class MCPServerManager:
             else self._tool_subject_token(server, caller.oauth2_headers, caller.raw_headers, auth)
         )
         identity: Final = None if auth is None else _admission_identity(auth, caller.raw_headers)
-        if not (identity or caller.mcp_auth_header or forwarded or stdio_env or caller_bearer):
+        upstream_url: Final = dynamic_url_header(caller.raw_headers) if server.dynamic_url is not None else None
+        if not (identity or caller.mcp_auth_header or forwarded or stdio_env or caller_bearer or upstream_url):
             return None
         material: Final = json.dumps(
-            (identity, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer),
+            (identity, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer, upstream_url),
             sort_keys=True,
             separators=(",", ":"),
         )
@@ -5865,7 +5889,7 @@ class MCPServerManager:
                     continue
                 if namespace_owner is None and global_mcp_tool_registry.get_tool(spelling) is not None:
                     continue
-                if register_bare_names or spelling != original_name:
+                if server.dynamic_url is None and (register_bare_names or spelling != original_name):
                     self.tool_name_to_mcp_server_name_mapping[spelling] = prefix
 
         verbose_logger.info("Successfully fetched %s tools from server %s", len(prefixed_tools), server.name)
@@ -7100,7 +7124,7 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         start_time: Final = datetime.datetime.now()
-        mcp_server: Final = self._resolve_mcp_server_for_tool_call(server_name, name)
+        mcp_server: Final = server_for_request(self._resolve_mcp_server_for_tool_call(server_name, name), raw_headers)
         effective_guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(
             guardrail_auth=guardrail_auth,
             user_api_key_auth=user_api_key_auth,

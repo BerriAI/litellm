@@ -288,7 +288,7 @@ async def test_call_tool_threads_logging_obj_into_both_hooks():
 
     mgr.pre_call_tool_check = _fake_pre_call_tool_check
     mgr._create_during_hook_task = _fake_during_hook_task
-    mgr._resolve_mcp_server_for_tool_call = lambda server_name, name: mock.MagicMock(spec_path=None)
+    mgr._resolve_mcp_server_for_tool_call = lambda server_name, name: mock.MagicMock(spec_path=None, dynamic_url=None)
     mgr._resolve_oauth2_headers_for_tool_call = mock.AsyncMock(return_value=None)
     mgr._call_regular_mcp_tool = mock.AsyncMock(return_value=mock.MagicMock())
 
