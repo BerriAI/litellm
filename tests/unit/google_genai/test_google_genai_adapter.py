@@ -4,9 +4,12 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 import json
 import unittest
+from itertools import chain
+from typing import Final
 
 import pytest
 
+from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 from litellm.google_genai.main import agenerate_content
 
 
@@ -306,37 +309,139 @@ def test_function_response_message_transformation():
     assert response_content["humidity"] == "45%"
 
 
-def test_parallel_calls_to_one_function_get_distinct_ids_that_their_responses_answer():
-    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+def _tagged_call(name: str, tag: str, **extra: str) -> dict[str, object]:
+    return {"functionCall": {"name": name, "args": {"tag": tag}, **extra}}
 
-    contents = [
-        {"role": "user", "parts": [{"text": "Weather in Paris and Rome?"}]},
-        {
-            "role": "model",
-            "parts": [
-                {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}},
-                {"functionCall": {"name": "get_weather", "args": {"city": "Rome"}}},
-                {"functionCall": {"name": "get_time", "args": {"city": "Paris"}}},
-            ],
-        },
-        {
-            "role": "user",
-            "parts": [
-                {"functionResponse": {"name": "get_weather", "response": {"forecast": "Sun"}}},
-                {"functionResponse": {"name": "get_weather", "response": {"forecast": "Rain"}}},
-                {"functionResponse": {"name": "get_time", "response": {"time": "noon"}}},
-            ],
-        },
-    ]
 
+def _tagged_response(name: str, tag: str, **extra: str) -> dict[str, object]:
+    return {"functionResponse": {"name": name, "response": {"tag": tag}, **extra}}
+
+
+@pytest.mark.parametrize(
+    "contents",
+    [
+        pytest.param(
+            [
+                {"role": "model", "parts": [_tagged_call("get_weather", "paris"), _tagged_call("get_weather", "rome")]},
+                {
+                    "role": "user",
+                    "parts": [_tagged_response("get_weather", "paris"), _tagged_response("get_weather", "rome")],
+                },
+            ],
+            id="parallel_calls_answered_in_one_turn",
+        ),
+        pytest.param(
+            [
+                {"role": "model", "parts": [_tagged_call("get_weather", "paris"), _tagged_call("get_weather", "rome")]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "paris")]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "rome")]},
+            ],
+            id="parallel_calls_answered_in_separate_turns",
+        ),
+        pytest.param(
+            [
+                {"role": "model", "parts": [_tagged_call("get_weather", "paris")]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "paris")]},
+                {"role": "model", "parts": [_tagged_call("get_weather", "rome")]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "rome")]},
+            ],
+            id="one_function_called_again_in_a_later_turn",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        _tagged_call("foo", "first"),
+                        _tagged_call("foo", "second"),
+                        _tagged_call("foo_1", "other"),
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [
+                        _tagged_response("foo", "first"),
+                        _tagged_response("foo", "second"),
+                        _tagged_response("foo_1", "other"),
+                    ],
+                },
+            ],
+            id="repeat_of_a_name_another_name_extends",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        _tagged_call("get_weather", "paris", id="call-paris"),
+                        _tagged_call("get_weather", "rome", id="call-rome"),
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [
+                        _tagged_response("get_weather", "rome", id="call-rome"),
+                        _tagged_response("get_weather", "paris", id="call-paris"),
+                    ],
+                },
+            ],
+            id="caller_ids_answered_out_of_order",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        _tagged_call("get_weather", "paris", id="call_get_weather"),
+                        _tagged_call("get_weather", "rome"),
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [_tagged_response("get_weather", "paris"), _tagged_response("get_weather", "rome")],
+                },
+            ],
+            id="caller_id_shaped_like_a_generated_one",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        {"functionCall": {"name": "get_weather", "args": {"tag": "paris"}, "id": 7}},
+                        _tagged_call("get_weather", "rome"),
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [_tagged_response("get_weather", "paris"), _tagged_response("get_weather", "rome")],
+                },
+            ],
+            id="caller_id_not_a_string",
+        ),
+    ],
+)
+def test_each_function_response_answers_the_call_it_was_sent_for(contents: list[dict[str, object]]):
     messages = GoogleGenAIAdapter().translate_generate_content_to_completion(model="gpt-6-luna", contents=contents)[
         "messages"
     ]
 
-    call_ids = [call["id"] for call in messages[1]["tool_calls"]]
-    assert len(set(call_ids)) == 3
-    assert [message["tool_call_id"] for message in messages[2:]] == call_ids
-    assert [json.loads(message["content"]) for message in messages[2:4]] == [{"forecast": "Sun"}, {"forecast": "Rain"}]
+    calls = list(chain.from_iterable(message.get("tool_calls") or () for message in messages))
+    tag_by_call_id = {call["id"]: json.loads(call["function"]["arguments"])["tag"] for call in calls}
+    answers = [message for message in messages if message["role"] == "tool"]
+    assert len(tag_by_call_id) == len(calls) == len(answers)
+    assert [tag_by_call_id[answer["tool_call_id"]] for answer in answers] == [
+        json.loads(answer["content"])["tag"] for answer in answers
+    ]
+
+
+@pytest.mark.parametrize("parts", [pytest.param({"text": "Hi"}, id="one_object"), pytest.param("Hi", id="string")])
+def test_a_turn_whose_parts_is_not_a_list_is_read_as_one_part(parts: object):
+    messages: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="gpt-6-luna", contents=[{"role": "user", "parts": parts}]
+    )["messages"]
+
+    assert messages == [{"role": "user", "content": "Hi"}]
 
 
 def test_completion_to_generate_content_with_tool_calls():

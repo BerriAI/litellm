@@ -1,7 +1,9 @@
 import json
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import accumulate, chain, count, groupby
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypeVar, cast
+from typing import Any, Final, Literal, TypeAlias, TypeVar, cast
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -61,20 +63,15 @@ class _GenAIPart(TypedDict, total=False):
 
 
 class _GenAIFunctionResponse(TypedDict, total=False):
+    id: ReadOnly[str]
     name: ReadOnly[str]
     response: ReadOnly[object]
 
 
 class _GenAIRequestFunctionCall(TypedDict, total=False):
+    id: ReadOnly[str]
     name: ReadOnly[str]
-    args: ReadOnly[Mapping[str, object]]
-
-
-class _GenAIContentPart(TypedDict, total=False):
-    text: ReadOnly[str]
-    inline_data: ReadOnly[Mapping[str, str]]
-    functionResponse: ReadOnly[_GenAIFunctionResponse]
-    functionCall: ReadOnly[_GenAIRequestFunctionCall]
+    args: ReadOnly[object]
 
 
 class _GenAIFunctionDeclaration(TypedDict, total=False):
@@ -108,6 +105,10 @@ _JSON_MIME_TYPE: Final = "application/json"
 _GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_ordering"})
 _CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])
+_GENAI_CONTENT_PARTS: Final = TypeAdapter(Sequence[object])
+_GENAI_FUNCTION_RESPONSE: Final = TypeAdapter(_GenAIFunctionResponse)
+_GENAI_FUNCTION_CALL: Final = TypeAdapter(_GenAIRequestFunctionCall)
+_GenAIMessagePart: TypeAlias = ChatCompletionTextObject | ChatCompletionImageObject
 _Validated: Final = TypeVar("_Validated")
 
 
@@ -145,9 +146,211 @@ def _deployment_supports_response_format(model: str, custom_llm_provider: str | 
     return supported_params is None or "response_format" in supported_params
 
 
-def _numbered_call_id(name: str, earlier_names: Sequence[str]) -> str:
-    earlier: Final = earlier_names.count(name)
-    return f"call_{name}" if earlier == 0 else f"call_{name}_{earlier}"
+def _genai_message_part(part: object) -> _GenAIMessagePart | None:
+    if isinstance(part, str):
+        return ChatCompletionTextObject(type="text", text=part)
+    fields: Final = _validated(_CONFIG_FIELDS, part)
+    if fields is None:
+        return None
+    if "text" in fields:
+        text: Final = fields["text"]
+        return ChatCompletionTextObject(type="text", text=text) if isinstance(text, str) else None
+    inline_data: Final = _validated(_CONFIG_FIELDS, fields.get("inline_data"))
+    if inline_data is None:
+        return None
+    return ChatCompletionImageObject(
+        type="image_url",
+        image_url={"url": f"data:{inline_data.get('mime_type', 'image/jpeg')};base64,{inline_data.get('data', '')}"},
+    )
+
+
+def _genai_content_parts(value: object) -> Sequence[object]:
+    if isinstance(value, str):
+        return (value,)
+    single_part: Final = _validated(_CONFIG_FIELDS, value)
+    return (single_part,) if single_part is not None else _validated(_GENAI_CONTENT_PARTS, value) or ()
+
+
+def _genai_message_parts(parts: Sequence[object]) -> tuple[_GenAIMessagePart, ...]:
+    return tuple(converted for part in parts if (converted := _genai_message_part(part)) is not None)
+
+
+def _without_unreadable_id(value: object) -> object:
+    fields: Final = _validated(_CONFIG_FIELDS, value)
+    if fields is None or isinstance(fields.get("id", ""), str):
+        return value
+    return {key: field for key, field in fields.items() if key != "id"}
+
+
+def _genai_function_response(part: object) -> _GenAIFunctionResponse | None:
+    fields: Final = _validated(_CONFIG_FIELDS, part)
+    if fields is None or "text" in fields or "inline_data" in fields:
+        return None
+    return _validated(_GENAI_FUNCTION_RESPONSE, _without_unreadable_id(fields.get("functionResponse")))
+
+
+def _genai_tool_response(response: _GenAIFunctionResponse, tool_call_id: str) -> ChatCompletionToolMessage:
+    return ChatCompletionToolMessage(
+        role="tool", tool_call_id=tool_call_id, content=json.dumps(response.get("response", {}))
+    )
+
+
+def _genai_function_call(part: object) -> _GenAIRequestFunctionCall | None:
+    fields: Final = _validated(_CONFIG_FIELDS, part)
+    if fields is None or "text" in fields:
+        return None
+    return _validated(_GENAI_FUNCTION_CALL, _without_unreadable_id(fields.get("functionCall")))
+
+
+def _genai_tool_call(call: _GenAIRequestFunctionCall, call_id: str) -> ChatCompletionAssistantToolCall:
+    return ChatCompletionAssistantToolCall(
+        id=call_id,
+        type="function",
+        function=ChatCompletionToolCallFunctionChunk(
+            name=call.get("name", ""), arguments=json.dumps(call.get("args", {}))
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _GenAITurn:
+    role: Literal["user", "model"]
+    parts: tuple[_GenAIMessagePart, ...]
+    calls: tuple[_GenAIRequestFunctionCall, ...]
+    responses: tuple[_GenAIFunctionResponse, ...]
+
+
+def _genai_turn(content: object) -> _GenAITurn | None:
+    fields: Final = _validated(_CONFIG_FIELDS, content)
+    if fields is None:
+        return None
+    parts: Final = _genai_content_parts(fields.get("parts", ()))
+    converted: Final = _genai_message_parts(parts)
+    match fields.get("role", "user"):
+        case "user":
+            responses: Final = tuple(
+                response for part in parts if (response := _genai_function_response(part)) is not None
+            )
+            return _GenAITurn(role="user", parts=converted, calls=(), responses=responses)
+        case "model":
+            calls: Final = tuple(call for part in parts if (call := _genai_function_call(part)) is not None)
+            text_parts: Final = tuple(part for part in converted if part["type"] == "text")
+            return _GenAITurn(role="model", parts=text_parts, calls=calls, responses=())
+        case _:
+            return None
+
+
+def _function_name(item: _GenAIRequestFunctionCall | _GenAIFunctionResponse) -> str:
+    return item.get("name", "unknown")
+
+
+def _free_call_ids(name: str, caller_ids: frozenset[str], reserved: frozenset[str]) -> Iterator[str]:
+    first: Final = f"call_{name}"
+    repeats: Final = (call_id for number in count(1) if (call_id := f"call_{name}_{number}") not in reserved)
+    return chain(() if first in caller_ids else (first,), repeats)
+
+
+def _genai_call_ids(calls: Sequence[_GenAIRequestFunctionCall]) -> tuple[str, ...]:
+    caller_ids: Final = frozenset(call_id for call in calls if (call_id := call.get("id")))
+    reserved: Final = caller_ids | frozenset(f"call_{_function_name(call)}" for call in calls)
+    without_id: Final = sorted(
+        (index for index, call in enumerate(calls) if not call.get("id")),
+        key=lambda index: _function_name(calls[index]),
+    )
+    generated: Final = MappingProxyType(
+        dict(
+            chain.from_iterable(
+                zip(indexes, _free_call_ids(name, caller_ids, reserved))
+                for name, indexes in groupby(without_id, key=lambda index: _function_name(calls[index]))
+            )
+        )
+    )
+    return tuple(call.get("id") or generated[index] for index, call in enumerate(calls))
+
+
+def _genai_response_ids(
+    responses: Sequence[_GenAIFunctionResponse], calls: Sequence[_GenAIRequestFunctionCall], call_ids: Sequence[str]
+) -> tuple[str, ...]:
+    known: Final = frozenset(call_ids)
+    answered_by_id: Final = frozenset(
+        response_id for response in responses if (response_id := response.get("id")) in known
+    )
+    open_calls: Final = sorted(
+        (index for index, call_id in enumerate(call_ids) if call_id not in answered_by_id),
+        key=lambda index: _function_name(calls[index]),
+    )
+    open_ids_by_name: Final = MappingProxyType(
+        {
+            name: tuple(call_ids[index] for index in indexes)
+            for name, indexes in groupby(open_calls, key=lambda index: _function_name(calls[index]))
+        }
+    )
+    unpaired: Final = sorted(
+        (index for index, response in enumerate(responses) if response.get("id") not in known),
+        key=lambda index: _function_name(responses[index]),
+    )
+    paired: Final = MappingProxyType(
+        dict(
+            chain.from_iterable(
+                zip(indexes, open_ids_by_name.get(name, ()))
+                for name, indexes in groupby(unpaired, key=lambda index: _function_name(responses[index]))
+            )
+        )
+    )
+    return tuple(
+        own_id
+        if (own_id := response.get("id")) in known
+        else paired.get(index) or own_id or f"call_{_function_name(response)}"
+        for index, response in enumerate(responses)
+    )
+
+
+def _genai_turn_messages(
+    turn: _GenAITurn, call_ids: Sequence[str], response_ids: Sequence[str]
+) -> tuple[AllMessageValues, ...]:
+    converted: Final = turn.parts
+    if turn.role == "user":
+        user_message: Final = (
+            (
+                ChatCompletionUserMessage(
+                    role="user",
+                    content=converted[0]["text"]
+                    if len(converted) == 1 and converted[0]["type"] == "text"
+                    else list(converted),
+                ),
+            )
+            if converted
+            else ()
+        )
+        return (*user_message, *map(_genai_tool_response, turn.responses, response_ids))
+    text: Final = "".join(part["text"] for part in converted if part["type"] == "text")
+    calls: Final = list(map(_genai_tool_call, turn.calls, call_ids))
+    return (
+        ChatCompletionAssistantMessage(role="assistant", content=text or None, tool_calls=calls)
+        if calls
+        else ChatCompletionAssistantMessage(role="assistant", content=text or None),
+    )
+
+
+def _genai_contents_messages(contents: Sequence[object]) -> tuple[AllMessageValues, ...]:
+    turns: Final = tuple(turn for content in contents if (turn := _genai_turn(content)) is not None)
+    calls: Final = tuple(chain.from_iterable(turn.calls for turn in turns))
+    call_ids: Final = _genai_call_ids(calls)
+    response_ids: Final = _genai_response_ids(
+        tuple(chain.from_iterable(turn.responses for turn in turns)), calls, call_ids
+    )
+    call_starts: Final = tuple(accumulate((len(turn.calls) for turn in turns), initial=0))
+    response_starts: Final = tuple(accumulate((len(turn.responses) for turn in turns), initial=0))
+    return tuple(
+        chain.from_iterable(
+            _genai_turn_messages(
+                turn,
+                call_ids[call_starts[index] : call_starts[index + 1]],
+                response_ids[response_starts[index] : response_starts[index + 1]],
+            )
+            for index, turn in enumerate(turns)
+        )
+    )
 
 
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
@@ -495,125 +698,17 @@ class GoogleGenAIAdapter:
 
     def _transform_contents_to_messages(
         self,
-        contents: list[dict[str, Any]],
+        contents: Sequence[object],
         system_instruction: _GenAISystemInstruction | None = None,
     ) -> list[AllMessageValues]:
         """Transform Google GenAI contents to OpenAI messages format"""
-        messages: Final[list[AllMessageValues]] = []
-
-        # Handle system instruction
-        if system_instruction:
-            system_parts: Final[Sequence[Mapping[str, str]]] = system_instruction.get("parts", [])
-            if system_parts and "text" in system_parts[0]:
-                messages.append(ChatCompletionSystemMessage(role="system", content=system_parts[0]["text"]))
-
-        for content in contents:
-            role = content.get("role", "user")
-            parts: Sequence[_GenAIContentPart | str | None] = content.get("parts", [])
-
-            if role == "user":
-                # Handle user messages with potential function responses
-                content_parts: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
-                tool_messages: list[ChatCompletionToolMessage] = []
-                response_names: list[str] = []
-
-                for part in parts:
-                    if isinstance(part, dict):
-                        if "text" in part:
-                            content_parts.append(
-                                cast(
-                                    ChatCompletionTextObject,
-                                    {"type": "text", "text": part["text"]},
-                                )
-                            )
-                        elif "inline_data" in part:
-                            # Handle Base64 image data
-                            inline_data = part["inline_data"]
-                            mime_type = inline_data.get("mime_type", "image/jpeg")
-                            data = inline_data.get("data", "")
-                            content_parts.append(
-                                cast(
-                                    ChatCompletionImageObject,
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {"url": f"data:{mime_type};base64,{data}"},
-                                    },
-                                )
-                            )
-                        elif "functionResponse" in part:
-                            # Transform function response to tool message
-                            func_response = part["functionResponse"]
-                            response_name = func_response.get("name", "unknown")
-                            tool_message = ChatCompletionToolMessage(
-                                role="tool",
-                                tool_call_id=_numbered_call_id(response_name, response_names),
-                                content=json.dumps(func_response.get("response", {})),
-                            )
-                            tool_messages.append(tool_message)
-                            response_names.append(response_name)
-                    elif isinstance(part, str):
-                        content_parts.append(cast(ChatCompletionTextObject, {"type": "text", "text": part}))
-
-                # Add user message if there's content
-                if content_parts:
-                    # If only one text part, use simple string format for backward compatibility
-                    if (
-                        len(content_parts) == 1
-                        and isinstance(content_parts[0], dict)
-                        and content_parts[0].get("type") == "text"
-                    ):
-                        text_part = cast(ChatCompletionTextObject, content_parts[0])
-                        messages.append(ChatCompletionUserMessage(role="user", content=text_part["text"]))
-                    else:
-                        # Use multimodal format (array of content parts)
-                        messages.append(ChatCompletionUserMessage(role="user", content=content_parts))
-
-                # Add tool messages
-                messages.extend(tool_messages)
-
-            elif role == "model":
-                # Handle assistant messages with potential function calls
-                combined_text = ""
-                tool_calls: list[ChatCompletionAssistantToolCall] = []
-                call_names: list[str] = []
-
-                for part in parts:
-                    if isinstance(part, dict):
-                        if "text" in part:
-                            combined_text += part["text"]
-                        elif "functionCall" in part:
-                            # Transform function call to tool call
-                            func_call = part["functionCall"]
-                            call_name = func_call.get("name", "unknown")
-                            tool_call = ChatCompletionAssistantToolCall(
-                                id=_numbered_call_id(call_name, call_names),
-                                type="function",
-                                function=ChatCompletionToolCallFunctionChunk(
-                                    name=func_call.get("name", ""),
-                                    arguments=json.dumps(func_call.get("args", {})),
-                                ),
-                            )
-                            tool_calls.append(tool_call)
-                            call_names.append(call_name)
-                    elif isinstance(part, str):
-                        combined_text += part
-
-                # Create assistant message
-                if tool_calls:
-                    assistant_message = ChatCompletionAssistantMessage(
-                        role="assistant",
-                        content=combined_text if combined_text else None,
-                        tool_calls=tool_calls,
-                    )
-                else:
-                    assistant_message = ChatCompletionAssistantMessage(
-                        role="assistant",
-                        content=combined_text if combined_text else None,
-                    )
-
-                messages.append(assistant_message)
-
-        return messages
+        system_parts: Final = system_instruction.get("parts", []) if system_instruction else []
+        system_messages: Final = (
+            (ChatCompletionSystemMessage(role="system", content=system_parts[0]["text"]),)
+            if system_parts and "text" in system_parts[0]
+            else ()
+        )
+        return [*system_messages, *_genai_contents_messages(contents)]
 
     def translate_completion_to_generate_content(
         self,

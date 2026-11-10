@@ -1803,6 +1803,7 @@ _WEATHER_CONTENTS: Final = ({"role": "user", "parts": [{"text": "What is the wea
         pytest.param({"parts": 4}, id="parts_number"),
         pytest.param("Answer in one short sentence.", id="string"),
         pytest.param({"parts": [{"inlineData": {"mimeType": "image/png", "data": "aGk="}}]}, id="media_only_part"),
+        pytest.param({"parts": [{"text": 4}]}, id="text_number"),
     ],
 )
 async def test_utils_token_counter_counts_the_contents_when_it_cannot_read_the_system_instruction(
@@ -1933,9 +1934,7 @@ async def test_utils_token_counter_drops_a_prompt_sent_with_contents_like_one_se
         litellm.proxy.proxy_server,
         "llm_router",
         Router(
-            model_list=[
-                {"model_name": "kimi", "litellm_params": {"model": "openai/gpt-6-luna", "drop_params": True}}
-            ]
+            model_list=[{"model_name": "kimi", "litellm_params": {"model": "openai/gpt-6-luna", "drop_params": True}}]
         ),
     )
     prompt: Final = "one two three four five six seven eight nine ten eleven twelve"
@@ -1950,7 +1949,9 @@ async def test_utils_token_counter_drops_a_prompt_sent_with_contents_like_one_se
         ),
         call_endpoint=False,
     )
-    prompt_only: Final = await token_counter(request=TokenCountRequest(model="kimi", prompt=prompt), call_endpoint=False)
+    prompt_only: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", prompt=prompt), call_endpoint=False
+    )
 
     assert from_contents.total_tokens == from_messages.total_tokens != prompt_only.total_tokens
 
