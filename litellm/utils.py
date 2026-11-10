@@ -76,7 +76,6 @@ from litellm.constants import (
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     INITIAL_RETRY_DELAY,
     JITTER,
-    LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_RETRY_DELAY,
     MAX_TOKEN_TRIMMING_ATTEMPTS,
     MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE,
@@ -291,7 +290,6 @@ from litellm.types.utils import (
     SandboxProviders,
     SearchProviders,
     SelectTokenizerResponse,
-    StandardLoggingPayloadErrorInformation,
     StreamingChoices,
     TranscriptionResponse,
     Usage,
@@ -1704,30 +1702,6 @@ def _speech_stream_error_mapper(
     return map_error
 
 
-_CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInformation] = {
-    "error_code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
-    "error_message": "Client disconnected the request",
-    "error_class": "ClientDisconnected",
-}
-
-
-def _mark_speech_stream_closed_early(logging_obj: LiteLLMLoggingObject) -> None:
-    litellm_params: Final[Mapping[str, object] | None] = logging_obj.model_call_details.get("litellm_params")
-    if not isinstance(litellm_params, dict):
-        return
-    request_metadata: Final = tuple(
-        (key, metadata)
-        for key in ("metadata", "litellm_metadata")
-        if isinstance(metadata := litellm_params.get(key), dict)
-    )
-    for key, existing in request_metadata or (("metadata", {}),):
-        litellm_params[key] = {
-            **existing,
-            "client_disconnected": True,
-            "error_information": dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION),
-        }
-
-
 def _async_speech_end_logger(
     logging_obj: LiteLLMLoggingObject,
     result: object,
@@ -1748,7 +1722,7 @@ def _async_speech_end_logger(
                 await logging_obj.async_failure_handler(error, traceback_exception, start_time, end_time)
                 return
             case StreamClosedEarly():
-                _mark_speech_stream_closed_early(logging_obj)
+                logging_obj.record_client_disconnect()
             case StreamCompleted():
                 pass
         dispatch_success_logging(
@@ -1780,7 +1754,7 @@ def _sync_speech_end_logger(
                 logging_obj.failure_handler(error, "".join(traceback.format_exception(error)), start_time, end_time)
                 return
             case StreamClosedEarly():
-                _mark_speech_stream_closed_early(logging_obj)
+                logging_obj.record_client_disconnect()
             case StreamCompleted():
                 pass
         if is_litellm_internal_call:
