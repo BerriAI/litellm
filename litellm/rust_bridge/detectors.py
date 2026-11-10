@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import os
 from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
@@ -168,15 +169,23 @@ def response_cache(request: NativeCall) -> bool:
     return litellm.cache is not None and cache.get("no-cache") is not True
 
 
-_NATIVE_ECDH_CURVES: Final = frozenset({"x25519", "prime256v1", "secp256r1", "p-256", "secp384r1", "p-384"})
+@functools.lru_cache(maxsize=32)
+def _tls_unsupported(security_level: str | None, ecdh_curve: str | None) -> bool:
+    from litellm.rust_bridge import _native
+
+    return bool(_native.unsupported_tls_settings(security_level, ecdh_curve))
 
 
 def tls_policy(_request: NativeCall) -> bool:
     """Python applies TLS settings or ECDH curves the native client cannot configure."""
-    curve: Final = os.getenv("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve)
-    return bool(os.getenv("SSL_SECURITY_LEVEL", litellm.ssl_security_level)) or (
-        bool(curve) and str(curve).strip().lower() not in _NATIVE_ECDH_CURVES
+    configured: Final[tuple[object, object]] = (
+        os.environ.get("SSL_SECURITY_LEVEL", litellm.ssl_security_level),
+        os.environ.get("SSL_ECDH_CURVE", litellm.ssl_ecdh_curve),
     )
+    if any(value and not isinstance(value, str) for value in configured):  # pyright: ignore[reportUnnecessaryIsInstance]  # callers assign the ssl settings untyped
+        return True
+    security_level, ecdh_curve = (value if isinstance(value, str) else None for value in configured)
+    return _tls_unsupported(security_level, ecdh_curve)
 
 
 COMMON: Final[Detectors] = MappingProxyType(

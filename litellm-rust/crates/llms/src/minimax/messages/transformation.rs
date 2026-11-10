@@ -31,6 +31,12 @@ pub struct MinimaxMessagesConfig;
 pub const MINIMAX_MESSAGES_CONFIG: MinimaxMessagesConfig = MinimaxMessagesConfig;
 
 impl BaseMessagesConfig for MinimaxMessagesConfig {
+    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
+        }
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,

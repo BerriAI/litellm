@@ -132,6 +132,24 @@ pub(crate) fn settings_config(
     Ok(resolved(py, settings))
 }
 
+#[pyfunction]
+#[pyo3(signature = (ssl_security_level=None, ssl_ecdh_curve=None))]
+pub(crate) fn unsupported_tls_settings(
+    ssl_security_level: Option<String>,
+    ssl_ecdh_curve: Option<String>,
+) -> Vec<String> {
+    let settings = HttpSettings::from_layers([HttpSettingsLayer {
+        ssl_security_level,
+        ssl_ecdh_curve,
+        ..HttpSettingsLayer::default()
+    }]);
+    Resolution::from(&settings)
+        .unsupported
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
 /// The client config `settings` resolve to, warning once per process about each setting the client cannot apply
 fn resolved(py: Python<'_>, settings: HttpSettings) -> HttpClientConfig {
     let resolution =

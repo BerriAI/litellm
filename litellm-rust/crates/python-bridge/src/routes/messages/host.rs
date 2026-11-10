@@ -62,11 +62,21 @@ fn project_litellm_params<'py>(
     Ok(litellm_params(fields.into_iter().chain(folded).collect()))
 }
 
+#[derive(serde::Deserialize)]
+struct HostSettings {
+    #[serde(flatten)]
+    settings: MessagesSettings,
+    model: String,
+    stream_cost_model: Option<String>,
+    extra_headers: Option<Map<String, Value>>,
+}
+
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
     view: RequestView,
     cache: PythonCache,
+    stream_cost_model: Option<String>,
 }
 
 impl MessagesPythonHost {
@@ -74,19 +84,33 @@ impl MessagesPythonHost {
         Self {
             view,
             cache: PythonCache::new(asynchronous),
+            stream_cost_model: None,
         }
+    }
+
+    fn host_settings(
+        &self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<HostSettings> {
+        from_py(
+            &py.import(ROUTE_HOST_MODULE)?
+                .getattr("settings")?
+                .call1((arguments, self.view.request(py)?))?,
+        )
     }
 
     fn projection(
         &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
+        settings: HostSettings,
     ) -> PyResult<Result<MessagesCall, Error>> {
         let argument = |name: &str| self.view.argument(py, arguments, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
-        let model = string("model")?.ok_or(ArgumentError::Required("model"))?;
+        let model = settings.model;
         let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
         let fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
         let body = [
@@ -112,8 +136,17 @@ impl MessagesPythonHost {
                 .call1((&model, api_base.as_deref()))?
                 .extract()?,
         };
-        let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
-        let extra_headers = self.merged_headers(py, arguments)?;
+        let shaping = MessagesShaping {
+            capabilities: self.capabilities(py, &model, custom_llm_provider.as_deref())?,
+            settings: MessagesSettings {
+                whole_sse_frames: settings.stream_cost_model.is_some(),
+                ..settings.settings
+            },
+        };
+        let extra_headers = match settings.extra_headers {
+            Some(headers) => Some(headers),
+            None => self.merged_headers(py, arguments)?,
+        };
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
         let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
         Ok(messages_body(body).and_then(|body| {
@@ -159,25 +192,17 @@ impl MessagesPythonHost {
             .transpose()
     }
 
-    fn shaping(
+    fn capabilities(
         &self,
         py: Python<'_>,
         model: &str,
         custom_llm_provider: Option<&str>,
-        arguments: &Bound<'_, PyDict>,
-    ) -> PyResult<MessagesShaping> {
-        let module = py.import(ROUTE_HOST_MODULE)?;
-        let capabilities: MessagesModelCapabilities = from_py(
+    ) -> PyResult<MessagesModelCapabilities> {
+        from_py(
             &py.import(MODEL_CAPABILITIES_MODULE)?
                 .getattr("anthropic_model_capabilities")?
                 .call1((model, custom_llm_provider))?,
-        )?;
-        let settings: MessagesSettings =
-            from_py(&module.getattr("settings")?.call1((arguments,))?)?;
-        Ok(MessagesShaping {
-            capabilities,
-            settings,
-        })
+        )
     }
 
     fn provider(&self, py: Python<'_>) -> String {
@@ -225,7 +250,11 @@ impl PythonBinding for MessagesPythonHost {
         let selection =
             crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
                 .map_err(InvokeError::Python)?;
-        self.projection(py, arguments)
+        let settings = self
+            .host_settings(py, arguments)
+            .map_err(InvokeError::Python)?;
+        self.stream_cost_model = settings.stream_cost_model.clone();
+        self.projection(py, arguments, settings)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
             .map(|request| (request, selection))
@@ -255,7 +284,14 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn encode_chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
-        Ok(PyBytes::new(py, &chunk).into_any().unbind())
+        let frames = PyBytes::new(py, &chunk).into_any();
+        let Some(model) = &self.stream_cost_model else {
+            return Ok(frames.unbind());
+        };
+        py.import(ROUTE_HOST_MODULE)?
+            .getattr("inject_stream_cost")?
+            .call1((frames, model, self.view.request(py)?))
+            .map(Bound::unbind)
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {

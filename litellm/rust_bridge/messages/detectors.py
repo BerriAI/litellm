@@ -5,25 +5,40 @@ from __future__ import annotations
 from typing import Final
 
 import litellm
-from litellm.anthropic_beta_headers_manager import is_foundry_api_base
-from litellm.litellm_core_utils.core_helpers import (
-    drops_unsupported_params,
-    proxy_request_headers,
-    stream_cost_injection_requested,
-)
-from litellm.llms.opencode.common_utils import is_opencode_api_base
-from litellm.rust_bridge.detectors import api_base, overridden, present, streaming
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.rust_bridge.detectors import overridden, present
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
 
-def provider_affinity(request: NativeCall) -> bool:
-    return is_opencode_api_base(api_base(request))
+def _response_cache_consulted(request: NativeCall, call_type: str, *, honours_cache_controls: bool) -> bool:
+    from litellm.caching.caching_handler import is_call_type_supported_by_cache, is_response_cache_excluded
+
+    cache: Final = litellm.cache
+    kwargs: Final = request.resolved
+    if (
+        cache is None
+        or is_response_cache_excluded(optional_str(kwargs.get("model")), kwargs)
+        or not is_call_type_supported_by_cache(call_type)
+    ):
+        return False
+    if honours_cache_controls and (
+        kwargs.get("caching") not in (None, True)
+        or (optional_mapping(kwargs.get("cache")) or {}).get("no-cache") is True
+    ):
+        return False
+    return cache.should_use_cache(**kwargs) is True  # pyright: ignore[reportUnknownMemberType]  # Cache.should_use_cache takes untyped kwargs
 
 
-def foundry_beta_row(request: NativeCall) -> bool:
-    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+def response_cache(request: NativeCall) -> bool:
+    return _response_cache_consulted(request, "anthropic_messages", honours_cache_controls=True)
 
-    return is_foundry_api_base(AnthropicModelInfo.get_api_base(api_base(request)))
+
+def sync_response_cache(request: NativeCall) -> bool:
+    return _response_cache_consulted(request, "anthropic_messages_handler", honours_cache_controls=False)
+
+
+def streamed_mock_response(request: NativeCall) -> bool:
+    return present(request, "mock_response") and request.resolved.get("stream") is True
 
 
 def anthropic_workload_identity(request: NativeCall) -> bool:
@@ -55,21 +70,11 @@ def thinking_signature_retry(request: NativeCall) -> bool:
     return any(_replays_thinking(message) for message in optional_sequence(request.resolved.get("messages")) or ())
 
 
-def tool_custom_field(request: NativeCall) -> bool:
-    tools: Final = optional_sequence(request.resolved.get("tools")) or ()
-    return any("custom" in (optional_mapping(tool) or {}) for tool in tools)
-
-
 def strict_tools_retry(request: NativeCall) -> bool:
     tools: Final = optional_sequence(request.resolved.get("tools")) or ()
     return drops_unsupported_params(request.resolved.get("drop_params")) and any(
         (optional_mapping(tool) or {}).get("strict") is True for tool in tools
     )
-
-
-def stream_cost_injection(request: NativeCall) -> bool:
-    """Python adds response cost to streaming usage when the global setting or the request header asks for it."""
-    return streaming(request) and stream_cost_injection_requested(proxy_request_headers(request.resolved))
 
 
 def pre_request_hook(_request: NativeCall) -> bool:

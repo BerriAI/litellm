@@ -42,6 +42,12 @@ pub const DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG: DeepSeekAnthropicMessagesConfig =
     DeepSeekAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
+    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
+        }
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,

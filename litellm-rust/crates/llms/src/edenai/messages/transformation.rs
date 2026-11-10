@@ -33,6 +33,12 @@ pub struct EdenAIAnthropicMessagesConfig;
 pub const EDENAI_MESSAGES_CONFIG: EdenAIAnthropicMessagesConfig = EdenAIAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
+    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
+        }
+    }
+
     fn validate_environment(
         &self,
         headers: Headers,

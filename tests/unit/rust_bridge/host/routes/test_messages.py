@@ -5,6 +5,7 @@ import pytest
 
 import litellm
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.rust_bridge.host.routes import messages as messages_host
 from litellm.rust_bridge.host.routes.messages import response
 
@@ -43,6 +44,10 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "reasoning_auto_summary": True,
         "additional_drop_params": ("metadata.user_id",),
         "request_timeout": 1800.0,
+        "model": None,
+        "mock_response": None,
+        "stream_cost_model": None,
+        "extra_headers": None,
     }
 
 
@@ -445,3 +450,87 @@ def test_a_failure_before_any_response_maps_like_the_python_transport_error(
         f"litellm.InternalServerError: AnthropicException - {text}. Handle with `litellm.InternalServerError`."
     )
     assert "This looks like a bug in LiteLLM" not in str(mapped)
+
+
+_CALL: Final = MappingProxyType({"messages": [{"role": "user", "content": "hi"}], "max_tokens": 8})
+_OPENCODE: Final = "https://opencode.ai/inference/go/anthropic/v1"
+_COST_HEADER: Final = MappingProxyType({"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}})
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected"),
+    [
+        (
+            "anthropic/claude-opus-latest",
+            None,
+            f"anthropic/{get_model_latest_aliases()['anthropic']['claude-opus-latest']}",
+        ),
+        ("claude-opus-latest", "anthropic", get_model_latest_aliases()["anthropic"]["claude-opus-latest"]),
+        ("anthropic/claude-sonnet-4-5", None, "anthropic/claude-sonnet-4-5"),
+    ],
+)
+def test_settings_resolve_a_latest_alias_keeping_the_provider_prefix(
+    model: str, custom_llm_provider: str | None, expected: str
+) -> None:
+    settings: Final = messages_host.settings({}, {**_CALL, "model": model, "custom_llm_provider": custom_llm_provider})
+
+    assert settings["model"] == expected
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({"api_base": _OPENCODE, "session_id": "s-1"}, {"x-opencode-session": "s-1"}),
+        (
+            {"api_base": _OPENCODE, "session_id": "s-1", "headers": {"x-trace": "t"}},
+            {"x-trace": "t", "x-opencode-session": "s-1"},
+        ),
+        ({"api_base": _OPENCODE, "session_id": "s-1", "extra_headers": {"x-opencode-session": "mine"}}, None),
+        ({"api_base": "https://other.example/v1", "session_id": "s-1"}, None),
+        ({"api_base": _OPENCODE, "session_id": "s-1", "mock_response": "hi"}, None),
+    ],
+)
+def test_settings_add_only_the_affinity_header_the_caller_did_not_send(
+    extra: dict[str, object], expected: dict[str, str] | None
+) -> None:
+    settings: Final = messages_host.settings({}, {**_CALL, "model": "anthropic/claude-sonnet-4-5", **extra})
+
+    assert settings["extra_headers"] == expected
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        ({"stream": True, "proxy_server_request": dict(_COST_HEADER)}, "claude-sonnet-4-5"),
+        ({"proxy_server_request": dict(_COST_HEADER)}, None),
+        ({"stream": True}, None),
+        ({"stream": True, "proxy_server_request": dict(_COST_HEADER), "mock_response": "hi"}, None),
+    ],
+)
+def test_settings_name_the_cost_model_only_for_an_opted_in_stream(
+    extra: dict[str, object], expected: str | None
+) -> None:
+    settings: Final = messages_host.settings({}, {**_CALL, "model": "anthropic/claude-sonnet-4-5", **extra})
+
+    assert settings["stream_cost_model"] == expected
+
+
+def test_settings_carry_the_mock_the_python_handler_returns() -> None:
+    settings: Final = messages_host.settings(
+        {}, {**_CALL, "model": "anthropic/claude-sonnet-4-5", "mock_response": "hi"}
+    )
+
+    assert isinstance(settings["mock_response"], dict)
+    assert settings["mock_response"]["content"] == [{"type": "text", "text": "hi"}]
+
+
+def test_settings_infer_no_provider_off_an_affinity_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected(model: str, api_base: str | None) -> str | None:
+        pytest.fail("the provider is only inferred for an affinity api_base")
+
+    monkeypatch.setattr(messages_host, "inferred_provider", unexpected)
+
+    settings: Final = messages_host.settings({}, {**_CALL, "model": "claude-sonnet-4-5"})
+
+    assert settings["model"] == "claude-sonnet-4-5"
+    assert settings["extra_headers"] is None
