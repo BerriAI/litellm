@@ -102,4 +102,58 @@ describe("getEditToolPreview", () => {
       expect(getEditToolPreview({ ...saved, transport }, saved)).toEqual({ kind: "saved" });
     }
   });
+
+  describe("secret headers", () => {
+    const savedCustom = { ...saved, auth_type: "secret_headers", static_headers: [] };
+    const rows = [{ header: "DD-API-KEY", value: "rotated-secret" }];
+
+    it("keeps saved discovery while no header rows are entered", () => {
+      expect(getEditToolPreview({ ...savedCustom, secret_headers: [] }, savedCustom)).toEqual({ kind: "saved" });
+    });
+
+    it("previews entered rows as credentials.headers", () => {
+      expect(getEditToolPreview({ ...savedCustom, secret_headers: rows }, savedCustom)).toEqual({
+        kind: "preview",
+        config: {
+          url: "https://example.com/mcp",
+          transport: "http",
+          auth_type: "secret_headers",
+          static_headers: {},
+          credentials: { headers: { "DD-API-KEY": "rotated-secret" } },
+        },
+      });
+    });
+
+    it("needs rows before previewing a switch to secret headers", () => {
+      expect(getEditToolPreview({ ...saved, auth_type: "secret_headers" }, saved).kind).toBe("incomplete");
+      expect(getEditToolPreview({ ...saved, auth_type: "secret_headers", secret_headers: rows }, saved).kind).toBe(
+        "preview",
+      );
+    });
+
+    it("does not reuse the stored headers on a new origin", () => {
+      expect(getEditToolPreview({ ...savedCustom, url: "https://other.example/mcp" }, savedCustom).kind).toBe(
+        "incomplete",
+      );
+    });
+
+    it("waits for a value on every row", () => {
+      expect(
+        getEditToolPreview({ ...savedCustom, secret_headers: [{ header: "DD-API-KEY", value: " " }] }, savedCustom)
+          .kind,
+      ).toBe("incomplete");
+    });
+  });
+
+  it("waits while any secret header row is unnamed or has no value", () => {
+    const edited = { ...saved, auth_type: "secret_headers", url: "https://example.com/corrected-mcp" };
+    const complete = { header: "X-Api-Key", value: "first" };
+    expect(getEditToolPreview({ ...edited, secret_headers: [complete] }, saved).kind).toBe("preview");
+    for (const unfinished of [
+      { header: "", value: "second" },
+      { header: "X-Other", value: "" },
+    ]) {
+      expect(getEditToolPreview({ ...edited, secret_headers: [complete, unfinished] }, saved).kind).toBe("incomplete");
+    }
+  });
 });
