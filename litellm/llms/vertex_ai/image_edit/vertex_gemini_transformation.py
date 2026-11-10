@@ -1,17 +1,17 @@
 import base64
 import json
 import os
-from collections.abc import Callable
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
-from litellm.llms.gemini import image_usage_transformation
+from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
@@ -22,7 +22,9 @@ from litellm.types.llms.vertex_ai import (
     HttpxPartType,
 )
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import FileTypes, ImageObject, ImageResponse, ImageUsage
+from litellm.types.utils import FileTypes, ImageObject, ImageResponse
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -224,14 +226,11 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             if (inline_data := part.get("inlineData")) and (b64_json := inline_data.get("data"))
         ]
 
-        usage_metadata: Final = response_json.get("usageMetadata")
+        usage_metadata: Final = _JSON_DICT.validate_python(response_json.get("usageMetadata") or {})
         traffic_type: Final = usage_metadata.get("trafficType") if usage_metadata else None
-        transform_usage: Final = cast(
-            Callable[[dict[str, object]], ImageUsage], image_usage_transformation.transform_gemini_image_usage
-        )
         return ImageResponse(
             data=data_list,
-            usage=transform_usage(dict(usage_metadata)) if usage_metadata else None,
+            usage=transform_gemini_image_usage(usage_metadata) if usage_metadata else None,
             hidden_params={"provider_specific_fields": {"traffic_type": traffic_type}}
             if isinstance(traffic_type, str) and traffic_type
             else {},
