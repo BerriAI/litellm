@@ -278,8 +278,8 @@ describe("user record link", () => {
   });
 
   it("links real users and encodes special characters", () => {
-    expect(userRecordHref("user-1")).toMatch(/\\/users\\?user=user-1$/);
-    expect(userRecordHref("a b/c")).toMatch(/\\?user=a%20b%2Fc$/);
+    expect(userRecordHref("user-1")).toMatch(/\/users\?user=user-1$/);
+    expect(userRecordHref("a b/c")).toMatch(/\?user=a%20b%2Fc$/);
   });
 });
 
