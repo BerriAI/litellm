@@ -333,12 +333,12 @@ jobs:
           status=0
           if [ ${#prettier_files[@]} -gt 0 ]; then
             echo "::group::Prettier (${#prettier_files[@]} files)"
-            npx prettier --check "${prettier_files[@]}" || { status=1; echo "::error::Unformatted files. Fix with: npm run format"; }
+            node_modules/.bin/prettier --check "${prettier_files[@]}" || { status=1; echo "::error::Unformatted files. Fix with: npm run format"; }
             echo "::endgroup::"
           fi
           if [ ${#eslint_files[@]} -gt 0 ]; then
             echo "::group::ESLint (${#eslint_files[@]} files)"
-            npx eslint --no-warn-ignored --pass-on-unpruned-suppressions "${eslint_files[@]}" || status=1
+            node_modules/.bin/eslint --no-warn-ignored --pass-on-unpruned-suppressions "${eslint_files[@]}" || status=1
             echo "::endgroup::"
           fi
           exit $status
