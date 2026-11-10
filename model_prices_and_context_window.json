@@ -72155,12 +72155,12 @@
         "source": "https://api.together.xyz/v1/models"
     },
     "together_ai/together/Tev1-4B-experimental": {
-        "input_cost_per_token": 4e-08,
+        "input_cost_per_token": 4.2e-08,
         "litellm_provider": "together_ai",
         "max_input_tokens": 32768,
         "mode": "chat",
         "output_cost_per_token": 0.0,
-        "source": "https://www.together.ai/pricing"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo": {
         "deprecation_date": "2026-02-06",
