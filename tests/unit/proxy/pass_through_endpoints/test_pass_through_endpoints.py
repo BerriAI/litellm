@@ -13204,6 +13204,13 @@ def _upstream_json(upstream_request: httpx.Request) -> object:
         ),
         pytest.param(
             "DELETE",
+            {"content-type": "application/x-www-form-urlencoded", "transfer-encoding": "chunked"},
+            b"",
+            None,
+            id="delete-chunked-empty-form",
+        ),
+        pytest.param(
+            "DELETE",
             {"content-type": "application/json", "content-length": "2"},
             b"{}",
             {},

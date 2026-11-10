@@ -198,7 +198,7 @@ def _parse_binary_body(body: bytes) -> dict[str, object]:
     return {}
 
 
-_BODY_BYTES_SCOPE_KEY: Final = "litellm_received_body_bytes"
+_BODY_SENT_SCOPE_KEY: Final = "litellm_request_sent_body"
 
 
 def _declared_content_length(headers: Mapping[str, str]) -> int | None:
@@ -212,10 +212,15 @@ def _request_declares_body(headers: Mapping[str, str]) -> bool:
 
 
 def request_sent_body(request: Request) -> bool:
-    received_bytes: Final[object] = request.scope.get(_BODY_BYTES_SCOPE_KEY) if hasattr(request, "scope") else None
-    if isinstance(received_bytes, int):
-        return received_bytes > 0
+    recorded: Final[object] = request.scope.get(_BODY_SENT_SCOPE_KEY) if hasattr(request, "scope") else None
+    if isinstance(recorded, bool):
+        return recorded
     return _request_declares_body(request.headers)
+
+
+def _record_body_sent(request: Request, sent: bool) -> None:
+    if hasattr(request, "scope"):
+        request.scope[_BODY_SENT_SCOPE_KEY] = sent  # rebind-ok: the ASGI scope is per-request shared state
 
 
 def _mark_body_received(byte_count: int | None) -> None:
@@ -228,8 +233,7 @@ def _mark_body_received(byte_count: int | None) -> None:
 
 async def _receive_body(request: Request) -> bytes:
     body: Final = await request.body()
-    if hasattr(request, "scope"):
-        request.scope[_BODY_BYTES_SCOPE_KEY] = len(body)  # rebind-ok: the ASGI scope is per-request shared state
+    _record_body_sent(request, len(body) > 0)
     _mark_body_received(len(body))
     return body
 
@@ -265,6 +269,7 @@ def _reraise_request_size_error(error: Exception) -> None:
 async def _read_form_data(request: Request) -> FormData:
     try:
         form_data: Final = await request.form()
+        _record_body_sent(request, len(form_data) > 0)
         _mark_body_received(_declared_content_length(request.headers))
     except ClientDisconnect:
         raise
