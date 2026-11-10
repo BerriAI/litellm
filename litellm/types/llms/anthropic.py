@@ -442,6 +442,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     reasoning_effort: str | None
     safeguards: ReadOnly[list[dict[str, object]] | None]
     service_tier: ReadOnly[str | None]
+    diagnostics: dict[str, object] | None
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):

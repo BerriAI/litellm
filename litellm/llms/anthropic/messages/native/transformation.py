@@ -134,6 +134,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "inference_geo",
             "speed",
             "service_tier",
+            "diagnostics",
             "output_config",
             "reasoning_effort",
             "safeguards",
