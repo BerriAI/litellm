@@ -5752,9 +5752,10 @@ def _bridged_turns(model: str, provider: str, items: Sequence[Mapping[str, objec
     ("model", "provider"),
     (
         ("bedrock/us.anthropic.claude-opus-5-5", "bedrock"),
-        ("bedrock/us.amazon.nova-pro-v1:0", "bedrock"),
         ("bedrock/invoke/us.anthropic.claude-opus-5-5", "bedrock"),
         ("anthropic/claude-opus-5-5", "anthropic"),
+        ("vertex_ai/claude-opus-5-5", "vertex_ai"),
+        ("azure_ai/claude-opus-5-5", "azure_ai"),
     ),
 )
 @pytest.mark.parametrize(
@@ -5795,10 +5796,94 @@ def test_a_user_input_item_without_content_is_dropped_where_no_assistant_turn_wo
     assert _bridged_turns("bedrock/us.anthropic.claude-opus-5-5", "bedrock", items) == expected
 
 
-def test_a_final_user_input_item_without_content_stays_dropped_on_routes_that_send_empty_text_as_is() -> None:
-    assert _bridged_turns("moonshot/kimi-k3", "moonshot", (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM)) == [
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (
+        ("moonshot/kimi-k3", "moonshot"),
+        ("bedrock/us.amazon.nova-2-lite-v1:0", "bedrock"),
+        ("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
+        ("anthropic/claude-sonnet-4-5-20250929", "anthropic"),
+    ),
+    ids=("sends_empty_text_as_is", "nova", "claude_with_prefill_on_converse", "claude_with_prefill_on_anthropic"),
+)
+def test_a_final_user_input_item_without_content_stays_dropped_on_routes_that_need_no_empty_turn(
+    model: str, provider: str
+) -> None:
+    assert _bridged_turns(model, provider, (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM)) == [
         ("user", "What is 2+2?"),
         ("assistant", "Four."),
+    ]
+
+
+_HIDDEN_BEDROCK_ARN: Final = "bedrock/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123"
+
+
+def _bridged_hidden_arn_turns(**request_kwargs: object) -> list[tuple[object, object]]:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=_HIDDEN_BEDROCK_ARN,
+        input=cast(ResponseInputParam, [_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM]),
+        responses_api_request={},
+        custom_llm_provider="bedrock",
+        **request_kwargs,
+    )
+    return [(message["role"], message.get("content")) for message in result["messages"]]
+
+
+def test_a_final_user_input_item_without_content_reads_a_hidden_arn_model_from_base_model() -> None:
+    assert _bridged_hidden_arn_turns(base_model="anthropic.claude-opus-5-5")[-1] == ("user", "")
+    assert _bridged_hidden_arn_turns()[-1] == ("assistant", "Four.")
+
+
+def test_a_final_user_input_item_without_content_keeps_its_cache_mark_on_the_empty_user_turn() -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-opus-5-5",
+        input=cast(
+            ResponseInputParam,
+            [_QUESTION_ITEM, _ANSWER_ITEM, {**_NULL_USER_ITEM, "cache_control": {"type": "ephemeral"}}],
+        ),
+        responses_api_request={},
+        custom_llm_provider="bedrock",
+    )
+
+    assert result["messages"][-1] == {"role": "user", "content": "", "cache_control": {"type": "ephemeral"}}
+
+
+@pytest.mark.parametrize("instructions", (None, "Be brief."), ids=("no_instructions", "instructions"))
+@pytest.mark.parametrize(
+    "empty_user_item", (_NULL_USER_ITEM, {"role": "user"}), ids=("null_content", "no_content_key")
+)
+def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history_on_an_empty_user_turn(
+    instructions: str | None, empty_user_item: dict[str, object]
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "What is 2+2?"}, {"role": "assistant", "content": "Four."}],
+            litellm_session_id=None,
+        )
+
+    chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-opus-5-5",
+        input=cast(ResponseInputParam, [empty_user_item]),
+        responses_api_request={
+            "previous_response_id": "resp_stored",
+            **({"instructions": instructions} if instructions else {}),
+        },
+        custom_llm_provider="bedrock",
+    )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_stored",
+            litellm_completion_request=chat_request,
+            instructions=instructions,
+            session_lookup=session_lookup,
+        )
+    )
+
+    assert [(message["role"], message.get("content")) for message in request["messages"] if message["role"] != "system"] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", ""),
     ]
 
 

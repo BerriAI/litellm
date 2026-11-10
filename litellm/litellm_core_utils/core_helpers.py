@@ -58,7 +58,7 @@ def as_str_mapping(value: object) -> Mapping[str, object] | None:
 
 
 def as_object_list(value: object) -> Sequence[object] | None:
-    return value if isinstance(value, list) else None
+    return cast(list[object], value) if isinstance(value, list) else None  # cast-ok: isinstance checked the list
 
 
 @runtime_checkable

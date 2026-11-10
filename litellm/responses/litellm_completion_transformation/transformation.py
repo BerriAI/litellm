@@ -41,7 +41,7 @@ from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -338,18 +338,32 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     )
 
 
-def _dropped_final_user_turn(input_items: str | ResponseInputParam, messages: Sequence[object]) -> bool:
-    if isinstance(input_items, str) or not input_items or not messages:
+def _dropped_final_user_turn(
+    input_items: str | ResponseInputParam, messages: Sequence[object], continues_session: bool
+) -> bool:
+    if isinstance(input_items, str) or not input_items or message_field(input_items[-1], "role") != "user":
         return False
-    return message_field(input_items[-1], "role") == "user" and message_field(messages[-1], "role") == "assistant"
+    last_role: Final = message_field(messages[-1], "role") if messages else None
+    return last_role == "assistant" or (continues_session and last_role in (None, "system", "developer"))
 
 
-def _target_fills_empty_user_turns(model: str, custom_llm_provider: str | None) -> bool:
+def _empty_user_turn(last_input_item: object) -> GenericChatCompletionMessage:
+    cache_control: Final = _input_item_cache_control(as_str_mapping(last_input_item) or {})
+    if cache_control is None:
+        return GenericChatCompletionMessage(role="user", content="")
+    return GenericChatCompletionMessage(role="user", content="", cache_control=cache_control)
+
+
+def _target_fills_empty_user_turns(model: str, custom_llm_provider: str | None, base_model: object) -> bool:
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.llms.bedrock.common_utils import bedrock_converse_rejects_assistant_prefill
+    from litellm.utils import is_explicitly_disabled_factory
 
-    return isinstance(
-        provider_chat_config(model, custom_llm_provider), AmazonConverseConfig
-    ) or provider_builds_anthropic_request(model, custom_llm_provider)
+    if isinstance(provider_chat_config(model, custom_llm_provider), AmazonConverseConfig):
+        return bedrock_converse_rejects_assistant_prefill(model, base_model if isinstance(base_model, str) else None)
+    return provider_builds_anthropic_request(model, custom_llm_provider) and is_explicitly_disabled_factory(
+        model, custom_llm_provider, "supports_assistant_prefill"
+    )
 
 
 _PROVIDERS_KEEPING_MESSAGE_CACHE_CONTROL: Final = frozenset(("anthropic", "dashscope", "minimax", "sap", "zai"))
@@ -882,7 +896,9 @@ class LiteLLMCompletionResponsesConfig:
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
-            route_fills_empty_user_turns=partial(_target_fills_empty_user_turns, model, custom_llm_provider),
+            route_fills_empty_user_turns=partial(
+                _target_fills_empty_user_turns, model, custom_llm_provider, request_kwargs.get("base_model")
+            ),
         )
 
         litellm_completion_request: dict = {
@@ -987,12 +1003,15 @@ class LiteLLMCompletionResponsesConfig:
                 replay_reasoning=replay_reasoning,
             )
         )
+        request_params: Final = cast(Mapping[str, object], responses_api_request)  # cast-ok: only read through .get
         if (
             route_fills_empty_user_turns is not None
-            and _dropped_final_user_turn(input, messages)
+            and _dropped_final_user_turn(
+                input, messages, continues_session=bool(request_params.get("previous_response_id"))
+            )
             and route_fills_empty_user_turns()
         ):
-            messages.append(GenericChatCompletionMessage(role="user", content=""))
+            messages.append(_empty_user_turn(input[-1]))
 
         return messages
 

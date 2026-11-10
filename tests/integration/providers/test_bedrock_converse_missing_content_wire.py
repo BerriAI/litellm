@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import _EMPTY_TEXT_PLAC
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 from pydantic import JsonValue, TypeAdapter
 
-_MODEL_ID: Final = "anthropic.claude-3-haiku-20240307-v1:0"
+_MODEL_ID: Final = "anthropic.claude-haiku-5-5"
 _CONVERSE_MODEL: Final = f"bedrock/converse/{_MODEL_ID}"
 _INVOKE_MODEL: Final = f"bedrock/invoke/{_MODEL_ID}"
 _CONVERSE_TARGET: Final = f"/model/{_MODEL_ID}/converse"
