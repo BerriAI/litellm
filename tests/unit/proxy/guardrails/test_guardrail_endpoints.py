@@ -1,9 +1,9 @@
 import json
 import time
-from collections.abc import Callable
-from datetime import datetime
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Dict, Final, List, Literal, Optional
+from typing import Dict, Final, List, Literal, NamedTuple, Optional
 from unittest.mock import AsyncMock
 
 import httpx
@@ -15,6 +15,7 @@ from pytest_mock import MockerFixture
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
@@ -44,6 +45,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
 from litellm.proxy.guardrails.guardrail_hooks.azure.prompt_shield import AzureContentSafetyPromptShieldGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -3924,3 +3926,130 @@ async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_wo
     assert returned is response
     callback.assert_called_once()
     assert callback.call_args.args[0] == {"response": {"response_text": "masked"}}
+
+
+_GUARDRAIL_RECORDS: Final = "standard_logging_guardrail_information"
+_BEDROCK_TEXT_ALLOWED: Final = {"action": "NONE", "outputs": [], "assessments": []}
+_BEDROCK_BLOCKED: Final = {
+    "action": "GUARDRAIL_INTERVENED",
+    "outputs": [{"text": "blocked"}],
+    "assessments": [{"contentPolicy": {"filters": [{"type": "VIOLENCE", "confidence": "HIGH", "action": "BLOCKED"}]}}],
+}
+
+
+class _BedrockGuardrailCall(NamedTuple):
+    response: httpx.Response
+    bedrock_payloads: Sequence[Mapping[str, object]]
+    logged: Mapping[str, object]
+    failure_hook_request: Mapping[str, object]
+
+
+def _bedrock_guard(handler: AsyncHTTPHandler, latest_user_message_only: bool = False) -> CustomGuardrail:
+    return BedrockGuardrail(
+        guardrail_name="bedrock-guard",
+        guardrailIdentifier="gr-1",
+        guardrailVersion="1",
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        async_handler=handler,
+        experimental_use_latest_role_message_only=latest_user_message_only,
+    )
+
+
+async def _apply_bedrock_guardrail_over_http(
+    mocker: MockerFixture,
+    bedrock_answers: Sequence[Mapping[str, object]],
+    body: Mapping[str, object],
+    guardrail: Callable[[AsyncHTTPHandler], CustomGuardrail] = _bedrock_guard,
+) -> _BedrockGuardrailCall:
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.guardrails.guardrail_endpoints import router
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    sent: Final[list[httpx.Request]] = []
+
+    def bedrock(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=bedrock_answers[len(sent) - 1])
+
+    registry: Final = mocker.Mock()
+    registry.get_initialized_guardrail_callback.return_value = guardrail(
+        AsyncHTTPHandler(transport=httpx.MockTransport(bedrock))
+    )
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", registry)
+    logging_obj: Final = Logging(
+        model="guardrail",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="bedrock-guard-call",
+        function_id="bedrock-guard-call",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={})
+    processor: Final = mocker.Mock()
+    processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"metadata": {"route": "/apply_guardrail"}}, logging_obj)
+    )
+    mocker.patch("litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing", return_value=processor)
+    proxy_logging: Final = mocker.Mock()
+    proxy_logging.post_call_success_hook = AsyncMock(return_value=None)
+    proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
+
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth()
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://guardrails.test") as client:
+        response: Final = await client.post(
+            "/guardrails/apply_guardrail", json={"guardrail_name": "bedrock-guard", **body}
+        )
+    failed: Final = proxy_logging.post_call_failure_hook.await_args
+    return _BedrockGuardrailCall(
+        response=response,
+        bedrock_payloads=tuple(json.loads(request.content) for request in sent),
+        logged=logging_obj.model_call_details.get("standard_logging_object") or {},
+        failure_hook_request=failed.kwargs["request_data"] if failed is not None else {},
+    )
+
+
+def _logged_verdicts(call: _BedrockGuardrailCall) -> list[tuple[object, object]]:
+    return [(record["guardrail_name"], record["guardrail_status"]) for record in call.logged["guardrail_information"]]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_logs_a_blocked_request_with_the_guardrail_verdict(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_BLOCKED,), {"text": "hello"})
+
+    assert call.response.status_code == 400
+    assert call.logged["status"] == "failure"
+    assert _logged_verdicts(call) == [("bedrock-guard", "guardrail_intervened")]
+    assert [record["guardrail_status"] for record in call.failure_hook_request["metadata"][_GUARDRAIL_RECORDS]] == [
+        "guardrail_intervened"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_logs_an_allowed_request_with_the_guardrail_verdict(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_TEXT_ALLOWED,), {"text": "hello"})
+
+    assert call.response.status_code == 200
+    assert call.logged["status"] == "success"
+    assert _logged_verdicts(call) == [("bedrock-guard", "success")]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_never_logs_a_verdict_the_caller_supplied(mocker: MockerFixture) -> None:
+    forged: Final = {"guardrail_name": "forged", "guardrail_status": "success"}
+
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_TEXT_ALLOWED,), {"text": "hello", "metadata": {_GUARDRAIL_RECORDS: [forged]}}
+    )
+
+    assert _logged_verdicts(call) == [("bedrock-guard", "success")]

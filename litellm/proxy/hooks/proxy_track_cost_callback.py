@@ -71,6 +71,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (  # noqa: F401  #
     should_store_prompts_for_call,
 )
 from litellm.proxy.utils import (
+    GUARDRAIL_ENDPOINT_FAILURE,
+    GUARDRAIL_ENDPOINT_FAILURE_KEY,
     REJECTED_BEFORE_REQUEST_SETUP,
     REJECTED_BEFORE_REQUEST_SETUP_KEY,
     BilledFailedAttempt,
@@ -479,6 +481,7 @@ class _ProxyDBLogger(CustomLogger):
             return
 
         request_route: Final = user_api_key_dict.request_route
+        request_fields: Final = _str_keyed_fields(request_data)
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
 
         route_is_trackable: Final = (
@@ -486,6 +489,7 @@ class _ProxyDBLogger(CustomLogger):
             or RouteChecks.is_llm_api_route(route=request_route)
             or RouteChecks.is_info_route(route=request_route)
             or InitPassThroughEndpointHelpers.has_configured_route_ignoring_trailing_slash(route=request_route)
+            or request_fields.get(GUARDRAIL_ENDPOINT_FAILURE_KEY) is GUARDRAIL_ENDPOINT_FAILURE
         )
         if (
             ProxyDBLogger._should_track_errors_in_db() is False
@@ -523,7 +527,6 @@ class _ProxyDBLogger(CustomLogger):
             )
         )
 
-        request_fields: Final = _str_keyed_fields(request_data)
         _metadata["used_client_oauth_token"] = _proxy_stamped_used_client_oauth_token(request_fields, request_route)
 
         existing_metadata: Final[dict] = request_data.get("metadata", None) or {}
