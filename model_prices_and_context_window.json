@@ -48764,7 +48764,8 @@
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
-        "prompt_cache_min_tokens": 4096
+        "prompt_cache_min_tokens": 4096,
+        "source": "https://replicate.com/anthropic/claude-4.5-haiku"
     },
     "replicate/ibm-granite/granite-3.3-8b-instruct": {
         "input_cost_per_token": 3e-08,
@@ -48856,6 +48857,7 @@
         "mode": "chat",
         "max_input_tokens": 65536,
         "max_output_tokens": 8192,
+        "source": "https://replicate.com/deepseek-ai/deepseek-v3",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48926,7 +48928,8 @@
         "supports_tool_choice": true,
         "supports_response_schema": true,
         "supports_prompt_caching": true,
-        "prompt_cache_min_tokens": 1024
+        "prompt_cache_min_tokens": 1024,
+        "source": "https://replicate.com/anthropic/claude-4.5-sonnet"
     },
     "replicate/openai/gpt-4.1": {
         "input_cost_per_token": 2e-06,
@@ -49010,6 +49013,7 @@
         "mode": "chat",
         "max_input_tokens": 163840,
         "max_output_tokens": 163840,
+        "source": "https://replicate.com/deepseek-ai/deepseek-v3.1",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true
@@ -49030,6 +49034,7 @@
         "mode": "chat",
         "max_input_tokens": 65536,
         "max_output_tokens": 8192,
+        "source": "https://replicate.com/deepseek-ai/deepseek-r1",
         "supports_reasoning": true,
         "supports_system_messages": true
     },
@@ -97061,5 +97066,484 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "replicate/alibaba/happyhorse-1.0": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_1080p": 0.28,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://replicate.com/alibaba/happyhorse-1.0"
+    },
+    "replicate/alibaba/happyhorse-1.1": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.18,
+        "output_cost_per_second_1080p": 0.18,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://replicate.com/alibaba/happyhorse-1.1"
+    },
+    "replicate/alibaba/qwen-image-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/alibaba/qwen-image-3"
+    },
+    "replicate/alibaba/qwen-image-3-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/alibaba/qwen-image-3-pro"
+    },
+    "replicate/alibaba/wan-3": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "output_cost_per_second_1080p": 0.14,
+        "output_cost_per_second_480p": 0.035,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://replicate.com/alibaba/wan-3"
+    },
+    "replicate/alibaba/wan-3-prime": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "output_cost_per_second_1080p": 0.28,
+        "output_cost_per_second_480p": 0.068,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://replicate.com/alibaba/wan-3-prime"
+    },
+    "replicate/anthropic/claude-fable-5": {
+        "input_cost_per_token": 1e-05,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "source": "https://replicate.com/anthropic/claude-fable-5",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-fable-5.2": {
+        "input_cost_per_token": 8e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 4e-05,
+        "source": "https://replicate.com/anthropic/claude-fable-5.2",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-opus-4.6": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://replicate.com/anthropic/claude-opus-4.6",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-opus-4.7": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "source": "https://replicate.com/anthropic/claude-opus-4.7",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-opus-5.5": {
+        "input_cost_per_token": 4e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2e-05,
+        "source": "https://replicate.com/anthropic/claude-opus-5.5",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-sonnet-4.6": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://replicate.com/anthropic/claude-sonnet-4.6",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/anthropic/claude-sonnet-5": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "source": "https://replicate.com/anthropic/claude-sonnet-5",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/black-forest-labs/flux-1.1-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/black-forest-labs/flux-1.1-pro"
+    },
+    "replicate/black-forest-labs/flux-1.1-pro-ultra": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/black-forest-labs/flux-1.1-pro-ultra"
+    },
+    "replicate/black-forest-labs/flux-1.1-pro-ultra-finetuned": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://replicate.com/black-forest-labs/flux-1.1-pro-ultra-finetuned"
+    },
+    "replicate/black-forest-labs/flux-2-flex": {
+        "input_cost_per_pixel": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 6e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-flex"
+    },
+    "replicate/black-forest-labs/flux-2-klein-4b": {
+        "input_cost_per_pixel": 1e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1e-09,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-4b"
+    },
+    "replicate/black-forest-labs/flux-2-klein-4b-base": {
+        "input_cost_per_pixel": 9e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 9e-09,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-4b-base"
+    },
+    "replicate/black-forest-labs/flux-2-klein-4b-base-lora": {
+        "input_cost_per_pixel": 9e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1.9e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-4b-base-lora"
+    },
+    "replicate/black-forest-labs/flux-2-klein-9b": {
+        "input_cost_per_pixel": 2e-09,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1.5e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-9b"
+    },
+    "replicate/black-forest-labs/flux-2-klein-9b-base": {
+        "input_cost_per_pixel": 1.1e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 1.1e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-9b-base"
+    },
+    "replicate/black-forest-labs/flux-2-klein-9b-base-lora": {
+        "input_cost_per_pixel": 1.1e-08,
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_pixel": 2.1e-08,
+        "source": "https://replicate.com/black-forest-labs/flux-2-klein-9b-base-lora"
+    },
+    "replicate/black-forest-labs/flux-canny-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-canny-dev"
+    },
+    "replicate/black-forest-labs/flux-canny-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/black-forest-labs/flux-canny-pro"
+    },
+    "replicate/black-forest-labs/flux-depth-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-depth-dev"
+    },
+    "replicate/black-forest-labs/flux-depth-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/black-forest-labs/flux-depth-pro"
+    },
+    "replicate/black-forest-labs/flux-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-dev"
+    },
+    "replicate/black-forest-labs/flux-dev-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.032,
+        "source": "https://replicate.com/black-forest-labs/flux-dev-lora"
+    },
+    "replicate/black-forest-labs/flux-fill-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/black-forest-labs/flux-fill-dev"
+    },
+    "replicate/black-forest-labs/flux-fill-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/black-forest-labs/flux-fill-pro"
+    },
+    "replicate/black-forest-labs/flux-kontext-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-dev"
+    },
+    "replicate/black-forest-labs/flux-kontext-dev-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.032,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-dev-lora"
+    },
+    "replicate/black-forest-labs/flux-kontext-max": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-max"
+    },
+    "replicate/black-forest-labs/flux-kontext-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/black-forest-labs/flux-kontext-pro"
+    },
+    "replicate/black-forest-labs/flux-krea-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-krea-dev"
+    },
+    "replicate/black-forest-labs/flux-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.055,
+        "source": "https://replicate.com/black-forest-labs/flux-pro"
+    },
+    "replicate/black-forest-labs/flux-pro-finetuned": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/black-forest-labs/flux-pro-finetuned"
+    },
+    "replicate/black-forest-labs/flux-redux-dev": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/black-forest-labs/flux-redux-dev"
+    },
+    "replicate/black-forest-labs/flux-redux-schnell": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.003,
+        "source": "https://replicate.com/black-forest-labs/flux-redux-schnell"
+    },
+    "replicate/black-forest-labs/flux-schnell": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.003,
+        "source": "https://replicate.com/black-forest-labs/flux-schnell"
+    },
+    "replicate/black-forest-labs/flux-schnell-lora": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "source": "https://replicate.com/black-forest-labs/flux-schnell-lora"
+    },
+    "replicate/bria/eraser": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/eraser"
+    },
+    "replicate/bria/expand-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/expand-image"
+    },
+    "replicate/bria/fibo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/fibo"
+    },
+    "replicate/bria/fibo-edit": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/fibo-edit"
+    },
+    "replicate/bria/generate-background": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/generate-background"
+    },
+    "replicate/bria/genfill": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/genfill"
+    },
+    "replicate/bria/image-3.2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/image-3.2"
+    },
+    "replicate/bria/increase-resolution": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/increase-resolution"
+    },
+    "replicate/bria/product-cutout": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/product-cutout"
+    },
+    "replicate/bria/product-packshot": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/product-packshot"
+    },
+    "replicate/bria/product-shadow": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bria/product-shadow"
+    },
+    "replicate/bria/remove-background": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.018,
+        "source": "https://replicate.com/bria/remove-background"
+    },
+    "replicate/bria/video-erase-object": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bria/video-erase-object"
+    },
+    "replicate/bria/video-increase-resolution": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bria/video-increase-resolution"
+    },
+    "replicate/bria/video-remove-background": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bria/video-remove-background"
+    },
+    "replicate/bytedance/dreamactor-m2.0": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://replicate.com/bytedance/dreamactor-m2.0"
+    },
+    "replicate/bytedance/dreamina-3.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/bytedance/dreamina-3.1"
+    },
+    "replicate/bytedance/omni-human": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "source": "https://replicate.com/bytedance/omni-human"
+    },
+    "replicate/bytedance/omni-human-1.5": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.16,
+        "source": "https://replicate.com/bytedance/omni-human-1.5"
+    },
+    "replicate/bytedance/seedance-1-lite": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.036,
+        "output_cost_per_second_1080p": 0.072,
+        "output_cost_per_second_480p": 0.018,
+        "output_cost_per_second_720p": 0.036,
+        "source": "https://replicate.com/bytedance/seedance-1-lite"
+    },
+    "replicate/bytedance/seedance-1-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.15,
+        "output_cost_per_second_1080p": 0.15,
+        "output_cost_per_second_480p": 0.03,
+        "output_cost_per_second_720p": 0.06,
+        "source": "https://replicate.com/bytedance/seedance-1-pro"
+    },
+    "replicate/bytedance/seedance-1-pro-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_480p": 0.015,
+        "output_cost_per_second_720p": 0.025,
+        "source": "https://replicate.com/bytedance/seedance-1-pro-fast"
+    },
+    "replicate/bytedance/seedream-3": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/bytedance/seedream-3"
+    },
+    "replicate/bytedance/seedream-4": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/bytedance/seedream-4"
+    },
+    "replicate/bytedance/seedream-4.5": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/bytedance/seedream-4.5"
+    },
+    "replicate/bytedance/seedream-5-lite": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://replicate.com/bytedance/seedream-5-lite"
+    },
+    "replicate/datalab-to/ocr": {
+        "litellm_provider": "replicate",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.002,
+        "source": "https://replicate.com/datalab-to/ocr"
+    },
+    "replicate/decart/lucy-edit-2": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "source": "https://replicate.com/decart/lucy-edit-2"
+    },
+    "replicate/easel/ai-avatars": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/easel/ai-avatars"
+    },
+    "replicate/elevenlabs/dubbing": {
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_second": 0.0366667,
+        "source": "https://replicate.com/elevenlabs/dubbing"
     }
 }
