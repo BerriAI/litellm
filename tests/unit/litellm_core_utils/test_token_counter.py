@@ -4033,3 +4033,12 @@ def test_token_counter_keeps_thinking_when_the_only_assistant_turn_is_last():
     ]
     stripped = [single[0], {"role": "assistant", "content": [single[1]["content"][1]]}]
     assert token_counter(model="gpt-4o", messages=single) > token_counter(model="gpt-4o", messages=stripped)
+
+
+def test_token_counter_keeps_historical_thinking_for_models_that_preserve_it():
+    """Opus 4.5+ / Sonnet 4.6+ keep and bill earlier turns' thinking blocks."""
+    all_turns = token_counter(model="claude-opus-4-5", messages=_tool_loop_messages())
+
+    without_previous = _tool_loop_messages()
+    without_previous[1]["content"] = [without_previous[1]["content"][1]]
+    assert all_turns > token_counter(model="claude-opus-4-5", messages=without_previous)

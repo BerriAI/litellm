@@ -1039,6 +1039,7 @@ def _count_messages(
         default_token_count (Optional[int]): The default number of tokens to return for a message block, if an error occurs.
     """
     last_assistant_index: Final = _last_assistant_index(messages)
+    preserves_thinking: Final = _model_preserves_historical_thinking(params)
     return sum(
         params.tokens_per_message
         + _count_message_fields(
@@ -1048,13 +1049,25 @@ def _count_messages(
             default_token_count,
             # Thinking blocks on earlier assistant turns never reach the model: the
             # Anthropic API strips them from context and does not bill them (only the
-            # latest assistant turn's thinking survives a tool-use loop). This covers
-            # only thinking/redacted_thinking content blocks; reasoning_content strings
+            # latest assistant turn's thinking survives a tool-use loop) — except on
+            # models flagged supports_thinking_cache_preservation, which keep and
+            # bill historical thinking, so every turn counts there. This covers only
+            # thinking/redacted_thinking content blocks; reasoning_content strings
             # still count on every turn, because OpenAI-compatible providers may keep
             # them in the prompt (e.g. Fireworks with reasoning_history="preserved").
-            counts_reasoning=_message_role(message) != "assistant" or index == last_assistant_index,
+            counts_reasoning=preserves_thinking
+            or _message_role(message) != "assistant"
+            or index == last_assistant_index,
         )
         for index, message in enumerate(messages)
+    )
+
+
+def _model_preserves_historical_thinking(params: _MessageCountParams) -> bool:
+    from litellm.utils import supports_thinking_cache_preservation
+
+    return supports_thinking_cache_preservation(
+        params._model  # pyright: ignore[reportPrivateUsage]  # same-module helper of _MessageCountParams
     )
 
 
