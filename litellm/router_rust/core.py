@@ -78,6 +78,7 @@ from litellm.litellm_core_utils.total_deadline import (
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.deployment_health import DeploymentHealthStore
 from litellm.redis.stores.router_cooldowns import RouterCooldownStore
+from litellm.redis.stores.router_session_pins import RouterSessionPinStore
 from litellm.redis.stores.router_usage import RouterUsage
 from litellm.router_api import (
     ROUTER_INIT_ARGS,
@@ -1165,6 +1166,10 @@ class RustHealth(RouterHealth):
     def cooldowns(self) -> "CooldownCache":
         return self._core._cooldowns  # pyright: ignore[reportPrivateUsage]  # see above
 
+    @property
+    def session_pins(self) -> RouterSessionPinStore:
+        return self._core._session_pins  # pyright: ignore[reportPrivateUsage]  # see above
+
     def failures_this_minute(self, deployment_id: str) -> int:
         count: Final[object] = self.store.get_cache(f"{deployment_id}:fails", local_only=True)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
         return int(count) if isinstance(count, int | float) else 0
@@ -1268,6 +1273,7 @@ _REBOUND_STATE: Final = MappingProxyType(
     {
         "_core_cache": "_cache",
         "_core_cooldown_cache": "_cooldowns",
+        "_core_session_pins": "_session_pins",
         "_core_health_state_cache": "_health_checks",
         "_core_slack_alerting_logger": "_slack_alerting_logger",
     }
@@ -1278,6 +1284,7 @@ _HEALTH_SERVED: Final = frozenset(
     {
         "store",
         "cooldowns",
+        "session_pins",
         "failures_this_minute",
         "record_failure",
         "usage",
@@ -1494,6 +1501,7 @@ class RustCore(
         self._health_checks: DeploymentHealthCache = resolved.health_routing.health_checks(
             DeploymentHealthStore(redis.deployment_health())
         )
+        self._session_pins: Final = RouterSessionPinStore(redis.router_session_pins())
         self._version: int = 1
         self._settings: RustSettings | None = None
         self._tag_filtering_models: tuple[int, bool] | None = None
@@ -1522,7 +1530,7 @@ class RustCore(
         ctx: Final = RoutingContext(self)  # pyright: ignore[reportArgumentType]  # the strategies read registry(), settings(), health() and select()
         self._ctx: Final = ctx
         strategies: Final = PreRoutingStrategies(
-            self._hosted, host, ctx, config.get("auto_router_capability_limit"), self._cache
+            self._hosted, host, ctx, config.get("auto_router_capability_limit"), self._session_pins
         )
         self._hosted.strategies = strategies
         self._prerouter: Final = PreRouter(strategies, self._hosted, host, ctx, self._cache)
@@ -1548,7 +1556,9 @@ class RustCore(
         self._hosted._core_routing_plugins = list(resolved.routing_plugins)  # pyright: ignore[reportPrivateUsage]  # the core fills its own host registry
         self._rebuild()
         self._join_callback_holders()
-        self._checks: Final = OptionalChecks(self, host, self._cache, self._usage, self._hosted, ctx, config.arguments)
+        self._checks: Final = OptionalChecks(
+            self, host, self._cache, self._usage, self._session_pins, self._hosted, ctx, config.arguments
+        )
         self._hosted.checks = self._checks
         strategies.ensure_affinity = self._checks.ensure_deployment_affinity_callback
         strategies.hand_over_affinity(self._checks.adopt)
@@ -2135,6 +2145,7 @@ class RustCore(
             self._usage.attach_redis(redis)
             self._cooldowns.cooldown_store.attach_redis(redis)
             self._health_checks.store.attach_redis(redis)
+            self._session_pins.attach_redis(redis)
             self._checks.prompt_caching_pin_cache.attach_redis_cache(changes.redis_cache)
             self._prerouter.attach_redis_cache(changes.redis_cache)
         return ApplyResult(
