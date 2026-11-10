@@ -49,7 +49,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     BilledTokenRates,
     CostCalculatorUtils,
     calculate_cache_writing_cost,
-    calculate_cost_component,
     generic_cost_per_character,
     generic_cost_per_token,
     get_batch_cost_rates,
@@ -3293,26 +3292,9 @@ def batch_cost_calculator(
             batch_rates.cache_creation_rates_by_ttl,
         )
     elif input_cost_per_token is not None:
-        details: Final = parse_prompt_tokens_details(usage)
-        cache_read_tokens: Final = details["cache_hit_tokens"]
-        cache_creation_tokens: Final = details["cache_creation_tokens"]
-
-        # Subtract cached tokens from prompt_tokens before calculating cost
-        # Fixes issue where cached tokens are being charged again
-        base_input_tokens: Final = get_billable_input_tokens(usage) - cache_creation_tokens
-        total_prompt_cost = (
-            base_input_tokens * (input_cost_per_token) / 2
-        )  # batch cost is usually half of the regular token cost
-
-        # Add cache read cost if applicable
-        cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", None)
-        total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
-
-        configured_cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost")
-        cache_creation_cost: Final = (
-            input_cost_per_token if configured_cache_creation_cost is None else configured_cache_creation_cost
+        total_prompt_cost = _half_price_prompt_cost(
+            usage, model_info, input_cost_per_token, batch_rates.cache_read_image
         )
-        total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
     text_rate: Final = _batch_or_half(batch_rates.output, output_cost_per_token)
     image_rate: Final = _batch_or_half(
         model_info.get("output_cost_per_image_token_batches"),
@@ -3352,6 +3334,40 @@ def _cached_modality_rate(
         return batch_cache_read_rate
     standard_modality_rate: Final = _standard_rate(model_info, standard_key, prompt_tokens)
     return cache_read_rate if standard_modality_rate is None else standard_modality_rate
+
+
+def _half_price_prompt_cost(
+    usage: Usage, model_info: ModelInfo, input_cost_per_token: float, batch_cache_read_image_rate: float | None
+) -> float:
+    details: Final = parse_prompt_tokens_details(usage)
+    cache_creation_tokens: Final = details["cache_creation_tokens"]
+    base_input_tokens: Final = get_billable_input_tokens(usage) - cache_creation_tokens
+    cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", None)
+    half_cache_read_rate: Final = (get_cost_per_unit(model_info, cache_read_cost_key, 0.0) or 0.0) / 2
+    cached_audio_rate: Final = _batch_or_half(
+        _optional_batch_rate(model_info, "cache_read_input_audio_token_cost_batches", usage.prompt_tokens),
+        _standard_rate(model_info, "cache_read_input_audio_token_cost", usage.prompt_tokens),
+        default=half_cache_read_rate,
+    )
+    cached_image_rate: Final = _batch_or_half(
+        batch_cache_read_image_rate,
+        _standard_rate(model_info, "cache_read_input_image_token_cost", usage.prompt_tokens),
+        default=half_cache_read_rate,
+    )
+    cached_audio_tokens: Final = details["cache_hit_audio_tokens"]
+    cached_image_tokens: Final = details["cached_image_tokens"]
+    cached_text_tokens: Final = max(details["cache_hit_tokens"] - cached_audio_tokens - cached_image_tokens, 0)
+    configured_cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost")
+    cache_creation_cost: Final = (
+        input_cost_per_token if configured_cache_creation_cost is None else configured_cache_creation_cost
+    )
+    return (
+        base_input_tokens * input_cost_per_token / 2
+        + cached_text_tokens * half_cache_read_rate
+        + cached_audio_tokens * cached_audio_rate
+        + cached_image_tokens * cached_image_rate
+        + cache_creation_tokens * cache_creation_cost / 2
+    )
 
 
 def _batch_prompt_cost(

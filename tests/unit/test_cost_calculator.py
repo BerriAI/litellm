@@ -4672,6 +4672,54 @@ def test_batch_cost_calculator_bills_cached_modality_tokens_at_their_batch_cache
     assert prompt_cost == pytest.approx(1000 * 1e-6)
 
 
+@pytest.mark.parametrize(
+    ("usage", "modality_cache_key", "expected_prompt_cost"),
+    [
+        pytest.param(
+            _cached_audio_batch_usage(),
+            "cache_read_input_audio_token_cost_batches",
+            1000 * 1e-6,
+            id="cached-audio-batch-price",
+        ),
+        pytest.param(
+            _cached_image_batch_usage(),
+            "cache_read_input_image_token_cost_batches",
+            1000 * 1e-6,
+            id="cached-image-batch-price",
+        ),
+        pytest.param(
+            _cached_audio_batch_usage(),
+            "cache_read_input_audio_token_cost",
+            1000 * 1e-6 / 2,
+            id="cached-audio-standard-price-halved",
+        ),
+        pytest.param(
+            _cached_image_batch_usage(),
+            "cache_read_input_image_token_cost",
+            1000 * 1e-6 / 2,
+            id="cached-image-standard-price-halved",
+        ),
+    ],
+)
+def test_batch_cost_calculator_half_price_fallback_bills_cached_modality_tokens_at_their_own_cache_price(
+    usage: Usage, modality_cache_key: str, expected_prompt_cost: float
+) -> None:
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 5e-6,
+            "cache_read_input_token_cost": 2.5e-6,
+            modality_cache_key: 1e-6,
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model="gpt-image-2", custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(expected_prompt_cost)
+
+
 def test_batch_cached_image_tokens_bill_the_rows_batch_cached_image_price_on_every_row_that_has_one() -> None:
     rows: Final = _rows_with_a_batch_cached_image_price()
     assert rows, "no cost map row prices Batch cached image input"
