@@ -37,6 +37,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def is_native_messages_route(self) -> bool:
         return False
 
+    def supports_cache_salt(self) -> bool:
+        return True
+
     def hoists_wrapped_defer_loading(self, model: str) -> bool:
         return False
 
@@ -139,6 +142,9 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def supports_cache_salt(self) -> bool:
+        return False
 
     def supports_safeguards(self) -> bool:
         return False

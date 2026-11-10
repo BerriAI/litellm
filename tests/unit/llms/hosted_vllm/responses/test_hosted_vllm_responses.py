@@ -227,7 +227,9 @@ def test_hosted_vllm_responses_folds_a_later_developer_item_into_instructions_fo
 
 
 @respx.mock
-def test_hosted_vllm_responses_folds_for_a_deployment_declared_system_first_and_sends_a_closing_developer_as_user() -> None:
+def test_hosted_vllm_responses_folds_for_a_deployment_declared_system_first_and_sends_a_closing_developer_as_user() -> (
+    None
+):
     assistant_turn: Final = {"type": "message", "role": "assistant", "content": "Paris"}
     route: Final = _vllm_responses_route("PONG")
     litellm.responses(
@@ -262,7 +264,9 @@ def test_hosted_vllm_responses_forwards_a_later_developer_item_in_place_for_an_u
 
 
 @respx.mock
-def test_hosted_vllm_responses_forwards_a_developer_item_without_content_on_a_deployment_declared_system_first() -> None:
+def test_hosted_vllm_responses_forwards_a_developer_item_without_content_on_a_deployment_declared_system_first() -> (
+    None
+):
     route: Final = _vllm_responses_route("Paris")
     input_items: Final = (
         {"role": "user", "content": "What is the capital of France?"},
@@ -276,3 +280,41 @@ def test_hosted_vllm_responses_forwards_a_developer_item_without_content_on_a_de
         api_base="https://test-vllm.example.com/v1",
     )
     assert tuple(_sent_body(route)["input"]) == input_items
+
+
+@respx.mock
+def test_hosted_vllm_responses_preserves_cache_salt_isolation_inputs() -> None:
+    route: Final = _vllm_responses_route("ok")
+    requests: Final[tuple[Mapping[str, str], ...]] = (
+        {"cache_salt": "salt-a"},
+        {"cache_salt": "salt-b"},
+        {},
+        {"cache_salt": "salt-a"},
+    )
+
+    def sent_body(kwargs: Mapping[str, str]) -> Mapping[str, object]:
+        litellm.responses(
+            model="hosted_vllm/Qwen/Qwen3-8B",
+            input="long prompt",
+            api_base="https://test-vllm.example.com/v1",
+            **kwargs,
+        )
+        return _sent_body(route)
+
+    assert [sent_body(kwargs) for kwargs in requests] == [
+        {"input": "long prompt", "cache_salt": "salt-a", "model": "Qwen/Qwen3-8B"},
+        {"input": "long prompt", "cache_salt": "salt-b", "model": "Qwen/Qwen3-8B"},
+        {"input": "long prompt", "model": "Qwen/Qwen3-8B"},
+        {"input": "long prompt", "cache_salt": "salt-a", "model": "Qwen/Qwen3-8B"},
+    ]
+
+
+@respx.mock
+def test_openai_responses_still_drops_cache_salt() -> None:
+    route: Final = respx.post("https://api.openai.com/v1/responses").mock(
+        return_value=httpx.Response(200, json=_make_mock_responses_api_response("ok"))
+    )
+
+    litellm.responses(model="openai/gpt-4o", input="long prompt", cache_salt="salt-a", api_key="test-key")
+
+    assert "cache_salt" not in _sent_body(route)

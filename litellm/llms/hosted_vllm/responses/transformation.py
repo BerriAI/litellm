@@ -32,6 +32,9 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.HOSTED_VLLM
 
+    def supports_cache_salt(self) -> bool:
+        return True
+
     def validate_environment(
         self,
         headers: dict,

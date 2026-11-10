@@ -391,7 +391,9 @@ class AnthropicAdapter:
         #########################################################
         # Created Typed Request Body
         #########################################################
-        request_body: Final = AnthropicMessagesRequest(model=model, messages=messages, **kwargs)
+        request_body: Final = AnthropicMessagesRequest(  # pyright: ignore[reportUnknownArgumentType]  # kwargs arrive as a bare dict
+            model=model, messages=messages, **kwargs
+        )
 
         (
             translated_body,

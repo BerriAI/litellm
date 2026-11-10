@@ -840,7 +840,7 @@ def anthropic_messages_handler(
     if marked_tools is not None:
         AnthropicCacheControlHook.record_gateway_injection(request_kwargs, 1)
     local_vars.update({**request_kwargs, **({"tools": list(marked_tools)} if marked_tools is not None else {})})
-    anthropic_messages_optional_request_params: Final = (
+    requested_anthropic_messages_optional_request_params: Final = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             params=local_vars,
             model=model,
@@ -848,6 +848,15 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=additional_drop_paths(request_kwargs),
         )
+    )
+    anthropic_messages_optional_request_params: Final = (
+        requested_anthropic_messages_optional_request_params
+        if anthropic_messages_provider_config.supports_cache_salt()
+        else {
+            key: value
+            for key, value in requested_anthropic_messages_optional_request_params.items()
+            if key != "cache_salt"
+        }
     )
     resolved_api_base: Final = (
         dynamic_api_base

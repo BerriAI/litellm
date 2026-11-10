@@ -80,6 +80,9 @@ class BaseResponsesAPIConfig(ABC):
         """
         return False
 
+    def supports_cache_salt(self) -> bool:
+        return False
+
     def supports_encrypted_agent_messages(self) -> bool:
         return False
 

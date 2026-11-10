@@ -1306,7 +1306,9 @@ async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_e
     api_base: Final = {} if api_base_from_env else {"api_base": "https://example-resource.cognitiveservices.azure.com"}
 
     with (
-        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
         patch(
             "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
             return_value=lambda: "entra-token",
@@ -1353,7 +1355,9 @@ async def test_bridged_messages_keep_the_azure_env_credential_when_the_deploymen
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     with (
-        patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"
+        ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
         respx.mock(assert_all_called=True) as respx_mock,
     ):
         upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
@@ -2799,6 +2803,99 @@ async def test_anthropic_messages_strict_tools_rejection_is_sent_again_without_s
     assert first["tools"] == [tool]
     assert second == {**first, "tools": [{"name": "lookup_record", "input_schema": {"type": "object"}}]}
     assert _JSON_BODY.validate_python(response)["id"] == "msg_strict_retry"
+
+
+class _RecordNativeMessages:
+    def __init__(self) -> None:
+        self.bodies: list[dict[str, object]] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.bodies.append(_JSON_BODY.validate_json(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": f"msg_{len(self.bodies)}",
+                "type": "message",
+                "role": "assistant",
+                "model": "granite",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+
+@pytest.mark.asyncio
+async def test_native_messages_passthrough_preserves_cache_salt_isolation_inputs() -> None:
+    upstream: Final = _RecordNativeMessages()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
+    requests: Final = (
+        {"cache_salt": "salt-a"},
+        {"cache_salt": "salt-b"},
+        {},
+        {"cache_salt": "salt-a"},
+    )
+
+    for kwargs in requests:
+        await litellm.anthropic_messages(
+            max_tokens=8,
+            messages=[{"role": "user", "content": "long prompt"}],
+            model="hosted_vllm/granite",
+            api_base="https://vllm.example.com/v1",
+            model_info={"supported_endpoints": ["/v1/messages"]},
+            client=client,
+            **kwargs,
+        )
+
+    assert [body.get("cache_salt", "<absent>") for body in upstream.bodies] == [
+        "salt-a",
+        "salt-b",
+        "<absent>",
+        "salt-a",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_direct_anthropic_messages_still_drops_cache_salt() -> None:
+    upstream: Final = _RecordNativeMessages()
+
+    await litellm.anthropic_messages(
+        max_tokens=8,
+        messages=[{"role": "user", "content": "long prompt"}],
+        model="anthropic/claude-sonnet-4-6",
+        api_key="test-key",
+        cache_salt="salt-a",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+    )
+
+    assert "cache_salt" not in upstream.bodies[-1]
+
+
+@pytest.mark.asyncio
+async def test_json_provider_anthropic_messages_still_drops_cache_salt() -> None:
+    from litellm.llms.openai_like.messages.transformation import JSONProviderAnthropicMessagesConfig
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    config: Final = ProviderConfigManager.get_provider_anthropic_messages_config(
+        model="gpt-6-sol", provider=LlmProviders.CORTECS
+    )
+    assert isinstance(config, JSONProviderAnthropicMessagesConfig)
+
+    upstream: Final = _RecordNativeMessages()
+    await litellm.anthropic_messages(
+        max_tokens=8,
+        messages=[{"role": "user", "content": "long prompt"}],
+        model="cortecs/gpt-6-sol",
+        api_base="https://cortecs.example.com/v1",
+        api_key="test-key",
+        cache_salt="salt-a",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+    )
+
+    assert "cache_salt" not in upstream.bodies[-1]
 
 
 @pytest.mark.asyncio
