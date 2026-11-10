@@ -356,7 +356,7 @@ export default function KeyInfoView({
         }
       } else {
         const baseMetadata = formValues.metadata || {};
-        const { tags: _omitTags, [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: _omitAlertEmails, ...rest } = baseMetadata;
+        const { tags: _omitTags, ...rest } = baseMetadata;
         formValues.metadata = {
           ...rest,
           ...(Array.isArray(formValues.tags) && formValues.tags.length > 0 ? { tags: formValues.tags } : {}),

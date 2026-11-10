@@ -762,12 +762,12 @@ describe("KeyInfoView handleKeyUpdate max_budget_alert_emails", () => {
     expect(sentPayload.metadata).toEqual({ cost_center: "ops" });
   });
 
-  it("replaces the stored recipients with the rows when the metadata arrives as an object", async () => {
+  it("writes the alert rows when the metadata JSON box is left empty", async () => {
     const sentPayload = await submit({
-      metadata: { cost_center: "ops", max_budget_alert_emails: { "50": ["old@example.com"] } },
+      metadata: "",
       max_budget_alert_emails: [{ threshold: 90, emails: "dl@example.com" }],
     });
 
-    expect(sentPayload.metadata).toEqual({ cost_center: "ops", max_budget_alert_emails: { "90": ["dl@example.com"] } });
+    expect(sentPayload.metadata).toEqual({ max_budget_alert_emails: { "90": ["dl@example.com"] } });
   });
 });

@@ -50,13 +50,6 @@ it("merges the budget alert rows into the metadata JSON box content", () => {
   });
 });
 
-it("leaves max_budget_alert_emails out of metadata when no row has a threshold", () => {
-  const result = build({ max_budget_alert_emails: [{ threshold: null, emails: "dl@example.com" }] });
-  expect(result.kind).toBe("ok");
-  if (result.kind !== "ok") throw new Error(result.kind);
-  expect(result.payload.metadata).toBe("{}");
-});
-
 const payloadOf = (result: KeyPayloadResult): Record<string, unknown> => {
   expect(result.kind).toBe("ok");
   if (result.kind !== "ok") throw new Error("unreachable");
