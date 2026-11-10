@@ -1,7 +1,7 @@
 import json
 import re
 from collections.abc import AsyncGenerator, AsyncIterable, Mapping
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 from fastapi import HTTPException
@@ -32,6 +32,12 @@ _UNOWNED_THREAD_MESSAGE: Final = (
 
 _MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+class _FirstClaimStore(Protocol):
+    async def async_set_cache(self, key: str, value: object, *, nx: bool, ttl: int) -> object: ...
+
+    async def async_get_cache(self, key: str) -> object: ...
 
 
 class _ThreadBinding(BaseModel):
@@ -138,9 +144,17 @@ def _owner(user_api_key_dict: "UserAPIKeyAuth") -> str:
     )
 
 
-def _continued_message_ids(data: Mapping[str, object]) -> tuple[str, ...]:
+def _threads(data: Mapping[str, object]) -> tuple[object, object]:
     extra_body: Final = _as_mapping(data.get("extra_body")) or {}
-    continued: Final = (continued_message_id(thread) for thread in (data.get("thread"), extra_body.get("thread")))
+    return data.get("thread"), extra_body.get("thread")
+
+
+def _sends_thread(data: Mapping[str, object]) -> bool:
+    return any(thread is not None for thread in _threads(data))
+
+
+def _continued_message_ids(data: Mapping[str, object]) -> tuple[str, ...]:
+    continued: Final = (continued_message_id(thread) for thread in _threads(data))
     return tuple(message_id for message_id in continued if message_id is not None)
 
 
@@ -251,7 +265,7 @@ class MessageThreadOwnership(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
-        message_id: Final = _response_message_id(response) if data.get("thread") is not None else None
+        message_id: Final = _response_message_id(response) if _sends_thread(data) else None
         if message_id is not None:
             await self._record_owner(message_id, user_api_key_dict, _sent_anthropic_beta(data))
         return response
@@ -262,7 +276,7 @@ class MessageThreadOwnership(CustomLogger):
         response: AsyncIterable[object],
         request_data: Mapping[str, object],
     ) -> AsyncGenerator[object, None]:
-        scanner: Final = _StreamedMessageIdScanner(finished=request_data.get("thread") is None)
+        scanner: Final = _StreamedMessageIdScanner(finished=not _sends_thread(request_data))
         async for chunk in response:
             yield chunk
             if not scanner.finished and (message_id := scanner.scan(chunk)) is not None:
@@ -279,9 +293,23 @@ class MessageThreadOwnership(CustomLogger):
     ) -> None:
         if await self._binding(message_id, user_api_key_dict) is not None:
             return
+        key: Final = _owner_key(message_id)
+        claimed: Final = _ThreadBinding(owner=_owner(user_api_key_dict), anthropic_beta=anthropic_beta).model_dump()
         await self._owners.async_set_cache(
-            key=_owner_key(message_id),
-            value=_ThreadBinding(owner=_owner(user_api_key_dict), anthropic_beta=anthropic_beta).model_dump(),
+            key=key,
+            value=await _first_claim(self._owners.dual_cache.redis_cache, key, claimed),
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+            local_only=True,
             ttl=_OWNER_TTL_SECONDS,
         )
+
+
+async def _first_claim(store: _FirstClaimStore | None, key: str, claimed: Mapping[str, object]) -> object:
+    if store is None:
+        return claimed
+    try:
+        await store.async_set_cache(key, claimed, nx=True, ttl=_OWNER_TTL_SECONDS)
+        stored: Final = await store.async_get_cache(key)
+    except Exception:  # noqa: BLE001  # a Redis outage keeps the binding in this worker, as DualCache's writes do
+        return claimed
+    return claimed if stored is None else stored

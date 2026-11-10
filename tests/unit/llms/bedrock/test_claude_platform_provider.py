@@ -938,25 +938,18 @@ def test_sigv4_no_duplicate_content_type_when_caller_sets_lowercase():
 async def test_anthropic_messages_bedrock_claude_platform_forwards_a_message_thread(thread: dict[str, str]) -> None:
     import litellm
 
-    requests = []
+    requests: list[dict] = []
 
-    async def mock_post(self, url, data=None, headers=None, **kwargs):
-        requests.append(_capture_request(url=url, headers=headers or {}, data=data))
-        return _anthropic_response(url)
-
-    try:
-        with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post", new=mock_post):
-            await litellm.anthropic_messages(
-                model="bedrock/claude_platform/claude-sonnet-4-6",
-                messages=[{"role": "user", "content": "what did I just say"}],
-                max_tokens=10,
-                api_base="https://aws-external-anthropic.us-west-2.api.aws",
-                api_key="fake-platform-key",
-                workspace_id="wrkspc_test",
-                thread=dict(thread),
-            )
-    finally:
-        await litellm.close_litellm_async_clients()
+    await litellm.anthropic_messages(
+        model="bedrock/claude_platform/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "what did I just say"}],
+        max_tokens=10,
+        api_base="https://aws-external-anthropic.us-west-2.api.aws",
+        api_key="fake-platform-key",
+        workspace_id="wrkspc_test",
+        thread=dict(thread),
+        client=_async_gateway_client(requests, lambda url, headers, data: _anthropic_response(url)),
+    )
 
     assert len(requests) == 1
     assert requests[0]["body"]["thread"] == thread

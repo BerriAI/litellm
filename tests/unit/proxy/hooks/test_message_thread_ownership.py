@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import json
 from collections.abc import AsyncIterator, Sequence
@@ -9,9 +10,9 @@ from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.hooks import PROXY_HOOKS
 from litellm.proxy.hooks.message_thread_ownership import MessageThreadOwnership
 from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging
@@ -103,8 +104,19 @@ async def allows(
     return False
 
 
-def test_the_hook_loads_with_the_proxy_hooks() -> None:
-    assert PROXY_HOOKS["message_thread_ownership"] is MessageThreadOwnership
+@pytest.mark.asyncio
+async def test_the_proxy_starts_with_a_hook_that_keeps_each_thread_with_its_key() -> None:
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging._add_proxy_hooks()
+    await proxy_logging.post_call_success_hook(
+        data={"thread": CREATE}, response=anthropic_message("msg_started"), user_api_key_dict=OWNER
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=INTRUDER, data=continue_from("msg_started"), call_type="anthropic_messages"
+        )
+    assert rejected.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -172,6 +184,53 @@ async def test_a_reply_served_again_to_another_key_stays_with_the_key_that_got_i
     assert not await allows(ownership, INTRUDER, "msg_cached")
 
 
+@pytest.mark.asyncio
+async def test_a_worker_that_writes_after_another_worker_claimed_the_reply_keeps_the_first_owner(
+    router_redis: tuple[RedisCache, object],
+) -> None:
+    redis_cache, _ = router_redis
+    late_write_started: Final = asyncio.Event()
+    owner_stored: Final = asyncio.Event()
+
+    class WritesAfterTheOwner(RedisCache):
+        async def async_set_cache(
+            self,
+            key: str | None,
+            value: object,
+            **kwargs: object,  # kwargs-ok: RedisCache write signature
+        ) -> None:
+            late_write_started.set()
+            await owner_stored.wait()
+            await super().async_set_cache(key, value, **kwargs)
+
+    first: Final = MessageThreadOwnership(
+        message_thread_owner_cache=InternalUsageCache(DualCache(redis_cache=redis_cache))
+    )
+    late: Final = MessageThreadOwnership(
+        message_thread_owner_cache=InternalUsageCache(
+            DualCache(redis_cache=WritesAfterTheOwner(url="redis://router-unit.example:6379/0"))
+        )
+    )
+
+    async def owner_claims() -> None:
+        await late_write_started.wait()
+        await first.async_post_call_success_hook(
+            data={"thread": CREATE}, user_api_key_dict=OWNER, response=anthropic_message("msg_raced")
+        )
+        owner_stored.set()
+
+    await asyncio.gather(
+        late.async_post_call_success_hook(
+            data={"thread": CREATE}, user_api_key_dict=INTRUDER, response=anthropic_message("msg_raced")
+        ),
+        owner_claims(),
+    )
+
+    for worker in (first, late):
+        assert await allows(worker, OWNER, "msg_raced")
+        assert not await allows(worker, INTRUDER, "msg_raced")
+
+
 @pytest.mark.parametrize("call_type", ("acompletion", "aresponses"))
 @pytest.mark.asyncio
 async def test_a_thread_continue_on_another_route_stays_with_the_key_that_created_the_thread(
@@ -224,6 +283,32 @@ async def test_an_owned_top_level_continue_does_not_let_another_keys_extra_body_
             user_api_key_dict=INTRUDER, cache=DualCache(), data=mixed, call_type="acompletion"
         )
     assert rejected.value.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "create",
+    (
+        pytest.param(
+            lambda ownership, data: ownership.async_post_call_success_hook(
+                data=data, user_api_key_dict=OWNER, response=anthropic_message("msg_body_create")
+            ),
+            id="reply",
+        ),
+        pytest.param(
+            lambda ownership, data: served(
+                ownership, (sse_frame(message_start("msg_body_create")), sse_frame({"type": "message_stop"})), data
+            ),
+            id="stream",
+        ),
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_thread_created_in_extra_body_stays_with_the_key_that_created_it(create) -> None:
+    ownership: Final = hook()
+    await create(ownership, {"messages": [], "extra_body": {"thread": CREATE}})
+
+    assert await allows(ownership, OWNER, "msg_body_create", "acompletion")
+    assert not await allows(ownership, INTRUDER, "msg_body_create", "acompletion")
 
 
 @pytest.mark.asyncio
