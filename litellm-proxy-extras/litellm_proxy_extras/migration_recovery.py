@@ -1,4 +1,5 @@
 import hashlib
+import re
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -156,3 +157,48 @@ def baseline_current_schema(
         "review any feature-specific backfill requirements.",
         len(migrations),
     )
+
+
+_LINE_COMMENT_RE: Final = re.compile(r"--[^\n]*")
+_BLOCK_COMMENT_RE: Final = re.compile(r"/\*.*?\*/", re.DOTALL)
+_NO_OP_STATEMENT_RE: Final = re.compile(r"^\s*SELECT\s+1\s*$", re.IGNORECASE)
+
+
+def is_inert_migration(script: str) -> bool:
+    """Whether a migration file changes nothing: only comments and `SELECT 1`, so
+    applying it can neither repeat nor skip a database change."""
+    stripped: Final = _LINE_COMMENT_RE.sub("", _BLOCK_COMMENT_RE.sub("", script))
+    return all(not part.strip() or _NO_OP_STATEMENT_RE.match(part) for part in stripped.split(";"))
+
+
+def roll_back_failed_inert_migration(coordinator: MigrationCoordinator, schema: str, migration: Path) -> bool:
+    """Roll back the failed ledger row of a migration whose file in this build is inert,
+    so `migrate deploy` applies the inert file on its next pass. The row records an
+    earlier build's attempt at SQL this build no longer ships (an index now built by the
+    migration job), so no database change can be repeated or skipped by replaying
+    the empty file. The caller commits this checkpoint before the next Prisma command.
+    """
+    from psycopg import sql
+
+    if not is_inert_migration(migration.read_text(encoding="utf-8")):
+        return False
+    coordinator.acquire_prisma_lock()
+    records: Final = _migration_records(coordinator.connection, schema, migration)
+    unfinished: Final = tuple(record for record in records if not record.finished)
+    if len(unfinished) != 1:
+        return False
+    result: Final = coordinator.connection.execute(
+        sql.SQL(
+            "UPDATE {} SET rolled_back_at = current_timestamp "
+            "WHERE id = %s AND finished_at IS NULL AND rolled_back_at IS NULL"
+        ).format(sql.Identifier(schema, "_prisma_migrations")),
+        (unfinished[0].id,),
+    )
+    if result.rowcount != 1:
+        raise RuntimeError("Could not roll back the failed inert migration history row; rerun the database setup.")
+    logger.info(
+        "Rolled back the failed history row of %s: this build ships it as an inert migration, "
+        "its index is built by the migration job",
+        migration.parent.name,
+    )
+    return True

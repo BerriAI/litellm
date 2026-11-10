@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 import urllib.parse as urlparse
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -700,6 +700,21 @@ class ProxyInitializationHelpers:
         action: Final = "Using existing" if configured_dir else "Auto-created"
         print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
         return multiproc_dir
+
+
+def _setup_database_with_request_log_indexes(
+    skip_server_startup: bool,
+    *,
+    setup: Callable[[], bool],
+    build: Callable[[], bool],
+    start: Callable[[], None],
+) -> bool:
+    if not setup():
+        return False
+    if skip_server_startup:
+        return build()
+    start()
+    return True
 
 
 @click.command()
@@ -1414,9 +1429,14 @@ def run_server(
                             "LiteLLM versions contend for the same DB.\033[0m"
                         )
                     try:
-                        setup_ok: Final = PrismaManager.setup_database(
-                            use_migrate=not use_prisma_db_push,
-                            use_v2_resolver=use_v2_resolver,
+                        setup_ok: Final = _setup_database_with_request_log_indexes(
+                            skip_server_startup,
+                            setup=lambda: PrismaManager.setup_database(
+                                use_migrate=not use_prisma_db_push,
+                                use_v2_resolver=use_v2_resolver,
+                            ),
+                            build=PrismaManager.build_request_log_indexes,
+                            start=PrismaManager.start_request_log_index_build,
                         )
                     except RuntimeError as e:
                         # Raised on unrecoverable migration errors: the v2
