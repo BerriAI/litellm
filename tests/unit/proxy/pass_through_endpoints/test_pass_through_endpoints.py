@@ -449,6 +449,39 @@ async def test_non_streaming_http_request_handler_multipart_with_non_empty_parse
     assert call_args["files"] == [("file", ("test.txt", file_content, "text/plain"))]
 
 
+@pytest.mark.parametrize("existing_api_base", [None, "http://existing.example/search"])
+def test_build_passthrough_failure_request_payload_carries_masked_api_base(existing_api_base: str | None) -> None:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="passthrough",
+        messages=[],
+        stream=False,
+        call_type=CallTypes.pass_through.value,
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="test-call-id",
+        function_id="test-function-id",
+    )
+    logging_obj.pre_call(
+        input={},
+        api_key="",
+        additional_args={
+            "complete_input_dict": {},
+            "api_base": "http://upstream.example/search?api-version=1",
+            "headers": {},
+        },
+    )
+    params: Final = {"metadata": {}, **({"api_base": existing_api_base} if existing_api_base else {})}
+    payload: Final = _build_passthrough_failure_request_payload(
+        parsed_body={},
+        kwargs={"litellm_params": params},
+        logging_obj=logging_obj,
+        custom_llm_provider=None,
+    )
+    assert payload["litellm_params"]["api_base"] == (
+        existing_api_base or logging_obj.model_call_details["litellm_params"]["api_base"]
+    )
+    assert params == {"metadata": {}, **({"api_base": existing_api_base} if existing_api_base else {})}
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_failure_handler():
     """
@@ -468,6 +501,7 @@ async def test_pass_through_request_failure_handler():
     assert "Request failed" in (failure.traceback_str or "")
     assert failure.request_data["contents"] == "not a list"
     assert failure.request_data["model"] == ""
+    assert failure.request_data["litellm_params"]["api_base"] == "http://test.com"
 
 
 @pytest.mark.asyncio

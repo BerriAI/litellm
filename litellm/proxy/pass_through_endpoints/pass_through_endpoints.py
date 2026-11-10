@@ -964,11 +964,16 @@ def _build_passthrough_failure_request_payload(
     model and provider. A user-defined route never gets that, since its URL
     names an upstream model rather than a LiteLLM-managed one.
     """
-    request_payload: Final[dict] = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
+    request_payload: Final = dict(cast(Mapping[str, object], parsed_body or {}))  # cast-ok: json body
     if kwargs:
-        request_payload.update(kwargs)
+        request_payload.update(_json_object(_DECODED_JSON.validate_python(kwargs)))
     if logging_obj is not None:
         request_payload["litellm_logging_obj"] = logging_obj
+        logging_litellm_params: Final = _json_object(logging_obj.model_call_details.get("litellm_params"))
+        existing_litellm_params: Final = _json_object(request_payload.get("litellm_params"))
+        api_base: Final = logging_litellm_params.get("api_base")
+        if isinstance(api_base, str) and api_base and "api_base" not in existing_litellm_params:
+            request_payload["litellm_params"] = {**existing_litellm_params, "api_base": api_base}
     url_route: Final = str(url) if url is not None else ""
     google_provider: Final = (
         _passthrough_google_provider(url_route, custom_llm_provider) if builtin_provider_route else None
