@@ -35,13 +35,6 @@ def cost_calculator(
         verbose_logger.debug("No usage data available for %s, cannot calculate token-based cost", model)
         return flat_image_cost(price_table, image_response)
 
-    # A chat Usage with an explicit output breakdown: cost via generic_cost_per_token.
-    if isinstance(usage, Usage) and usage.completion_tokens_details is not None:
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider=provider, model_info=price_table
-        )
-        return prompt_cost + completion_cost
-
     # ImageUsage / ResponseAPIUsage: reuse the shared helper (same path as
     # azure_ai/gemini/vertex_ai). It prices generated output tokens at
     # output_cost_per_image_token, classifying them as image tokens when the provider
