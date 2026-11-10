@@ -7,6 +7,7 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional
 
@@ -333,7 +334,15 @@ async def _resolve_mcp_server_identifiers_to_ids(
             if identifier == registry_key or _mcp_server_identifier_matches(server, identifier):
                 resolved[identifier].add(server_id)
 
-    return resolved
+    for server in global_mcp_server_manager.catalog.config_registrations.values():
+        for identifier in identifiers:
+            if _mcp_server_identifier_matches(server, identifier):
+                resolved[identifier].add(server.server_id)
+
+    # An exact server_id grants only that server, matching runtime expand_permission_list,
+    # so another registration whose name or alias equals the ID is not also granted.
+    known_ids: Final = frozenset(chain.from_iterable(resolved.values()))
+    return {identifier: {identifier} if identifier in known_ids else ids for identifier, ids in resolved.items()}
 
 
 _MCP_TOOL_PERMISSIONS_ADAPTER: Final = TypeAdapter(dict[str, list[str] | None])
@@ -500,7 +509,7 @@ def _get_all_mcp_server_ids() -> set[str]:
         global_mcp_server_manager,
     )
 
-    return set(global_mcp_server_manager.get_registry().keys())
+    return global_mcp_server_manager.get_all_mcp_server_ids()
 
 
 async def _existing_object_permission_mcp_servers(

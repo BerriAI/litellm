@@ -267,6 +267,7 @@ def _make_mock_mcp_manager(*existing_ids: str, servers=None):
     for server_id in existing_ids:
         server_objs.setdefault(server_id, _make_mock_mcp_server(server_id))
     mock_mgr.get_registry.return_value = server_objs
+    mock_mgr.get_all_mcp_server_ids.side_effect = lambda: set(server_objs)
     mock_mgr.get_mcp_server_by_id.side_effect = lambda sid: server_objs.get(sid)
     return mock_mgr
 
@@ -1094,6 +1095,7 @@ async def test_resolve_team_all_proxy_sentinel_resolves_dynamically(mock_access_
     }
     mock_mgr = MagicMock()
     mock_mgr.get_registry.return_value = registry
+    mock_mgr.get_all_mcp_server_ids.side_effect = lambda: set(registry)
 
     team_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
     team_perm.mcp_servers = [SpecialMCPServerName.all_proxy_servers.value]
@@ -1617,6 +1619,21 @@ async def test_unambiguous_tool_permission_keys_persist_verbatim():
 
 
 @pytest.mark.asyncio
+async def test_exact_server_id_resolves_only_that_server_while_shared_alias_resolves_all():
+    """An exact server_id grants only that server even when another row's alias equals it,
+    matching runtime expansion. A shared alias still resolves to every server using it."""
+    from litellm.proxy.management_helpers.object_permission_utils import _resolve_mcp_server_identifiers_to_ids
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    with patch(
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()
+    ):
+        resolved = await _resolve_mcp_server_identifiers_to_ids({"solo-id", "wiki"}, _make_ambiguity_prisma())
+
+    assert resolved == {"solo-id": {"solo-id"}, "wiki": {"wiki-a-id", "wiki-b-id"}}
+
+
+@pytest.mark.asyncio
 async def test_stored_ambiguous_tool_permission_key_is_grandfathered_until_changed():
     """A shared-alias entry already on the row may be re-sent unchanged so unrelated
     edits succeed, but changing its tool list is rejected."""
@@ -1656,3 +1673,40 @@ def test_object_permission_dict_mirrors_pydantic_model():
         f"Only in Pydantic model: {sorted(pydantic_fields - typeddict_fields)}\n"
         f"Only in TypedDict:      {sorted(typeddict_fields - pydantic_fields)}"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identifier", ["native-id", "native_name", "native_alias"])
+async def test_provider_config_key_assignment_retains_server_and_tool_grants(
+    monkeypatch: pytest.MonkeyPatch, identifier: str,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server import mcp_server_manager
+
+    manager: Final = mcp_server_manager.MCPServerManager()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    await manager.load_servers_from_config({"native_name": {
+        "server_id": "native-id", "alias": "native_alias", "execution_mode": "provider",
+        "url": "https://native.example/mcp", "allowed_tools": ["search"],
+    }})
+    permissions: Final[ObjectPermissionDict] = {
+        "mcp_servers": [identifier], "mcp_tool_permissions": {identifier: ["search"]},
+    }
+    team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="native-team", object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="team-grant", mcp_servers=["native-id"],
+        ),
+    )
+    assert await validate_key_mcp_servers_against_team(permissions, team) == {
+        "mcp_servers": [identifier], "mcp_tool_permissions": {identifier: ["search"]},
+    }
+    assert await validate_key_mcp_servers_against_team(
+        permissions, team, existing_key_object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-grant", mcp_servers=[identifier],
+        ),
+    ) == {"mcp_servers": [identifier], "mcp_tool_permissions": {identifier: ["search"]}}
+    with pytest.raises(HTTPException) as denied:
+        await validate_key_mcp_servers_against_team(permissions, None)
+    assert denied.value.status_code == 403
+    assert manager.get_registry() == {}

@@ -1135,12 +1135,15 @@ if MCP_AVAILABLE:
         )
         from litellm.proxy.proxy_server import prisma_client
 
-        access_groups: Final = set()
+        access_groups: Final = set[str]()
 
         # Get from config-loaded servers
         for server in global_mcp_server_manager.config_mcp_servers.values():
             if server.access_groups:
                 access_groups.update(server.access_groups)
+
+        for server in global_mcp_server_manager.catalog.config_registrations.values():
+            access_groups.update(server.mcp_access_groups)
 
         # Get from DB
         if prisma_client is not None:
@@ -1243,11 +1246,17 @@ if MCP_AVAILABLE:
         return "restricted"
 
     def _redacted_server_tables(server_ids: Iterable[str]) -> list[LiteLLM_MCPServerTable]:
-        registered: Final = (global_mcp_server_manager.get_mcp_server_by_id(server_id) for server_id in server_ids)
+        selected_ids: Final = frozenset(server_ids)
+        registered: Final = (global_mcp_server_manager.get_mcp_server_by_id(server_id) for server_id in selected_ids)
         tables: Final = [
             global_mcp_server_manager.build_mcp_server_table(server) for server in registered if server is not None
         ]
-        return _redact_mcp_credentials_list(tables)
+        provider_tables: Final = [
+            server
+            for server_id, server in global_mcp_server_manager.catalog.provider_registrations().items()
+            if server_id in selected_ids
+        ]
+        return _redact_mcp_credentials_list(tables + provider_tables)
 
     async def _granted_mcp_server_ids(
         object_permission_id: str | None,
@@ -1301,7 +1310,7 @@ if MCP_AVAILABLE:
             check_db_only=True,
         )
 
-        team_server_ids: Final = await get_team_allowed_mcp_servers(team_obj)
+        team_server_ids: Final = await get_team_allowed_mcp_servers(team_obj, prisma_client=prisma_client)
         allow_all_server_ids: Final = get_allow_all_keys_server_ids()
         all_allowed_ids: Final = team_server_ids | allow_all_server_ids
 
@@ -1379,7 +1388,7 @@ if MCP_AVAILABLE:
             if view_providers
             or getattr(server, "execution_mode", MCPExecutionMode.litellm) != MCPExecutionMode.provider
         ]
-        if view_all:
+        if view_all and len(visible_inventory) == len(inventory):
             return visible_inventory
 
         provider_servers: Final = [
@@ -1387,13 +1396,21 @@ if MCP_AVAILABLE:
             for server in visible_inventory
             if getattr(server, "execution_mode", MCPExecutionMode.litellm) == MCPExecutionMode.provider
         ]
+        initial_servers: Final = visible_inventory if view_all else provider_servers
         allowed_by_context: Final = [
             await global_mcp_server_manager.get_all_allowed_mcp_servers(user_api_key_auth=auth_context)
             for auth_context in await build_effective_auth_contexts(user_api_key_dict)
         ]
         aggregated: Final = {
             server.server_id: server
-            for server in (*chain.from_iterable(reversed(allowed_by_context)), *provider_servers)
+            for server in (
+                *(
+                    server
+                    for server in chain.from_iterable(reversed(allowed_by_context))
+                    if not view_all or server.execution_mode == MCPExecutionMode.provider
+                ),
+                *initial_servers,
+            )
         }
         return list(aggregated.values())
 
@@ -1528,7 +1545,9 @@ if MCP_AVAILABLE:
         if connected_app_view is True and is_ui_session_credential(user_api_key_dict):
             reachable_ids: Final = await _connected_app_reachable_server_ids(user_api_key_dict)
             for server in redacted_mcp_servers:
-                server.connected_app_reachable = server.server_id in reachable_ids
+                server.connected_app_reachable = (
+                    server.execution_mode == MCPExecutionMode.litellm and server.server_id in reachable_ids
+                )
 
         # Annotate has_user_credential for BYOK servers (single batched query)
         from litellm.proxy.proxy_server import prisma_client as _byok_prisma_client
