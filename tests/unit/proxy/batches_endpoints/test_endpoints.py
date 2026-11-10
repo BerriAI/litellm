@@ -36,6 +36,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Dict, Final, Optional
 from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 
@@ -1909,10 +1910,10 @@ async def test_retrieve__db_non_terminal_state_syncs_with_provider(retrieve_harn
     assert retrieve_harness.update_batch_in_db.call_count == 1
 
 
-def _hook_rewriting_the_batch_id_to(batch_id):
-    def hook(**kwargs):
-        kwargs["response"].id = batch_id
-        return kwargs["response"]
+def _hook_rewriting_the_batch_id_to(batch_id: str) -> Callable[..., LiteLLMBatch]:
+    def hook(*, response: LiteLLMBatch, **_: object) -> LiteLLMBatch:
+        response.id = batch_id
+        return response
 
     return hook
 

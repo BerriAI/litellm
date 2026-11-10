@@ -918,6 +918,28 @@ def test_retrieve_response_no_errors_when_no_message(config):
     assert out.errors is None
 
 
+@pytest.mark.parametrize(
+    "job_model_id,expected_endpoint",
+    [
+        ("amazon.titan-embed-text-v2:0", "/v1/embeddings"),
+        ("arn:aws:bedrock:us-west-2::foundation-model/amazon.titan-embed-text-v2:0", "/v1/embeddings"),
+        ("anthropic.claude-3-5-sonnet-20240620-v1:0", "/v1/chat/completions"),
+        ("a-model-the-cost-map-does-not-list", "/v1/chat/completions"),
+        (None, "/v1/chat/completions"),
+    ],
+)
+def test_retrieve_response_endpoint_follows_the_job_models_mode(
+    config: BedrockBatchesConfig, job_model_id: str | None, expected_endpoint: str
+) -> None:
+    out = config.transform_retrieve_batch_response(
+        model=None,
+        raw_response=_raw({"jobArn": ARN, "status": "InProgress", "modelId": job_model_id}),
+        logging_obj=MagicMock(),
+        litellm_params={},
+    )
+    assert out.endpoint == expected_endpoint
+
+
 def test_retrieve_response_enriches_metadata(config):
     body = {
         "jobArn": ARN,
