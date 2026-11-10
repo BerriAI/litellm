@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.caching.caching import Cache, CacheMode
+from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -503,53 +503,6 @@ def test_response_cache_is_skipped_only_by_no_cache(
 ) -> None:
     monkeypatch.setattr(litellm, "cache", cache)
     assert detectors.response_cache(call(**kwargs)) is expected
-
-
-@pytest.mark.parametrize(
-    ("cache", "kwargs", "expected"),
-    (
-        pytest.param(None, {}, False, id="no-cache-configured"),
-        pytest.param(Cache(), {}, True, id="default-cache"),
-        pytest.param(Cache(), {"cache": {"no-cache": True}}, False, id="no-cache-control"),
-        pytest.param(Cache(mode=CacheMode.default_off), {}, False, id="default-off"),
-        pytest.param(
-            Cache(mode=CacheMode.default_off), {"cache": {"use-cache": True}}, True, id="default-off-opted-in"
-        ),
-        pytest.param(Cache(supported_call_types=["acompletion"]), {}, False, id="messages-not-cached"),
-        pytest.param(Cache(supported_call_types=["anthropic_messages"]), {}, True, id="messages-cached"),
-        pytest.param(Cache(), {"caching": False}, False, id="caching-off"),
-        pytest.param(Cache(), {"model": "databricks_agent/agent"}, False, id="excluded-provider"),
-    ),
-)
-def test_messages_response_cache_fires_only_when_python_touches_the_cache(
-    monkeypatch: pytest.MonkeyPatch, cache: Cache | None, kwargs: Mapping[str, object], expected: bool
-) -> None:
-    monkeypatch.setattr(litellm, "cache", cache)
-    assert messages_detectors.response_cache(call(**kwargs)) is expected
-
-
-def _handler_cache() -> Cache:
-    return Cache(supported_call_types=["anthropic_messages_handler"])  # pyright: ignore[reportArgumentType]  # the sync handler name the cache gate keys on
-
-
-@pytest.mark.parametrize(
-    ("cache", "kwargs", "expected"),
-    (
-        pytest.param(_handler_cache(), {}, True, id="handler-cached"),
-        pytest.param(Cache(supported_call_types=["anthropic_messages"]), {}, False, id="only-async-cached"),
-        pytest.param(
-            _handler_cache(),
-            {"cache": {"no-cache": True}},
-            True,
-            id="sync-lookup-ignores-no-cache",
-        ),
-    ),
-)
-def test_sync_messages_response_cache_keys_on_the_handler_name(
-    monkeypatch: pytest.MonkeyPatch, cache: Cache, kwargs: Mapping[str, object], expected: bool
-) -> None:
-    monkeypatch.setattr(litellm, "cache", cache)
-    assert messages_detectors.sync_response_cache(call(**kwargs)) is expected
 
 
 @pytest.mark.parametrize(

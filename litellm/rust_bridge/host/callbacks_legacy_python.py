@@ -42,6 +42,7 @@ class MetadataUpdater(Protocol):
         kwargs: dict[str, object],
         start_time: datetime.datetime,
         end_time: datetime.datetime,
+        cache_hit: bool | None = None,
     ) -> None: ...
 
 
@@ -98,6 +99,7 @@ def finalize(
     kwargs: dict[str, object],
     start_time: datetime.datetime,
     end_time: datetime.datetime,
+    cache_hit: bool,
 ) -> None:
     from litellm.litellm_core_utils.llm_response_utils import response_metadata
 
@@ -105,6 +107,16 @@ def finalize(
     update: Final = cast(  # cast-ok: legacy metadata function accepts concrete kwargs
         MetadataUpdater, response_metadata.update_response_metadata
     )
+    if cache_hit:
+        from litellm.caching.caching_handler import (
+            _set_cached_hidden_param,  # pyright: ignore[reportPrivateUsage]  # the @client cache hit's own hidden params
+        )
+        from litellm.rust_bridge.host.cache import hit_cache_key, restore_hit
+
+        restore_hit(response, logger)
+        update(response, logger, logger.model, kwargs, start_time, end_time, cache_hit=True)
+        _set_cached_hidden_param(response, "cache_key", hit_cache_key(logger))
+        return
     update(response, logger, model if isinstance(model, str) else None, kwargs, start_time, end_time)
     cache_key: Final = logger.model_call_details.get("cache_key")
     if logger.model_call_details.get("cache_hit") is True and isinstance(cache_key, str):
@@ -401,6 +413,16 @@ def async_success_handler(
     return logger.async_success_handler(response, start, end, cache_hit=_cache_hit(logger))
 
 
+def cache_hit_success(logger: Logging, response: object, start: datetime.datetime, end: datetime.datetime) -> None:
+    from litellm.caching.caching_handler import LLMCachingHandler
+
+    handler: Final = logger.llm_caching_handler
+    if isinstance(handler, LLMCachingHandler):
+        handler.async_log_cache_hit_on_callbacks(
+            logging_obj=logger, cached_result=response, start_time=start, end_time=end, cache_hit=True
+        )
+
+
 def enqueue_logging(coroutine: Coroutine[object, object, None]) -> None:
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
@@ -474,9 +496,10 @@ def stamp_stream_head(
     kwargs: dict[str, object],  # mutable-ok: `finalize` takes the call kwargs as a dict
     start_time: datetime.datetime,
     end_time: datetime.datetime,
+    cache_hit: bool,
 ) -> None:
     carrier: Final = _HiddenParamsCarrier(head)
-    finalize(carrier, logger, kwargs, start_time, end_time)
+    finalize(carrier, logger, kwargs, start_time, end_time, cache_hit)
     stamped: Final = carrier._hidden_params  # pyright: ignore[reportPrivateUsage]  # the carrier's own field
     if stamped is not head and isinstance(stamped, dict):
         head.update(cast("dict[str, object]", stamped))  # cast-ok: update_response_metadata writes a str-keyed dict

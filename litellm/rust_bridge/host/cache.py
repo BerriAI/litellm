@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Final
+import weakref
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # bounded cast of the served response
 
 from pydantic import TypeAdapter
 
@@ -9,9 +10,12 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_par
 
 if TYPE_CHECKING:
     from litellm.caching.caching import Cache
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
 _RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
 _HEADERS: Final = TypeAdapter(dict[str, object])
+_EVENTS: Final = TypeAdapter(list[str])
+_HITS: Final[weakref.WeakKeyDictionary[Logging, Mapping[str, object]]] = weakref.WeakKeyDictionary()
 
 
 def configured_cache() -> Cache | None:
@@ -25,17 +29,14 @@ def _python_entry(response: Mapping[str, object]) -> Mapping[str, object]:
     headers: Final = hidden.get("additional_headers")
     if not isinstance(headers, Mapping) or _RUST_RESPONSE_HEADER not in headers:
         return response
-    return {
-        **response,
-        "_hidden_params": {
-            **hidden,
-            "additional_headers": {
-                name: value
-                for name, value in _HEADERS.validate_python(headers).items()
-                if name != _RUST_RESPONSE_HEADER
-            },
-        },
+    kept: Final = {
+        name: value for name, value in _HEADERS.validate_python(headers).items() if name != _RUST_RESPONSE_HEADER
     }
+    stored: Final = {name: value for name, value in hidden.items() if name != "additional_headers" or kept} | (
+        {"additional_headers": kept} if kept else {}
+    )
+    entry: Final = {name: value for name, value in response.items() if name != "_hidden_params"}
+    return {**entry, "_hidden_params": stored} if stored else entry
 
 
 def store_response(
@@ -52,3 +53,87 @@ def store_response(
             **kwargs,  # pyright: ignore[reportArgumentType]  # the cache call's own keyword arguments, as Python passes them
         )
     )
+
+
+async def store_stream(
+    cache: Cache,
+    entry: Mapping[str, object],
+    /,
+    **kwargs: object,  # kwargs-ok: the cache call's own arguments
+) -> None:
+    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm.types.caching import CACHED_STREAM_EVENTS_KEY
+
+    events: Final = entry.get(CACHED_STREAM_EVENTS_KEY)
+    handler: Final = getattr(kwargs.get("litellm_logging_obj"), "llm_caching_handler", None)
+    await cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
+        {**entry, CACHED_STREAM_EVENTS_KEY: tuple(_EVENTS.validate_python(events))}
+        if isinstance(events, list)
+        else entry,
+        dynamic_cache_object=handler.dual_cache if isinstance(handler, LLMCachingHandler) else None,
+        **kwargs,  # pyright: ignore[reportArgumentType]  # the cache call's own keyword arguments, as Python passes them
+    )
+
+
+async def lookup(
+    _cache: Cache,
+    original_function: Callable[..., object],
+    /,
+    **kwargs: object,  # kwargs-ok: the cache call's own arguments
+) -> object | None:
+    from litellm.caching.caching_handler import LLMCachingHandler
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = kwargs.get("litellm_logging_obj")
+    if not isinstance(logging_obj, Logging):
+        return None
+    handler: Final = LLMCachingHandler(
+        original_function=original_function, request_kwargs=dict(kwargs), start_time=logging_obj.start_time
+    )
+    logging_obj.llm_caching_handler = handler
+    model: Final = kwargs.get("model")
+    model_name: Final = model if isinstance(model, str) else ""
+    if not handler.reads_cache(model=model_name, kwargs=kwargs):
+        return None
+    read: Final = await handler.async_read_cache(
+        model=model_name,
+        original_function=original_function,
+        logging_obj=logging_obj,
+        call_type=original_function.__name__,
+        kwargs=kwargs,
+        args=(),
+    )
+    if not read.hit:
+        return None
+    _remember(logging_obj, read.cached_result)
+    return read.cached_result
+
+
+def _remember(logging_obj: Logging, cached: object) -> None:
+    if isinstance(cached, Mapping):
+        _HITS[logging_obj] = _HEADERS.validate_python(cached)
+
+
+def _replace(response: object, cached: Mapping[str, object] | None) -> None:
+    if isinstance(response, dict) and cached is not None:
+        served: Final = cast(  # cast-ok: a Messages response is the str-keyed dict the route serves
+            "dict[str, object]", response
+        )
+        served.clear()
+        served.update(cached)
+
+
+def restore_hit(response: object, logger: Logging) -> None:
+    from litellm.caching.caching_handler import (
+        _set_cached_hidden_param,  # pyright: ignore[reportPrivateUsage]  # the @client cache hit's own hidden params
+    )
+
+    _replace(response, _HITS.pop(logger, None))
+    _set_cached_hidden_param(response, "cache_hit", True)
+
+
+def hit_cache_key(logger: Logging) -> object:
+    from litellm.caching.caching_handler import LLMCachingHandler
+
+    handler: Final = logger.llm_caching_handler
+    return handler.hit_cache_key() if isinstance(handler, LLMCachingHandler) else None

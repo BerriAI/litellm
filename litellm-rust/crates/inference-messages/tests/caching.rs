@@ -301,3 +301,89 @@ async fn provider_reported_cost_is_delivered_once_and_never_charged_for_a_cache_
     assert!(matches!(cached.source, ResultSource::Cache { .. }));
     assert_eq!(cached.cost, Cost::CacheHit);
 }
+
+#[derive(Default)]
+struct CallerKeyed {
+    config: ResponseCacheConfig,
+    entry: std::sync::Mutex<Option<Value>>,
+}
+
+impl ResponseCacheService for CallerKeyed {
+    fn config(&self) -> &ResponseCacheConfig {
+        &self.config
+    }
+
+    fn keyed_by_caller(&self) -> bool {
+        true
+    }
+
+    fn lookup<'a>(
+        &'a self,
+        _: &'a litellm_cache_response::ResponseCacheRequest,
+        _: Duration,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Option<Value>, litellm_cache::Error>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Ok(self.entry.lock().unwrap().clone()) })
+    }
+
+    fn store<'a>(
+        &'a self,
+        _: &'a litellm_cache_response::ResponseCacheRequest,
+        value: Value,
+        _: Duration,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), litellm_cache::Error>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            *self.entry.lock().unwrap() = Some(value);
+            Ok(())
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_caller_keyed_hit_is_served_before_the_request_is_built_or_intercepted() {
+    use litellm_inference_messages::{MessagesCall, MessagesCallResponse};
+
+    let response = json!({"id": "msg_caller", "type": "message", "role": "assistant", "model": "native-test",
+        "content": [{"type": "text", "text": "answer"}], "stop_reason": "end_turn", "stop_sequence": null,
+        "usage": {"input_tokens": 3, "output_tokens": 2}});
+    let upstream = support::upstream([support::json_response(response)]).await;
+    let hooks = ChangingHooks::default();
+    let route = support::messages_route(litellm_inference_testing::no_secrets()).with_cache(
+        ScopedCache::new(Arc::new(CallerKeyed::default()), CacheScope::Shared),
+    );
+    let request = |api_key: Option<&str>| {
+        MessagesCall {
+        body: serde_json::from_value(json!({"model": "native-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16})).unwrap(),
+        api_key: api_key.map(Into::into), api_base: Some(upstream.uri()), custom_llm_provider: Some("anthropic".into()),
+        litellm_params: Default::default(), extra_headers: None, provider_specific_header: None,
+        timeout: None, shaping: Default::default(),
+    }
+    };
+    let first = route
+        .execute(request(Some("key")), &hooks, None)
+        .await
+        .unwrap();
+    let second = route.execute(request(None), &hooks, None).await.unwrap();
+    let (MessagesCallResponse::Complete(first), MessagesCallResponse::Complete(second)) =
+        (first, second)
+    else {
+        panic!("expected Messages responses");
+    };
+    assert_eq!(first, second);
+    assert_eq!(support::received(&upstream).await.len(), 1);
+    assert_eq!(hooks.calls.load(Ordering::SeqCst), 1);
+    let facts = hooks.facts.lock().unwrap();
+    let [provider, cached] = facts.as_slice() else {
+        panic!("expected provider and cache results");
+    };
+    assert_eq!(provider.source, ResultSource::Provider);
+    assert!(matches!(cached.source, ResultSource::Cache { .. }));
+    assert_eq!(cached.cost, Cost::CacheHit);
+}
