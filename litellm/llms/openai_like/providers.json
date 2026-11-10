@@ -93,7 +93,10 @@
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/responses"
-    ]
+    ],
+    "special_handling": {
+      "force_store_false": true
+    }
   },
   "assemblyai": {
     "base_url": "https://llm-gateway.assemblyai.com/v1",
