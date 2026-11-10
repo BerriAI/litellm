@@ -1805,6 +1805,21 @@ def check_coroutine(value) -> bool:
     return get_coroutine_checker().is_async_callable(value)
 
 
+def _chat_deployment_runs_hosted_mcp(kwargs: Mapping[str, object]) -> bool:
+    """Whether this chat deployment forwards MCP server URLs for the provider to call (hosted MCP),
+    as Claude Platform on Bedrock does, so its tool grants must be checked before dispatch."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    model: Final = kwargs.get("model")
+    provider: Final = _deployment_provider(kwargs)
+    if not isinstance(model, str) or provider not in LlmProviders._value2member_map_:
+        return False
+    config: Final = ProviderConfigManager.get_provider_chat_config(
+        model=litellm.get_llm_provider(model=model, custom_llm_provider=provider)[0], provider=LlmProviders(provider)
+    )
+    return isinstance(config, AnthropicConfig) and config.runs_hosted_mcp()
+
+
 def _deployment_provider(kwargs: Mapping[str, object]) -> str:
     model: Final = kwargs.get("model")
     custom_llm_provider: Final = kwargs.get("custom_llm_provider")
@@ -1850,6 +1865,13 @@ async def async_pre_call_deployment_hook(kwargs: Mapping[str, object], call_type
             if result is not None:
                 modified_kwargs = result
 
+    if call_type in (CallTypes.aresponses.value, CallTypes.anthropic_messages.value) or (
+        call_type == CallTypes.acompletion.value
+        and (_deployment_provider(modified_kwargs) == "anthropic" or _chat_deployment_runs_hosted_mcp(modified_kwargs))
+    ):
+        from litellm.responses.mcp.request_context import authorize_provider_mcp_request
+
+        await authorize_provider_mcp_request(TypeAdapter(dict[str, object]).validate_python(modified_kwargs), kwargs)
     return _unstreamed_when_post_call_guardrails_apply(modified_kwargs, typed_call_type)
 
 

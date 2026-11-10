@@ -3246,6 +3246,7 @@ class MCPRequestHandler:
         user_api_key_auth: UserAPIKeyAuth | None = None,
         *,
         keyless_source: bool = False,
+        fail_closed: bool = False,
     ) -> list[str] | None:
         """
         Get list of allowed tool names for a specific server based on key/team permissions.
@@ -3254,6 +3255,8 @@ class MCPRequestHandler:
         Args:
             server_id: Server ID to check permissions for
             user_api_key_auth: User auth
+            fail_closed: Deny every tool ([]) when the lookup fails, instead of the legacy allow-all.
+                Provider-native admission sets it, because None there means every registered tool.
 
         Returns:
             List[str] if restrictions exist, None if no restrictions (allow all)
@@ -3295,7 +3298,8 @@ class MCPRequestHandler:
             # keyless_source AND the marker are needed: each source resolves through an UNMARKED auth, so
             # without keyless_source a fault under a source returns None and wins the union as allow-all.
             deny_all: Final = (
-                unreadable_entitlement
+                fail_closed
+                or unreadable_entitlement
                 or keyless_source
                 or is_mcp_admitted_user_subject(user_api_key_auth)
                 or personal_key_inherits_team_grants(user_api_key_auth)

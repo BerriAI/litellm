@@ -1,0 +1,177 @@
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, NoReturn
+
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.models.mcp_server import LiteLLM_MCPServerTable
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
+from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+from litellm.types.mcp_server.provider_registration import canonical_provider_mcp_url
+
+_OBJECT: Final = TypeAdapter(dict[str, object])
+_OBJECTS: Final = TypeAdapter(tuple[dict[str, object], ...])
+_NAMES: Final = TypeAdapter(tuple[str, ...])
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderMCPAttachment:
+    url: str
+    tools: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class MCPAdmissionError:
+    message: str
+
+
+def _names(value: object) -> frozenset[str] | MCPAdmissionError:
+    try:
+        names: Final = _NAMES.validate_python(value)
+    except ValidationError:
+        return MCPAdmissionError("Provider MCP attachments require an explicit allowed_tools list")
+    if any(not name.strip() or any(char in name for char in "*?[]") for name in names):
+        return MCPAdmissionError("Provider MCP tool names must be exact names without wildcards")
+    return frozenset(names)
+
+
+def _attachment(url: object, tools: frozenset[str] | MCPAdmissionError) -> ProviderMCPAttachment | MCPAdmissionError:
+    if isinstance(tools, MCPAdmissionError):
+        return tools
+    try:
+        canonical: Final = canonical_provider_mcp_url(url)
+    except ValueError:
+        return MCPAdmissionError("Provider MCP attachments require a registered HTTPS server_url")
+    return ProviderMCPAttachment(canonical, tools)
+
+
+def _openai_attachment(tool: Mapping[str, object]) -> ProviderMCPAttachment | MCPAdmissionError:
+    if tool.get("connector_id") is not None:
+        return MCPAdmissionError("Provider MCP connector IDs are not supported by URL registrations")
+    allowed: Final = tool.get("allowed_tools")
+    names: Final = _OBJECT.validate_python(allowed).get("tool_names") if isinstance(allowed, Mapping) else allowed
+    if isinstance(allowed, Mapping) and not names:
+        # OpenAI reads an empty tool_names filter as no filter at all, i.e. every tool on the server.
+        return MCPAdmissionError("Provider MCP tool filters require a nonempty tool_names list")
+    return _attachment(tool.get("server_url"), _names(names))
+
+
+def _anthropic_attachment(
+    server: Mapping[str, object], toolsets: Mapping[str, Mapping[str, object]]
+) -> ProviderMCPAttachment | MCPAdmissionError:
+    name: Final = server.get("name")
+    if server.get("type") != "url" or not isinstance(name, str):
+        return MCPAdmissionError("Provider MCP servers must have type=url and a name")
+    toolset: Final = toolsets.get(name)
+    if toolset is not None and server.get("tool_configuration") is not None:
+        return MCPAdmissionError("Provider MCP servers require one unambiguous tool configuration")
+    if toolset is not None:
+        default: Final = _OBJECT.validate_python(toolset.get("default_config") or {})
+        if default.get("enabled") is not False:
+            return MCPAdmissionError("Provider MCP toolsets require default_config.enabled=false")
+        configs: Final = TypeAdapter(dict[str, dict[str, object]]).validate_python(toolset.get("configs") or {})
+        if any("enabled" in config and type(config["enabled"]) is not bool for config in configs.values()):
+            return MCPAdmissionError("Provider MCP tool enabled settings must be booleans")
+        enabled: Final = tuple(name for name, config in configs.items() if config.get("enabled") is True)
+        return _attachment(server.get("url"), _names(enabled))
+    config: Final = _OBJECT.validate_python(server.get("tool_configuration") or {})
+    if config.get("enabled") is False:
+        return _attachment(server.get("url"), frozenset())
+    names: Final = _names(config.get("allowed_tools"))
+    if names == frozenset():
+        return MCPAdmissionError("Enabled legacy MCP connectors require a nonempty allowed_tools list")
+    return _attachment(server.get("url"), names)
+
+
+async def _attachments(
+    body: Mapping[str, object], *, provider_bound: bool
+) -> tuple[ProviderMCPAttachment | MCPAdmissionError, ...]:
+    tools: Final = _OBJECTS.validate_python(body.get("tools") or ())
+    mcp_tools: Final = tuple(tool for tool in tools if tool.get("type") == "mcp")
+    gateway: Final = (
+        (False,) * len(mcp_tools)
+        if provider_bound
+        else await LiteLLM_Proxy_MCP_Handler.routes_through_gateway(mcp_tools)
+    )
+    openai: Final = tuple(_openai_attachment(tool) for tool, routed in zip(mcp_tools, gateway) if not routed)
+    servers: Final = (
+        *_OBJECTS.validate_python(body.get("mcp_servers") or ()),
+        *(tool for tool in tools if tool.get("type") == "url"),
+    )
+    toolsets: Final = tuple(tool for tool in tools if tool.get("type") == "mcp_toolset")
+    server_names: Final = frozenset(_NAMES.validate_python(tuple(server.get("name") for server in servers)))
+    toolset_names: Final = _NAMES.validate_python(tuple(tool.get("mcp_server_name") for tool in toolsets))
+    if len(server_names) != len(servers) or any(name not in server_names for name in toolset_names):
+        return (MCPAdmissionError("Provider MCP server names must be unique and toolsets must reference them"),)
+    indexed_toolsets: Final = MappingProxyType({name: tool for name, tool in zip(toolset_names, toolsets)})
+    if len(indexed_toolsets) != len(toolsets):
+        return (MCPAdmissionError("Provider MCP servers require one unambiguous tool configuration"),)
+    return (*openai, *(_anthropic_attachment(server, indexed_toolsets) for server in servers))
+
+
+def _raise_denied(error: MCPAdmissionError) -> NoReturn:
+    raise ProxyException(
+        message=error.message,
+        type=ProxyErrorTypes.tool_access_denied,
+        param="tools",
+        code=403,
+    )
+
+
+@catalog_operation(global_manager)
+async def authorize_provider_mcp(
+    body: Mapping[str, object], auth: UserAPIKeyAuth, *, provider_bound: bool = False
+) -> None:
+    try:
+        attachments: Final = await _attachments(body, provider_bound=provider_bound)
+    except (ValidationError, TypeError):
+        _raise_denied(MCPAdmissionError("Invalid provider MCP tool configuration"))
+    if not attachments:
+        return
+    current_auth: Final = await MCPRequestHandler.refresh_catalog_authority(auth)
+    if current_auth is None:
+        _raise_denied(MCPAdmissionError("Provider MCP requests require an authenticated caller"))
+    manager: Final = global_manager()
+    servers: Final = tuple(manager.catalog.provider_registrations().values())
+    # Uniqueness of provider URLs is enforced on write, but a request must not depend on it:
+    # every registration of a URL is considered, so a duplicate can never shadow a grant.
+    registrations: Final = {
+        url: tuple(server for server in servers if server.url == url) for url in {s.url for s in servers}
+    }
+    allowed_servers: Final = frozenset(await manager.get_allowed_mcp_servers(current_auth))
+    for attachment in attachments:
+        await _authorize_attachment(attachment, registrations, allowed_servers, current_auth)
+
+
+async def _granted_tools(registration: LiteLLM_MCPServerTable, auth: UserAPIKeyAuth) -> frozenset[str]:
+    permitted: Final = await MCPRequestHandler.get_allowed_tools_for_server(
+        registration.server_id, auth, fail_closed=True
+    )
+    ceiling: Final = frozenset(registration.allowed_tools or ())
+    return ceiling if permitted is None else ceiling.intersection(permitted)
+
+
+async def _authorize_attachment(
+    attachment: ProviderMCPAttachment | MCPAdmissionError,
+    registrations: Mapping[str | None, tuple[LiteLLM_MCPServerTable, ...]],
+    allowed_servers: frozenset[str],
+    auth: UserAPIKeyAuth,
+) -> None:
+    """Admit the attachment when any registration of its URL that the key or team is granted
+    allows every requested tool."""
+    if isinstance(attachment, MCPAdmissionError):
+        _raise_denied(attachment)
+    granted: Final = tuple(
+        registration
+        for registration in registrations.get(attachment.url, ())
+        if registration.server_id in allowed_servers
+    )
+    if not granted:
+        _raise_denied(MCPAdmissionError("Provider MCP server is not registered or not permitted for this key/team"))
+    for registration in granted:
+        if attachment.tools <= await _granted_tools(registration, auth):
+            return
+    _raise_denied(MCPAdmissionError("Provider MCP tools exceed the registered server or key/team permissions"))
