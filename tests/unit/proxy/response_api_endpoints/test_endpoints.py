@@ -2770,14 +2770,19 @@ class TestResponsesWSFirstFrameModelAuth:
         assert json.loads(row["request_tags"]) == ["ws-tag"]
         assert row["spend"] == 0.5
         assert row["request_id"] == write["kwargs"]["litellm_call_id"] and len(row["request_id"]) == 36
-        assert json.loads(row["proxy_server_request"]) == {
-            "input": "my email is <EMAIL_ADDRESS>" if outcome == "refused" else "my email is a@b.co",
-            "metadata": {"trace": "t1"},
-            "model": "gpt-4o-mini",
-        }
+        assert json.loads(row["proxy_server_request"]) == (
+            {"input": "my email is <EMAIL_ADDRESS>", "metadata": {"trace": "t1"}, "model": "gpt-4o-mini"}
+            if outcome == "refused"
+            else {}
+        )
 
     @pytest.mark.asyncio
-    async def test_frame_guard_bills_a_refused_turn_without_the_logging_state_its_frame_forges(self):
+    @pytest.mark.parametrize(
+        "client_metadata", [{"tags": ["forged-tag"], "model_group": "forged-group"}, "not an object"]
+    )
+    async def test_frame_guard_bills_a_refused_turn_without_the_logging_state_its_frame_forges(
+        self, client_metadata: object
+    ):
         from unittest.mock import create_autospec
 
         from litellm.exceptions import RateLimitError
@@ -2800,6 +2805,9 @@ class TestResponsesWSFirstFrameModelAuth:
             {
                 "type": "response.create",
                 "input": "my secret prompt",
+                "metadata": client_metadata,
+                "cache_hit": True,
+                "custom_llm_provider": "forged-provider",
                 "standard_logging_object": {},
                 "standard_callback_dynamic_params": {"turn_off_message_logging": False},
                 "litellm_params": {"metadata": {"tags": ["forged-tag"]}},
@@ -2821,6 +2829,8 @@ class TestResponsesWSFirstFrameModelAuth:
         stored_request = json.loads(row["proxy_server_request"])
         assert row["model_group"] == "mini-group"
         assert json.loads(row["request_tags"]) == ["ws-tag"]
+        assert row["cache_hit"] == "False"
+        assert row["custom_llm_provider"] != "forged-provider"
         assert "my secret prompt" not in row["proxy_server_request"]
         assert stored_request.keys().isdisjoint(
             {"standard_logging_object", "standard_callback_dynamic_params", "litellm_params"}
@@ -3452,7 +3462,8 @@ class TestResponsesWSFirstFrameModelAuth:
             await guard(json.dumps({"type": "response.create", field: "unguarded", "response": {"input": "hi"}}))
 
         proxy_logging_obj.pre_call_hook.assert_not_awaited()
-        assert spend_logger.async_post_call_failure_hook.await_args.kwargs["request_data"]["input"] == "hi"
+        billed = spend_logger.async_post_call_failure_hook.await_args.kwargs["request_data"]
+        assert (billed["model"], billed["call_type"]) == ("gpt-4o-mini", "_aresponses_websocket")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

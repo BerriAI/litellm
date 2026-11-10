@@ -1703,9 +1703,7 @@ client can neither hide a guardrail block nor force a row by sending the key or 
 
 FAILURE_ROW_ALREADY_WRITTEN_KEY: Final = "litellm_failure_row_already_written"
 FAILURE_ROW_ALREADY_WRITTEN: Final = object()
-"""Stored under ``FAILURE_ROW_ALREADY_WRITTEN_KEY`` on ``request_data`` when the failure being handled already
-wrote its own spend row, so the failure hooks still run (budget reservation release, alerting) but the spend logger
-writes no second row. A sentinel object for the same reason as ``REJECTED_BEFORE_REQUEST_SETUP``."""
+"""An object, like ``REJECTED_BEFORE_REQUEST_SETUP``, so the client body cannot forge it."""
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(

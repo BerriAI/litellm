@@ -2187,6 +2187,8 @@ _UNFORWARDED_FRAME_FIELDS: Final = (*_GUARDED_FRAME_FIELDS, *_PROXY_ONLY_FRAME_F
 _UNTRUSTED_TURN_FIELDS: Final = frozenset(
     (*_UNTRUSTED_ROOT_CONTROL_FIELDS, "standard_callback_dynamic_params", "litellm_params")
 )
+_SOCKET_OWNED_METADATA_FIELDS: Final = frozenset(("tags", "model_group"))
+_TURN_ROW_FIELDS: Final = ("model", "litellm_call_id")
 _OBJECTS: Final = TypeAdapter(list[object])
 _TURN_COPIED_CONTAINERS: Final = (list, dict)
 
@@ -2265,7 +2267,11 @@ def _responses_ws_frame_guard(
         await asyncio.shield(
             spawn_logging_task(
                 asyncio.get_running_loop(),
-                _bill_rejected_frame(rejected_frame_auth, refusal, failure_row(turn, started_at)),
+                _bill_rejected_frame(
+                    rejected_frame_auth,
+                    refusal,
+                    {**failure_row(turn, started_at), "proxy_server_request": _turn_stored_request(metadata_key, turn)},
+                ),
                 task_name="Responses WebSocket refused turn row",
             )
         )
@@ -2352,10 +2358,6 @@ def _turn_failure_row(
     turn: Mapping[str, object],
     started_at: datetime,
 ) -> dict[str, object]:  # mutable-ok: the spend logger stamps the failure row on the request dict
-    """A turn bills like an HTTP ``/v1/responses`` request: its own call id, start time, guardrail records and stored
-    request, under the socket's call type, client request tags and the model group the router resolved for the socket.
-    """
-    trusted_turn: Final = {key: value for key, value in turn.items() if key not in _UNTRUSTED_TURN_FIELDS}
     turn_bucket: Final = turn.get(metadata_key)
     turn_metadata: Final = _WS_FRAME.validate_python(turn_bucket) if isinstance(turn_bucket, dict) else {}
     request_tags: Final = StandardLoggingPayloadSetup.get_request_tags(
@@ -2365,8 +2367,18 @@ def _turn_failure_row(
     model_group: Final = (
         _WS_FRAME.validate_python(socket_bucket).get("model_group") if isinstance(socket_bucket, dict) else None
     )
+    client_metadata: Final = _without_untrusted_metadata("metadata", turn.get("metadata"))
     return {
-        **trusted_turn,
+        **{key: turn[key] for key in _TURN_ROW_FIELDS if key in turn},
+        "metadata": (
+            {
+                name: item
+                for name, item in _WS_FRAME.validate_python(client_metadata).items()
+                if name not in _SOCKET_OWNED_METADATA_FIELDS
+            }
+            if isinstance(client_metadata, dict)
+            else {}
+        ),
         metadata_key: {
             **turn_metadata,
             **({"tags": request_tags} if request_tags else {}),
@@ -2374,13 +2386,16 @@ def _turn_failure_row(
         },
         "call_type": CallTypes.aresponses_websocket.value,
         "start_time": started_at,
-        "proxy_server_request": {
-            "body": {
-                key: _without_untrusted_metadata(key, value)
-                for key, value in without_server_streaming_classification(trusted_turn).items()
-                if key not in (metadata_key, "litellm_call_id")
-            }
-        },
+    }
+
+
+def _turn_stored_request(metadata_key: str, turn: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "body": {
+            key: _without_untrusted_metadata(key, value)
+            for key, value in without_server_streaming_classification(turn).items()
+            if key not in _UNTRUSTED_TURN_FIELDS and key not in (metadata_key, "litellm_call_id")
+        }
     }
 
 
