@@ -19,7 +19,6 @@ import yaml
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
-from litellm.proxy.db import prisma_client
 from litellm.proxy import proxy_cli
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
@@ -1927,15 +1926,14 @@ class TestRunServerDbSetup:
     """Tests for run_server's prisma setup_database behavior."""
 
     @pytest.fixture
-    def mock_setup_database(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
-        setup: Final = MagicMock()
-        manager: Final = SimpleNamespace(
-            setup_database=setup,
-            build_request_log_indexes=lambda: True,
-            start_request_log_index_build=lambda: None,
+    def mock_setup_database(self) -> MagicMock:
+        return MagicMock()
+
+    @pytest.fixture
+    def database_startup(self, mock_setup_database: MagicMock) -> proxy_cli._DatabaseStartupDependencies:
+        return proxy_cli._DatabaseStartupDependencies(
+            setup=mock_setup_database, build=lambda: True, start=lambda: None
         )
-        monkeypatch.setattr(prisma_client, "PrismaManager", manager)
-        return setup
 
     @patch("subprocess.run")
     @patch("atexit.register")
@@ -1948,6 +1946,7 @@ class TestRunServerDbSetup:
         mock_atexit_register: MagicMock,
         mock_subprocess_run: MagicMock,
         mock_setup_database: MagicMock,
+        database_startup: proxy_cli._DatabaseStartupDependencies,
     ) -> None:
         """Test that use_prisma_db_push flag correctly controls PrismaManager.setup_database use_migrate parameter"""
         from litellm.proxy.proxy_cli import run_server
@@ -1995,7 +1994,7 @@ class TestRunServerDbSetup:
 
             # Test 1: Without --use_prisma_db_push flag (default behavior)
             # use_prisma_db_push should be False (default), so use_migrate should be True
-            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False, obj=database_startup)
             mock_setup_database.assert_called_with(use_migrate=True, use_v2_resolver=False)
 
             # Reset mocks
@@ -2008,6 +2007,7 @@ class TestRunServerDbSetup:
             run_server.main(
                 ["--local", "--skip_server_startup", "--use_prisma_db_push"],
                 standalone_mode=False,
+                obj=database_startup,
             )
             mock_setup_database.assert_called_with(use_migrate=False, use_v2_resolver=False)
 
@@ -2026,6 +2026,7 @@ class TestRunServerDbSetup:
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
         mock_setup_database: MagicMock,
+        database_startup: proxy_cli._DatabaseStartupDependencies,
     ) -> None:
         from litellm.proxy.proxy_cli import run_server
 
@@ -2065,7 +2066,7 @@ class TestRunServerDbSetup:
                 "port": 8000,
             }
 
-            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False, obj=database_startup)
 
         assert "prisma CLI is neither on PATH" not in capsys.readouterr().out
         mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=False)
@@ -2097,6 +2098,7 @@ class TestRunServerDbSetup:
         exits: bool,
         capsys: pytest.CaptureFixture[str],
         mock_setup_database: MagicMock,
+        database_startup: proxy_cli._DatabaseStartupDependencies,
     ) -> None:
         """A failed PrismaManager.setup_database exits 1 by default; only an explicit
         --no-enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=false keeps the proxy booting"""
@@ -2142,7 +2144,9 @@ class TestRunServerDbSetup:
                 "host": "localhost",
                 "port": 8000,
             }
-            run_server.main(["--local", "--skip_server_startup", *arguments], standalone_mode=False)
+            run_server.main(
+                ["--local", "--skip_server_startup", *arguments], standalone_mode=False, obj=database_startup
+            )
 
         assert (exc_info is not None and exc_info.value.code == 1) is exits
         assert ("Database migration failed but continuing startup" in capsys.readouterr().out) is not exits
@@ -2159,6 +2163,7 @@ class TestRunServerDbSetup:
         mock_atexit_register: MagicMock,
         mock_subprocess_run: MagicMock,
         mock_setup_database: MagicMock,
+        database_startup: proxy_cli._DatabaseStartupDependencies,
     ) -> None:
         """A sqlite DATABASE_URL must exit immediately, before any prisma call,
         instead of stalling on a migration against the postgresql-only schema."""
@@ -2190,7 +2195,7 @@ class TestRunServerDbSetup:
             ),
         ):
             with pytest.raises(SystemExit) as exc_info:
-                run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+                run_server.main(["--local", "--skip_server_startup"], standalone_mode=False, obj=database_startup)
             assert exc_info.value.code == 1
             mock_setup_database.assert_not_called()
 
@@ -2206,6 +2211,7 @@ class TestRunServerDbSetup:
         mock_subprocess_run: MagicMock,
         capsys: pytest.CaptureFixture[str],
         mock_setup_database: MagicMock,
+        database_startup: proxy_cli._DatabaseStartupDependencies,
     ) -> None:
         """USE_V2_MIGRATION_RESOLVER=true must select the v2 resolver.
 
@@ -2229,8 +2235,8 @@ class TestRunServerDbSetup:
         clean_env: Final = {
             **{k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")},
             "DATABASE_URL": "postgresql://test:test@localhost:5432/test",
+            "USE_V2_MIGRATION_RESOLVER": "true",
         }
-        clean_env["USE_V2_MIGRATION_RESOLVER"] = "true"
 
         with (
             patch.dict(os.environ, clean_env, clear=True),
@@ -2242,7 +2248,7 @@ class TestRunServerDbSetup:
                 },
             ),
         ):
-            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
+            run_server.main(["--local", "--skip_server_startup"], standalone_mode=False, obj=database_startup)
 
         mock_setup_database.assert_called_once_with(use_migrate=True, use_v2_resolver=True)
 
