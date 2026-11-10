@@ -2976,7 +2976,7 @@ async def ui_view_spend_logs(
         if scope_api_keys is not None:
             sql_conditions.append(f"api_key = ANY(${p}::text[])")
             sql_params.append(list(scope_api_keys))
-            p += 1
+            p += 1  # rebind-ok: advances the file's shared $N placeholder counter
 
         # Status filter
         if status_filter is not None and not (group_by_session is True and not is_search_lookup):

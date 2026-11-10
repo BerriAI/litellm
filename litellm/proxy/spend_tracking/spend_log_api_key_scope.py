@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.proxy.utils import PrismaClient, query_raw_rows
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -35,6 +35,8 @@ LIMIT $4
 
 
 class _ApiKeyRow(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     api_key: str
 
 
