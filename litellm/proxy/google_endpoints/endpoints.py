@@ -111,6 +111,22 @@ class _TokenCountExtras(BaseModel):
     system: JsonValue = None
 
 
+def _is_media_only_part(part: JsonValue) -> bool:
+    return (
+        isinstance(part, dict)
+        and part.get("text") is None
+        and any(field is not None for key, field in part.items() if key != "text")
+    )
+
+
+def _countable_system_instruction(value: JsonValue) -> JsonValue:
+    match value:
+        case {"parts": list() as parts}:
+            return {**value, "parts": [part for part in parts if not _is_media_only_part(part)]}
+        case _:
+            return value
+
+
 def google_token_count_request(request: TokenCountRequest) -> TokenCountRequest:
     if request.contents is None or request.messages is not None:
         return request
@@ -120,7 +136,7 @@ def google_token_count_request(request: TokenCountRequest) -> TokenCountRequest:
             request.model,
             {
                 "contents": request.contents,
-                "systemInstruction": request.system_instruction,
+                "systemInstruction": _countable_system_instruction(request.system_instruction),
                 "tools": caller.tools or (),
             },
         )

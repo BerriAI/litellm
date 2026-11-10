@@ -46886,6 +46886,7 @@ export interface components {
             prompt?: string | null;
             /** System */
             system?: unknown | null;
+            /** @description Google systemInstruction, counted with contents */
             systemInstruction?: components["schemas"]["JsonValue"];
             /** Tools */
             tools?: {

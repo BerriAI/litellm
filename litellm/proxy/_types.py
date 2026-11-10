@@ -3413,7 +3413,9 @@ class TokenCountRequest(LiteLLMPydanticObjectBase):
     tools: list[dict] | None = None
     system: Any | None = None
     system_instruction: JsonValue = Field(
-        default=None, validation_alias=AliasChoices("systemInstruction", "system_instruction")
+        default=None,
+        validation_alias=AliasChoices("systemInstruction", "system_instruction"),
+        description="Google systemInstruction, counted with contents",
     )
 
 
