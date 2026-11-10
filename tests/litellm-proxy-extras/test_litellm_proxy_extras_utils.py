@@ -1006,6 +1006,78 @@ class TestStripPrismaQueryParams:
 
         return dict(parse_qsl(urlparse(url).query))
 
+    @pytest.mark.parametrize(
+        "url,expected_user,expected_password,expected_host,expected_port,expected_sslmode",
+        (
+            (
+                "postgresql://u:wr ong'pw9@writer:5433/litellm",
+                "u",
+                "wr ong'pw9",
+                "writer",
+                "5433",
+                None,
+            ),
+            (
+                "postgresql://u:wr ong'pw9@writer:5433/litellm?schema=x&sslmode=require",
+                "u",
+                "wr ong'pw9",
+                "writer",
+                "5433",
+                "require",
+            ),
+            (
+                "postgresql://u:p%40ss%20w@writer:5433/litellm",
+                "u",
+                "p@ss w",
+                "writer",
+                "5433",
+                None,
+            ),
+            (
+                "postgresql://u:p%z@writer:5433/litellm",
+                "u",
+                "p%z",
+                "writer",
+                "5433",
+                None,
+            ),
+            (
+                "postgresql://u:wr ong'pw9@[::1]:5433/litellm",
+                "u",
+                "wr ong'pw9",
+                "::1",
+                "5433",
+                None,
+            ),
+        ),
+    )
+    def test_userinfo_is_encoded_for_libpq(
+        self,
+        url: str,
+        expected_user: str,
+        expected_password: str,
+        expected_host: str,
+        expected_port: str,
+        expected_sslmode: str | None,
+    ) -> None:
+        from psycopg.conninfo import conninfo_to_dict
+
+        result: Final = ProxyExtrasDBManager._strip_prisma_query_params(url)
+        conninfo: Final = conninfo_to_dict(result)
+
+        assert conninfo["user"] == expected_user
+        assert conninfo["password"] == expected_password
+        assert conninfo["host"] == expected_host
+        assert conninfo["port"] == expected_port
+        assert conninfo["dbname"] == "litellm"
+        assert conninfo.get("sslmode") == expected_sslmode
+        assert "schema" not in conninfo
+
+    def test_empty_password_userinfo_keeps_its_separator(self) -> None:
+        url: Final = "postgresql://u:@writer/litellm"
+
+        assert ProxyExtrasDBManager._strip_prisma_query_params(url) == url
+
     def test_prisma_ca_sslcert_becomes_sslrootcert_with_verify_full(self):
         url = "postgresql://u:p@writer:5432/db?schema=public&sslmode=require&sslcert=/tmp/pinned.pem&sslaccept=strict"
 
