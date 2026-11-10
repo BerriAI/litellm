@@ -24,8 +24,6 @@ from typing import TYPE_CHECKING, Final
 
 from uvicorn.main import main as uvicorn_main
 
-from litellm.cli.main import without_gc_pauses
-
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
@@ -66,6 +64,8 @@ def pool_database_url(
 
 
 def worker_app() -> "FastAPI":
+    from litellm.cli.main import without_gc_pauses
+
     with without_gc_pauses():
         from gateway.main import app
     return app
