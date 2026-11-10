@@ -7266,6 +7266,9 @@ def get_model_info_helper(
                 cache_read_input_audio_token_cost_batches=_model_info.get(
                     "cache_read_input_audio_token_cost_batches", None
                 ),
+                cache_read_input_image_token_cost_batches=_model_info.get(
+                    "cache_read_input_image_token_cost_batches", None
+                ),
                 explicit_cache_read_input_token_cost=_model_info.get("explicit_cache_read_input_token_cost", None),
                 cache_read_input_image_token_cost=_model_info.get("cache_read_input_image_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
