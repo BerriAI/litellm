@@ -22,7 +22,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.types.llms.vertex_ai import HttpxPartType
-from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 # --- Response extraction tests ---
 
@@ -416,3 +416,43 @@ class TestServerSideSearchUsageCounting:
         VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
 
         assert self._web_search_requests(usage) == 2
+
+    def test_transform_response_counts_server_side_searches_end_to_end(self):
+        """Full non-streaming transform_response: a GOOGLE_SEARCH_WEB toolCall carrying queries,
+        with no webSearchQueries in groundingMetadata, must still set web_search_requests (#49012)."""
+        completion_response = {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {
+                                "toolCall": {
+                                    "toolType": "GOOGLE_SEARCH_WEB",
+                                    "args": {"queries": ["weather Buenos Aires", "weather Montevideo"]},
+                                }
+                            },
+                            {"text": "It is sunny."},
+                        ],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 20, "totalTokenCount": 30},
+        }
+        raw_response = MagicMock()
+        raw_response.json.return_value = completion_response
+
+        result = VertexGeminiConfig().transform_response(
+            model="gemini-3-flash",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            messages=[],
+            optional_params={"include_server_side_tool_invocations": True},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert self._web_search_requests(result.usage) == 2
