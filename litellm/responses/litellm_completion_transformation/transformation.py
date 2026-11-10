@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from itertools import accumulate, chain, islice
+from itertools import accumulate, chain, islice, takewhile
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -51,6 +51,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.factory import is_empty_user_message
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -348,6 +349,12 @@ def _empty_user_turn(last_input_item: object, text: str) -> GenericChatCompletio
     return GenericChatCompletionMessage(role="user", content=text, cache_control=cache_control)
 
 
+def _last_input_item(input_items: str | ResponseInputParam) -> object:
+    if isinstance(input_items, str):
+        return {"role": "user", "content": input_items}
+    return input_items[-1] if input_items else None
+
+
 def restored_empty_user_turn(
     input_items: str | ResponseInputParam,
     messages: Sequence[object],
@@ -355,11 +362,17 @@ def restored_empty_user_turn(
     route_fills_empty_user_turns: Callable[[], bool],
     text: str = "",
 ) -> tuple[GenericChatCompletionMessage, ...]:
-    if not isinstance(input_items, list) or not input_items or message_field(input_items[-1], "role") != "user":
+    last_input_item: Final = _last_input_item(input_items)
+    if message_field(last_input_item, "role") != "user":
         return ()
     if not messages or message_field(messages[-1], "role") != "assistant" or not route_fills_empty_user_turns():
         return ()
-    return (_empty_user_turn(input_items[-1] if keeps_cache_mark else None, text),)
+    return (_empty_user_turn(last_input_item if keeps_cache_mark else None, text),)
+
+
+def without_blank_user_tail(messages: Sequence[SessionMessage]) -> Sequence[SessionMessage]:
+    blank_tail: Final = sum(1 for _ in takewhile(is_empty_user_message, reversed(messages)))
+    return messages[: len(messages) - blank_tail]
 
 
 def _resolved_chat_config(model: str, custom_llm_provider: str | None) -> "BaseConfig | None":
