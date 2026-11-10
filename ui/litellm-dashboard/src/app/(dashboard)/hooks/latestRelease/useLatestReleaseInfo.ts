@@ -26,14 +26,16 @@ const fetchLatestRelease = async (): Promise<LatestReleaseAnswer> => {
 };
 
 export const useLatestReleaseInfo = (accessToken: string | null | undefined) => {
-  const { data, isError } = useQuery({
+  const options = {
     queryKey: latestReleaseKeys.all,
     queryFn: fetchLatestRelease,
     enabled: Boolean(accessToken),
     staleTime: 60 * 60 * 1000,
     retry: false,
-    refetchInterval: (query) => pendingReleasePollMs(query.state),
+    refetchInterval: (query: { state: { status: string; data?: LatestReleaseAnswer } }) =>
+      pendingReleasePollMs(query.state),
     structuralSharing: keepKnownRelease,
-  });
+  };
+  const { data, isError } = useQuery(options);
   return { data: isError ? undefined : data?.release };
 };
