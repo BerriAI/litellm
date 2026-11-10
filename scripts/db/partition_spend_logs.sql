@@ -32,7 +32,7 @@
 -- The spend-log cleanup job then verifies the table is partitioned and reclaims
 -- disk by dropping expired partitions instead of deleting rows. It also
 -- pre-creates upcoming partitions on each run. To roll back, see
--- db_scripts/unpartition_spend_logs.sql.
+-- scripts/db/unpartition_spend_logs.sql.
 
 BEGIN;
 

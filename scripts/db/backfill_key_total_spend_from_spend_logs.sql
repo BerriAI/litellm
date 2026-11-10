@@ -1,4 +1,4 @@
--- Optional follow-up to db_scripts/backfill_key_total_spend.sql. Run that
+-- Optional follow-up to scripts/db/backfill_key_total_spend.sql. Run that
 -- script first; this one rebuilds earlier budget periods for the keys it
 -- can only partially fix: keys whose spend resets each period, because their own
 -- budget_duration IS NOT NULL or because their budget_id links to a
@@ -38,7 +38,7 @@
 --    its next read of each key.
 --
 -- Usage:
---   psql "$DATABASE_URL" -f db_scripts/backfill_key_total_spend_from_spend_logs.sql
+--   psql "$DATABASE_URL" -f scripts/db/backfill_key_total_spend_from_spend_logs.sql
 
 -- Active keys whose spend resets (own budget_duration, or a linked
 -- LiteLLM_BudgetTable row with one). Rebuild from LiteLLM_SpendLogs,

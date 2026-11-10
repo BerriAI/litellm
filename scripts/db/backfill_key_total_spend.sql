@@ -22,14 +22,14 @@
 --    budget_id links to a LiteLLM_BudgetTable row whose budget_duration IS
 --    NOT NULL (a linked budget resets the key's spend each period too). For
 --    those keys this script only recovers the current period;
---    db_scripts/backfill_key_total_spend_from_spend_logs.sql is an optional
+--    scripts/db/backfill_key_total_spend_from_spend_logs.sql is an optional
 --    follow-up that rebuilds the earlier periods from LiteLLM_SpendLogs.
 --
 -- 3. No proxy restart is needed. The proxy picks up the corrected values on
 --    its next read of each key.
 --
 -- Usage:
---   psql "$DATABASE_URL" -f db_scripts/backfill_key_total_spend.sql
+--   psql "$DATABASE_URL" -f scripts/db/backfill_key_total_spend.sql
 
 UPDATE "LiteLLM_VerificationToken"
 SET total_spend = spend

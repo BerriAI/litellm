@@ -1,4 +1,4 @@
--- Rolls back db_scripts/partition_spend_logs.sql: converts the native
+-- Rolls back scripts/db/partition_spend_logs.sql: converts the native
 -- range-partitioned "LiteLLM_SpendLogs" table back into a plain,
 -- non-partitioned table matching the default LiteLLM schema.
 --
