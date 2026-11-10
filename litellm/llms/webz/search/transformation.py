@@ -65,7 +65,7 @@ class WebzSearchConfig(BaseSearchConfig):
         optional_params: dict,
         **kwargs: Any,
     ) -> dict:
-        params = {**kwargs, **optional_params}
+        params = optional_params
         return _build_webz_payload(
             query=query,
             **params,

@@ -252,18 +252,6 @@ def search(
         if isinstance(query, list) and not all(isinstance(q, str) for q in query):
             raise ValueError("All items in query list must be strings")
 
-        # Resolve API key for Webz if not provided
-        if (
-            search_provider == SearchProviders.WEBZ
-            or search_provider == "webz"
-        ) and api_key is None:
-            api_key = (
-                os.environ.get("WEBZ_API_TOKEN")
-                or get_secret_str("WEBZ_API_TOKEN")
-                or os.environ.get("WEBZ_API_KEY")
-                or get_secret_str("WEBZ_API_KEY")
-            )
-
         # Get provider config
         search_provider_config: Final[BaseSearchConfig | None] = ProviderConfigManager.get_provider_search_config(
             provider=SearchProviders(search_provider),

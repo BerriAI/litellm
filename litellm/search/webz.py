@@ -15,11 +15,49 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     SearchResponse,
     SearchResult,
+    _is_trusted_search_api_base,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.secret_managers.main import get_secret_str
 
 WEBZ_API_URL: Final = "https://api.webz.io/api/news/context"
+
+
+def _resolve_webz_credentials(
+    api_key: str | None,
+    api_base: str | None,
+) -> str:
+    """
+    Resolve Webz.io API credentials, blocking server-configured secrets
+    from being sent to untrusted caller-supplied api_base hosts.
+    """
+    if not api_key:
+        server_key = (
+            os.environ.get("WEBZ_API_TOKEN")
+            or get_secret_str("WEBZ_API_TOKEN")
+            or os.environ.get("WEBZ_API_KEY")
+            or get_secret_str("WEBZ_API_KEY")
+        )
+        if server_key:
+            if api_base and not _is_trusted_search_api_base(
+                caller_api_base=api_base,
+                default_api_base=WEBZ_API_URL,
+                base_env_var="WEBZ_API_BASE",
+            ):
+                raise ValueError(
+                    f"Refusing to send the server-configured WEBZ_API_TOKEN to the "
+                    f"caller-supplied api_base '{api_base}'. Pass an explicit api_key "
+                    f"when overriding api_base for this search provider."
+                )
+            resolved_api_key = server_key
+        else:
+            resolved_api_key = None
+    else:
+        resolved_api_key = api_key
+
+    if not resolved_api_key:
+        raise ValueError("WEBZ_API_TOKEN is not set. Set `WEBZ_API_TOKEN` environment variable or pass `api_key`.")
+    return resolved_api_key
 
 
 def _build_webz_payload(
@@ -84,6 +122,7 @@ def _build_webz_payload(
         "api_key",
         "api_base",
         "timeout",
+        "headers",
         "extra_headers",
         "client",
         "asearch",
@@ -159,15 +198,7 @@ async def async_search(
       Authorization: Bearer <api_key>
       Content-Type: application/json
     """
-    resolved_api_key = (
-        api_key
-        or os.environ.get("WEBZ_API_TOKEN")
-        or get_secret_str("WEBZ_API_TOKEN")
-        or os.environ.get("WEBZ_API_KEY")
-        or get_secret_str("WEBZ_API_KEY")
-    )
-    if not resolved_api_key:
-        raise ValueError("WEBZ_API_TOKEN is not set. Set `WEBZ_API_TOKEN` environment variable or pass `api_key`.")
+    resolved_api_key = _resolve_webz_credentials(api_key=api_key, api_base=api_base)
 
     headers: dict[str, str] = {
         "Authorization": f"Bearer {resolved_api_key}",
@@ -219,15 +250,7 @@ def search(
     """
     Synchronously search Webz.io News Search API.
     """
-    resolved_api_key = (
-        api_key
-        or os.environ.get("WEBZ_API_TOKEN")
-        or get_secret_str("WEBZ_API_TOKEN")
-        or os.environ.get("WEBZ_API_KEY")
-        or get_secret_str("WEBZ_API_KEY")
-    )
-    if not resolved_api_key:
-        raise ValueError("WEBZ_API_TOKEN is not set. Set `WEBZ_API_TOKEN` environment variable or pass `api_key`.")
+    resolved_api_key = _resolve_webz_credentials(api_key=api_key, api_base=api_base)
 
     headers: dict[str, str] = {
         "Authorization": f"Bearer {resolved_api_key}",

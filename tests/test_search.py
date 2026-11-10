@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import litellm
+from litellm.llms.webz.search.transformation import WebzSearchConfig
 from litellm.router import SearchAPIRouter
-from litellm.search.webz import async_search as webz_async_search
+from litellm.search.webz import async_search as webz_async_search, search as webz_search
 from litellm.types.search import SearchProvider, SearchProviders
 
 MOCK_WEBZ_RESPONSE = {
@@ -216,16 +217,78 @@ async def test_webz_direct_async_search_handler():
 
 
 def test_search_api_router_credentials_resolution():
-    """Verify SearchAPIRouter credential resolution for Webz provider."""
-    with patch.dict(os.environ, {"WEBZ_API_TOKEN": "router-token-456"}):
-        api_key, _ = SearchAPIRouter._resolve_search_provider_credentials(
-            tool_litellm_params={"search_provider": "webz"},  # type: ignore
-        )
-        assert api_key == "router-token-456"
+    """Verify SearchAPIRouter credential resolution comes from tool params without eager env leakage."""
+    api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
+        tool_litellm_params={"search_provider": "webz"},  # type: ignore
+    )
+    assert api_key is None
+    assert api_base is None
 
-    # Explicit api_key in params takes precedence over env var
-    with patch.dict(os.environ, {"WEBZ_API_TOKEN": "router-token-456"}):
-        api_key, _ = SearchAPIRouter._resolve_search_provider_credentials(
-            tool_litellm_params={"search_provider": "webz", "api_key": "param-token-789"},  # type: ignore
+    api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
+        tool_litellm_params={"search_provider": "webz", "api_key": "param-token-789", "api_base": "https://api.webz.io"},  # type: ignore
+    )
+    assert api_key == "param-token-789"
+    assert api_base == "https://api.webz.io"
+
+
+def test_webz_destination_validation_rejects_untrusted_api_base():
+    """Refuse to send server-configured WEBZ_API_TOKEN to an untrusted caller-supplied host."""
+    config = WebzSearchConfig()
+
+    with patch.dict(os.environ, {"WEBZ_API_TOKEN": "server-secret-token"}, clear=True):
+        # 1. Config environment validation blocks untrusted api_base without explicit api_key
+        with pytest.raises(ValueError, match="Refusing to send the server-configured"):
+            config.validate_environment({}, api_base="https://attacker.example.com/api")
+
+        # 2. Main litellm.search router blocks untrusted api_base
+        with pytest.raises(Exception, match="Refusing to send the server-configured"):
+            litellm.search(
+                query="climate",
+                search_provider="webz",
+                api_base="https://attacker.example.com/api",
+            )
+
+        # 3. Direct synchronous search blocks untrusted api_base
+        with pytest.raises(ValueError, match="Refusing to send the server-configured"):
+            webz_search(
+                query="climate",
+                api_base="https://attacker.example.com/api",
+            )
+
+        # 4. Explicit api_key overrides destination restriction for custom proxy/gateways
+        headers = config.validate_environment(
+            {},
+            api_key="caller-explicit-key",
+            api_base="https://custom-gateway.internal/api",
         )
-        assert api_key == "param-token-789"
+        assert headers["Authorization"] == "Bearer caller-explicit-key"
+
+
+@pytest.mark.asyncio
+async def test_webz_direct_async_search_destination_validation():
+    """Verify webz_async_search rejects untrusted api_base when relying on server credentials."""
+    with patch.dict(os.environ, {"WEBZ_API_TOKEN": "server-secret-token"}, clear=True):
+        with pytest.raises(ValueError, match="Refusing to send the server-configured"):
+            await webz_async_search(
+                query="climate",
+                api_base="https://attacker.example.com/api",
+            )
+
+
+def test_webz_transform_search_request_does_not_leak_bearer_token_in_payload():
+    """Verify that transform_search_request never leaks headers or bearer tokens into request JSON."""
+    config = WebzSearchConfig()
+    payload = config.transform_search_request(
+        query="renewable energy",
+        optional_params={"country": "US", "k": 5},
+        headers={"Authorization": "Bearer leaked-bearer-token"},
+        extra_headers={"X-Secret": "sensitive-header"},
+    )
+
+    assert "headers" not in payload
+    assert "extra_headers" not in payload
+    assert "Authorization" not in str(payload)
+    assert "leaked-bearer-token" not in str(payload)
+    assert payload["query"] == "renewable energy"
+    assert payload["k"] == 5
+    assert payload["country"] == "US"

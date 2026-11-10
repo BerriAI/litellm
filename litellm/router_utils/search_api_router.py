@@ -51,16 +51,6 @@ class SearchAPIRouter:
         resolved_api_key: str | None = tool_litellm_params.get("api_key")
         resolved_api_base: Final[str | None] = tool_litellm_params.get("api_base")
 
-        if not resolved_api_key:
-            search_provider = tool_litellm_params.get("search_provider")
-            if search_provider == SearchProviders.WEBZ or search_provider == "webz":
-                resolved_api_key = (
-                    os.environ.get("WEBZ_API_TOKEN")
-                    or get_secret_str("WEBZ_API_TOKEN")
-                    or os.environ.get("WEBZ_API_KEY")
-                    or get_secret_str("WEBZ_API_KEY")
-                )
-
         return resolved_api_key, resolved_api_base
 
     @staticmethod
@@ -237,13 +227,6 @@ class SearchAPIRouter:
             api_key, api_base = SearchAPIRouter._resolve_search_provider_credentials(
                 tool_litellm_params=litellm_params,
             )
-            if (search_provider == SearchProviders.WEBZ or search_provider == "webz") and not api_key:
-                api_key = (
-                    os.environ.get("WEBZ_API_TOKEN")
-                    or get_secret_str("WEBZ_API_TOKEN")
-                    or os.environ.get("WEBZ_API_KEY")
-                    or get_secret_str("WEBZ_API_KEY")
-                )
             protected_params: Final = frozenset(("search_provider", "api_key", "api_base"))
             search_params: Final = MappingProxyType(
                 {
