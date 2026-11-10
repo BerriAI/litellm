@@ -7,11 +7,6 @@ from litellm.secret_managers.main import str_to_bool
 FIPS_MODE_SETTING: Final = "fips_mode"
 _SETTING: Final = f"general_settings.{FIPS_MODE_SETTING}"
 _FIPS_MODE_ACTIVE: Final = threading.Event()
-# JWT signature algorithms PyJWT runs through OpenSSL's signature services. HS256/384/512 are left out: PyJWT computes
-# them with hmac.new, which does not use the FIPS provider's HMAC service.
-_FIPS_JWT_ALGORITHMS: Final = frozenset(
-    {"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"}
-)
 
 
 class FipsModeError(Exception):
@@ -103,9 +98,3 @@ def enforce_fips_mode(general_settings: Mapping[str, object]) -> None:
 def fips_mode_active() -> bool:
     """Whether general_settings.fips_mode was on when enforce_fips_mode last accepted it."""
     return _FIPS_MODE_ACTIVE.is_set()
-
-
-def refuse_jwt_algorithm_in_fips_mode(algorithm: str) -> None:
-    """Raise ValueError when fips_mode is on and the JWT algorithm is not an RSA, ECDSA or EdDSA signature."""
-    if fips_mode_active() and algorithm not in _FIPS_JWT_ALGORITHMS:
-        raise ValueError(f"{_SETTING} is on and does not allow the JWT algorithm {algorithm!r}")

@@ -92,7 +92,8 @@ from litellm.integrations.custom_guardrail import (
 )
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.fips import refuse_jwt_algorithm_in_fips_mode
+from litellm.proxy.common_utils.fips import fips_mode_active
+from litellm.proxy.common_utils.fips_jwt import fips_jwt
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral
 
@@ -484,7 +485,6 @@ class MCPJWTSigner(CustomGuardrail):
         # PyJWT populates algorithm_name from the key's `alg` field; when absent
         # it infers from the key type (RSAPublicKey → RS256).
         alg: Final = getattr(signing_jwk, "algorithm_name", None) or "RS256"
-        refuse_jwt_algorithm_in_fips_mode(alg)
 
         decode_options: Final[Options] = {"verify_exp": True}
         decode_kwargs: Final[_JWTDecodeKwargs] = {
@@ -499,7 +499,8 @@ class MCPJWTSigner(CustomGuardrail):
         if self.verify_issuer:
             decode_kwargs["issuer"] = self.verify_issuer
 
-        payload: Final[dict[str, object]] = jwt.decode(raw_token, signing_jwk.key, **decode_kwargs)
+        decode: Final = fips_jwt().decode if fips_mode_active() else jwt.decode
+        payload: Final[dict[str, object]] = decode(raw_token, signing_jwk.key, **decode_kwargs)
         return payload
 
     async def _introspect_opaque_token(self, token: str) -> Mapping[str, object]:

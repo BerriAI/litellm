@@ -1068,6 +1068,12 @@ _HMAC_JWK: Final[Mapping[str, str]] = {
     "kid": "h",
     "k": base64.urlsafe_b64encode(_HMAC_SECRET).rstrip(b"=").decode(),
 }
+_SHORT_HMAC_SECRET: Final = b"thirteen-byte"
+_SHORT_HMAC_JWK: Final[Mapping[str, str]] = {
+    "kty": "oct",
+    "kid": "s",
+    "k": base64.urlsafe_b64encode(_SHORT_HMAC_SECRET).rstrip(b"=").decode(),
+}
 
 
 @pytest.fixture
@@ -1097,11 +1103,35 @@ async def test_verify_incoming_jwt_accepts_an_hmac_jwks_key_outside_fips_mode(re
 
 
 @pytest.mark.asyncio
-async def test_verify_incoming_jwt_refuses_an_hmac_jwks_key_in_fips_mode(
+async def test_verify_incoming_jwt_accepts_an_hmac_jwks_key_in_fips_mode(
     fips_mode: None, respx_idp: respx.MockRouter
 ) -> None:
-    with pytest.raises(ValueError, match="fips_mode is on and does not allow the JWT algorithm 'HS256'"):
-        await _verify_against_idp(respx_idp, _HMAC_SECRET, "HS256", _HMAC_JWK)
+    payload: Final = await _verify_against_idp(respx_idp, _HMAC_SECRET, "HS256", _HMAC_JWK)
+    assert payload["sub"] == "idp-user"
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_rejects_a_forged_hmac_token_in_fips_mode(
+    fips_mode: None, respx_idp: respx.MockRouter
+) -> None:
+    with pytest.raises(jwt.InvalidSignatureError):
+        await _verify_against_idp(respx_idp, b"another-shared-secret-of-32-bytes", "HS256", _HMAC_JWK)
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_refuses_an_hmac_jwks_key_under_112_bits_in_fips_mode(
+    fips_mode: None, respx_idp: respx.MockRouter
+) -> None:
+    with pytest.raises(jwt.InvalidKeyError, match="at least 112 bits"):
+        await _verify_against_idp(respx_idp, _SHORT_HMAC_SECRET, "HS256", _SHORT_HMAC_JWK)
+
+
+@pytest.mark.asyncio
+async def test_verify_incoming_jwt_accepts_an_hmac_jwks_key_under_112_bits_outside_fips_mode(
+    respx_idp: respx.MockRouter,
+) -> None:
+    payload: Final = await _verify_against_idp(respx_idp, _SHORT_HMAC_SECRET, "HS256", _SHORT_HMAC_JWK)
+    assert payload["sub"] == "idp-user"
 
 
 @pytest.mark.asyncio

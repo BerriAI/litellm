@@ -8,6 +8,7 @@ cache's hit/single-flight behavior. Each assertion fails under a real mutation o
 
 import asyncio
 import gc
+import hmac
 import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,7 +17,7 @@ import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, rsa
 from pydantic import SecretStr
 
 import litellm
@@ -37,10 +38,7 @@ from litellm.proxy.mcp_server.outbound_credentials.types import (
     PrivateKeyJwtAuth,
 )
 
-_PATCH_TARGET = (
-    "litellm.proxy.mcp_server.outbound_credentials."
-    "token_endpoint.get_async_httpx_client"
-)
+_PATCH_TARGET = "litellm.proxy.mcp_server.outbound_credentials.token_endpoint.get_async_httpx_client"
 
 _ENDPOINT = "https://idp.example.com/oauth2/token"
 _CLIENT_ID = "litellm-client-id"
@@ -213,6 +211,11 @@ _ED25519_PEM: Final = (
     .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     .decode()
 )
+_P521_PEM: Final = (
+    ec.generate_private_key(ec.SECP521R1())
+    .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    .decode()
+)
 
 
 @pytest.mark.asyncio
@@ -226,10 +229,44 @@ async def test_fetch_signs_an_hmac_client_assertion_outside_fips_mode() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fetch_refuses_an_hmac_client_assertion_in_fips_mode(fips_mode: None) -> None:
-    client: Final = AsyncMock()
+async def test_fetch_signs_the_same_hmac_client_assertion_in_fips_mode(fips_mode: None) -> None:
+    client: Final = _client(_resp())
     with patch(_PATCH_TARGET, return_value=client):
         result: Final = await TokenEndpointClient().fetch(_ENDPOINT, _CLIENT_ID, {"grant_type": "g"}, _HMAC_AUTH)
+
+    assert isinstance(result, Ok)
+    assertion: Final = _posted_data(client)["client_assertion"]
+    claims: Final = jwt.decode(
+        assertion, _HMAC_AUTH.private_key.get_secret_value(), algorithms=["HS256"], audience=_ENDPOINT
+    )
+    assert jwt.encode(claims, _HMAC_AUTH.private_key.get_secret_value(), algorithm="HS256") == assertion
+
+
+@pytest.mark.asyncio
+async def test_fetch_computes_the_hmac_client_assertion_with_hmac_digest_in_fips_mode(
+    fips_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    keys: Final[list[bytes]] = []
+
+    def recording_digest(key: bytes, msg: bytes, digest: str) -> bytes:
+        keys.append(key)
+        return hmac.digest(key, msg, digest)
+
+    monkeypatch.setattr("litellm.proxy.common_utils.fips_jwt.hmac", MagicMock(digest=recording_digest))
+    client: Final = _client(_resp())
+    with patch(_PATCH_TARGET, return_value=client):
+        result: Final = await TokenEndpointClient().fetch(_ENDPOINT, _CLIENT_ID, {"grant_type": "g"}, _HMAC_AUTH)
+
+    assert isinstance(result, Ok)
+    assert keys == [_HMAC_AUTH.private_key.get_secret_value().encode()]
+
+
+@pytest.mark.asyncio
+async def test_fetch_refuses_an_hmac_key_under_112_bits_in_fips_mode(fips_mode: None) -> None:
+    client: Final = AsyncMock()
+    auth: Final = PrivateKeyJwtAuth(private_key=SecretStr("thirteen-byte"), signing_alg="HS256")
+    with patch(_PATCH_TARGET, return_value=client):
+        result: Final = await TokenEndpointClient().fetch(_ENDPOINT, _CLIENT_ID, {"grant_type": "g"}, auth)
 
     assert isinstance(result, Error)
     assert result.error.tag == "misconfigured"
@@ -237,7 +274,21 @@ async def test_fetch_refuses_an_hmac_client_assertion_in_fips_mode(fips_mode: No
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("pem, signing_alg", [(_PRIVATE_PEM, "RS256"), (_ED25519_PEM, "EdDSA")], ids=["rsa", "eddsa"])
+async def test_fetch_signs_an_hmac_key_under_112_bits_outside_fips_mode() -> None:
+    client: Final = _client(_resp())
+    auth: Final = PrivateKeyJwtAuth(private_key=SecretStr("thirteen-byte"), signing_alg="HS256")
+    with patch(_PATCH_TARGET, return_value=client):
+        result: Final = await TokenEndpointClient().fetch(_ENDPOINT, _CLIENT_ID, {"grant_type": "g"}, auth)
+
+    assert isinstance(result, Ok)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pem, signing_alg",
+    [(_PRIVATE_PEM, "RS256"), (_ED25519_PEM, "EdDSA"), (_P521_PEM, "ES521")],
+    ids=["rsa", "eddsa", "es521"],
+)
 async def test_fetch_signs_a_public_key_client_assertion_in_fips_mode(
     fips_mode: None, pem: str, signing_alg: str
 ) -> None:
