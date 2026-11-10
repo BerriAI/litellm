@@ -2449,6 +2449,10 @@ _CONVERSE_ASSISTANT_NON_TEXT_FIELDS: Final = ("tool_calls", "thinking_blocks")
 def _assistant_turn_as_converse_sends_it(message: Mapping[str, object]) -> Mapping[str, object] | None:
     if message.get("role") != "assistant" or not carries_empty_text(message):
         return message
+    if litellm.modify_params:
+        return get_assistant_message_block_or_continue_message(
+            cast(ChatCompletionAssistantMessage, message)  # cast-ok: role checked above, the helper reads only content
+        )
     kept: Final = tuple(block for block in parts_of(message.get("content")) if not _is_empty_text_block(block))
     if kept or any(message.get(field) for field in _CONVERSE_ASSISTANT_NON_TEXT_FIELDS):
         return {**message, "content": list(kept) or None}

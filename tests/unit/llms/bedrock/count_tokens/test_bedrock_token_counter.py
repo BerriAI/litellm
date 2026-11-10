@@ -470,23 +470,43 @@ def _sent_texts(body: Mapping[str, JsonValue]) -> tuple[tuple[JsonValue, str], .
     return tuple(pair for message in (messages if isinstance(messages, list) else []) for pair in _role_texts(message))
 
 
+_DROPPED: Final = (("user", "What is 2+2?"), ("user", "And 3+3?"))
+_CONTINUED: Final = (("user", "What is 2+2?"), ("assistant", "Please continue."), ("user", "And 3+3?"))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "assistant_turn",
+    "assistant_turn, modify_params, expected_sent",
     (
-        {"role": "assistant", "content": ""},
-        {"role": "assistant", "content": [{"type": "text", "text": ""}]},
-        {
-            "role": "assistant",
-            "content": "",
-            "thinking_blocks": [{"type": "thinking", "thinking": "Adding.", "signature": "c2lnbmF0dXJl"}],
-        },
+        ({"role": "assistant", "content": ""}, False, _DROPPED),
+        ({"role": "assistant", "content": [{"type": "text", "text": ""}]}, False, _DROPPED),
+        (
+            {
+                "role": "assistant",
+                "content": "",
+                "thinking_blocks": [{"type": "thinking", "thinking": "Adding.", "signature": "c2lnbmF0dXJl"}],
+            },
+            False,
+            _DROPPED,
+        ),
+        ({"role": "assistant", "content": ""}, True, _CONTINUED),
+        ({"role": "assistant", "content": [{"type": "text", "text": " "}]}, True, _CONTINUED),
     ),
-    ids=("empty_string", "empty_text_block", "thinking_and_empty_string"),
+    ids=(
+        "empty_string",
+        "empty_text_block",
+        "thinking_and_empty_string",
+        "modify_params_empty_string",
+        "modify_params_blank_text_block",
+    ),
 )
 async def test_claude_converse_count_sends_the_texts_converse_inference_sends(
     assistant_turn: dict[str, JsonValue],
+    modify_params: bool,
+    expected_sent: tuple[tuple[str, str], ...],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
     credentials: Final = DEPLOYMENT["litellm_params"]
     deployment_model: Final = "bedrock/us.anthropic.claude-haiku-5-5"
     messages: Final = [
@@ -517,7 +537,7 @@ async def test_claude_converse_count_sends_the_texts_converse_inference_sends(
     assert result.error is False
     converse_sent: Final = _sent_texts(_JSON_BODY.validate_json(inference.requests[0].content))
     assert _sent_texts(_counted_body(bedrock.requests[0])) == converse_sent
-    assert converse_sent == (("user", "What is 2+2?"), ("user", "And 3+3?"))
+    assert converse_sent == expected_sent
 
 
 @pytest.mark.asyncio
