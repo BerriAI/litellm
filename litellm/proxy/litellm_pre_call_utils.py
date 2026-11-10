@@ -833,8 +833,21 @@ def _drop_blank_client_oauth_pair(
 def _drop_blank_client_oauth_pair_in_entries(entries: Sequence[object]) -> None:
     for entry in entries:
         if isinstance(entry, dict):
-            _drop_blank_client_oauth_pair(
+            _drop_blank_client_oauth_pair_in_entry(
                 cast("dict[str, object]", entry)  # cast-ok: a fallback entry dict is a str-keyed JSON object
+            )
+
+
+def _drop_blank_client_oauth_pair_in_entry(
+    entry: dict[str, object],  # mutable-ok: strips in place on a fallback target or a model group's fallback chain
+) -> None:
+    _drop_blank_client_oauth_pair(entry)
+    if "model" in entry:
+        return
+    for chain in entry.values():
+        if isinstance(chain, list):
+            _drop_blank_client_oauth_pair_in_entries(
+                cast("Sequence[object]", chain)  # cast-ok: a model group's fallback chain holds mixed entry shapes
             )
 
 

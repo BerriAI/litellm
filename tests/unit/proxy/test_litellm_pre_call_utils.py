@@ -8242,6 +8242,34 @@ async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_fall
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_key", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_grouped_fallbacks(fallback_key: str):
+    updated: Final = await _pre_call_body(
+        {
+            fallback_key: [
+                {
+                    "primary-model": [
+                        "plain-model",
+                        {"model": "blank-pair-model", "client_id": "", "client_secret": None},
+                        {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},
+                    ]
+                }
+            ]
+        }
+    )
+
+    assert updated[fallback_key] == [
+        {
+            "primary-model": [
+                "plain-model",
+                {"model": "blank-pair-model"},
+                {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},
+            ]
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_omits_trusted_callback_vars_without_team_callbacks():
     """Without team/key callback settings the trusted field must not exist for a callback to read."""
     data = {
