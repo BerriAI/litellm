@@ -22,11 +22,14 @@ const OK: &str =
 const UNAVAILABLE: &str = "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 const NOT_FOUND: &str = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
+const SLOW_BODY: &[u8] = b"{      }";
+
 #[derive(Clone, Copy)]
 enum Answer {
     Raw(&'static str),
     Stall,
     StallBody,
+    SlowBody,
     Oversized,
 }
 
@@ -75,6 +78,18 @@ impl Upstream {
                                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{")
                                 .unwrap();
                             std::thread::sleep(Duration::from_secs(5));
+                        }
+                        Answer::SlowBody => {
+                            stream.set_nodelay(true).unwrap();
+                            stream
+                                .write_all(
+                                    b"HTTP/1.1 200 OK\r\nETag: \"v1\"\r\nContent-Length: 8\r\nConnection: close\r\n\r\n",
+                                )
+                                .unwrap();
+                            for byte in SLOW_BODY {
+                                std::thread::sleep(Duration::from_millis(60));
+                                stream.write_all(&[*byte]).unwrap();
+                            }
                         }
                     }
                 });
@@ -430,6 +445,29 @@ async fn an_s3_body_that_stalls_after_the_headers_times_out() {
         failed.reason
     );
     assert!(!failed.retryable);
+    assert_eq!(upstream.heads().len(), 1);
+}
+
+#[rstest]
+#[case::http(|upstream: &Upstream| (S3Access::Environment { region: None }, upstream.url()))]
+#[case::s3(|upstream: &Upstream| (s3(upstream, keys()), "s3://prices/cost.json".to_owned()))]
+#[tokio::test]
+async fn a_body_that_keeps_arriving_finishes_after_the_timeout(
+    #[case] source: fn(&Upstream) -> (S3Access, String),
+) {
+    let upstream = Upstream::serve(vec![Answer::SlowBody]);
+    let (access, url) = source(&upstream);
+    let policy = RetryPolicy {
+        timeout: Duration::from_millis(300),
+        ..POLICY
+    };
+    assert_eq!(
+        fetch(&Client::for_test(), &access, &url, policy, Start::Fresh).await,
+        Ok(Fetched {
+            body: SLOW_BODY.to_vec(),
+            etag: Some("\"v1\"".into()),
+        })
+    );
     assert_eq!(upstream.heads().len(), 1);
 }
 

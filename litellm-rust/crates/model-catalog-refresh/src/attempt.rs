@@ -48,16 +48,15 @@ pub(crate) async fn http(
     url: Url,
     timeout: Duration,
 ) -> Result<Fetched, Rejected> {
-    let transport = |error: reqwest::Error| Rejected {
-        cause: Cause::Transport(Error::from(litellm_http::Error::from(error))),
+    let transport = |error: litellm_http::Error| Rejected {
+        cause: Cause::Transport(Error::from(error)),
         retryable: true,
         retry_after: None,
     };
-    let mut response = client
-        .get(url)
-        .timeout(timeout)
-        .send()
+    let mut response = tokio::time::timeout(timeout, client.get(url).send())
         .await
+        .map_err(litellm_http::Error::read_timeout)
+        .and_then(|sent| sent.map_err(litellm_http::Error::from))
         .map_err(transport)?;
     let status = response.status().as_u16();
     let etag = etag(response.headers());
@@ -81,7 +80,12 @@ pub(crate) async fn http(
         return Err(Rejected::fatal(Error::body_too_large(MAX_BODY_BYTES)));
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(transport)? {
+    while let Some(chunk) = tokio::time::timeout(timeout, response.chunk())
+        .await
+        .map_err(litellm_http::Error::body_read_timeout)
+        .and_then(|read| read.map_err(litellm_http::Error::from))
+        .map_err(transport)?
+    {
         append(&mut body, &chunk).map_err(Rejected::fatal)?;
     }
     Ok(Fetched { body, etag })
@@ -123,15 +127,12 @@ pub(crate) async fn s3(
         let etag = output.e_tag().map(str::to_owned);
         let mut stream = output.body;
         let mut body = Vec::new();
-        while let Some(chunk) = stream.try_next().await? {
+        while let Some(chunk) = tokio::time::timeout(timeout, stream.try_next()).await?? {
             append(&mut body, &chunk)?;
         }
         Ok::<_, Error>(Fetched { body, etag })
     };
-    tokio::time::timeout(timeout, fetched)
-        .await
-        .unwrap_or_else(|elapsed| Err(Error::from(elapsed)))
-        .map_err(Rejected::fatal)
+    fetched.await.map_err(Rejected::fatal)
 }
 
 fn append(body: &mut Vec<u8>, chunk: &Bytes) -> Result<(), Error> {
