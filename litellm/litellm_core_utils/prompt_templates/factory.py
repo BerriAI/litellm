@@ -4765,23 +4765,67 @@ def _sort_bedrock_assistant_content_blocks(
 
 def _is_blank_text_block(block: object) -> bool:
     text: Final = message_field(block, "text")
-    return message_field(block, "type") == "text" and not (isinstance(text, str) and text.strip())
+    return message_field(block, "type") in ("text", "guarded_text") and not (isinstance(text, str) and text.strip())
 
 
 def _has_no_content(message: object) -> bool:
     content: Final = message_field(message, "content")
     blocks: Final = as_object_list(content)
-    return not content or (blocks is not None and all(map(_is_blank_text_block, blocks)))
+    if blocks is not None:
+        return all(map(_is_blank_text_block, blocks))
+    return not content or (isinstance(content, str) and not content.strip())
 
 
-def _bedrock_empty_user_turn(
-    trailing_messages: Sequence[object], contents: Sequence[BedrockMessageBlock]
-) -> BedrockMessageBlock | None:
-    if not trailing_messages or not contents or contents[-1]["role"] != "assistant":
-        return None
-    if not all(map(_has_no_content, trailing_messages)):
-        return None
-    return BedrockMessageBlock(role="user", content=[BedrockContentBlock(text=_EMPTY_TEXT_PLACEHOLDER)])
+def _is_empty_user_message(message: object) -> bool:
+    return message_field(message, "role") == "user" and _has_no_content(message)
+
+
+def _ends_on_empty_user_turn(
+    messages: Sequence[object],
+    start: int,
+    contents: Sequence[BedrockMessageBlock],
+    user_continue_message: ChatCompletionUserMessage | None,
+) -> bool:
+    if user_continue_message is not None or litellm.modify_params:
+        return False
+    if not contents or contents[-1]["role"] != "assistant":
+        return False
+    return all(_is_empty_user_message(messages[index]) for index in range(start, len(messages)))
+
+
+def _has_cache_mark(holder: object) -> bool:
+    return message_field(holder, "cache_control") is not None
+
+
+def _cache_mark_holders(message: object) -> Sequence[object]:
+    return (message, *(as_object_list(message_field(message, "content")) or ()))
+
+
+def _bedrock_placeholder_turn(
+    trailing_messages: Sequence[object],
+    model: str,
+    deployment_model: str | None,
+    model_info: Mapping[str, object] | None,
+) -> BedrockMessageBlock:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    holders: Final = itertools.chain.from_iterable(map(_cache_mark_holders, trailing_messages))
+    marked: Final = next(filter(_has_cache_mark, holders), None)
+    cache_point: Final = (
+        None
+        if marked is None
+        else AmazonConverseConfig().get_cache_point_block(
+            cast(ChatCompletionUserMessage, marked),  # cast-ok: get_cache_point_block only reads cache_control
+            block_type="content_block",
+            model=model,
+            deployment_model=deployment_model,
+            model_info=model_info,
+        )
+    )
+    return BedrockMessageBlock(
+        role="user",
+        content=[BedrockContentBlock(text=_EMPTY_TEXT_PLACEHOLDER), *([] if cache_point is None else [cache_point])],
+    )
 
 
 def _insert_assistant_continue_message(
@@ -5094,6 +5138,7 @@ class BedrockConverseMessagesProcessor:
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import (
             bedrock_converse_accepts_redacted_thinking,
+            bedrock_converse_rejects_assistant_prefill,
             bedrock_converse_rejects_signed_thinking,
         )
 
@@ -5108,6 +5153,11 @@ class BedrockConverseMessagesProcessor:
         message_objects: Final = cast(Sequence[object], messages)  # cast-ok: the builders take an untyped list
 
         while msg_i < len(messages):
+            if _ends_on_empty_user_turn(
+                message_objects, msg_i, contents, user_continue_message
+            ) and bedrock_converse_rejects_assistant_prefill(model, base_model):
+                contents.append(_bedrock_placeholder_turn(message_objects[msg_i:], model, deployment_model, model_info))
+                break
             user_content: list[BedrockContentBlock] = []
             init_msg_i = msg_i
             ## MERGE CONSECUTIVE USER CONTENT ##
@@ -5246,11 +5296,6 @@ class BedrockConverseMessagesProcessor:
                         contents[-1]["content"].extend(tool_content)
                 else:
                     contents.append(BedrockMessageBlock(role="user", content=tool_content))
-            if (
-                msg_i == len(message_objects)
-                and (empty_user_turn := _bedrock_empty_user_turn(message_objects[init_msg_i:], contents)) is not None
-            ):
-                contents.append(empty_user_turn)
             assistant_content: list[BedrockContentBlock] = []
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
@@ -5547,6 +5592,7 @@ def _bedrock_converse_messages_pt(
     """
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_accepts_redacted_thinking,
+        bedrock_converse_rejects_assistant_prefill,
         bedrock_converse_rejects_signed_thinking,
     )
 
@@ -5561,6 +5607,11 @@ def _bedrock_converse_messages_pt(
     message_objects: Final = cast(Sequence[object], messages)  # cast-ok: the builders take an untyped list
 
     while msg_i < len(messages):
+        if _ends_on_empty_user_turn(
+            message_objects, msg_i, contents, user_continue_message
+        ) and bedrock_converse_rejects_assistant_prefill(model, base_model):
+            contents.append(_bedrock_placeholder_turn(message_objects[msg_i:], model, deployment_model, model_info))
+            break
         user_content: list[BedrockContentBlock] = []
         init_msg_i = msg_i
         ## MERGE CONSECUTIVE USER CONTENT ##
@@ -5700,11 +5751,6 @@ def _bedrock_converse_messages_pt(
                     contents[-1]["content"].extend(tool_content)
             else:
                 contents.append(BedrockMessageBlock(role="user", content=tool_content))
-        if (
-            msg_i == len(message_objects)
-            and (empty_user_turn := _bedrock_empty_user_turn(message_objects[init_msg_i:], contents)) is not None
-        ):
-            contents.append(empty_user_turn)
         assistant_content: list[BedrockContentBlock] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":

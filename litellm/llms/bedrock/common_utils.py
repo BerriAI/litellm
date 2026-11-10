@@ -1607,6 +1607,14 @@ def bedrock_converse_rejects_signed_thinking(model: str, base_model: str | None)
     return not _is_claude_behind_any_region_prefix(_converse_target_model(model, base_model))
 
 
+def bedrock_converse_rejects_assistant_prefill(model: str, base_model: str | None) -> bool:
+    from litellm.utils import is_explicitly_disabled_factory
+
+    return is_explicitly_disabled_factory(
+        _converse_target_model(model, base_model), "bedrock", "supports_assistant_prefill"
+    )
+
+
 def _converse_target_model(model: str, base_model: str | None) -> str:
     if base_model is None or "." in get_bedrock_base_model(model):
         return model

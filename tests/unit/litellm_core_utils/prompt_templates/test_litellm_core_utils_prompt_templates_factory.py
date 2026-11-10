@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime
+from itertools import chain
 from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
@@ -1114,6 +1115,7 @@ async def _converse_messages(
     base_model: str | None,
     use_async: bool,
     assistant_continue_message: str | None = None,
+    user_continue_message: ChatCompletionUserMessage | None = None,
 ) -> list[dict[str, object]]:
     return (
         await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
@@ -1122,6 +1124,7 @@ async def _converse_messages(
             llm_provider="bedrock",
             base_model=base_model,
             assistant_continue_message=assistant_continue_message,
+            user_continue_message=user_continue_message,
         )
         if use_async
         else _bedrock_converse_messages_pt(
@@ -1130,6 +1133,7 @@ async def _converse_messages(
             llm_provider="bedrock",
             base_model=base_model,
             assistant_continue_message=assistant_continue_message,
+            user_continue_message=user_continue_message,
         )
     )
 
@@ -1156,6 +1160,135 @@ async def test_bedrock_converse_keeps_an_empty_trailing_user_turn(
     assert result[-1]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]
 
 
+_ANSWERED_HISTORY: Final = ({"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "blank_user_message",
+    [
+        {"role": "user", "content": "   "},
+        {"role": "user", "content": [{"type": "text", "text": " \n"}]},
+        {"role": "user", "content": [{"type": "guarded_text", "text": ""}]},
+    ],
+    ids=["whitespace-string", "whitespace-block", "empty-guarded-text"],
+)
+async def test_bedrock_converse_treats_a_blank_trailing_user_turn_as_empty(
+    use_async: bool, blank_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse([*_ANSWERED_HISTORY, blank_user_message], use_async)
+
+    assert result[-1] == {"role": "user", "content": [{"text": _EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "model",
+    ["us.amazon.nova-2-lite-v1:0", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", _HIDDEN_MODEL_ARN],
+    ids=["nova", "claude-with-prefill", "hidden-arn"],
+)
+@CONVERSE_EMPTY_USER_MESSAGES
+async def test_bedrock_converse_adds_no_placeholder_for_a_model_that_is_not_known_to_refuse_a_prefill(
+    use_async: bool, model: str, empty_user_message: dict[str, object]
+) -> None:
+    result: Final = await _converse_messages([*_ANSWERED_HISTORY, empty_user_message], model, None, use_async)
+
+    assert [message["role"] for message in result] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_reads_a_hidden_arn_model_from_base_model_for_the_placeholder(use_async: bool) -> None:
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": None}],
+        _HIDDEN_MODEL_ARN,
+        "anthropic.claude-opus-5-5",
+        use_async,
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": _EMPTY_TEXT_PLACEHOLDER}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("model", "turns"),
+    [
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", (*_ANSWERED_HISTORY, {"role": "user", "content": "   "})),
+        (
+            "us.anthropic.claude-opus-5-5",
+            (
+                *_ANSWERED_HISTORY,
+                {"role": "user", "content": "   "},
+                {"role": "assistant", "content": "again"},
+                {"role": "user", "content": "more"},
+            ),
+        ),
+    ],
+    ids=["model-with-prefill", "before-later-turns"],
+)
+async def test_bedrock_converse_leaves_a_whitespace_string_alone_unless_it_ends_a_request_that_needs_the_placeholder(
+    use_async: bool, model: str, turns: Sequence[dict[str, object]]
+) -> None:
+    result: Final = await _converse_messages(list(turns), model, None, use_async)
+
+    assert {"text": "   "} in result[2]["content"]
+    assert not _carries_the_placeholder(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "marked_user_message",
+    [
+        {"role": "user", "content": "", "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": None, "cache_control": {"type": "ephemeral"}},
+        {"role": "user", "content": [{"type": "text", "text": "", "cache_control": {"type": "ephemeral"}}]},
+    ],
+    ids=["empty-string", "null", "empty-text-block"],
+)
+async def test_bedrock_converse_keeps_the_cache_mark_of_an_empty_trailing_user_turn(
+    use_async: bool, marked_user_message: Mapping[str, object]
+) -> None:
+    result: Final = await _converse([*_ANSWERED_HISTORY, marked_user_message], use_async)
+
+    assert result[-1]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}, {"cachePoint": {"type": "default"}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_prefers_a_user_continue_message_over_the_placeholder(use_async: bool) -> None:
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": "   "}],
+        "us.anthropic.claude-opus-5-5",
+        None,
+        use_async,
+        user_continue_message={"role": "user", "content": "go on"},
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": "go on"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    "content", ["", "   ", [{"type": "text", "text": ""}]], ids=["empty-string", "whitespace-string", "empty-text-block"]
+)
+async def test_bedrock_converse_fills_a_blank_trailing_user_turn_under_a_guardrail(
+    use_async: bool, content: object
+) -> None:
+    guarded: Final = litellm.AmazonConverseConfig._convert_consecutive_user_messages_to_guarded_text(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": content}],
+        {"guardrailConfig": {"guardrailIdentifier": "guardrail", "guardrailVersion": "1"}},
+    )
+
+    result: Final = await _converse(guarded, use_async)
+
+    assert result[-1] == {"role": "user", "content": [{"text": _EMPTY_TEXT_PLACEHOLDER}]}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize("empty_user_first", [True, False], ids=["empty-user-then-tool", "tool-then-empty-user"])
@@ -1178,7 +1311,8 @@ async def test_bedrock_converse_empty_user_message_beside_a_tool_result_keeps_th
 
 
 def _carries_the_placeholder(turns: Sequence[Mapping[str, object]]) -> bool:
-    return any(block.get("text") == _EMPTY_TEXT_PLACEHOLDER for turn in turns for block in turn["content"])
+    blocks: Final = chain.from_iterable(turn["content"] for turn in turns)
+    return any(block.get("text") == _EMPTY_TEXT_PLACEHOLDER for block in blocks)
 
 
 @pytest.mark.asyncio
