@@ -20507,6 +20507,7 @@
       "cancel": "Cancel",
       "save": "Save",
       "block": "Block",
+      "blockHint": "Block and Unblock change the customer record. The proxy only rejects a blocked customer's requests when the blocked_user_check callback is enabled in litellm_settings.callbacks.",
       "unblock": "Unblock",
       "edit": "Edit",
       "total": "Total",

@@ -52,6 +52,7 @@ export default function CustomersPage() {
           <Plus className="size-4" /> {t("customerPortal.list.create")}
         </Button>
       </div>
+      <p className="text-xs text-muted-foreground">{t("customerPortal.common.blockHint")}</p>
       <div className="rounded-lg border bg-card">
         <div className="border-b p-3">
           <Input

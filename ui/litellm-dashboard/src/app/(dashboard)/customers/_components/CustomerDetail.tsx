@@ -110,6 +110,7 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
           )}
         </div>
       </div>
+      <p className="text-xs text-muted-foreground">{t("customerPortal.common.blockHint")}</p>
 
       <div className="rounded-lg border bg-card">
         <div className="flex items-baseline gap-3 border-b px-4 py-3">

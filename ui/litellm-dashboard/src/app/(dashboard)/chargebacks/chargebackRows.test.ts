@@ -92,6 +92,12 @@ describe("sumRows and toCsv", () => {
       '"globex","Globex ""Inc""","main","1","10","5","9.000000"',
     ]);
   });
+  test("csv neutralises ids and aliases that a spreadsheet would run as a formula", () => {
+    const rows = rowsByCustomer(new Map([['=HYPERLINK("x")', usage.get("acme")!]]));
+    const line = toCsv(rows, new Map([['=HYPERLINK("x")', "-1+1"]]), null).split("\n")[1];
+    expect(line.startsWith(`"'=HYPERLINK(""x"")","'-1+1",`)).toBe(true);
+    expect(line.endsWith('"3","30","15","6.000000"')).toBe(true);
+  });
   test("csv without a dimension has no dimension column", () => {
     expect(toCsv(rowsByCustomer(usage), new Map(), null).split("\n")[0]).toBe(
       '"customer_id","customer","requests","input_tokens","output_tokens","spend_usd"',

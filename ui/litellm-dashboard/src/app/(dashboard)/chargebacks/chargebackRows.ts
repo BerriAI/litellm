@@ -56,7 +56,9 @@ export const sumRows = (rows: readonly Totals[]): Totals =>
     ZERO,
   );
 
-const csvCell = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
+const FORMULA_PREFIX = /^[=+\-@\t\r]/;
+const neutralise = (v: string) => (FORMULA_PREFIX.test(v) ? `'${v}` : v);
+const csvCell = (v: string | number) => `"${(typeof v === "string" ? neutralise(v) : String(v)).replace(/"/g, '""')}"`;
 
 export const toCsv = (
   rows: readonly ChargebackRow[],
