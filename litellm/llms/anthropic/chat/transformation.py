@@ -1499,7 +1499,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 continue
             tool_calls = msg.get("tool_calls")
             function_call = msg.get("function_call")
-            if not tool_calls and not function_call:
+            renamed_provider_fields = _provider_fields_with_tool_names(msg, name_forward_map)
+            if not tool_calls and not function_call and renamed_provider_fields is None:
                 new_messages.append(msg)
                 continue
             new_msg = dict(msg)
@@ -1525,7 +1526,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_fc = dict(function_call)
                 new_fc["name"] = name_forward_map[fc_name]
                 new_msg["function_call"] = new_fc
-            renamed_provider_fields = _provider_fields_with_tool_names(msg, name_forward_map)
             if renamed_provider_fields is not None:
                 new_msg["provider_specific_fields"] = renamed_provider_fields
             new_messages.append(cast(AllMessageValues, new_msg))

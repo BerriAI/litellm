@@ -10864,6 +10864,49 @@ def test_a_renamed_tool_leaves_tool_results_without_tool_references_as_claude_se
     assert [block["name"] for block in sent if block["type"] == "tool_use"] == ["weather_get"]
 
 
+@pytest.mark.parametrize(
+    ("last_block", "stop_reason"),
+    [
+        pytest.param(dict(_PARIS_ANSWER), "end_turn", id="search_then_answer"),
+        pytest.param({**_WEATHER_TOOL_USE, "name": "weather_get"}, "tool_use", id="search_then_tool"),
+    ],
+)
+def test_a_renamed_tool_keeps_the_replayed_search_that_loaded_it(last_block: dict[str, object], stop_reason: str):
+    search_turn: Final = _tool_search_turn(["weather_get"], last_block)
+    message: Final = _parsed_assistant_message(search_turn, stop_reason, {"weather_get": "weather.get"})
+    answers: Final = (
+        [{"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"}] if stop_reason == "tool_use" else []
+    )
+    config: Final = AnthropicConfig()
+
+    request: Final = config.transform_request(
+        model="claude-opus-5-5",
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            message.model_dump(),
+            *answers,
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    _function_tool("weather.get"),
+                ]
+            },
+            optional_params={},
+            model="claude-opus-5-5",
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    sent: Final = request["messages"][1]["content"]
+    assert [block for block in sent if block["type"] == "tool_search_tool_result"] == [search_turn[1]]
+    assert [block["id"] for block in sent if block["type"] == "server_tool_use"] == ["srvtoolu_01Search"]
+
+
 _INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]
 
 

@@ -1857,7 +1857,7 @@ async def test_previous_response_id_sends_back_a_search_the_stored_turn_got_as_i
 
 
 @pytest.mark.asyncio
-async def test_previous_response_id_drops_a_stored_search_when_the_follow_up_sends_no_search_tool() -> None:
+async def test_previous_response_id_keeps_a_stored_search_when_the_follow_up_sends_no_search_tool() -> None:
     anthropic: Final = _RecordingRawAnthropicMessages()
     loaded_weather_tool: Final = {key: value for key, value in _WEATHER_TOOL.items() if key != "defer_loading"}
 
@@ -1872,7 +1872,11 @@ async def test_previous_response_id_drops_a_stored_search_when_the_follow_up_sen
         )
 
     messages: Final = json.loads(anthropic.body)["messages"]
-    assert next(message["content"] for message in messages if message["role"] == "assistant") == [_WEATHER_USE]
+    assert next(message["content"] for message in messages if message["role"] == "assistant") == [
+        _SEARCH_USE,
+        _SEARCH_RESULT,
+        _WEATHER_USE,
+    ]
 
 
 _SERVER_HELD_SEARCH_TURN: Final = {
@@ -1916,15 +1920,15 @@ _SERVER_HELD_SEARCH_TURN: Final = {
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("tools", "assistant_content"),
+    "tools",
     [
-        (list(_SEARCHABLE_TOOLS), [_SEARCH_USE, _SEARCH_RESULT, _WEATHER_USE]),
-        ([{key: value for key, value in _WEATHER_TOOL.items() if key != "defer_loading"}], [_WEATHER_USE]),
+        list(_SEARCHABLE_TOOLS),
+        [{key: value for key, value in _WEATHER_TOOL.items() if key != "defer_loading"}],
     ],
     ids=["follow_up_sends_the_search_tool", "follow_up_sends_no_search_tool"],
 )
-async def test_previous_response_id_replays_a_search_claude_ran_only_while_the_follow_up_sends_a_search_tool(
-    tools: list[Mapping[str, object]], assistant_content: list[Mapping[str, object]]
+async def test_previous_response_id_replays_a_search_claude_ran_whatever_search_tool_the_follow_up_sends(
+    tools: list[Mapping[str, object]],
 ) -> None:
     anthropic: Final = _RecordingRawAnthropicMessages()
 
@@ -1939,7 +1943,11 @@ async def test_previous_response_id_replays_a_search_claude_ran_only_while_the_f
         )
 
     messages: Final = json.loads(anthropic.body)["messages"]
-    assert next(message["content"] for message in messages if message["role"] == "assistant") == assistant_content
+    assert next(message["content"] for message in messages if message["role"] == "assistant") == [
+        _SEARCH_USE,
+        _SEARCH_RESULT,
+        _WEATHER_USE,
+    ]
 
 
 @pytest.mark.asyncio
