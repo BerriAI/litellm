@@ -886,6 +886,7 @@ async def rag_ingest(
                 llm_router=llm_router,
                 model="",
                 route=get_request_route(request=request),
+                team_id=user_api_key_dict.team_id,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})

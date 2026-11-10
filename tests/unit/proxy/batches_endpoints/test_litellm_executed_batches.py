@@ -260,6 +260,9 @@ class FakeRouter:
 
 
 class FakeRegistry:
+    def routing_group(self, name: str) -> None:
+        return None
+
     def index(self, name: Literal["team_model"]) -> Mapping[tuple[str, str], Sequence[int]]:
         return MappingProxyType({})
 
@@ -273,7 +276,9 @@ class FakeRegistry:
     def resolve(self, name: str, *, kind: str = "group") -> None:
         return None
 
-    def deployments(self, model_name: str | None = None, *, source: str = "group") -> list[object]:
+    def deployments(
+        self, model_name: str | None = None, *, source: str = "group", team_id: str | None = None
+    ) -> list[object]:
         return []
 
 

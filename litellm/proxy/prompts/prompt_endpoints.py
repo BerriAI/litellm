@@ -1111,6 +1111,7 @@ async def test_prompt(
             general_settings=general_settings,
             llm_router=llm_router,
             model=data.get("model", ""),
+            team_id=user_api_key_dict.team_id,
         )
 
         # Use ProxyBaseLLMRequestProcessing to go through all proxy logic

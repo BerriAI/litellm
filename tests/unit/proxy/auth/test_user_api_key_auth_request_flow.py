@@ -4852,6 +4852,64 @@ def _proxy_attrs_for_centralized_checks(user_custom_auth=None, flag=False, maste
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("team_id, is_allowed", [(None, True), ("other-team", True), ("pinned-team", False)])
+async def test_deferred_body_check_uses_only_the_authenticated_teams_deployments(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, is_allowed: bool
+) -> None:
+    from litellm.proxy.utils import ProxyLogging
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            team_id=team_id, api_key=api_key, user_role=LitellmUserRoles.INTERNAL_USER, models=["chat"]
+        )
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {
+                    "model": "vertex_ai/test-model",
+                    "configurable_clientside_auth_params": ["vertex_location"],
+                },
+            },
+            {
+                "model_name": "private-chat",
+                "model_info": {"team_id": "pinned-team", "team_public_model_name": "chat"},
+                "litellm_params": {"model": "vertex_ai/test-model", "vertex_location": "europe-west4"},
+            },
+        ]
+    )
+    key_cache: Final = UserApiKeyCache()
+    attributes: Final = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=authenticate),
+        "llm_router": router,
+        "llm_model_list": None,
+        "user_api_key_cache": key_cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+    for name, value in attributes.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    request: Final = Request(
+        {"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []},
+        receive=AsyncMock(
+            return_value={
+                "type": "http.request",
+                "more_body": False,
+                "body": json.dumps({"model": "chat", "vertex_location": "us-central1"}).encode(),
+            }
+        ),
+    )
+    if is_allowed:
+        identity: Final = await user_api_key_auth(request=request, api_key="Bearer external-token")
+        assert identity.team_id == team_id
+        return
+    with pytest.raises(ProxyException) as rejection:
+        await user_api_key_auth(request=request, api_key="Bearer external-token")
+    assert int(rejection.value.code) == 401
+    assert "vertex_location" in str(rejection.value)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_runs_for_standard_auth():
     """Regardless of which _user_api_key_auth_builder path returned, the
     wrapper must run common_checks. This is the structural fix: no

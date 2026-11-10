@@ -3933,7 +3933,7 @@ class TestIsRequestBodySafeBlocksNVCFFunctionOverride:
         monkeypatch.setattr(
             auth_utils,
             "_allow_model_level_clientside_configurable_parameters",
-            lambda model, param, request_body_value, llm_router: param == "nvcf_function_id",
+            lambda model, param, request_body_value, llm_router, team_id=None: param == "nvcf_function_id",
         )
 
         assert (
@@ -4018,7 +4018,7 @@ class TestIsRequestBodySafeBlocksRivaUseSsl:
         monkeypatch.setattr(
             auth_utils,
             "_allow_model_level_clientside_configurable_parameters",
-            lambda model, param, request_body_value, llm_router: param == "use_ssl",
+            lambda model, param, request_body_value, llm_router, team_id=None: param == "use_ssl",
         )
 
         assert (
@@ -4456,7 +4456,7 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
     monkeypatch.setattr(
         auth_utils,
         "_allow_model_level_clientside_configurable_parameters",
-        lambda model, param, request_body_value, llm_router: param == "api_base",
+        lambda model, param, request_body_value, llm_router, team_id=None: param == "api_base",
     )
 
     with pytest.raises(ValueError, match="Rejected Request: langfuse_host is not allowed in request") as exc:
@@ -5129,10 +5129,13 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
         )
         request_body: Final = {"model": model, "vertex_location": "us-central1"}
         if opted_in:
-            assert is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions") is True
+            assert (
+                is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions", team_id="team-one")
+                is True
+            )
             return
         with pytest.raises(ValueError, match="vertex_location"):
-            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions")
+            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions", team_id="team-one")
 
     @pytest.mark.parametrize(
         "model, opted_in, global_exact, is_allowed",
@@ -5171,10 +5174,13 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
         )
         request_body: Final = {"model": model, "vertex_location": "us-central1"}
         if is_allowed:
-            assert is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions") is True
+            assert (
+                is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions", team_id="team-one")
+                is True
+            )
             return
         with pytest.raises(ValueError, match="vertex_location"):
-            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions")
+            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions", team_id="team-one")
 
     @pytest.mark.parametrize("fallback_setting", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
     def test_team_internal_fallback_to_another_public_name_keeps_its_pin(self, fallback_setting: str) -> None:
@@ -5201,7 +5207,12 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
         )
         with pytest.raises(ValueError, match="vertex_location"):
             is_request_body_safe(
-                {"model": "chat", "vertex_location": "us-central1"}, {}, router, "chat", route="/v1/chat/completions"
+                {"model": "chat", "vertex_location": "us-central1"},
+                {},
+                router,
+                "chat",
+                route="/v1/chat/completions",
+                team_id="team-one",
             )
 
     def test_model_with_no_deployment_has_no_opt_in(self) -> None:
