@@ -49,6 +49,7 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.exceptions import AuthenticationError, BadRequestError
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_provider, get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import has_sensitive_keyword
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
@@ -60,6 +61,7 @@ from litellm.litellm_core_utils.routing_common_utils import as_excluded_deployme
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
+from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.secret_managers.main import secret_manager_would_be_consulted
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import Deployment, GenericLiteLLMParams, ModelInfo
@@ -245,7 +247,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return None if deployment_id is None else str(deployment_id)
 
     @staticmethod
-    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
+    def _find_deployment_by_model_id(
+        healthy_deployments: list[dict[str, object]], model_id: str
+    ) -> dict[str, object] | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
@@ -546,6 +550,26 @@ class EncryptedContentAffinityCheck(CustomLogger):
     # Request routing  (pre-call filter)
     # ------------------------------------------------------------------
 
+    async def _routing_tags_reject(
+        self, model: str, pinned: Sequence[Mapping[str, object]], request_kwargs: Mapping[str, object]
+    ) -> bool:
+        """Whether the router's tag filter would reject every deployment in ``pinned`` for this request, so an
+        explicit routing tag outranks the pin."""
+        if self.ctx is None:
+            return False
+        try:
+            await get_deployments_for_tag(
+                ctx=self.ctx,
+                model=model,
+                healthy_deployments=pinned,  # pyright: ignore[reportArgumentType]  # deployment dicts
+                request_kwargs=request_kwargs,  # pyright: ignore[reportArgumentType]  # the request kwargs
+                metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs),
+                request_deployments=self.ctx.registry().deployments(model) or pinned,  # pyright: ignore[reportArgumentType]  # deployment dicts
+            )
+        except ValueError:
+            return True
+        return False
+
     async def async_filter_deployments(
         self,
         model: str,
@@ -629,7 +653,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             healthy_deployments=untried_candidates,
             model_id=model_id,
         )
-        if deployment is not None:
+        if deployment is not None and not await self._routing_tags_reject(model, (deployment,), typed_request_kwargs):
             verbose_router_logger.debug(
                 "EncryptedContentAffinityCheck: pinning -> deployment=%s",
                 model_id,
@@ -650,9 +674,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
             healthy_deployments=untried_candidates,
             model_id=model_id,
         )
-        if boundary_matches:
+        if boundary_matches and not await self._routing_tags_reject(model, boundary_matches, typed_request_kwargs):
             verbose_router_logger.debug(
-                "EncryptedContentAffinityCheck: model_id=%s not in healthy_deployments; "
+                "EncryptedContentAffinityCheck: model_id=%s cannot serve this turn; "
                 "pinning to %d deployment(s) on same encryption boundary",
                 model_id,
                 len(boundary_matches),
