@@ -2,7 +2,16 @@ from typing import Annotated, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
-from litellm.models.alert import Alert, AlertID, AlertPage, AlertStatus, AlertStore, AlertUpdate
+from litellm.models.alert import (
+    Alert,
+    AlertFilter,
+    AlertID,
+    AlertStatus,
+    AlertStore,
+    AlertUpdate,
+    AlertView,
+    AlertViewPage,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.deps.repositories import AlertRepositoryDep
@@ -29,24 +38,29 @@ def _found(alert: Alert | None) -> Alert:
     return alert
 
 
-@router.get("/alerts", response_model=AlertPage, summary="List saved alerts")
+@router.get("/alerts", response_model=AlertViewPage, summary="List saved alerts")
 async def list_alerts(
     user: Auth,
     repository: AlertRepositoryDep,
     status: Annotated[AlertStatus, Query(description="Status to list.")] = "open",
     limit: Annotated[int, Query(ge=1, le=100, description="Maximum alerts per page.")] = 25,
     cursor: Annotated[AlertID | None, Query(description="next_cursor from the preceding page.")] = None,
-) -> AlertPage:
-    """Read saved alerts, newest first. Gateway admins and view-only admins can read. No usage queries run."""
+    alert_type: Annotated[
+        AlertFilter | None, Query(alias="type", description="Alert category, or all performance alerts.")
+    ] = None,
+) -> AlertViewPage:
+    """Read saved alerts with current resource names and eight days of Usage history. Requires a gateway admin."""
     store: Final = _authorized_store(user, repository, write=False)
-    return await store.list(status, limit, int(cursor) if cursor is not None else None)
+    page: Final = await store.list(status, limit, int(cursor) if cursor is not None else None, alert_type)
+    return AlertViewPage(data=await store.enrich(page.data), next_cursor=page.next_cursor)
 
 
-@router.get("/alerts/{alert_id}", response_model=Alert, summary="Read an alert")
-async def get_alert(alert_id: AlertPath, user: Auth, repository: AlertRepositoryDep) -> Alert:
+@router.get("/alerts/{alert_id}", response_model=AlertView, summary="Read an alert")
+async def get_alert(alert_id: AlertPath, user: Auth, repository: AlertRepositoryDep) -> AlertView:
     """Return the saved evidence and status. Requires a gateway admin or view-only admin."""
     store: Final = _authorized_store(user, repository, write=False)
-    return _found(await store.get(int(alert_id)))
+    alert: Final = _found(await store.get(int(alert_id)))
+    return (await store.enrich((alert,)))[0]
 
 
 @router.patch("/alerts/{alert_id}", response_model=Alert, summary="Change an alert's status")

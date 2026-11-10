@@ -1,9 +1,12 @@
-import { renderHook } from "@testing-library/react";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
+import { renderHook as testingRenderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 
 const mockUseAggregatedDailyActivity = vi.fn();
+const renderHook: typeof testingRenderHook = (render, options) =>
+  testingRenderHook(render, { ...options, wrapper: NuqsTestingAdapter });
 
 vi.mock("@/app/(dashboard)/usage/_components/hooks/useAggregatedDailyActivity", () => ({
   useAggregatedDailyActivity: (options: unknown) => {
@@ -86,4 +89,15 @@ describe("useDailyActivityRange", () => {
       apiKey: null,
     });
   });
+});
+
+it("opens the alert's complete UTC date window", () => {
+  const { result } = testingRenderHook(() => useActivityDateRange(), {
+    wrapper: ({ children }) => (
+      <NuqsTestingAdapter searchParams="activity_from=2026-01-01&activity_to=2026-01-08">{children}</NuqsTestingAdapter>
+    ),
+  });
+  expect(result.current.dateValue.from?.getDate()).toBe(1);
+  expect(result.current.dateValue.to?.getDate()).toBe(8);
+  expect(result.current.dateValue.from?.getFullYear()).toBe(2026);
 });

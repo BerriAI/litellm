@@ -1,3 +1,4 @@
+import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import { MemberRoleSelect } from "./MemberRoleSelect";
 import React, { useState } from "react";
@@ -99,7 +100,11 @@ export default function UserInfoView({
   const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
   const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
   const [baseUrl, setBaseUrl] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<string>(initialTab === 1 ? "details" : "overview");
+  const [activeTab, setActiveTab] = useUrlTab(
+    ["overview", "details", "activity", "savings", "auto-router-usage"],
+    initialTab === 1 ? "details" : "overview",
+    "detail_tab",
+  );
   const hiddenUsageTab = (activeTab === "savings" || activeTab === "activity") && !canViewUserUsage;
   const hiddenRouterTab = activeTab === "auto-router-usage" && !canViewAutoRouterUsage;
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
@@ -484,7 +489,7 @@ export default function UserInfoView({
 
       <Tabs
         value={hiddenUsageTab || hiddenRouterTab ? "overview" : activeTab}
-        onValueChange={(v: unknown) => setActiveTab(String(v))}
+        onValueChange={(v: unknown) => setActiveTab(String(v) as typeof activeTab)}
         className="gap-0"
       >
         <TabsList variant="line" className="mb-4">

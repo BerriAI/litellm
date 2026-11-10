@@ -418,7 +418,11 @@ describe("UserInfoView auto-router usage", () => {
       Promise.resolve({ ...MOCK_USER_DATA_NO_TEAMS, user_id: userId }),
     );
     mockFetch.mockReset().mockResolvedValue(Response.json(routerUsageResponse(42)));
-    vi.stubGlobal("fetch", mockFetch);
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.includes("/telemetry/")) return Promise.resolve(Response.json({ enabled: false }));
+      return mockFetch(input, init);
+    });
   });
 
   afterEach(() => {

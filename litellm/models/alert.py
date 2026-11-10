@@ -1,10 +1,12 @@
-from datetime import date, datetime, timezone
+from datetime import date as Date
+from datetime import datetime, timezone
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Self
 
 AlertType: TypeAlias = Literal["spend", "traffic", "latency", "reliability", "model_deprecation"]
+AlertFilter: TypeAlias = AlertType | Literal["performance"]
 AlertStatus: TypeAlias = Literal["open", "resolved", "dismissed"]
 AlertResourceType: TypeAlias = Literal["gateway", "key", "team", "user", "model"]
 MAX_ALERT_ID: Final = 2**63 - 1
@@ -33,7 +35,7 @@ class MetricEvidence(BaseModel):
 class DeprecationEvidence(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    deprecation_date: date = Field(description="Date the affected model retires.")
+    deprecation_date: Date = Field(description="Date the affected model retires.")
     replacement_model: str | None = Field(
         default=None, min_length=1, max_length=1024, description="Suggested replacement."
     )
@@ -106,6 +108,22 @@ class Alert(AlertDetection):
     updated_by: str | None = Field(default=None, max_length=1024, description="User who last changed the status.")
 
 
+class AlertHistoryPoint(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    date: Date = Field(description="UTC day represented by this value.")
+    value: float = Field(allow_inf_nan=False, description="Recorded daily value in the alert metric's unit.")
+
+
+class AlertView(Alert):
+    resource_name: str | None = Field(default=None, max_length=1024, description="Current resource display name.")
+    history: tuple[AlertHistoryPoint, ...] | None = Field(
+        default=None,
+        max_length=8,
+        description="Current Usage values for the seven baseline days and observed day. Null if unavailable.",
+    )
+
+
 class AlertUpdate(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -121,10 +139,21 @@ class AlertPage(BaseModel):
     )
 
 
+class AlertViewPage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    data: tuple[AlertView, ...] = Field(description="Alerts ordered newest first, with current Usage history.")
+    next_cursor: AlertID | None = Field(default=None, description="Cursor for the next page, or null at the end.")
+
+
 class AlertStore(Protocol):
     async def record(self, detection: AlertDetection) -> Alert: ...
 
-    async def list(self, status: AlertStatus, limit: int, cursor: int | None) -> AlertPage: ...
+    async def list(
+        self, status: AlertStatus, limit: int, cursor: int | None, alert_type: AlertFilter | None = None
+    ) -> AlertPage: ...
+
+    async def enrich(self, alerts: tuple[Alert, ...]) -> tuple[AlertView, ...]: ...
 
     async def get(self, alert_id: int) -> Alert | None: ...
 

@@ -79,7 +79,8 @@ def test_permissions_precede_database_access(
 
 
 @pytest.mark.parametrize(
-    "query", ("limit=0", "limit=101", "cursor=0", "cursor=9223372036854775808", "cursor=oops", "status=invalid")
+    "query",
+    ("limit=0", "limit=101", "cursor=0", "cursor=9223372036854775808", "cursor=oops", "status=invalid", "type=invalid"),
 )
 def test_invalid_page_never_reads_database(client: TestClient, table: MagicMock, query: str) -> None:
     assert client.get(f"/alerts?{query}").status_code == 422
@@ -134,7 +135,7 @@ def test_openapi_keeps_ids_and_cursors_as_strings(client: TestClient) -> None:
     assert {s["type"] for s in cursor["schema"]["anyOf"]} == {"string", "null"}
     schemas: Final = spec["components"]["schemas"]
     assert schemas["Alert"]["properties"]["id"]["type"] == "string"
-    assert {s["type"] for s in schemas["AlertPage"]["properties"]["next_cursor"]["anyOf"]} == {"string", "null"}
+    assert {s["type"] for s in schemas["AlertViewPage"]["properties"]["next_cursor"]["anyOf"]} == {"string", "null"}
 
 
 def test_viewer_reads_saved_alert_with_string_id(app: FastAPI, table: MagicMock) -> None:
@@ -145,7 +146,10 @@ def test_viewer_reads_saved_alert_with_string_id(app: FastAPI, table: MagicMock)
         response: Final = client.get("/alerts?status=open&limit=1")
     assert response.status_code == 200, response.text
     expected: Final = StoredAlert().model_dump(mode="json", exclude={"detection_key"})
-    assert response.json() == {"data": [{**expected, "id": "5"}], "next_cursor": None}
+    assert response.json() == {
+        "data": [{**expected, "id": "5", "resource_name": None, "history": []}],
+        "next_cursor": None,
+    }
 
 
 @pytest.mark.parametrize("method", ("GET", "PATCH"))
