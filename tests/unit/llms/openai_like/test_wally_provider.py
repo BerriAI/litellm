@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -204,7 +203,7 @@ def test_wally_supported_endpoints():
 
 @pytest.mark.parametrize("reasoning_effort", ["none", "max"])
 def test_wally_chat_completion_request(reasoning_effort: str):
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
         response: Final = litellm.completion(
             model="wally/glm-5.3-flash",
@@ -228,7 +227,7 @@ def test_wally_chat_completion_request(reasoning_effort: str):
 
 
 def test_wally_responses_request_is_bridged_to_chat_completions():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
         response: Final = litellm.responses(
             model="wally/glm-5.3-flash",
@@ -250,7 +249,7 @@ def test_wally_responses_request_is_bridged_to_chat_completions():
 async def test_wally_anthropic_messages_request_is_bridged_to_chat_completions(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
         response: Final = await litellm.anthropic.messages.acreate(
             model="wally/glm-5.3-flash",

@@ -6,7 +6,7 @@ from itertools import accumulate
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from integration._support.client import Gateway, JSON_OBJECT, object_value
 from litellm.constants import PROXY_CONFIG_RELOAD_INTERVAL_SECONDS

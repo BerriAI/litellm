@@ -1,7 +1,7 @@
 import os
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 try:
     from litellm._version import version

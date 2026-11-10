@@ -2,7 +2,7 @@ import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi.testclient import TestClient
 

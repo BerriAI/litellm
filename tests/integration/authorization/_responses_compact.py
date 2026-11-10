@@ -12,7 +12,7 @@ from hashlib import sha256
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows

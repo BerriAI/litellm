@@ -16,7 +16,7 @@ from functools import cache
 from types import MappingProxyType
 from typing import Final, Protocol, TypeVar
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.offline_mode import is_offline_mode

@@ -14,7 +14,7 @@ import enum
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 import openai
 from typing_extensions import Buffer
 

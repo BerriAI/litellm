@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from types import ModuleType, SimpleNamespace
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

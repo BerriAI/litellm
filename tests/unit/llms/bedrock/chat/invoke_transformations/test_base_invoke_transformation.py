@@ -4,16 +4,17 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from tests._support.respx_httpx2 import response_for_respx
 from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, ROUTER_CHUNK_SIZE_CASES, keys_at_every_depth
 
 
@@ -475,7 +476,9 @@ def test_transform_request_meta_llama(monkeypatch, respx_mock):
 def test_custom_prompt_roles_wrap_the_mistral_invoke_prompt(respx_mock: respx.Router) -> None:
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.OpenOrca/invoke"
-    ).mock(return_value=httpx.Response(200, json={"outputs": [{"text": "ok", "stop_reason": "stop"}]}))
+    ).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"outputs": [{"text": "ok", "stop_reason": "stop"}]}))
+    )
     response: Final = litellm.completion(
         model="bedrock/mistral.OpenOrca",
         messages=[{"role": "user", "content": "What's AWS?"}],
@@ -503,7 +506,9 @@ def test_imported_llama_model_arn_is_encoded_and_max_tokens_become_max_gen_len(r
         "arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
     )
     route: Final = respx_mock.post(expected_url).mock(
-        return_value=httpx.Response(200, json={"generation": "Here's a joke...", "stop_reason": "stop"})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"generation": "Here's a joke...", "stop_reason": "stop"})
+        )
     )
 
     response: Final = litellm.completion(

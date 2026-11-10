@@ -10,10 +10,10 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
@@ -57,6 +57,7 @@ from litellm.types.router import (
     RouterRateLimitError,
 )
 from litellm.types.utils import CooldownDeploymentInfo, CredentialItem
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -2764,7 +2765,7 @@ async def test_bad_request_error_does_not_cool_down_a_deployment(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             400,
             json={
                 "error": {
@@ -2774,7 +2775,7 @@ async def test_bad_request_error_does_not_cool_down_a_deployment(
                     "code": "invalid_request",
                 }
             },
-        )
+        ))
     )
     router: Final = litellm.Router(
         model_list=[
@@ -2843,10 +2844,12 @@ async def test_fallback_deployment_stays_up_while_the_primary_is_in_cooldown(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://primary.test/v1/chat/completions").mock(
-        return_value=httpx.Response(503, json={"error": {"message": "down", "type": "server_error"}})
+        return_value=response_for_respx(
+            httpx.Response(503, json={"error": {"message": "down", "type": "server_error"}})
+        )
     )
     backup_route: Final = respx_mock.post("https://backup.test/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
+        return_value=response_for_respx(httpx.Response(200, json=_CHAT_COMPLETION_OK))
     )
     router: Final = litellm.Router(
         model_list=[
@@ -2876,10 +2879,12 @@ async def test_fallback_group_stays_up_after_a_bad_key_cools_the_primary_under_t
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://primary.test/v1/chat/completions").mock(
-        return_value=httpx.Response(401, json={"error": {"message": "bad key", "type": "invalid_request_error"}})
+        return_value=response_for_respx(
+            httpx.Response(401, json={"error": {"message": "bad key", "type": "invalid_request_error"}})
+        )
     )
     respx_mock.post("https://backup.test/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
+        return_value=response_for_respx(httpx.Response(200, json=_CHAT_COMPLETION_OK))
     )
     router: Final = litellm.Router(
         model_list=[
@@ -2965,7 +2970,7 @@ async def test_router_allowed_fails_benches_a_lone_deployment_only_when_the_poli
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=httpx.ReadTimeout("upstream timeout")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("upstream timeout"))
     )
     deployment: Final = {**TIMED_OUT_DEPLOYMENT, "model_info": {**TIMED_OUT_DEPLOYMENT["model_info"], **model_info}}
     router: Final = Router(model_list=[deployment], cooldown_time=300, num_retries=0, **router_kwargs)
@@ -3021,9 +3026,11 @@ async def test_router_allowed_fails_still_benches_a_deployment_that_has_a_siblin
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     timed_out: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=httpx.ReadTimeout("upstream timeout")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("upstream timeout"))
     )
-    respx_mock.post("https://backup.test/v1/chat/completions").mock(return_value=httpx.Response(200, json=BACKUP_REPLY))
+    respx_mock.post("https://backup.test/v1/chat/completions").mock(
+        return_value=response_for_respx(httpx.Response(200, json=BACKUP_REPLY))
+    )
     router: Final = Router(
         model_list=[TIMED_OUT_DEPLOYMENT, {**BACKUP_DEPLOYMENT, "model_name": "test-model"}],
         cooldown_time=300,

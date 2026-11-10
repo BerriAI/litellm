@@ -1,9 +1,10 @@
+from tests._support.respx_httpx2 import response_for_respx
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm import embedding
 from litellm.llms.azure_ai.embed.handler import _foundry_models_route_base
 
@@ -56,7 +57,7 @@ def test_foundry_models_route_base(api_base, expected):
 @respx.mock
 def test_azure_ai_embedding_calls_foundry_models_route():
     route = respx.post("https://my-foundry.services.ai.azure.com/models/embeddings").mock(
-        return_value=httpx.Response(200, json=EMBEDDING_PAYLOAD)
+        return_value=response_for_respx(httpx.Response(200, json=EMBEDDING_PAYLOAD))
     )
 
     response = embedding(
@@ -73,14 +74,14 @@ def test_azure_ai_embedding_calls_foundry_models_route():
 @respx.mock
 def test_azure_ai_cohere_image_embedding_calls_image_route():
     route = respx.post("https://my-foundry.services.ai.azure.com/models/images/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
                 "model": "Cohere-embed-v3-multilingual",
                 "usage": {"prompt_tokens": 2, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     response = embedding(

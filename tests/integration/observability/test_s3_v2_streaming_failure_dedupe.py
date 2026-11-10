@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 from _s3_v2_support import RecordingS3Sink, call_surface, collect_payloads, matched_ids, s3_config, surface_reply
 from integration._support.client import Gateway, JsonValue, Scenario, eventually, object_value

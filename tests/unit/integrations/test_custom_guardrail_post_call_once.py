@@ -6,14 +6,16 @@ from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from mcp.types import Tool as MCPTool
 from pydantic import BaseModel, TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.caching.caching import Cache
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -265,10 +267,14 @@ def provider(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> I
     ProxyLogging._callback_capabilities_cache.clear()  # pyright: ignore[reportPrivateUsage]  # keyed on id(), which a collected guardrail from an earlier test can reuse
     for endpoint in ("chat/completions", "responses"):
         respx_mock.post(f"{_FAILING_API_BASE}/{endpoint}").mock(
-            return_value=httpx.Response(500, json={"error": {"message": "primary down"}})
+            return_value=response_for_respx(httpx.Response(500, json={"error": {"message": "primary down"}}))
         )
-    respx_mock.post(f"{_OPENAI_API_BASE}/chat/completions").mock(side_effect=_json_or_sse(_CHAT_REPLY, _CHAT_SSE))
-    respx_mock.post(f"{_OPENAI_API_BASE}/responses").mock(side_effect=_json_or_sse(_RESPONSES_REPLY, _RESPONSES_SSE))
+    respx_mock.post(f"{_OPENAI_API_BASE}/chat/completions").mock(
+        side_effect=side_effect_for_respx(_json_or_sse(_CHAT_REPLY, _CHAT_SSE))
+    )
+    respx_mock.post(f"{_OPENAI_API_BASE}/responses").mock(
+        side_effect=side_effect_for_respx(_json_or_sse(_RESPONSES_REPLY, _RESPONSES_SSE))
+    )
     yield respx_mock
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -454,7 +460,9 @@ async def test_mcp_auto_execute_checks_the_tool_call_round_before_running_its_to
         litellm, "callbacks", [ToolCallBlockingGuardrail(guardrail_name="G", event_hook=GuardrailEventHooks.post_call)]
     )
     provider.post(f"{_MCP_API_BASE}/responses").mock(
-        side_effect=[httpx.Response(200, json=_TOOL_CALL_ROUND), httpx.Response(200, json=_RESPONSES_REPLY)]
+        side_effect=side_effect_for_respx(
+            [httpx.Response(200, json=_TOOL_CALL_ROUND), httpx.Response(200, json=_RESPONSES_REPLY)]
+        )
     )
     echo_tool: Final = MCPTool.model_validate(
         {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},

@@ -4,11 +4,13 @@ from typing import Final, TypedDict
 
 from typing_extensions import ReadOnly
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import litellm.proxy.proxy_server as proxy_server
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import VectorStorePreCallHook
@@ -77,10 +79,10 @@ def _knowledge_base(monkeypatch: pytest.MonkeyPatch, fake_provider_credentials: 
 
 def _kb_route(respx_mock: respx.MockRouter) -> respx.Route:
     return respx_mock.post(_KB_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={"retrievalResults": [{"content": {"text": _KB_TEXT, "type": "TEXT"}, "score": 0.9, "metadata": {}}]},
-        )
+        ))
     )
 
 
@@ -91,7 +93,9 @@ def _sent_body(route: respx.Route) -> dict[str, object]:
 @pytest.mark.asyncio
 async def test_completion_with_vector_store_ids_prepends_the_kb_context_block(respx_mock: respx.MockRouter) -> None:
     _kb_route(respx_mock)
-    anthropic: Final = respx_mock.post(_ANTHROPIC_URL).mock(return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE))
+    anthropic: Final = respx_mock.post(_ANTHROPIC_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_ANTHROPIC_MESSAGE))
+    )
 
     await litellm.acompletion(
         model="anthropic/claude-haiku-4-5-20251001",
@@ -111,7 +115,9 @@ async def test_completion_with_vector_store_ids_prepends_the_kb_context_block(re
 async def test_streaming_completion_carries_the_search_results_on_a_chunk_delta(respx_mock: respx.MockRouter) -> None:
     kb: Final = _kb_route(respx_mock)
     anthropic: Final = respx_mock.post(_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(200, text=_ANTHROPIC_STREAM, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=_ANTHROPIC_STREAM, headers={"content-type": "text/event-stream"})
+        )
     )
 
     response: Final = await litellm.acompletion(
@@ -140,7 +146,7 @@ async def test_streaming_completion_carries_the_search_results_on_a_chunk_delta(
 async def test_file_search_filters_reach_the_kb_as_a_bedrock_equals_filter(respx_mock: respx.MockRouter) -> None:
     kb: Final = _kb_route(respx_mock)
     anthropic: Final = respx_mock.post(_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE)
+        return_value=response_for_respx(httpx.Response(200, json=_ANTHROPIC_MESSAGE))
     )
 
     response: Final = await litellm.acompletion(
@@ -181,7 +187,9 @@ async def test_openai_request_with_vector_store_ids_leads_with_a_kb_context_user
     respx_mock: respx.MockRouter,
 ) -> None:
     _kb_route(respx_mock)
-    openai: Final = respx_mock.post(_OPENAI_URL).mock(return_value=httpx.Response(200, json=_OPENAI_COMPLETION))
+    openai: Final = respx_mock.post(_OPENAI_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_COMPLETION))
+    )
 
     await litellm.acompletion(
         model="gpt-5-mini",
@@ -200,7 +208,9 @@ async def test_a_managed_file_search_tool_is_resolved_locally_and_not_sent_upstr
     respx_mock: respx.MockRouter,
 ) -> None:
     _kb_route(respx_mock)
-    openai: Final = respx_mock.post(_OPENAI_URL).mock(return_value=httpx.Response(200, json=_OPENAI_COMPLETION))
+    openai: Final = respx_mock.post(_OPENAI_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_COMPLETION))
+    )
 
     await litellm.acompletion(
         model="gpt-5-mini",
@@ -217,7 +227,9 @@ async def test_an_unknown_vector_store_tool_is_forwarded_while_the_known_one_is_
     respx_mock: respx.MockRouter,
 ) -> None:
     _kb_route(respx_mock)
-    openai: Final = respx_mock.post(_OPENAI_URL).mock(return_value=httpx.Response(200, json=_OPENAI_COMPLETION))
+    openai: Final = respx_mock.post(_OPENAI_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_COMPLETION))
+    )
 
     await litellm.acompletion(
         model="gpt-5-mini",
@@ -265,7 +277,9 @@ async def test_proxy_http_response_keeps_the_kb_search_results_in_provider_speci
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     kb: Final = _kb_route(respx_mock)
-    upstream: Final = respx_mock.post(_OPENAI_URL).mock(return_value=httpx.Response(200, json=_OPENAI_COMPLETION))
+    upstream: Final = respx_mock.post(_OPENAI_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_COMPLETION))
+    )
     monkeypatch.setattr(
         proxy_server,
         "llm_router",

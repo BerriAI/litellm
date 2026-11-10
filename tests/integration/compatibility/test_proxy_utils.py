@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server

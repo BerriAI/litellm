@@ -9,14 +9,16 @@ from types import TracebackType
 from typing import ClassVar, Final, Literal, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import AsyncOpenAI
 from websockets.exceptions import ConnectionClosed, ConnectionClosedError
 from websockets.frames import Close
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -1777,7 +1779,9 @@ def federated_deployment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dic
 
 def _mock_token_exchange() -> None:
     respx.post("https://auth.openai.com/oauth/token").mock(
-        return_value=httpx.Response(200, json={"access_token": "federated-bearer", "expires_in": 3600})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"access_token": "federated-bearer", "expires_in": 3600})
+        )
     )
 
 

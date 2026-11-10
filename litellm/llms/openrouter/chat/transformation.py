@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from enum import Enum
 from typing import TYPE_CHECKING, Final, cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import finite_cost

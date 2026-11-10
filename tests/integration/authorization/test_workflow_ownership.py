@@ -1,7 +1,7 @@
 import hashlib
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import JSON_OBJECT, Gateway, object_value, string_value
 from integration._support.database import read_rows, write_rows
 from pydantic import BaseModel, JsonValue

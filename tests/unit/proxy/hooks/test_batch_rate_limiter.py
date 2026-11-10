@@ -13,12 +13,14 @@ from datetime import datetime, timezone
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from typing_extensions import ReadOnly, TypedDict
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import DualCache
 from litellm.constants import BATCH_TPD_WINDOW_SECONDS
@@ -345,7 +347,7 @@ def _batch_rows(messages: Sequence[str]) -> tuple[_BatchLine, ...]:
 def _serve_file(router: respx.MockRouter, file_id: str, rows: Sequence[_BatchLine]) -> respx.Route:
     jsonl: Final = "\n".join(json.dumps(row) for row in rows)
     return router.get(f"https://api.openai.com/v1/files/{file_id}/content").mock(
-        return_value=httpx.Response(200, content=jsonl.encode())
+        return_value=response_for_respx(httpx.Response(200, content=jsonl.encode()))
     )
 
 
@@ -510,7 +512,9 @@ async def test_batch_input_without_a_model_is_read_through_the_team_deployment(
     rows: Final = _batch_rows(("Hello",))
     environment_route: Final = _serve_file(openai_files, "file-abc123", rows)
     team_route: Final = openai_files.get("https://team.example/v1/files/file-abc123/content").mock(
-        return_value=httpx.Response(200, content="\n".join(json.dumps(row) for row in rows).encode())
+        return_value=response_for_respx(
+            httpx.Response(200, content="\n".join(json.dumps(row) for row in rows).encode())
+        )
     )
     team_key: Final = UserAPIKeyAuth(api_key="sk", team_id="team-1", team_models=["openai/*"], models=[_BATCH_MODEL])
     teamless_key: Final = UserAPIKeyAuth(api_key="sk")
@@ -591,7 +595,7 @@ async def test_model_routed_batch_is_counted_with_the_deployment_key_not_the_req
         ),
     )
     file_route: Final = openai_files.get(_ROUTED_FILE_URL).mock(
-        side_effect=_serve_file_to_the_deployment_key(_batch_rows(("Hello " * 50,)))
+        side_effect=side_effect_for_respx(_serve_file_to_the_deployment_key(_batch_rows(("Hello " * 50,))))
     )
     user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-batch"), tpm_limit=1)
     request: Final = Request(

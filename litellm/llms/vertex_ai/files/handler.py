@@ -6,7 +6,7 @@ from collections.abc import Coroutine, Mapping
 from typing import Final
 from urllib.parse import unquote
 
-import httpx
+import httpx2 as httpx
 
 from litellm import LlmProviders
 from litellm.integrations.gcs_bucket.gcs_bucket_base import (

@@ -2,7 +2,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.telemetry.histogram import ATTEMPT_BOUNDS, BLOCK_COUNT_BOUNDS, LATENCY_BOUNDS_MS

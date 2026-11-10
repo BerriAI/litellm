@@ -25,7 +25,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

@@ -8,7 +8,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, TypedDict
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly
 
 import litellm

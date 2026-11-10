@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import decoded_json_object

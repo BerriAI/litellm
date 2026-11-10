@@ -4,11 +4,12 @@ import logging
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.openai.common_utils import (
@@ -202,7 +203,7 @@ def test_evicting_a_client_built_on_the_callers_session_leaves_that_session_open
     whatever http client it was given, so treating the wrapper as litellm's to
     close would close the caller's shared session out from under them.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.caching.evicted_client_closer import EvictedClientCloser
     from litellm.caching.llm_caching_handler import LLMClientCache
@@ -633,18 +634,20 @@ async def _list_model_ids(sdk_client: openai.OpenAI | openai.AsyncOpenAI) -> lis
 @pytest.mark.asyncio
 async def test_sdk_api_factories_keep_httpx_transport_and_request_timeouts(api: str, is_async: bool) -> None:
     timeout: Final = openai.Timeout(connect=1, read=7, write=2, pool=3)
-    with respx.mock(assert_all_called=True) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
         mock.get(host="sdk-default.example", path__regex=r".*/models$").mock(
-            return_value=httpx.Response(307, headers={"location": "https://sdk-default.example/v1/moved-models"})
+            return_value=response_for_respx(
+                httpx.Response(307, headers={"location": "https://sdk-default.example/v1/moved-models"})
+            )
         )
         moved: Final = mock.get(host="sdk-default.example", path="/v1/moved-models").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "object": "list",
                     "data": [{"id": "sdk-compat", "object": "model", "created": 0, "owned_by": "t"}],
                 },
-            )
+            ))
         )
         sdk_client: Final = _sdk_api_client(api, is_async, timeout)
         assert sdk_client is not None

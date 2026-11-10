@@ -4,7 +4,7 @@ import logging
 from itertools import chain
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from prometheus_client import REGISTRY
 

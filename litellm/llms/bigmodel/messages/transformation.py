@@ -2,7 +2,7 @@ import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from openai._streaming import ServerSentEvent, SSEDecoder
 from pydantic import JsonValue, TypeAdapter, ValidationError
 

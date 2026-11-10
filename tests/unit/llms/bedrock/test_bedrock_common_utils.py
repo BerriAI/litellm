@@ -1,6 +1,8 @@
+import httpx2 as httpx
 import asyncio, importlib, litellm, pytest
-import respx
-from httpx import Response
+
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
 from typing import Final
 
 
@@ -24,6 +26,7 @@ from litellm.llms.bedrock.common_utils import (
 from collections.abc import Iterator
 from litellm import completion
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from unittest.mock import Mock, patch
 
@@ -619,7 +622,7 @@ async def test_a_bedrock_deployment_sends_cache_points_by_its_own_flag_not_a_sib
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     converse: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/converse").mock(
-        return_value=Response(200, json=_CONVERSE_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_CONVERSE_REPLY))
     )
     flags: Final = {flagged: {"supports_prompt_cache_breakpoint": declared}}
     registration_order: Final = ("flagless", flagged) if flagless_registers_first else (flagged, "flagless")
@@ -664,7 +667,7 @@ async def test_a_routed_bedrock_deployment_sends_cache_points_when_register_mode
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     converse: Final = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/moonshotai.kimi-k3/converse"
-    ).mock(return_value=Response(200, json=_CONVERSE_REPLY))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_CONVERSE_REPLY)))
     litellm.register_model({"bedrock/moonshotai.kimi-k3": {"supports_prompt_cache_breakpoint": True}})
     router: Final = Router(
         model_list=[
@@ -992,7 +995,7 @@ def test_bedrock_chat_get_error_class_keeps_provider_headers(config):
 
 
 def test_error_response_text_reads_a_read_response():
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.bedrock.common_utils import error_response_text
 
@@ -1004,7 +1007,7 @@ def test_error_response_text_reads_a_read_response():
 def test_error_response_text_falls_back_when_a_streamed_response_was_never_read():
     """A retried streamed request raises HTTPStatusError over an unread body; reading it
     throws ResponseNotRead and would lose the status and headers this fix preserves."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.bedrock.common_utils import error_response_text
 
@@ -1025,7 +1028,7 @@ def test_error_response_text_falls_back_when_a_streamed_response_was_never_read(
 def test_bedrock_error_skips_header_values_httpx_cannot_carry():
     """The shared HTTP handler copies an arbitrary exception's header values in verbatim,
     so a non-str value must not take down the whole error (LIT-5428)."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.bedrock.common_utils import BedrockError
 
@@ -1041,7 +1044,7 @@ def test_bedrock_error_skips_header_values_httpx_cannot_carry():
 
 
 def test_bedrock_error_keeps_duplicate_httpx_header_values():
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.bedrock.common_utils import BedrockError
 
@@ -1092,7 +1095,7 @@ def test_every_bedrock_httpx_status_error_site_keeps_provider_headers():
 @pytest.mark.asyncio
 async def test_bedrock_embedding_call_keeps_provider_headers(is_async):
     """The embeddings surface raises from the same shape as chat and lost the same header."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.bedrock.common_utils import BedrockError
     from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
@@ -1299,7 +1302,7 @@ def test_unmapped_model_of_family_with_invoke_handler_still_routes_to_invoke():
 def test_completion_on_unmapped_model_posts_converse_unless_its_id_names_an_invoke_provider(
     model: str, model_path: bytes, response_json: dict[str, object]
 ):
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 

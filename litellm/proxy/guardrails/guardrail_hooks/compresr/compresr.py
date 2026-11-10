@@ -25,9 +25,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, TypeGuard
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
-from httpx import Response as HttpxResponse
+from httpx2 import Response as HttpxResponse
 from pydantic import TypeAdapter
 
 import litellm

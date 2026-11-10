@@ -5,7 +5,7 @@ from datetime import datetime
 from hashlib import sha256
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, object_value
 from integration._support.database import read_rows

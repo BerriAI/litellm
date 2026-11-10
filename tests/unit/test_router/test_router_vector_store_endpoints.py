@@ -2,10 +2,12 @@ import json
 from collections.abc import Iterator
 from typing import Final
 
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from litellm import Router
 
 VECTOR_STORES_URL: Final = "https://api.openai.com/v1/vector_stores"
@@ -24,9 +26,9 @@ def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 @pytest.mark.asyncio
 async def test_avector_store_update_sends_name_and_metadata_to_provider() -> None:
-    with respx.mock(assert_all_called=True) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
         route: Final = mock.post(f"{VECTOR_STORES_URL}/vs_test123").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "vs_test123",
@@ -36,7 +38,7 @@ async def test_avector_store_update_sends_name_and_metadata_to_provider() -> Non
                     "metadata": {"key": "value"},
                     "status": "completed",
                 },
-            )
+            ))
         )
         result: Final = await Router(model_list=[]).avector_store_update(
             vector_store_id="vs_test123",
@@ -54,9 +56,9 @@ async def test_avector_store_update_sends_name_and_metadata_to_provider() -> Non
 
 
 def test_vector_store_list_forwards_pagination_params_to_provider() -> None:
-    with respx.mock(assert_all_called=True) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
         route: Final = mock.get(VECTOR_STORES_URL).mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "object": "list",
@@ -65,7 +67,7 @@ def test_vector_store_list_forwards_pagination_params_to_provider() -> None:
                     "first_id": "vs_0",
                     "last_id": "vs_4",
                 },
-            )
+            ))
         )
         result: Final = Router(model_list=[]).vector_store_list(
             limit=5, after="vs_previous", order="asc", custom_llm_provider="openai"
@@ -80,9 +82,9 @@ def test_vector_store_list_forwards_pagination_params_to_provider() -> None:
 
 def test_vector_store_update_forwards_expires_after_to_provider() -> None:
     expires_after: Final = {"anchor": "last_active_at", "days": 7}
-    with respx.mock(assert_all_called=True) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
         route: Final = mock.post(f"{VECTOR_STORES_URL}/vs_test123").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "vs_test123",
@@ -90,7 +92,7 @@ def test_vector_store_update_forwards_expires_after_to_provider() -> None:
                     "expires_after": expires_after,
                     "expires_at": 1699668576,
                 },
-            )
+            ))
         )
         result: Final = Router(model_list=[]).vector_store_update(
             vector_store_id="vs_test123", expires_after=expires_after, custom_llm_provider="openai"
@@ -102,18 +104,18 @@ def test_vector_store_update_forwards_expires_after_to_provider() -> None:
 
 
 def test_vector_store_retrieve_and_delete_return_provider_responses() -> None:
-    with respx.mock(assert_all_called=True) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
         retrieve_route: Final = mock.get(f"{VECTOR_STORES_URL}/vs_test123").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={"id": "vs_test123", "object": "vector_store", "status": "completed"},
-            )
+            ))
         )
         delete_route: Final = mock.delete(f"{VECTOR_STORES_URL}/vs_test123").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={"id": "vs_test123", "object": "vector_store.deleted", "deleted": True},
-            )
+            ))
         )
         router: Final = Router(model_list=[])
         retrieved: Final = router.vector_store_retrieve(
@@ -133,18 +135,18 @@ def test_vector_store_retrieve_and_delete_return_provider_responses() -> None:
 
 @pytest.mark.asyncio
 async def test_avector_store_retrieve_and_delete_return_provider_responses() -> None:
-    with respx.mock(assert_all_called=True) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
         retrieve_route: Final = mock.get(f"{VECTOR_STORES_URL}/vs_test123").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={"id": "vs_test123", "object": "vector_store", "status": "completed"},
-            )
+            ))
         )
         delete_route: Final = mock.delete(f"{VECTOR_STORES_URL}/vs_test123").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={"id": "vs_test123", "object": "vector_store.deleted", "deleted": True},
-            )
+            ))
         )
         router: Final = Router(model_list=[])
         retrieved: Final = await router.avector_store_retrieve(

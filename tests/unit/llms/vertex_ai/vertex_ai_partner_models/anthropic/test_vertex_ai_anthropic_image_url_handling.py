@@ -10,7 +10,7 @@ import json
 import sys
 from unittest.mock import patch, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

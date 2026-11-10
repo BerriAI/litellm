@@ -3,7 +3,7 @@ import uuid
 from hashlib import sha256
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import BaseModel, JsonValue, TypeAdapter
 

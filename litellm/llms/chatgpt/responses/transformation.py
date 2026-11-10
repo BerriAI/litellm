@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import httpx
+import httpx2 as httpx
 from openai.types.responses.response_input_param import ResponseInputItemParam
 
 from litellm.exceptions import AuthenticationError

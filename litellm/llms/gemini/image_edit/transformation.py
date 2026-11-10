@@ -3,8 +3,8 @@ from collections.abc import Mapping
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.core_helpers import decoded_json_object

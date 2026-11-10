@@ -5,8 +5,8 @@ from datetime import datetime
 from typing import Final, Literal, TypeGuard
 
 from fastapi import HTTPException
-from httpx import HTTPError
-from httpx import Response as HttpxResponse
+from httpx2 import HTTPError
+from httpx2 import Response as HttpxResponse
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm

@@ -6,7 +6,7 @@ from email.policy import HTTP
 from typing import Final
 from urllib.parse import parse_qsl, urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows

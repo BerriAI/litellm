@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.exceptions import HTTPException
-from httpx import ReadTimeout, Request, Response
+from httpx2 import ReadTimeout, Request, Response
 
 import litellm
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler

@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 import boto3
-import httpx
+import httpx2 as httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 

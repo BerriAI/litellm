@@ -16,7 +16,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional, Protocol
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 import openai
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, DefaultAsyncHttpxClient, DefaultHttpxClient, OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage

@@ -2,7 +2,7 @@ from collections.abc import Callable, Mapping, Sequence
 from types import UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, Union, get_args, get_origin
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 from pydantic import fields as pyd_fields
 

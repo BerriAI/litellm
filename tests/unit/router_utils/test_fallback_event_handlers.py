@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal, NoReturn
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -2007,7 +2007,7 @@ class FakeAnthropicUpstream:
         async def _send(_client: httpx.AsyncClient, request: httpx.Request, **kwargs: Any) -> httpx.Response:
             return await self.send(request, **kwargs)
 
-        return patch("httpx.AsyncClient.send", new=_send)
+        return patch("httpx2.AsyncClient.send", new=_send)
 
 
 FABLE_TIER = {

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from itertools import accumulate, chain
 from typing import Final, Literal, TypeAlias, TypeVar, cast  # noqa: TID251  # sum_usage_metadata casts computed keys
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger

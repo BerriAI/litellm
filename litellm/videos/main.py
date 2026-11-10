@@ -5,7 +5,7 @@ from collections.abc import Coroutine
 from functools import partial
 from typing import Final, Literal, overload
 
-from httpx._types import FileContent
+from httpx2._types import FileContent
 
 import litellm
 from litellm.constants import DEFAULT_VIDEO_ENDPOINT_MODEL

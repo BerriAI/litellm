@@ -4,7 +4,7 @@ import threading
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

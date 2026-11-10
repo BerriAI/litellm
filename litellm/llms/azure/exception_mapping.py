@@ -1,6 +1,6 @@
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.exceptions import ContentPolicyViolationError
 

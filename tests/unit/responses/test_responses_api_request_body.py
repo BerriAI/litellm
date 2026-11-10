@@ -15,15 +15,17 @@ from importlib import import_module
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import ResponsesAPIResponse
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.bedrock.slow_upstream import (
     STREAM_TIMEOUT_SECONDS,
     UPSTREAM_FIRST_BYTE_SECONDS,
@@ -243,7 +245,9 @@ async def test_aresponses_forwards_non_enum_reasoning_effort(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_effort_int", "gpt-5.4"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_effort_int", "gpt-5.4"))
+        )
     )
 
     response: Final = await litellm.aresponses(model="openai/gpt-5.4", input="hi", reasoning_effort=5)
@@ -262,7 +266,9 @@ async def test_aresponses_forwards_moderation(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_moderation", "gpt-5.4"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_moderation", "gpt-5.4"))
+        )
     )
     moderation: Final = {"model": "omni-moderation-latest"}
 
@@ -283,7 +289,9 @@ async def test_aresponses_omits_null_moderation(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_null_moderation", "gpt-5.4"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_null_moderation", "gpt-5.4"))
+        )
     )
 
     await litellm.aresponses(model="openai/gpt-5.4", input="hi", moderation=None)
@@ -340,7 +348,9 @@ async def test_acompletion_with_tools_forwards_non_enum_reasoning_effort_over_th
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_bridge_int", "gpt-5.4"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_bridge_int", "gpt-5.4"))
+        )
     )
 
     response: Final = await litellm.acompletion(
@@ -385,7 +395,9 @@ async def test_aresponses_sends_the_declared_reasoning_effort_level_rounded_up(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post(url__regex=rf"{api_base}/responses.*").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_declared_effort", "my-kimi"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_declared_effort", "my-kimi"))
+        )
     )
 
     response: Final = await litellm.aresponses(
@@ -444,7 +456,9 @@ async def test_aresponses_sends_a_declared_level_the_model_map_disables(
     litellm.in_memory_llm_clients_cache.flush_cache()
     model, level = _gpt_5_row_disabling_a_level(provider)
     upstream: Final = respx_mock.post(url__regex=rf"{api_base}/.*responses.*").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_declared_disabled", model))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_declared_disabled", model))
+        )
     )
     request: Final = {
         "model": f"{provider}/{model}",
@@ -473,7 +487,9 @@ async def test_aresponses_forwards_prompt_managed_reasoning_effort(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_prompt_effort", "gpt-5.4"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_prompt_effort", "gpt-5.4"))
+        )
     )
 
     response: Final = await litellm.aresponses(
@@ -501,7 +517,9 @@ async def test_aresponses_forwards_prompt_managed_reasoning_dict(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_prompt_reasoning", "gpt-5.4"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_prompt_reasoning", "gpt-5.4"))
+        )
     )
 
     response: Final = await litellm.aresponses(
@@ -1277,7 +1295,9 @@ async def test_aresponses_sends_a_claude_compaction_item_to_openai_as_its_summar
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post(upstream_url).mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_compacted", "gpt-5.6"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_compacted", "gpt-5.6"))
+        )
     )
 
     await call(model="openai/gpt-5.6", api_key="fake-api-key", input=[*_HISTORY, compaction_item, _NEXT_TURN])
@@ -1348,7 +1368,9 @@ async def test_responses_bills_per_call_custom_pricing_from_usage(
     monkeypatch.setattr(litellm, "model_cost", dict(model_cost))
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_custom_price", model.split("/")[1]))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_custom_price", model.split("/")[1]))
+        )
     )
     pricing: Final = {"input_cost_per_token": 1e-5, "output_cost_per_token": 2e-5}
 
@@ -1373,7 +1395,9 @@ async def test_concurrent_responses_calls_keep_their_own_per_call_prices(
     model_cost: Final[dict[str, object]] = getattr(litellm, "model_cost")
     cost_map_row_before: Final = copy.deepcopy(model_cost.get(model))
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_minimal_responses_api_payload("resp_concurrent", "gpt-5.4-nano"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_minimal_responses_api_payload("resp_concurrent", "gpt-5.4-nano"))
+        )
     )
     rates: Final = ((1e-5, 2e-5), (3e-5, 4e-5))
 
@@ -1524,10 +1548,10 @@ async def test_router_responses_deployment_pricing_keeps_inherited_cache_rates(
     usage: Final = _JSON_OBJECT.validate_python(payload["usage"])
     cached_tokens: Final = 8
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={**payload, "usage": {**usage, "input_tokens_details": {"cached_tokens": cached_tokens}}},
-        )
+        ))
     )
 
     response: Final = await router.aresponses(model="nano", input="hi")

@@ -4,9 +4,9 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ValidationError
 
@@ -253,7 +253,7 @@ def _create_vs1_file(**params: str) -> None:
 
 
 def _sent_by(call, **params: str) -> Sequence[httpx.Request]:
-    with respx.mock(assert_all_called=False) as provider:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as provider:
         provider.post(url__regex=r"/vector_stores/vs1/search$").respond(200, json=_SEARCH_PAGE)
         provider.post(url__regex=r"/vector_stores/vs1/files$").respond(200, json=_VECTOR_STORE_FILE)
         call(**params)
@@ -295,7 +295,7 @@ def test_a_registry_credential_without_an_api_base_never_sends_its_oidc_token_to
         [credential.model_copy(update={"credential_values": {"api_key": "oidc/env/VS_PROJECTED_TOKEN"}})],
     )
 
-    with respx.mock(assert_all_called=False) as provider:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as provider:
         provider.route().respond(200, json=_SEARCH_PAGE)
         with pytest.raises(litellm.AuthenticationError, match="sends it only to that credential's own api_base"):
             call(api_base="https://caller.example/v1")

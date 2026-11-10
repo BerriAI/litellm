@@ -7,10 +7,9 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER

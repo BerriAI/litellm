@@ -11,13 +11,15 @@ from collections.abc import Awaitable, Mapping
 from typing import Final, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from starlette.routing import Match
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.realtime_streaming import TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE
 from litellm.proxy._lazy_features import LAZY_FEATURES, attach_lazy_features, reserve_lazy_slot
@@ -1322,9 +1324,11 @@ def test_translation_calls_honor_the_minting_keys_guardrail_opt_out(
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         upstream.post("https://api.openai.com/v1/realtime/translations/calls").mock(
-            return_value=httpx.Response(201, content=b"v=0\r\n", headers={"content-type": "application/sdp"})
+            return_value=response_for_respx(
+                httpx.Response(201, content=b"v=0\r\n", headers={"content-type": "application/sdp"})
+            )
         )
         answered: Final = client.post(
             "/v1/realtime/translations/calls",
@@ -1665,7 +1669,9 @@ def _post_through_the_azure_deployments(
     monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=model_list))
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
     upstream: Final = respx_mock.route(host="realtime-qa.openai.azure.com").mock(
-        return_value=httpx.Response(200, json={"value": "ek_azure", "expires_at": int(time.time()) + 3600})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"value": "ek_azure", "expires_at": int(time.time()) + 3600})
+        )
     )
     monkeypatch.setitem(
         proxy_app.dependency_overrides,

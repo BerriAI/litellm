@@ -41,7 +41,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import quote, urlencode
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Scenario, eventually, string_value
 from integration._support.database import read_rows

@@ -1,11 +1,13 @@
 import json
 from collections.abc import Iterator
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 
@@ -58,20 +60,20 @@ def _assert_is_the_reranking(response: litellm.RerankResponse, route: respx.Rout
 
 
 def test_rerank_returns_the_upstream_ranking(rerank_route: respx.Route):
-    rerank_route.mock(return_value=httpx.Response(200, json=RERANKED))
+    rerank_route.mock(return_value=response_for_respx(httpx.Response(200, json=RERANKED)))
 
     _assert_is_the_reranking(_rerank(is_async=False), rerank_route)
 
 
 async def test_async_rerank_returns_the_upstream_ranking(rerank_route: respx.Route):
-    rerank_route.mock(return_value=httpx.Response(200, json=RERANKED))
+    rerank_route.mock(return_value=response_for_respx(httpx.Response(200, json=RERANKED)))
 
     _assert_is_the_reranking(await _rerank(is_async=True), rerank_route)
 
 
 @pytest.mark.parametrize("payload", NON_OBJECT_BODIES)
 def test_rerank_rejects_non_object_bodies(rerank_route: respx.Route, payload: object):
-    rerank_route.mock(return_value=httpx.Response(200, json=payload))
+    rerank_route.mock(return_value=response_for_respx(httpx.Response(200, json=payload)))
 
     with pytest.raises(ValidationError) as exc_info:
         _rerank(is_async=False)
@@ -81,7 +83,7 @@ def test_rerank_rejects_non_object_bodies(rerank_route: respx.Route, payload: ob
 
 @pytest.mark.parametrize("payload", NON_OBJECT_BODIES)
 async def test_async_rerank_rejects_non_object_bodies(rerank_route: respx.Route, payload: object):
-    rerank_route.mock(return_value=httpx.Response(200, json=payload))
+    rerank_route.mock(return_value=response_for_respx(httpx.Response(200, json=payload)))
 
     with pytest.raises(ValidationError) as exc_info:
         await _rerank(is_async=True)
@@ -90,7 +92,7 @@ async def test_async_rerank_rejects_non_object_bodies(rerank_route: respx.Route,
 
 
 def test_rerank_without_results_is_a_value_error(rerank_route: respx.Route):
-    rerank_route.mock(return_value=httpx.Response(200, json={"id": "rr-1"}))
+    rerank_route.mock(return_value=response_for_respx(httpx.Response(200, json={"id": "rr-1"})))
 
     with pytest.raises(ValueError, match="No results found"):
         _rerank(is_async=False)

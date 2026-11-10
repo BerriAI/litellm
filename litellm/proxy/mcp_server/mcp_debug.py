@@ -114,8 +114,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qsl, quote, quote_plus, unquote_plus, urlencode
 
-import httpx
 import httpx2
+import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter
 from starlette.requests import HTTPConnection
 from starlette.types import Message, Send

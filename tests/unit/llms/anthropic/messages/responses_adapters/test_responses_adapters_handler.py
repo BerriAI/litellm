@@ -8,12 +8,13 @@ from itertools import chain
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -1189,7 +1190,9 @@ def _upstream_after(
         if stream
         else httpx.Response(200, json=TEXT_RESPONSE)
     )
-    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=[*failures, served])
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=side_effect_for_respx([*failures, served])
+    )
 
 
 @pytest.mark.asyncio
@@ -1352,7 +1355,7 @@ def _rejected_then(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        side_effect=[httpx.Response(400, json=REJECTED_REPLAYED_REASONING), sent_again]
+        side_effect=side_effect_for_respx([httpx.Response(400, json=REJECTED_REPLAYED_REASONING), sent_again])
     )
 
 

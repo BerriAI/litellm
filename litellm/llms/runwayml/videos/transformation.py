@@ -3,8 +3,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm

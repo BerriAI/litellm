@@ -1,15 +1,16 @@
 import json
 from typing import Final
 
-import httpx
-import respx
+import httpx2 as httpx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 
 def test_together_ai_embedding_uses_together_embeddings_endpoint(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post("https://api.together.ai/v1/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -17,7 +18,7 @@ def test_together_ai_embedding_uses_together_embeddings_endpoint(respx_mock: res
                 "model": "BAAI/bge-large-en-v1.5",
                 "usage": {"prompt_tokens": 1, "total_tokens": 1},
             },
-        )
+        ))
     )
 
     response: Final = litellm.embedding(

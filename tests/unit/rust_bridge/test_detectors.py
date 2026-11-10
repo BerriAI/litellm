@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import reduce
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

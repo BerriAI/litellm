@@ -9,7 +9,7 @@ import os
 from typing import Any, Dict
 from unittest.mock import AsyncMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.integrations.custom_guardrail import ModifyResponseException

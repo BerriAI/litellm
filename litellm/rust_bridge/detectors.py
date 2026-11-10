@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypeAlias, cast  # noqa: TID251  # tool lists stay caller-owned
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger

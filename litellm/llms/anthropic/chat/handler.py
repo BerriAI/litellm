@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 import litellm.litellm_core_utils

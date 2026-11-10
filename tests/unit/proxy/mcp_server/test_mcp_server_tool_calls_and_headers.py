@@ -1,3 +1,4 @@
+from tests._support.respx_httpx2 import side_effect_for_respx
 import asyncio
 import contextlib
 import contextvars
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 from typing import Callable, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
@@ -7169,7 +7170,7 @@ async def test_probe_upstream_auth_returns_upstream_status():
 
 @pytest.mark.asyncio
 async def test_probe_upstream_auth_surfaces_httpx_status_error():
-    """Probe extracts status + WWW-Authenticate from httpx.HTTPStatusError.
+    """Probe extracts status + WWW-Authenticate from httpx2.HTTPStatusError.
 
     AsyncHTTPHandler.post() calls raise_for_status() internally, so when the
     upstream returns 401/403 the call raises httpx.HTTPStatusError rather than
@@ -7339,7 +7340,8 @@ async def test_legacy_delegate_bare_token_is_not_probed_upstream():  # test-qual
 async def test_legacy_delegate_dual_credentials_probe_only_the_upstream_token() -> None:
     """With a separate x-litellm-api-key, the preflight probes the upstream with its own token and never
     with the LiteLLM key."""
-    import respx
+
+    from tests._support import respx_httpx2 as respx
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server.server import (
@@ -7440,7 +7442,7 @@ async def test_legacy_delegate_multi_server_scope_is_not_failed_by_one_upstream_
 async def test_legacy_delegate_probe_checks_the_callers_token_not_a_static_authorization() -> None:
     """The probe is what checks a delegate caller's own token, so a static Authorization the server sends on
     tool calls cannot stand in for it: a junk token still gets the re-authorization challenge."""
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     server: Final = _delegate_auth_mcp_server().model_copy(
         update={"static_headers": {"Authorization": "Bearer operator-token"}}
@@ -7454,9 +7456,9 @@ async def test_legacy_delegate_probe_checks_the_callers_token_not_a_static_autho
         respx.mock as upstream,
     ):
         upstream.post(server.url).mock(
-            side_effect=lambda request: httpx.Response(
+            side_effect=side_effect_for_respx(lambda request: httpx.Response(
                 200 if request.headers["Authorization"] == "Bearer operator-token" else 401
-            )
+            ))
         )
         outcome: Final = await asyncio.gather(
             _expired_delegate_token_preflight(["delegate_test"]), return_exceptions=True
@@ -7477,7 +7479,7 @@ async def test_modern_interaction_probes_legacy_delegate_only_for_a_single_reque
 ) -> None:
     """The single-server rule follows what the caller asked for, not what it can reach, so a request
     naming two servers is not failed by one expired delegate token."""
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server import server
@@ -7767,7 +7769,7 @@ async def test_delegate_not_probed_when_named_only_via_server_id():
 async def test_delegate_probe_not_fanned_out_to_access_group_members() -> None:
     """A single access-group name resolves to no server under admission's resolver, so the delegate probe is
     not fanned out to the group's members and one member rejecting the token cannot fail the whole group."""
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server.server import (
@@ -11552,7 +11554,7 @@ async def test_mcp_origin_admission_precedes_authentication(
     origin_headers: tuple[tuple[str, str], ...],
     expected_status: int,
 ) -> None:
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.mcp_server import server
 
@@ -12173,7 +12175,7 @@ async def test_modern_preflight_leaves_invalid_envelopes_to_sdk_without_upstream
 @pytest.mark.parametrize("binding", ("probe", "PROBE", "shared"))
 @pytest.mark.parametrize("forwarded_token", (False, True))
 async def test_modern_passthrough_probe_uses_scrubbed_server_credential(binding: str, forwarded_token: bool):
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
     from litellm.proxy.mcp_server import server
@@ -12247,7 +12249,7 @@ async def test_modern_passthrough_probe_uses_scrubbed_server_credential(binding:
 @pytest.mark.parametrize("allowed", (True, False))
 @pytest.mark.parametrize("header_shape", ("mapping", "non_authorization"))
 async def test_passthrough_probes_bind_each_token_to_its_authorized_server(allowed: bool, header_shape: str):
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     from litellm.proxy._types import LiteLLM_ObjectPermissionTable
     from litellm.proxy.mcp_server import server
@@ -12266,7 +12268,7 @@ async def test_passthrough_probes_bind_each_token_to_its_authorized_server(allow
         for name in ("first", "second")
     ]
     mcp_operations.global_mcp_server_manager.registry.update({target.server_id: target for target in targets})
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         first: Final = upstream.post(targets[0].url).respond(200)
         second: Final = upstream.post(targets[1].url).respond(200)
         result: Final = await server._check_passthrough_upstream_auth(

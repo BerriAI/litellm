@@ -7,7 +7,7 @@ Tests for the Realtime transcription_sessions surface used by gpt-realtime-whisp
 
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

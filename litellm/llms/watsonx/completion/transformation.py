@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from _s3_v2_support import RecordingS3Sink, collect_payloads

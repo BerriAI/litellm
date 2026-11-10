@@ -2,7 +2,7 @@ from asyncio import Future
 from collections.abc import Mapping, Sequence
 from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
 
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue
 from typing_extensions import disjoint_base
 

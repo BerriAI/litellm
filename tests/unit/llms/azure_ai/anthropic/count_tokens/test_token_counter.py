@@ -4,11 +4,13 @@ import threading
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import anthropic_beta_headers_manager
 from litellm.llms.azure_ai.anthropic.count_tokens.token_counter import AzureAIAnthropicTokenCounter
@@ -21,7 +23,7 @@ COUNT_URL: Final = f"{API_BASE}/anthropic/v1/messages/count_tokens"
 async def _count(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> TokenCountResponse | None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        respx.post(COUNT_URL).mock(return_value=response)
+        respx.post(COUNT_URL).mock(return_value=response_for_respx(response))
         return await AzureAIAnthropicTokenCounter().count_tokens(
             model_to_use="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
@@ -180,7 +182,7 @@ async def test_entra_rejecting_the_deployment_oidc_token_becomes_a_401_error_res
     monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
     with respx.mock:
         respx.post("https://login.microsoftonline.com/qa-tenant/oauth2/v2.0/token").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 401,
                 json={
                     "error": "invalid_client",
@@ -188,9 +190,11 @@ async def test_entra_rejecting_the_deployment_oidc_token_becomes_a_401_error_res
                     "assertion issuer 'https://oidc.litellm-qa.invalid'. Trace ID: 0f5c2b1e",
                     "error_codes": [700211],
                 },
-            )
+            ))
         )
-        count_route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        count_route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 6}))
+        )
         result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
             model_to_use="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
@@ -221,9 +225,13 @@ async def test_entra_throttling_the_deployment_oidc_token_exchange_keeps_its_429
     monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
     with respx.mock:
         respx.post("https://login.microsoftonline.com/throttled-tenant/oauth2/v2.0/token").mock(
-            return_value=httpx.Response(429, json={"error": "temporarily_unavailable", "error_codes": [90055]})
+            return_value=response_for_respx(
+                httpx.Response(429, json={"error": "temporarily_unavailable", "error_codes": [90055]})
+            )
         )
-        count_route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        count_route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 6}))
+        )
         result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
             model_to_use="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
@@ -280,7 +288,9 @@ async def test_count_uses_the_shared_api_base_chat_would_use(monkeypatch: pytest
     else:
         monkeypatch.setattr(litellm, "api_base", API_BASE)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 6}))
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 6}))
+        )
         result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
             model_to_use="claude-sonnet-4-5",
             messages=[{"role": "user", "content": "hi"}],
@@ -310,7 +320,9 @@ async def test_count_sends_the_compact_beta_only_when_the_history_replays_a_comp
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 376}))
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 376}))
+        )
         result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
             model_to_use="claude-sonnet-5-5",
             messages=[
@@ -330,7 +342,9 @@ async def test_count_sends_the_compact_beta_only_when_the_history_replays_a_comp
 async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 541}))
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 541}))
+        )
         result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
             model_to_use="claude-sonnet-5-5",
             messages=[
@@ -349,7 +363,7 @@ async def test_count_sends_the_tool_change_beta_when_the_history_adds_a_tool(mon
 async def _betas_azure_inference_sends(context_management: Mapping[str, object]) -> frozenset[str]:
     with respx.mock:
         route: Final = respx.post(f"{API_BASE}/anthropic/v1/messages").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "msg_1",
@@ -361,7 +375,7 @@ async def _betas_azure_inference_sends(context_management: Mapping[str, object])
                     "stop_sequence": None,
                     "usage": {"input_tokens": 12, "output_tokens": 2},
                 },
-            )
+            ))
         )
         await litellm.anthropic.messages.acreate(
             max_tokens=64,
@@ -384,7 +398,9 @@ async def test_count_forwards_the_context_edits_with_the_betas_azure_inference_s
     spec: Final = {"edits": [{"type": edit_type}]}
     inference_betas: Final = await _betas_azure_inference_sends(spec)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 88}))
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 88}))
+        )
         result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
             model_to_use="claude-sonnet-5-5",
             messages=[{"role": "user", "content": "Summarize the thread."}],
@@ -418,8 +434,8 @@ async def test_count_with_an_edit_fetches_the_remote_beta_config_off_the_event_l
     monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
     fetch_threads: Final = _FetchThreads()
     with respx.mock:
-        respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=fetch_threads)
-        respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 88}))
+        respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=side_effect_for_respx(fetch_threads))
+        respx.post(COUNT_URL).mock(return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 88})))
         result: Final = await AzureAIAnthropicTokenCounter().count_tokens(
             model_to_use="claude-sonnet-5-5",
             messages=[{"role": "user", "content": "Summarize the thread."}],

@@ -25,7 +25,7 @@ from typing import (
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 if TYPE_CHECKING:

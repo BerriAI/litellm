@@ -4,7 +4,7 @@ from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConf
 from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
 
 if TYPE_CHECKING:
-    from httpx import URL
+    from httpx2 import URL
 
 
 class WatsonxPassthroughConfig(IBMWatsonXMixin, BasePassthroughConfig):

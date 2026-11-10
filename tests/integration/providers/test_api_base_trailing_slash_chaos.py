@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 from integration._support.client import Gateway, Scenario, object_value
 from integration._support.wire import Reply, Request, wire_server

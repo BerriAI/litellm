@@ -7,7 +7,7 @@ from itertools import chain
 from typing import Final
 from urllib.parse import unquote
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, Scenario, held, list_value, object_value, string_value
 from integration._support.database import read_rows

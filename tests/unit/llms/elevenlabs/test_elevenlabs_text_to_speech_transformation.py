@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.elevenlabs.text_to_speech.transformation import (
     ElevenLabsTextToSpeechConfig,
@@ -39,7 +40,9 @@ def test_should_reject_dot_segment_elevenlabs_voice_id():
 def test_speech_keeps_an_internal_prefixed_kwarg_out_of_the_elevenlabs_request(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "http://localhost:12346"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/v1/text-to-speech/.*").mock(
-        return_value=httpx.Response(status_code=200, content=b"audio", headers={"content-type": "audio/mpeg"})
+        return_value=response_for_respx(
+            httpx.Response(status_code=200, content=b"audio", headers={"content-type": "audio/mpeg"})
+        )
     )
 
     litellm.speech(
@@ -68,7 +71,9 @@ def test_speech_maps_wav_and_pcm_to_elevenlabs_output_formats(
 ) -> None:
     api_base: Final = "http://localhost:12346"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/v1/text-to-speech/.*").mock(
-        return_value=httpx.Response(status_code=200, content=b"audio", headers={"content-type": "audio/mpeg"})
+        return_value=response_for_respx(
+            httpx.Response(status_code=200, content=b"audio", headers={"content-type": "audio/mpeg"})
+        )
     )
 
     litellm.speech(

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from anthropic import Anthropic

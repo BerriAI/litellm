@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 from anthropic.types import Message, MessageParam
 from integration._support.anthropic_sse import (

@@ -1,3 +1,4 @@
+
 import asyncio
 import json
 from typing import Optional
@@ -5,11 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import google.auth
 import google.auth.credentials
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 from litellm.integrations.custom_logger import CustomLogger
@@ -608,7 +609,7 @@ def _vertex_json_response(payload: object) -> httpx.Response:
 
 
 async def _created_vertex_tuning_job(run_async: bool, endpoint: respx.Route, payload: object):
-    endpoint.mock(return_value=_vertex_json_response(payload))
+    endpoint.mock(return_value=response_for_respx(_vertex_json_response(payload)))
     pending = VertexFineTuningAPI().create_fine_tuning_job(
         _is_async=run_async,
         create_fine_tuning_job_data=FineTuningJobCreate(
@@ -668,7 +669,7 @@ async def test_vertex_fine_tuning_job_creation_reports_a_tuning_job_body_that_is
 async def test_vertex_passthrough_post_returns_the_upstream_json_body_unchanged(
     vertex_tuning_endpoint: respx.Route, body: object
 ):
-    vertex_tuning_endpoint.mock(return_value=_vertex_json_response(body))
+    vertex_tuning_endpoint.mock(return_value=response_for_respx(_vertex_json_response(body)))
 
     returned = await VertexFineTuningAPI().pass_through_vertex_ai_POST_request(
         request_data={"baseModel": "gemini-1.0-pro-002"},

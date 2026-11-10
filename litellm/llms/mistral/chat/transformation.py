@@ -12,7 +12,7 @@ from itertools import accumulate, count
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 

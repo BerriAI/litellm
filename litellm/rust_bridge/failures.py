@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final, Protocol, cast  # noqa: TID251  # adapts the public exception mapper
 
-import httpx
+import httpx2 as httpx
 import openai
 from pydantic import TypeAdapter, ValidationError
 

@@ -9,7 +9,7 @@ from collections.abc import Coroutine, Iterator, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.constants import request_timeout

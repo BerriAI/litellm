@@ -12,7 +12,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypedDict, overload
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import Never, ReadOnly, Required
 
 from litellm._logging import verbose_logger

@@ -23,9 +23,10 @@ from typing import Final, SupportsIndex, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from jsonschema import Draft7Validator, validate
 
 import litellm
@@ -1894,6 +1895,7 @@ def test_vertex_params_not_stripped_for_vertex_family(model, custom_llm_provider
 
 from litellm.utils import supports_function_calling
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from litellm import acompletion, completion
 
@@ -2063,17 +2065,17 @@ class TestProxyFunctionCalling:
         # Documentation notes:
         print("""
         PROXY MODEL RESOLUTION BEHAVIOR:
-        
+
         ✅ WORKS (with current fallback logic):
            - litellm_proxy/gpt-4
            - litellm_proxy/claude-sonnet-4-5-20250929
            - litellm_proxy/anthropic/claude-3-haiku-20240307
-           
+
         ❌ DOESN'T WORK (requires proxy server config):
            - litellm_proxy/my-custom-gpt4
            - litellm_proxy/bedrock-claude-3-haiku
            - litellm_proxy/production-model
-           
+
         💡 SOLUTION: Use LiteLLM proxy server with proper model_list configuration
            that maps custom names to underlying models.
         """)
@@ -2444,7 +2446,7 @@ def test_completion_custom_prices_price_the_call_without_writing_the_cost_map() 
         persist_across_reloads=False,
     )
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-priced",
@@ -2460,7 +2462,7 @@ def test_completion_custom_prices_price_the_call_without_writing_the_cost_map() 
                 ],
                 "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -3052,22 +3054,22 @@ def test_get_valid_models_bedrock_lists_what_the_deployment_credentials_can_invo
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/foundation-models", params={"byInferenceType": "ON_DEMAND"}
     ).mock(
-        side_effect=lambda request: signed_by_the_deployment(
+        side_effect=side_effect_for_respx(lambda request: signed_by_the_deployment(
             request, {"modelSummaries": [{"modelId": "amazon.nova-micro-v1:0"}]}
-        )
+        ))
     )
     respx.get(
         f"https://bedrock.{region}.amazonaws.com/inference-profiles",
         params={"typeEquals": "SYSTEM_DEFINED"},
     ).mock(
-        side_effect=lambda request: signed_by_the_deployment(
+        side_effect=side_effect_for_respx(lambda request: signed_by_the_deployment(
             request,
             {
                 "inferenceProfileSummaries": [
                     {"inferenceProfileId": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0", "status": "ACTIVE"}
                 ]
             },
-        )
+        ))
     )
 
     assert litellm.get_valid_models(
@@ -5740,13 +5742,13 @@ async def test_router_aresponses_does_not_run_sdk_retries(monkeypatch: pytest.Mo
     router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
 
     try:
-        with respx.mock(assert_all_called=True) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
             upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     503,
                     headers={"retry-after": "0"},
                     json={"error": {"message": "model is down", "type": "server_error"}},
-                )
+                ))
             )
             with pytest.raises(litellm.ServiceUnavailableError):
                 await router.aresponses(model="responses-retry", input="hi", stream=stream)
@@ -5776,13 +5778,13 @@ def test_router_responses_keeps_sdk_retries_for_sync_router_call(
     router: Final = litellm.Router(model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True)
 
     try:
-        with respx.mock(assert_all_called=True) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
             upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     503,
                     headers={"retry-after": "0"},
                     json={"error": {"message": "model is down", "type": "server_error"}},
-                )
+                ))
             )
             with pytest.raises(litellm.ServiceUnavailableError):
                 router.responses(model="responses-retry", input="hi")
@@ -5799,13 +5801,13 @@ async def test_aresponses_uses_sdk_retries_without_router(monkeypatch: pytest.Mo
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     try:
-        with respx.mock(assert_all_called=True) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
             upstream: Final = respx_mock.post("https://responses-direct.local/v1/responses").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     503,
                     headers={"retry-after": "0"},
                     json={"error": {"message": "model is down", "type": "server_error"}},
-                )
+                ))
             )
             with pytest.raises(litellm.ServiceUnavailableError):
                 await litellm.aresponses(
@@ -5826,13 +5828,13 @@ def test_responses_uses_sdk_retries_without_router(monkeypatch: pytest.MonkeyPat
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     try:
-        with respx.mock(assert_all_called=True) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
             upstream: Final = respx_mock.post("https://responses-sync.local/v1/responses").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     503,
                     headers={"retry-after": "0"},
                     json={"error": {"message": "model is down", "type": "server_error"}},
-                )
+                ))
             )
             with pytest.raises(litellm.ServiceUnavailableError):
                 litellm.responses(
@@ -6977,7 +6979,7 @@ class TestHuggingFaceConfigFetch:
 
     @pytest.fixture
     def hf_config_route(self):
-        with respx.mock(assert_all_called=True) as respx_mock:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
             yield respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(
                 json={"max_position_embeddings": 512}
             )
@@ -7353,7 +7355,7 @@ def test_named_credential_oidc_file_api_key_sends_the_token_read_on_each_call(
     reference: Final = f"oidc/file/{token}"
     monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
         _ping_mistral_through("mistral-sa")
         token.write_text("token-after-rotation")
@@ -7379,7 +7381,7 @@ async def test_deployment_oidc_env_api_key_resolves_per_call_and_the_router_keep
         ]
     )
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
         await router.acompletion(model="devstral", messages=[{"role": "user", "content": "ping"}])
         monkeypatch.setenv("MISTRAL_SA_TOKEN", "env-token-two")
@@ -7396,7 +7398,7 @@ def test_explicit_api_key_wins_over_a_named_credential_reference(
     monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
     monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(f"oidc/file/{tmp_path / 'absent'}")])
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
         litellm.completion(
             model="mistral/devstral-latest",
@@ -7436,7 +7438,7 @@ def test_unresolvable_oidc_api_key_fails_closed_naming_the_reason_without_its_ta
     reference: Final = make_reference(tmp_path)
     monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
         with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(litellm.AuthenticationError) as excinfo:
             _ping_mistral_through("mistral-sa")
@@ -7466,7 +7468,7 @@ def test_oidc_api_key_of_a_kind_api_key_cannot_resolve_fails_closed_as_an_authen
     monkeypatch.setenv("MISTRAL_SA_TOKEN_PATH", str(token))
     monkeypatch.setattr(litellm, "credential_list", [_mistral_credential(reference)])
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         route: Final = upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
         with pytest.raises(litellm.AuthenticationError) as excinfo:
             _ping_mistral_through("mistral-sa")
@@ -7504,7 +7506,7 @@ async def test_router_fails_over_from_a_deployment_whose_oidc_api_key_kind_canno
     )
 
     try:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
             response: Final = await router.acompletion(model="devstral", messages=_PING)
             sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
@@ -7521,7 +7523,7 @@ def test_an_oidc_api_key_sent_with_the_call_goes_upstream_as_written(
     token: Final = _allowed_token_file(tmp_path, monkeypatch, "server-secret")
     reference: Final = f"oidc/file/{token}"
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
         litellm.completion(model="mistral/devstral-latest", messages=_PING, api_key=reference)
         sent: Final = upstream.calls.last.request.headers["Authorization"]
@@ -7585,9 +7587,9 @@ async def test_named_credential_oidc_google_api_key_sends_the_metadata_token_and
     monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
     refreshed_at: Final = _CLOCK_START + _GOOGLE_TOKEN_LIFETIME - 59
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(
-            side_effect=partial(_metadata_identity, queue.SimpleQueue())
+            side_effect=side_effect_for_respx(partial(_metadata_identity, queue.SimpleQueue()))
         )
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
         await _ping_vllm_through(call_path, "vllm-sa")
@@ -7622,8 +7624,10 @@ async def test_router_fetches_an_oidc_google_api_key_token_off_the_event_loop_an
     )
 
     try:
-        with respx.mock(assert_all_called=True) as upstream:
-            upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=partial(_metadata_identity, fetched_on))
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+            upstream.get(_GOOGLE_METADATA_IDENTITY).mock(
+                side_effect=side_effect_for_respx(partial(_metadata_identity, fetched_on))
+            )
             chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
             await router.acompletion(model="vllm", messages=_PING)
             sent: Final = chat.calls.last.request.headers["Authorization"]
@@ -7663,9 +7667,9 @@ async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_a
     monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
     recovered_token: Final = _google_id_token(audience, _CLOCK_START)
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.get(_GOOGLE_METADATA_IDENTITY).mock(
-            side_effect=[metadata_failure(), httpx.Response(200, text=recovered_token)]
+            side_effect=side_effect_for_respx([metadata_failure(), httpx.Response(200, text=recovered_token)])
         )
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
         with (
@@ -7698,8 +7702,10 @@ async def test_an_oidc_google_api_key_token_cached_when_the_call_starts_is_sent_
     monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
     fetched_on: Final[queue.SimpleQueue[int]] = queue.SimpleQueue()
 
-    with respx.mock(assert_all_called=False) as upstream:
-        upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=partial(_metadata_identity, fetched_on))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
+        upstream.get(_GOOGLE_METADATA_IDENTITY).mock(
+            side_effect=side_effect_for_respx(partial(_metadata_identity, fetched_on))
+        )
         updates: Final = await acredential_updates({"model": _VLLM_MODEL, "litellm_credential_name": "vllm-sa"})
 
     assert updates["api_key"] == cached_token
@@ -7723,8 +7729,11 @@ async def test_a_pending_oidc_google_metadata_fetch_leaves_the_default_executor_
         release.wait(timeout=30)
         return httpx.Response(500, text="metadata server unavailable")
 
-    with ThreadPoolExecutor(max_workers=1) as observer, respx.mock(assert_all_called=False) as upstream:
-        upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=pending_metadata)
+    with (
+        ThreadPoolExecutor(max_workers=1) as observer,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream,
+    ):
+        upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=side_effect_for_respx(pending_metadata))
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
         call: Final = asyncio.ensure_future(_ping_vllm_through("async", "vllm-sa"))
         try:
@@ -7762,8 +7771,11 @@ async def test_concurrent_calls_that_miss_the_oidc_google_token_cache_share_one_
         release.wait(timeout=30)
         return metadata_answer(token)
 
-    with ThreadPoolExecutor(max_workers=1) as observer, respx.mock(assert_all_called=False) as upstream:
-        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=held_metadata)
+    with (
+        ThreadPoolExecutor(max_workers=1) as observer,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream,
+    ):
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=side_effect_for_respx(held_metadata))
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
         calls: Final = [asyncio.ensure_future(_ping_vllm_through("async", "vllm-sa")) for _ in range(24)]
         loop: Final = asyncio.get_running_loop()
@@ -7801,7 +7813,7 @@ async def test_a_call_an_oidc_google_api_key_may_not_go_to_is_refused_without_a_
     _, reference = _google_reference()
     monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(500)
         with pytest.raises(litellm.AuthenticationError) as excinfo:
             await acredential_updates(
@@ -7843,7 +7855,7 @@ async def test_a_pass_through_call_with_an_oidc_google_api_key_is_refused_withou
     audience, reference = _google_reference()
     monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(
             200, text=_google_id_token(audience, _CLOCK_START)
         )
@@ -7874,7 +7886,7 @@ def test_oidc_google_api_key_metadata_fetch_waits_at_most_gce_metadata_timeout_s
     monkeypatch.setattr(litellm, "credential_list", [_vllm_credential(reference)])
     token: Final = _google_id_token(audience, _CLOCK_START)
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).respond(200, text=token)
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
         litellm.completion(model=_VLLM_MODEL, messages=_PING, litellm_credential_name="vllm-sa")
@@ -7888,7 +7900,7 @@ def test_oidc_google_api_key_metadata_fetch_waits_at_most_gce_metadata_timeout_s
 def test_an_oidc_google_api_key_sent_with_the_call_goes_upstream_as_written_without_a_metadata_fetch() -> None:
     _, reference = _google_reference()
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         chat: Final = upstream.post(_VLLM_CHAT_URL).respond(200, json=_VLLM_REPLY)
         litellm.completion(model=_VLLM_MODEL, api_base=_VLLM_BASE, messages=_PING, api_key=reference)
         sent: Final = chat.calls.last.request.headers["Authorization"]
@@ -7918,7 +7930,7 @@ async def test_router_resolves_an_oidc_api_key_only_on_a_proxy_level_deployment(
     )
 
     try:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             upstream.post(_MISTRAL_CHAT_URL).respond(200, json=_MISTRAL_REPLY)
             await router.acompletion(model="devstral", messages=_PING, metadata={"user_api_key_team_id": "team-1"})
             sent: Final = upstream.calls.last.request.headers["Authorization"]
@@ -7965,7 +7977,7 @@ async def test_an_inline_oidc_api_key_is_refused_before_its_file_is_read_when_th
     router: Final = _bedrock_router("oidc/file//run/secrets/lit-missing-token", deployment_endpoint)
 
     try:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_BEDROCK_REPLY)
             with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL) as excinfo:
                 await router.acompletion(model="claude", messages=_PING, aws_bedrock_runtime_endpoint=call_endpoint)
@@ -7985,7 +7997,7 @@ async def test_an_inline_oidc_api_key_reaches_the_endpoint_its_deployment_config
     router: Final = _bedrock_router(f"oidc/file/{token}", _BEDROCK_RUNTIME)
 
     try:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_BEDROCK_REPLY)
             await router.acompletion(
                 model="claude",
@@ -8028,7 +8040,7 @@ async def test_an_inline_oidc_api_key_is_refused_when_a_wildcard_call_names_its_
     router: Final = _huggingface_router("huggingface/*", f"oidc/file/{token}")
 
     try:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
             with pytest.raises(litellm.AuthenticationError, match=_DEPLOYMENT_HOST_REFERENCE_REFUSAL):
                 await router.aembedding(
@@ -8050,7 +8062,7 @@ async def test_an_inline_oidc_api_key_reaches_the_url_its_deployment_names_as_th
     router: Final = _huggingface_router(model, f"oidc/file/{token}")
 
     try:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_HUGGINGFACE_EMBEDDING)
             await router.aembedding(model=model, input=["hello"], input_type="feature-extraction")
             sent: Final = _authorizations(upstream.calls)
@@ -8095,7 +8107,7 @@ def test_a_named_credentials_oidc_api_key_never_goes_to_an_api_base_the_credenti
         [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
     )
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         upstream.route().respond(200, json=_MISTRAL_REPLY)
         with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
             litellm.completion(
@@ -8127,7 +8139,7 @@ def test_a_named_credentials_oidc_api_key_reaches_an_api_base_on_the_same_origin
         [CredentialItem(credential_name="mistral-sa", credential_values=credential_values, credential_info={})],
     )
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         upstream.route().respond(200, json=_MISTRAL_REPLY)
         litellm.completion(
             model="mistral/devstral-latest",
@@ -8175,7 +8187,7 @@ async def test_a_team_row_naming_an_oidc_credential_reaches_only_the_credentials
     )
 
     try:
-        with respx.mock(assert_all_called=False) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
             upstream.route().respond(200, json=_MISTRAL_REPLY)
             if refused:
                 with pytest.raises(litellm.AuthenticationError, match=_CALLER_HOST_REFERENCE_REFUSAL):
@@ -8222,7 +8234,7 @@ def test_provider_model_listing_sends_the_token_only_behind_a_deployment_oidc_ap
     token: Final = _allowed_token_file(tmp_path, monkeypatch, "listing-token")
     reference: Final = f"oidc/file/{token}"
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.get("https://api.openai.com/v1/models").respond(
             200, json={"object": "list", "data": [{"id": "gpt-listed", "object": "model"}]}
         )
@@ -9459,7 +9471,7 @@ def reset_mock_cache() -> None:
 @respx.mock
 def test_get_valid_models_does_not_ask_a_timed_out_provider_again_on_the_next_listing(reset_mock_cache: None) -> None:
     catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(
-        side_effect=httpx.ReadTimeout("catalog hung")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("catalog hung"))
     )
     deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-during-an-outage")
 
@@ -9476,7 +9488,7 @@ def test_get_valid_models_does_not_ask_a_timed_out_hosted_vllm_server_again_on_t
     reset_mock_cache: None,
 ) -> None:
     models_route: Final = respx.get("http://vllm-hung.test:8000/v1/models").mock(
-        side_effect=httpx.ReadTimeout("vLLM did not answer")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("vLLM did not answer"))
     )
     deployment: Final = LiteLLM_Params(model="hosted_vllm/*", api_base="http://vllm-hung.test:8000/v1")
 
@@ -9491,7 +9503,9 @@ def test_get_valid_models_does_not_ask_a_timed_out_hosted_vllm_server_again_on_t
 @respx.mock
 def test_get_valid_models_lists_a_provider_again_right_after_a_fast_failure(reset_mock_cache: None) -> None:
     respx.get("https://openrouter.ai/api/v1/models/user").mock(
-        side_effect=(httpx.Response(503), httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]}))
+        side_effect=side_effect_for_respx(
+            (httpx.Response(503), httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]}))
+        )
     )
     deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-recovers")
 
@@ -9516,7 +9530,9 @@ def test_get_valid_models_keeps_a_good_listing_when_an_overlapping_listing_fails
             raise httpx.ReadTimeout("catalog hung", request=request)
         return httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
 
-    respx.get("https://openrouter.ai/api/v1/models/user").mock(side_effect=answer_after_an_overlapping_listing)
+    respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        side_effect=side_effect_for_respx(answer_after_an_overlapping_listing)
+    )
     get_valid_models(check_provider_endpoint=True, custom_llm_provider="openrouter", litellm_params=deployment)
 
     assert get_valid_models(
@@ -9530,7 +9546,9 @@ def test_get_valid_models_asks_a_provider_once_when_many_listings_start_together
         threading.Event().wait(0.2)
         return httpx.Response(200, json={"data": [{"id": "anthropic/claude-haiku-5-5"}]})
 
-    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(side_effect=slow_catalog)
+    catalog: Final = respx.get("https://openrouter.ai/api/v1/models/user").mock(
+        side_effect=side_effect_for_respx(slow_catalog)
+    )
     deployment: Final = LiteLLM_Params(model="openrouter/*", api_key="sk-or-many-listings")
 
     def list_models(_: int) -> tuple[str, ...]:
@@ -9987,7 +10005,7 @@ def test_usage_object_null_tokens():
     assert usage_obj.completion_tokens == 0
 
 
-@mock.patch("httpx.AsyncClient")
+@mock.patch("httpx2.AsyncClient")
 @mock.patch.dict(
     os.environ,
     {"SSL_VERIFY": "/certificate.pem", "SSL_CERTIFICATE": "/client.pem"},
@@ -10017,7 +10035,7 @@ def test_async_http_handler(mock_async_client):
         assert call_args["follow_redirects"] is True
 
 
-@mock.patch("httpx.AsyncClient")
+@mock.patch("httpx2.AsyncClient")
 @mock.patch.dict(os.environ, {}, clear=True)
 def test_async_http_handler_force_ipv4(mock_async_client):
     """
@@ -10025,7 +10043,7 @@ def test_async_http_handler_force_ipv4(mock_async_client):
 
     This is prod test - we need to ensure that httpx always uses ipv4 when litellm.force_ipv4 is True
     """
-    import httpx
+    import httpx2 as httpx
     import ssl
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
@@ -10814,7 +10832,7 @@ def test_get_valid_models_discovers_provider_models_from_http(
     models_url: Final = f"{api_base}/v1/models"
     upstream: Final[respx.MockRouter]
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         model_list_route: Final = upstream.get(models_url).respond(200, json=response_body)
 
         discovered_models: Final = get_valid_models(
@@ -10840,7 +10858,7 @@ def test_check_valid_key_returns_false_for_http_unauthorized() -> None:
     }
     upstream: Final[respx.MockRouter]
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         invalid_key_route: Final = upstream.post("https://api.openai.com/v1/chat/completions").respond(
             401,
             json=response_body,
@@ -10870,7 +10888,7 @@ def test_check_valid_key_returns_true_for_successful_completion() -> None:
     }
     upstream: Final[respx.MockRouter]
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         valid_key_route: Final = upstream.post("https://api.openai.com/v1/chat/completions").respond(
             200,
             json=response_body,
@@ -10948,7 +10966,7 @@ def test_prompt_caching_image_check_uses_default_image_dimensions() -> None:
         }
     ]
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         image_route: Final = upstream.get(image_url).respond(200, content=image_bytes)
         cacheable: Final = is_prompt_caching_valid_prompt(
             model="gpt-4o-mini",
@@ -10973,7 +10991,7 @@ def test_get_valid_models_discovers_fireworks_models_from_http(
     monkeypatch.setenv("FIREWORKS_ACCOUNT_ID", account_id)
     upstream: Final[respx.MockRouter]
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         model_list_route: Final = upstream.get(models_url).respond(
             200,
             json={"models": [{"name": model_name}]},
@@ -11032,8 +11050,8 @@ def test_get_valid_models_uses_the_litellm_params_anthropic_api_key() -> None:
             return httpx.Response(401, json={"error": {"message": "invalid key"}}, request=request)
         return httpx.Response(200, json=response_body, request=request)
 
-    with respx.mock(assert_all_called=True) as upstream:
-        model_list_route: Final = upstream.get(models_url).mock(side_effect=response_for_api_key)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
+        model_list_route: Final = upstream.get(models_url).mock(side_effect=side_effect_for_respx(response_for_api_key))
 
         bad_key_models: Final = get_valid_models(
             check_provider_endpoint=True,
@@ -11208,10 +11226,10 @@ def test_openai_sdk_transcription_params_pass_through_to_other_providers(custom_
 @respx.mock
 def test_drop_params_keeps_openai_sdk_transcription_params_out_of_a_deepgram_request() -> None:
     route: Final = respx.post(url__startswith="https://api.deepgram.com/v1/listen").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={"metadata": {"duration": 1.0}, "results": {"channels": [{"alternatives": [{"transcript": "hi"}]}]}},
-        )
+        ))
     )
 
     litellm.transcription(
@@ -11429,14 +11447,14 @@ async def test_completion_with_retry_policy(sync_mode):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_responses_retry_on_auth_error(sync_mode, respx_mock: respx.MockRouter, monkeypatch):
+async def test_responses_retry_on_auth_error(respx_mock: respx.MockRouter, sync_mode, monkeypatch):
     """
     Test that responses API actually retries when encountering authentication errors.
     This validates that the @client decorator properly handles responses/aresponses retries.
     """
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={
                 "error": {
@@ -11445,7 +11463,7 @@ async def test_responses_retry_on_auth_error(sync_mode, respx_mock: respx.MockRo
                     "code": "invalid_api_key",
                 }
             },
-        )
+        ))
     )
     num_retries = 2
 
@@ -11485,7 +11503,7 @@ async def test_responses_retry_on_auth_error(sync_mode, respx_mock: respx.MockRo
 def test_pre_call_rules_see_messages_passed_positionally(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "pre_call_rules", [lambda text: "forbidden" not in text])
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-rules",
@@ -11495,7 +11513,7 @@ def test_pre_call_rules_see_messages_passed_positionally(monkeypatch: pytest.Mon
                 "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
             },
-        )
+        ))
     )
 
     with pytest.raises(litellm.APIResponseValidationError, match="failed post-call-rule check"):

@@ -3,7 +3,7 @@ code and whose credentials the gateway presented, never on the upstream's HTTP s
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.proxy.mcp_server.faults.classify import (

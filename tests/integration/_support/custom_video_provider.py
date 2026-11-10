@@ -4,8 +4,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig

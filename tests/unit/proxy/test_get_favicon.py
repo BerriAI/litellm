@@ -1,7 +1,7 @@
 import os
 
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.proxy.proxy_server import app

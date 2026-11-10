@@ -12,10 +12,11 @@ from datetime import datetime
 from typing import Final
 from zlib import crc32
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router import Router
@@ -223,7 +224,7 @@ def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_router_aanthropic_messages_non_streaming_posts_anthropic_body(respx_mock):
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body())
+        return_value=response_for_respx(httpx.Response(200, json=_anthropic_body()))
     )
     response: Final = await _router(_ALIAS, _ANTHROPIC_MODEL).aanthropic_messages(
         messages=[{"role": "user", "content": _PROMPT}],
@@ -240,7 +241,7 @@ async def test_router_aanthropic_messages_non_streaming_posts_anthropic_body(res
 @pytest.mark.asyncio
 async def test_router_aanthropic_messages_latency_routing_forwards_user_id(respx_mock):
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body())
+        return_value=response_for_respx(httpx.Response(200, json=_anthropic_body()))
     )
     response: Final = await _router(
         _ALIAS, _ANTHROPIC_MODEL, routing_strategy="latency-based-routing"
@@ -260,12 +261,14 @@ async def test_router_aanthropic_messages_latency_routing_forwards_user_id(respx
 async def test_router_aanthropic_messages_falls_back_to_bedrock_after_anthropic_401(respx_mock, monkeypatch):
     _set_fake_aws_env(monkeypatch)
     anthropic_route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
-        )
+        ))
     )
     bedrock_route: Final = respx_mock.post(url__regex=_BEDROCK_INVOKE_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body(model=_BEDROCK_SONNET, msg_id="msg_bedrock"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_anthropic_body(model=_BEDROCK_SONNET, msg_id="msg_bedrock"))
+        )
     )
     router: Final = Router(
         model_list=[
@@ -295,10 +298,10 @@ async def test_router_aanthropic_messages_falls_back_to_bedrock_after_anthropic_
 async def test_router_aanthropic_messages_bedrock_converse_and_invoke(respx_mock, monkeypatch):
     _set_fake_aws_env(monkeypatch)
     converse_route: Final = respx_mock.post(url__regex=_BEDROCK_CONVERSE_URL).mock(
-        return_value=httpx.Response(200, json=_CONVERSE_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=_CONVERSE_BODY))
     )
     invoke_route: Final = respx_mock.post(url__regex=_BEDROCK_INVOKE_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body(model=_BEDROCK_SONNET))
+        return_value=response_for_respx(httpx.Response(200, json=_anthropic_body(model=_BEDROCK_SONNET)))
     )
     converse_model: Final = f"bedrock/converse/{_BEDROCK_SONNET}"
     invoke_model: Final = f"bedrock/{_BEDROCK_SONNET}"
@@ -328,7 +331,7 @@ async def test_router_aanthropic_messages_bedrock_converse_and_invoke(respx_mock
 
 def test_sync_openai_bridge_anthropic_messages_returns_content_blocks(respx_mock):
     route: Final = respx_mock.post(url__regex=_OPENAI_RESPONSES_URL).mock(
-        return_value=httpx.Response(200, json=_OPENAI_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_BODY))
     )
     response: Final = litellm.anthropic.messages.create(
         messages=[{"role": "user", "content": _PROMPT}],
@@ -361,7 +364,7 @@ async def test_acreate_non_streaming_returns_dict_content_blocks(
     respx_mock, monkeypatch, model: str, url: str, body: Mapping[str, object], expected_model: str
 ):
     _set_fake_aws_env(monkeypatch)
-    route: Final = respx_mock.post(url__regex=url).mock(return_value=httpx.Response(200, json=body))
+    route: Final = respx_mock.post(url__regex=url).mock(return_value=response_for_respx(httpx.Response(200, json=body)))
     response: Final = await litellm.anthropic.messages.acreate(
         messages=[{"role": "user", "content": _PROMPT}],
         model=model,
@@ -377,7 +380,9 @@ async def test_router_aanthropic_messages_non_streaming_logs_usage_model_and_cos
     messages: Final = _unique_messages()
     recorder: Final = _RecordingLogger(messages)
     monkeypatch.setattr(litellm, "callbacks", [recorder])
-    respx_mock.post(url__regex=_ANTHROPIC_URL).mock(return_value=httpx.Response(200, json=_anthropic_body()))
+    respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_anthropic_body()))
+    )
     response: Final = await _router(_ALIAS, _ANTHROPIC_MODEL).aanthropic_messages(
         messages=messages, model=_ALIAS, max_tokens=100
     )
@@ -424,7 +429,7 @@ async def test_router_aanthropic_messages_streaming_logs_usage_model_and_cost(
     recorder: Final = _RecordingLogger(messages)
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     respx_mock.post(url__regex=url).mock(
-        return_value=httpx.Response(200, content=body, headers={"content-type": content_type})
+        return_value=response_for_respx(httpx.Response(200, content=body, headers={"content-type": content_type}))
     )
     stream: Final = await _router(_ALIAS, model).aanthropic_messages(
         messages=messages, model=_ALIAS, max_tokens=100, stream=True
@@ -510,7 +515,7 @@ async def test_router_aanthropic_messages_bills_a_per_second_deployment_for_the_
         await asyncio.sleep(_UPSTREAM_PAUSE_SECONDS)
         return httpx.Response(200, json=_anthropic_body())
 
-    respx_mock.post(url__regex=_ANTHROPIC_URL).mock(side_effect=slow_upstream)
+    respx_mock.post(url__regex=_ANTHROPIC_URL).mock(side_effect=side_effect_for_respx(slow_upstream))
     started: Final = time.monotonic()
     await _route_like_the_proxy(_priced_router(**pricing), messages=messages)
     await _wait_for_payload(recorder)
@@ -529,9 +534,9 @@ async def test_router_aanthropic_messages_bills_a_per_second_deployment_for_the_
     recorder: Final = _RecordingLogger(messages)
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        side_effect=lambda request: httpx.Response(
+        side_effect=side_effect_for_respx(lambda request: httpx.Response(
             200, headers={"content-type": "text/event-stream"}, content=_sse_pausing_after_the_first_event()
-        )
+        ))
     )
     started: Final = time.monotonic()
     stream: Final = await _route_like_the_proxy(_per_second_router(), messages=messages, stream=True)
@@ -562,7 +567,7 @@ async def test_router_aanthropic_messages_bills_a_short_call_on_a_long_context_r
     recorder: Final = _RecordingLogger(messages)
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        side_effect=lambda request: httpx.Response(200, json=_anthropic_body())
+        side_effect=side_effect_for_respx(lambda request: httpx.Response(200, json=_anthropic_body()))
     )
 
     await _route_like_the_proxy(_priced_router(), messages=messages)
@@ -588,7 +593,7 @@ def _cached_system() -> list[AnthropicMessagesTextParam]:
 async def test_bedrock_converse_system_prompt_caching_returns_cache_tokens(respx_mock, monkeypatch):
     _set_fake_aws_env(monkeypatch)
     route: Final = respx_mock.post(url__regex=_BEDROCK_CONVERSE_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 **_CONVERSE_BODY,
@@ -600,7 +605,7 @@ async def test_bedrock_converse_system_prompt_caching_returns_cache_tokens(respx
                     "cacheWriteInputTokens": 50,
                 },
             },
-        )
+        ))
     )
     response: Final = await litellm.anthropic.messages.acreate(
         model=f"bedrock/converse/{_BEDROCK_SONNET}",
@@ -619,7 +624,7 @@ async def test_bedrock_converse_system_prompt_caching_returns_cache_tokens(respx
 async def test_bedrock_invoke_system_prompt_caching_returns_cache_tokens(respx_mock, monkeypatch):
     _set_fake_aws_env(monkeypatch)
     route: Final = respx_mock.post(url__regex=_BEDROCK_INVOKE_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 **_anthropic_body(model=_BEDROCK_SONNET),
@@ -630,7 +635,7 @@ async def test_bedrock_invoke_system_prompt_caching_returns_cache_tokens(respx_m
                     "cache_read_input_tokens": 500,
                 },
             },
-        )
+        ))
     )
     response: Final = await litellm.anthropic.messages.acreate(
         model=f"bedrock/invoke/{_BEDROCK_SONNET}",
@@ -662,7 +667,9 @@ async def test_bedrock_streaming_message_start_carries_cache_usage_fields(
 ):
     _set_fake_aws_env(monkeypatch)
     route: Final = respx_mock.post(url__regex=url).mock(
-        return_value=httpx.Response(200, content=body, headers={"content-type": "application/vnd.amazon.eventstream"})
+        return_value=response_for_respx(
+            httpx.Response(200, content=body, headers={"content-type": "application/vnd.amazon.eventstream"})
+        )
     )
     stream: Final = await litellm.anthropic.messages.acreate(
         model=model,
@@ -723,7 +730,7 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
     respx_mock, prompt: str, tool_name: str, tool_input: Mapping[str, str]
 ):
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 **_anthropic_body(model="claude-sonnet-4-5-20250929", msg_id="msg_tool"),
@@ -732,7 +739,7 @@ async def test_tool_search_forwards_deferred_tools_and_beta_header(
                 ],
                 "stop_reason": "tool_use",
             },
-        )
+        ))
     )
     response: Final = await litellm.anthropic.messages.acreate(
         model="anthropic/claude-sonnet-4-5-20250929",
@@ -756,7 +763,7 @@ async def _native_output_config_sent(
     respx_mock: respx.MockRouter, effort: str, model_info: Mapping[str, object] | None, **params: object
 ) -> object:
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body("claude-sonnet-4-6"))
+        return_value=response_for_respx(httpx.Response(200, json=_anthropic_body("claude-sonnet-4-6")))
     )
     deployment: Final = {
         "model_name": _ALIAS,
@@ -799,7 +806,7 @@ async def _native_opus_body_sent(
     respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
 ) -> Mapping[str, object]:
     route: Final = respx_mock.post(url__regex=_ANTHROPIC_URL).mock(
-        return_value=httpx.Response(200, json=_anthropic_body("claude-opus-5-5"))
+        return_value=response_for_respx(httpx.Response(200, json=_anthropic_body("claude-opus-5-5")))
     )
     deployment: Final = {
         "model_name": _ALIAS,
@@ -983,10 +990,10 @@ async def test_mixed_openai_azure_group_answers_the_same_400_for_a_null_tool_res
     respx_mock,
 ):
     openai_route: Final = respx_mock.post(url__regex=_OPENAI_RESPONSES_URL).mock(
-        return_value=httpx.Response(200, json=_OPENAI_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=_OPENAI_BODY))
     )
     azure_route: Final = respx_mock.post(url__regex=_MIXED_AZURE_CHAT_URL).mock(
-        return_value=httpx.Response(200, json=_MIXED_AZURE_CHAT_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=_MIXED_AZURE_CHAT_BODY))
     )
     router: Final = _mixed_openai_azure_router()
 

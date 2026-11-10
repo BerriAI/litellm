@@ -183,7 +183,7 @@ import json
 import sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-import httpx
+import httpx2 as httpx
 import huggingface_hub
 from huggingface_hub.errors import LocalEntryNotFoundError
 import litellm

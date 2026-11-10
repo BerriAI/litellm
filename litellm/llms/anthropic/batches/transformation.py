@@ -3,8 +3,8 @@ import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
-import httpx
-from httpx import Headers, Response
+import httpx2 as httpx
+from httpx2 import Headers, Response
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route, join_api_base

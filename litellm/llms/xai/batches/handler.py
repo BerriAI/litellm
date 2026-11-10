@@ -2,7 +2,7 @@ from collections.abc import Coroutine
 from itertools import chain
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.custom_httpx.http_handler import (

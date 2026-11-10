@@ -8,12 +8,14 @@ from collections.abc import Mapping
 from typing import Final
 from unittest.mock import ANY, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-from httpx import Client, Headers
+
+from tests._support import respx_httpx2 as respx
+from httpx2 import Client, Headers
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import completion
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -687,11 +689,11 @@ def test_azure_chat_stream_preserves_text_and_special_characters():
     route: Final = respx.post(
         url__regex=r"https://azure-stream\.openai\.azure\.com/.*/chat/completions.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=_azure_sse_body(response_chunks),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
 
     stream: Final = litellm.completion(
@@ -753,11 +755,11 @@ def test_azure_chat_stream_reassembles_tool_call_arguments():
     route: Final = respx.post(
         url__regex=r"https://azure-tool-stream\.openai\.azure\.com/.*/chat/completions.*"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=_azure_sse_body(response_chunks),
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     messages: Final = [{"role": "user", "content": "What is the weather in Boston?"}]
     stream: Final = litellm.completion(

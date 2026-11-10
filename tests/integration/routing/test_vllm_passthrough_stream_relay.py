@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 import psutil
 import pytest

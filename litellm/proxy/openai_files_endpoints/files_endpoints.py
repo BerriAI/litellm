@@ -13,7 +13,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, BinaryIO, Final, NoReturn, TypedDict, cast, get_args
 
-import httpx
+import httpx2 as httpx
 from fastapi import (
     APIRouter,
     Depends,

@@ -3,7 +3,7 @@ import gc
 from collections.abc import AsyncIterator, Mapping
 from typing import Annotated, Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Response
 from starlette.requests import ClientDisconnect, Request

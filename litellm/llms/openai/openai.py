@@ -4,7 +4,7 @@ import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
-import httpx
+import httpx2 as httpx
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession

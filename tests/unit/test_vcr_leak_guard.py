@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import httpx2
 import pytest
 
@@ -38,7 +38,7 @@ def test_leaked_cassette_is_detected_named_and_restorable(leaked_cassette_dir: P
     leak: Final = detect_vcr_patch_leak()
 
     assert leak is not None
-    assert {"httpx.MockTransport.handle_async_request", "aiohttp.client.ClientSession._request"} <= set(
+    assert {"httpx2.MockTransport.handle_async_request", "aiohttp.client.ClientSession._request"} <= set(
         leak.patch_points
     )
     assert leak.cassette_paths == (str(leaked_cassette_dir / "rewound_owner.yaml"),)

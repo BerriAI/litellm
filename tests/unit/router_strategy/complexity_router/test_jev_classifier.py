@@ -6,11 +6,13 @@ from datetime import datetime
 from typing import Final, NoReturn
 from unittest.mock import create_autospec
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 import tiktoken
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
@@ -537,7 +539,7 @@ async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
         },
         derive_savings_baseline=False,
     )
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.post(f"{upstream_base}/v1/systemone").respond(
             200,
             json={
@@ -608,7 +610,7 @@ async def test_databricks_routes_through_the_serving_endpoint_and_accounts_the_e
         },
         derive_savings_baseline=False,
     )
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.post(f"https://workspace.test/serving-endpoints/{endpoint}/invocations").respond(
             200,
             json={
@@ -661,7 +663,7 @@ async def test_databricks_routes_through_ai_decide_without_a_model_field_and_acc
         },
         derive_savings_baseline=False,
     )
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.post("https://workspace.test/api/2.0/ai-functions/ai-decide").respond(
             200,
             json={"response": {"answers": {"tier": _answer().model_dump()}}, "metadata": {"version": "1.0"}},
@@ -766,7 +768,7 @@ async def test_jev_connection_resolves_only_explicit_environment_references(
         "tiers": {"SIMPLE": "cheap", "COMPLEX": "strong"},
     }
     classifier: Final = ComplexityRouter("env-router", litellm.Router(), config, derive_savings_baseline=False)
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.post(
             "https://default-jev.test/v1/systemone" if connection == "defaults" else "https://jev.test/v1/systemone"
         ).respond(json={"answers": {"tier": _answer("SIMPLE").model_dump()}})
@@ -797,7 +799,7 @@ def test_jev_missing_explicit_environment_reference_never_uses_provider_defaults
     else:
         monkeypatch.setenv("JEV_MISSING_CONNECTION", value)
     with (
-        respx.mock(assert_all_called=False) as upstream,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream,
         pytest.raises(ValueError, match=rf"opensource_classifier_config\.{field}"),
     ):
         ComplexityRouter(
@@ -956,20 +958,20 @@ async def test_deployed_decision_classifier_uses_registered_connection(
         },
         derive_savings_baseline=False,
     )
-    with respx.mock(assert_all_called=True) as requests:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as requests:
         route: Final = requests.post(
             "https://decision.test/serving-endpoints/my-endpoint/invocations"
             if provider == "databricks"
             else "https://decision.test/v1/systemone"
         ).mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 status_code,
                 json={
                     "model": model,
                     "answers": {"tier": _answer().model_dump()},
                     "usage": {"input_tokens": 31, "output_tokens": 0},
                 },
-            )
+            ))
         )
         outcome: Final = await classifier.aclassify("What is two plus two?")
     assert route.call_count == 1
@@ -1026,17 +1028,17 @@ async def test_deployed_decision_classifier_preserves_failure_handling(
         derive_savings_baseline=False,
     )
     cancellation_reached: Final = asyncio.Event()
-    with respx.mock(assert_all_called=failure != "cancelled") as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=failure != "cancelled") as upstream:
         route: Final = upstream.post("https://decision.test/v1/systemone")
         if failure == "timeout":
-            route.mock(side_effect=httpx.ReadTimeout("classifier timeout"))
+            route.mock(side_effect=side_effect_for_respx(httpx.ReadTimeout("classifier timeout")))
         elif failure == "cancelled":
 
             async def cancel_request(request: httpx.Request) -> httpx.Response:
                 cancellation_reached.set()
                 raise asyncio.CancelledError()
 
-            route.mock(side_effect=cancel_request)
+            route.mock(side_effect=side_effect_for_respx(cancel_request))
         else:
             route.respond(json={"answers": {"tier": _answer("not-a-tier").model_dump()}})
         if failure == "cancelled":
@@ -1101,7 +1103,7 @@ async def test_jev_bounds_complete_input_without_changing_forwarded_messages(
         derive_savings_baseline=False,
     )
     try:
-        with respx.mock(assert_all_called=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
             route: Final = upstream.post("https://budget.test/v1/systemone").respond(
                 json={"answers": {"tier": _answer().model_dump()}}
             )
@@ -1190,7 +1192,7 @@ async def test_jev_budget_uses_effective_headers_and_every_deployment(
         derive_savings_baseline=False,
     )
     ask: Final = "Explain this code " + "word001 word002 word003 " * 12000
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.route(method="POST").respond(json={"answers": {"tier": _answer().model_dump()}})
         outcome: Final = await classifier.aclassify(ask)
     assert outcome.cause == "jev_classifier"
@@ -1252,7 +1254,7 @@ async def test_jev_untrimmable_rubric_uses_configured_fallback_without_a_provide
         },
         derive_savings_baseline=False,
     )
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         route: Final = upstream.route(method="POST").respond(json={"answers": {"tier": _answer().model_dump()}})
         outcome: Final = await classifier.aclassify("What is two plus two?")
     assert route.call_count == 0

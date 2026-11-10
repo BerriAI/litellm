@@ -8,7 +8,7 @@ from Perplexity API responses.
 import datetime
 from unittest.mock import Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 # Add the project root to Python path

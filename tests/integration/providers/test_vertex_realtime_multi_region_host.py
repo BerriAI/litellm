@@ -20,7 +20,7 @@ from itertools import chain, repeat
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 import websockets
 from pydantic import JsonValue

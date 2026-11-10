@@ -14,9 +14,9 @@ from functools import partial
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
@@ -42,6 +42,7 @@ from litellm.types.decisions import (
 from litellm.types.router import ModelInfo
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests._support.respx_httpx2 import side_effect_for_respx
 from tests.unit.conftest import AsyncOnlyImageFetch
 
 _QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
@@ -828,7 +829,7 @@ def test_upstream_bad_request_maps_to_litellm_error(respx_mock: respx.MockRouter
 
 def test_unreachable_upstream_maps_to_a_connection_error(respx_mock: respx.MockRouter) -> None:
     respx_mock.post("https://api.perplexity.ai/v1/decisions").mock(
-        side_effect=httpx.ConnectError("Cannot connect to host api.perplexity.ai:443")
+        side_effect=side_effect_for_respx(httpx.ConnectError("Cannot connect to host api.perplexity.ai:443"))
     )
 
     with pytest.raises(litellm.APIConnectionError, match="PerplexityException - Cannot connect to host"):
@@ -4129,7 +4130,7 @@ async def test_clips_to_a_group_whose_only_taker_is_cooling_down_are_refused_rat
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").mock(
-        side_effect=_answer_unless_key_is("takes")
+        side_effect=side_effect_for_respx(_answer_unless_key_is("takes"))
     )
     unlisted: Final = "openrouter/example/omni-preview"
     router: Final = litellm.Router(

@@ -3,10 +3,11 @@ import traceback
 from typing import Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.azure.azure import AzureChatCompletion
@@ -427,7 +428,9 @@ async def test_azure_aimage_generation_v1_route_sends_deployment_name_in_body(
     }
 
     route = respx_mock.post("https://my-resource.openai.azure.com/openai/v1/images/generations").mock(
-        return_value=httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+        )
     )
 
     logging_obj = MagicMock()
@@ -468,7 +471,9 @@ def test_azure_image_generation_v1_route_base_model_vs_deployment_name(respx_moc
     }
 
     route = respx_mock.post(f"{api_base}/openai/v1/images/generations").mock(
-        return_value=httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+        )
     )
 
     logging_obj = MagicMock()
@@ -512,7 +517,9 @@ def fake_entra_id(monkeypatch: pytest.MonkeyPatch):
 
 def _mock_image_generation_route(respx_mock: respx.MockRouter, api_base: str, model: str) -> respx.Route:
     return respx_mock.post(f"{api_base}/openai/deployments/{model}/images/generations").mock(
-        return_value=httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+        )
     )
 
 

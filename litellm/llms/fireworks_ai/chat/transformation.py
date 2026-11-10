@@ -2,7 +2,7 @@ import json
 from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

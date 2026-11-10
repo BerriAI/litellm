@@ -8,7 +8,7 @@ from litellm_params/env, credential validation, caching, and error handling.
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.gigachat import authenticator

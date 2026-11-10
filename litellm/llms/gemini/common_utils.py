@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import TypedDict as ExtraItemsTypedDict
 

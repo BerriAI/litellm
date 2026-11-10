@@ -1,7 +1,7 @@
 ## This is a template base class to be used for adding new LLM providers via API calls
 from typing import TYPE_CHECKING, Union
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 

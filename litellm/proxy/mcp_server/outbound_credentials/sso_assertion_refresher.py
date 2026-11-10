@@ -49,7 +49,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, Protocol
 
-import httpx
+import httpx2 as httpx
 from pydantic import SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 

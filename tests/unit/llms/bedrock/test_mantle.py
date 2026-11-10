@@ -9,7 +9,7 @@ association via `aws_bedrock_project_id`.
 import json
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.bedrock.common_utils import BedrockModelInfo, get_bedrock_chat_config

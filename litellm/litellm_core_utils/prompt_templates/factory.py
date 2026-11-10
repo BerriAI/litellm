@@ -4012,7 +4012,7 @@ def stringify_json_tool_call_content(messages: list) -> list:
 
 from email.message import Message
 
-import httpx
+import httpx2 as httpx
 
 from litellm.types.llms.bedrock import (
     BedrockConverseReasoningContentBlock,

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Final, Literal, TypeAlias
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import (

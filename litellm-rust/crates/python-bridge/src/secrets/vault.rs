@@ -155,7 +155,7 @@ fn timeout_message(
 fn response_text(py: Python<'_>, body: &[u8]) -> PyResult<String> {
     let kwargs = pyo3::types::PyDict::new(py);
     kwargs.set_item("content", pyo3::types::PyBytes::new(py, body))?;
-    py.import("httpx")?
+    py.import("httpx2")?
         .getattr("Response")?
         .call((200,), Some(&kwargs))?
         .getattr("text")?

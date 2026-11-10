@@ -1,7 +1,7 @@
 import math
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, set_response_cost_in_hidden_params

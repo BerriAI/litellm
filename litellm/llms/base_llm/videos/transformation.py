@@ -3,8 +3,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
-from httpx._types import FileContent, RequestFiles
+import httpx2 as httpx
+from httpx2._types import FileContent, RequestFiles
 
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams

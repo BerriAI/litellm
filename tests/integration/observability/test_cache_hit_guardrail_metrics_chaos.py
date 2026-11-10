@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value
 from integration._support.process import owned_proxy_process

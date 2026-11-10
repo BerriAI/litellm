@@ -7,11 +7,12 @@ import json
 import struct
 from typing import Final
 
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.nova.transformation import SagemakerNovaConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -479,7 +480,7 @@ NOVA_URL: Final = "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/n
 @pytest.mark.usefixtures("fake_provider_credentials")
 def test_nova_completion_parses_content_finish_reason_and_usage(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(NOVA_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-nova-single",
@@ -495,7 +496,7 @@ def test_nova_completion_parses_content_finish_reason_and_usage(respx_mock: resp
                 ],
                 "usage": {"prompt_tokens": 14, "completion_tokens": 2, "total_tokens": 16},
             },
-        )
+        ))
     )
     response: Final = litellm.completion(
         model="sagemaker_nova/nova-endpoint",
@@ -522,10 +523,10 @@ def test_nova_completion_parses_content_finish_reason_and_usage(respx_mock: resp
 @pytest.mark.usefixtures("fake_provider_credentials")
 def test_nova_streaming_sends_stream_flag_and_parses_chunks_and_usage(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(f"{NOVA_URL}-response-stream").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             content=_nova_stream_frame("Nova ", None) + _nova_stream_frame("stream", "stop"),
-        )
+        ))
     )
     stream: Final = litellm.completion(
         model="sagemaker_nova/nova-endpoint",

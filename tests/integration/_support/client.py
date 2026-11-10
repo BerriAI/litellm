@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Final, TypeVar
 
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter
 
 from tests.integration._support.database import read_rows

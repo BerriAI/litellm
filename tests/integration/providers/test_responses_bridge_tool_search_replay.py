@@ -4,7 +4,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from itertools import chain
 from typing import Final, Literal, TypeAlias, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 from anthropic import Anthropic
 from integration._support import prompt_cache_breakpoint as pcb

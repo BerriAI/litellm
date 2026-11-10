@@ -5,10 +5,11 @@ Tests for Milvus Vector Store
 import json
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import Router
 from litellm.llms.milvus.vector_stores.transformation import MilvusVectorStoreConfig
@@ -134,7 +135,7 @@ def _alias_router():
 
 def _mock_embedding_route(respx_mock: respx.MockRouter) -> respx.Route:
     return respx_mock.post(OPENAI_EMBEDDINGS_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -142,16 +143,20 @@ def _mock_embedding_route(respx_mock: respx.MockRouter) -> respx.Route:
                 "model": "text-embedding-3-small",
                 "usage": {"prompt_tokens": 2, "total_tokens": 2},
             },
-        )
+        ))
     )
 
 
 def _mock_search_route(respx_mock: respx.MockRouter) -> respx.Route:
-    return respx_mock.post(MILVUS_SEARCH_URL).mock(return_value=httpx.Response(200, json=MOCK_MILVUS_SEARCH_RESPONSE))
+    return respx_mock.post(MILVUS_SEARCH_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=MOCK_MILVUS_SEARCH_RESPONSE))
+    )
 
 
 def _mock_zilliz_search_route(respx_mock: respx.MockRouter) -> respx.Route:
-    return respx_mock.post(ZILLIZ_SEARCH_URL).mock(return_value=httpx.Response(200, json=MOCK_MILVUS_SEARCH_RESPONSE))
+    return respx_mock.post(ZILLIZ_SEARCH_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=MOCK_MILVUS_SEARCH_RESPONSE))
+    )
 
 
 def _search_request_body(search_route: respx.Route):

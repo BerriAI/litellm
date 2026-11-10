@@ -1,3 +1,4 @@
+import httpx2 as httpx
 import gzip
 import json
 import os
@@ -7,11 +8,13 @@ from typing import Awaitable, Coroutine, Final, TypedDict, TypeVar
 from unittest.mock import AsyncMock, patch
 
 import pytest
-import respx
-from httpx import Request, Response
+
+from tests._support import respx_httpx2 as respx
+from httpx2 import Request, Response
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import litellm.integrations.datadog.datadog as datadog_module
 from litellm.caching.caching import Cache
@@ -845,7 +848,9 @@ def delivery(
     monkeypatch.delenv("DD_SERVICE", raising=False)
     with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
         logger: Final = DataDogLogger()
-    intake: Final = respx_mock.post(_INTAKE_URL).mock(return_value=Response(202, text="Accepted"))
+    intake: Final = respx_mock.post(_INTAKE_URL).mock(
+        return_value=response_for_respx(httpx.Response(202, text="Accepted"))
+    )
     return logger, intake
 
 

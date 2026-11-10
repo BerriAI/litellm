@@ -7,16 +7,17 @@ Routes covered:
 
 from __future__ import annotations
 
+from tests._support.respx_httpx2 import response_for_respx
 from datetime import datetime, timedelta, timezone
 import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import jwt
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from .conftest import normalize
 
 
@@ -243,7 +244,7 @@ def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma, httpx_tra
 
     password = "Hunter2Strong!"
     respx.get(_hibp_url_for(password)).mock(
-        return_value=httpx.Response(200, text=f"{_hibp_suffix_for('unrelated-password')}:9")
+        return_value=response_for_respx(httpx.Response(200, text=f"{_hibp_suffix_for('unrelated-password')}:9"))
     )
 
     onboarding_jwt = _make_onboarding_jwt("sk-master-test")

@@ -1,3 +1,4 @@
+
 import asyncio
 import base64
 import contextvars
@@ -18,9 +19,9 @@ from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import UUID
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, UploadFile, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
@@ -96,6 +97,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
     WebSocketSessionUsage,
 )
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests._master_key import MASTER_KEY
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -3837,7 +3839,7 @@ async def test_pass_through_request_follows_redirect_to_final_response(httpx_tra
 
     mock_user_api_key_dict = MagicMock()
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.get("https://upstream.test/redirect/1").respond(302, headers={"Location": "/get"})
         upstream.get("https://upstream.test/get").respond(200, json={"url": "https://upstream.test/get"})
 
@@ -10663,16 +10665,16 @@ async def _run_passthrough(
         patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
             "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
         ),
-        respx.mock(assert_all_called=False) as upstream_mock,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream_mock,
     ):
         litellm_patch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm_patch.setattr(litellm, "callbacks", [recorder] if guardrail is None else [guardrail, recorder])
         litellm.in_memory_llm_clients_cache.flush_cache()
         upstream_route: Final = upstream_mock.route(method="POST")
         if isinstance(upstream, Exception):
-            upstream_route.mock(side_effect=upstream)
+            upstream_route.mock(side_effect=side_effect_for_respx(upstream))
         else:
-            upstream_route.mock(return_value=upstream)
+            upstream_route.mock(return_value=response_for_respx(upstream))
         mock_request: Final = MagicMock(spec=Request)
         mock_request.method = "POST"
         proxy_url: Final = httpx.URL(target.replace("https://", "http://test-proxy.com/"))
@@ -12718,7 +12720,7 @@ async def test_vertex_passthrough_forwards_body_and_request_tags_to_spend_payloa
     )
     user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="test-team")
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.post(target).respond(status_code=200, json=response_body)
         response: Final = await pass_through_request(
             request=request,
@@ -12809,11 +12811,11 @@ async def test_pass_through_request_logging_failure(mock_request, mock_user_api_
 
     with (
         patch(
-            "httpx.AsyncClient.send",
+            "httpx2.AsyncClient.send",
             return_value=mock_response,
         ),
         patch(
-            "httpx.AsyncClient.request",
+            "httpx2.AsyncClient.request",
             return_value=mock_response,
         ),
     ):
@@ -12853,11 +12855,11 @@ async def test_pass_through_request_logging_failure_with_stream(mock_request, mo
 
     with (
         patch(
-            "httpx.AsyncClient.send",
+            "httpx2.AsyncClient.send",
             return_value=mock_response,
         ),
         patch(
-            "httpx.AsyncClient.request",
+            "httpx2.AsyncClient.request",
             return_value=mock_response,
         ),
     ):

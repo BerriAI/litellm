@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 from uuid import uuid4
 
 import anyio
-import httpx
 import httpx2
+import httpx2 as httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import TypeAdapter, ValidationError
 from starlette.datastructures import Headers

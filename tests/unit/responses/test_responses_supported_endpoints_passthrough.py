@@ -7,10 +7,11 @@ providers such as `custom_openai` keep bridging through `/v1/chat/completions`.
 import json
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -61,8 +62,10 @@ SSE_BODY = (
 
 
 def _mock_backend(router: respx.MockRouter) -> tuple[respx.Route, respx.Route]:
-    responses_route = router.post(RESPONSES_URL).mock(return_value=httpx.Response(200, json=RESPONSES_BODY))
-    chat_route = router.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_BODY))
+    responses_route = router.post(RESPONSES_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=RESPONSES_BODY))
+    )
+    chat_route = router.post(CHAT_URL).mock(return_value=response_for_respx(httpx.Response(200, json=CHAT_BODY)))
     return responses_route, chat_route
 
 
@@ -87,10 +90,10 @@ def _mock_swap_targets(router: respx.MockRouter, monkeypatch) -> tuple[respx.Rou
     opt-in would send to."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek")
     swapped_chat_route = router.post(f"{SWAPPED_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(200, json=CHAT_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=CHAT_BODY))
     )
     stale_responses_route = router.post(f"{SWAPPED_API_BASE}/responses").mock(
-        return_value=httpx.Response(200, json=RESPONSES_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=RESPONSES_BODY))
     )
     return swapped_chat_route, stale_responses_route
 
@@ -152,9 +155,11 @@ async def test_opt_in_forwards_streaming_responses_natively(monkeypatch):
     treated as non-streaming and would be faked, so mirror that registration here."""
     monkeypatch.setitem(litellm.model_cost, "custom_openai/my-model", {"litellm_provider": "custom_openai"})
     responses_route = respx.post(RESPONSES_URL).mock(
-        return_value=httpx.Response(200, text=SSE_BODY, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=SSE_BODY, headers={"content-type": "text/event-stream"})
+        )
     )
-    chat_route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_BODY))
+    chat_route = respx.post(CHAT_URL).mock(return_value=response_for_respx(httpx.Response(200, json=CHAT_BODY)))
 
     stream = await litellm.aresponses(
         model="custom_openai/my-model",

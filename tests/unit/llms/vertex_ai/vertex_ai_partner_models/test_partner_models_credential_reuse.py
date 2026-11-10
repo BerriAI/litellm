@@ -8,11 +8,12 @@ import sys
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 import responses
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
@@ -271,7 +272,7 @@ def test_sync_mistral_partner_completion_posts_to_raw_predict_without_a_client()
         "https://us-central1-aiplatform.googleapis.com/v1/projects/partner-project/locations/us-central1"
         "/publishers/mistralai/models/mistral-small-2503@001:rawPredict"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-vertex-mistral",
@@ -287,7 +288,7 @@ def test_sync_mistral_partner_completion_posts_to_raw_predict_without_a_client()
                 ],
                 "usage": {"prompt_tokens": 21, "completion_tokens": 5, "total_tokens": 26},
             },
-        )
+        ))
     )
     messages: Final = [
         {"role": "system", "content": "Your name is Litellm Bot, you are a helpful assistant"},

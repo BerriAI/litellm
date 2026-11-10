@@ -1,8 +1,10 @@
+from tests._support.respx_httpx2 import response_for_respx
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 
 from litellm.proxy.guardrails.guardrail_hooks.aporia_ai.aporia_ai import AporiaGuardrail
@@ -76,7 +78,7 @@ async def test_make_aporia_api_request_posts_prepared_body_to_validate_endpoint(
 @pytest.mark.asyncio
 async def test_make_aporia_api_request_raises_400_when_aporia_blocks(respx_mock: respx.MockRouter) -> None:
     verdict = {"action": "block", "revised_response": "blocked by policy"}
-    respx_mock.post(f"{_API_BASE}/validate").mock(return_value=httpx.Response(200, json=verdict))
+    respx_mock.post(f"{_API_BASE}/validate").mock(return_value=response_for_respx(httpx.Response(200, json=verdict)))
 
     with pytest.raises(HTTPException) as blocked:
         await _guardrail().make_aporia_api_request(

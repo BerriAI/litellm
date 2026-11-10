@@ -5,11 +5,12 @@ from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -462,15 +463,19 @@ async def test_rejected_cache_is_replaced_when_a_request_param_cannot_be_deep_co
     stream: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.get(url__regex=r".*/cachedContents.*").mock(return_value=httpx.Response(200, json={}))
+    respx_mock.get(url__regex=r".*/cachedContents.*").mock(
+        return_value=response_for_respx(httpx.Response(200, json={}))
+    )
     respx_mock.post(url__regex=r".*/cachedContents$").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_created("cachedContents/deleted", _FAR_FUTURE)),
             httpx.Response(200, json=_created("cachedContents/fresh", _FAR_FUTURE)),
-        ]
+        ])
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
-        side_effect=[_generated(stream), _rejected(404, "CachedContent not found"), _generated(stream)]
+        side_effect=side_effect_for_respx(
+            [_generated(stream), _rejected(404, "CachedContent not found"), _generated(stream)]
+        )
     )
     lock: Final = threading.Lock()
 
@@ -506,16 +511,16 @@ async def test_remembered_cache_rejected_by_generate_content_is_replaced_within_
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
-        return_value=httpx.Response(200, json={})
+        return_value=response_for_respx(httpx.Response(200, json={}))
     )
     respx_mock.post(url__regex=r".*/cachedContents$").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_created("cachedContents/deleted", _FAR_FUTURE)),
             httpx.Response(200, json=_created("cachedContents/fresh", _FAR_FUTURE)),
-        ]
+        ])
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
-        side_effect=[_generated(stream), _rejected(status_code, message), _generated(stream)]
+        side_effect=side_effect_for_respx([_generated(stream), _rejected(status_code, message), _generated(stream)])
     )
     logged: Final[list[dict]] = []
 
@@ -566,16 +571,16 @@ async def test_error_that_does_not_name_a_missing_cache_is_not_retried(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
-        return_value=httpx.Response(200, json={})
+        return_value=response_for_respx(httpx.Response(200, json={}))
     )
     respx_mock.post(url__regex=r".*/cachedContents$").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_created("cachedContents/first", _FAR_FUTURE)),
             httpx.Response(200, json=_created("cachedContents/second", _FAR_FUTURE)),
-        ]
+        ])
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
-        side_effect=[_generated(stream), _rejected(status_code, message), _generated(stream)]
+        side_effect=side_effect_for_respx([_generated(stream), _rejected(status_code, message), _generated(stream)])
     )
 
     assert await _complete(sync_mode, stream) == "ok"
@@ -604,10 +609,10 @@ async def test_rejected_caller_supplied_cached_content_is_not_sent_again(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
-        return_value=httpx.Response(200, json={})
+        return_value=response_for_respx(httpx.Response(200, json={}))
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:(stream)?[gG]enerateContent.*").mock(
-        side_effect=[_rejected(404, "CachedContent not found"), _generated(stream)]
+        side_effect=side_effect_for_respx([_rejected(404, "CachedContent not found"), _generated(stream)])
     )
 
     with pytest.raises(openai.APIStatusError):
@@ -643,16 +648,18 @@ async def test_cache_rejected_on_a_resume_hop_is_not_sent_again(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     list_route: Final = respx_mock.get(url__regex=r".*/cachedContents.*").mock(
-        return_value=httpx.Response(200, json={})
+        return_value=response_for_respx(httpx.Response(200, json={}))
     )
     respx_mock.post(url__regex=r".*/cachedContents$").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_created("cachedContents/deleted", _FAR_FUTURE)),
             httpx.Response(200, json=_created("cachedContents/fresh", _FAR_FUTURE)),
-        ]
+        ])
     )
     generate_route: Final = respx_mock.post(url__regex=r".*:streamGenerateContent.*").mock(
-        side_effect=[_cut_off_stream(), _rejected(404, "CachedContent not found"), _generated(True)]
+        side_effect=side_effect_for_respx(
+            [_cut_off_stream(), _rejected(404, "CachedContent not found"), _generated(True)]
+        )
     )
 
     await _complete(sync_mode, True, max_tokens=100_000)

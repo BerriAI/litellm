@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 import yaml

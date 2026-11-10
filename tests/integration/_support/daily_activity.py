@@ -8,7 +8,7 @@ from hashlib import sha256
 from itertools import chain
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import psycopg
 import pytest
 from integration._support.client import Gateway, Scenario, object_value

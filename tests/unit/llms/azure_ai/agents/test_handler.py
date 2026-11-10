@@ -2,10 +2,9 @@ import datetime
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure_ai.agents.handler import AzureAIAgentsHandler
@@ -24,7 +23,7 @@ def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _assistants_api(thread_id: str, answer: str, project_path: str = "/api/projects/litellm-test") -> respx.MockRouter:
     thread_path: Final = f"{project_path}/threads/{thread_id}"
-    router: Final = respx.mock(assert_all_called=False)
+    router: Final = respx.mock(using="httpcore2_and_legacy", assert_all_called=False)
     router.post(path=f"{project_path}/threads").respond(
         200, json={"id": thread_id, "object": "thread", "created_at": 1767225600, "metadata": {}}
     )

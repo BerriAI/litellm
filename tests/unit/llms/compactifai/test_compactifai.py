@@ -4,9 +4,9 @@ import sys
 from unittest.mock import AsyncMock, patch
 from typing import Final, Optional
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from respx import MockRouter
 
 import litellm

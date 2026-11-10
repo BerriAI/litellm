@@ -11,10 +11,11 @@ from types import MappingProxyType
 from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import ANY, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from pydantic import TypeAdapter
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -129,7 +130,9 @@ async def test_publish_message_encodes_the_standard_payload(
     topic_id: Final = "unit-topic"
     url: Final = f"https://pubsub.googleapis.com/v1/projects/{project_id}/topics/{topic_id}:publish"
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
-    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(202, json={"messageIds": ["publish-1"]}))
+    route: Final = respx_mock.post(url).mock(
+        return_value=response_for_respx(httpx.Response(202, json={"messageIds": ["publish-1"]}))
+    )
     logger: Final = GcsPubSubLogger(
         project_id=project_id,
         topic_id=topic_id,
@@ -218,7 +221,9 @@ async def test_v1_success_event_publishes_the_spend_log_fixture(
     url: Final = f"https://pubsub.googleapis.com/v1/projects/{project_id}/topics/{topic_id}:publish"
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr(litellm, "gcs_pub_sub_use_v1", True)
-    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(202, json={"messageIds": ["publish-2"]}))
+    route: Final = respx_mock.post(url).mock(
+        return_value=response_for_respx(httpx.Response(202, json={"messageIds": ["publish-2"]}))
+    )
     logger: Final = GcsPubSubLogger(
         project_id=project_id,
         topic_id=topic_id,

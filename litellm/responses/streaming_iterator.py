@@ -26,7 +26,7 @@ from typing import (
     runtime_checkable,
 )
 
-import httpx
+import httpx2 as httpx
 from openai._streaming import SSEDecoder
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs

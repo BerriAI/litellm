@@ -8,7 +8,7 @@ from functools import partial
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from openai import Timeout as SDKTimeout
 from typing_extensions import assert_never
 

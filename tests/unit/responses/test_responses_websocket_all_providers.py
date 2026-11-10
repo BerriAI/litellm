@@ -7,6 +7,7 @@ Tests that:
 3. Providers without native websocket support use ManagedResponsesWebSocketHandler
 """
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import asyncio
 import itertools
 import json
@@ -16,10 +17,10 @@ from functools import partial
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.custom_llm import CustomLLM
@@ -2119,7 +2120,9 @@ class TestWebSocketTurnAdmission:
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         _turns_finish_at(monkeypatch, _TURNED_AT)
-        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=_provider_turn_stream)
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=side_effect_for_respx(_provider_turn_stream)
+        )
         client_metadata: Final = {"session": "abc", "team": "search"}
         dual_cache: Final = DualCache()
 
@@ -4271,8 +4274,8 @@ class TestResponsesWebSocketCredentials:
     ) -> None:
         from unittest.mock import AsyncMock, patch
 
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.responses import main as responses_main
@@ -4301,11 +4304,14 @@ class TestResponsesWebSocketCredentials:
         websocket.close = AsyncMock()
         websocket.receive_text = AsyncMock(side_effect=RuntimeError("client closed"))
 
-        with respx.mock(assert_all_called=False) as upstream, patch("websockets.connect", refuse_native_socket):
+        with (
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream,
+            patch("websockets.connect", refuse_native_socket),
+        ):
             chat_completions: Final = upstream.post(f"{api_base}/chat/completions").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     200, text=stream + "data: [DONE]\n\n", headers={"content-type": "text/event-stream"}
-                )
+                ))
             )
             await responses_main._aresponses_websocket.__wrapped__(
                 model="astra-chat",

@@ -4,10 +4,11 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
@@ -2124,7 +2125,9 @@ def _openai_sse(*chunks: Mapping[str, object]) -> str:
 
 def _complete_streamed_openai_response(respx_mock: respx.MockRouter, sse_body: str) -> litellm.ModelResponse:
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=sse_body, headers={"content-type": "text/event-stream"})
+        )
     )
     return litellm.completion(
         model="openai/gpt-4.1-mini",

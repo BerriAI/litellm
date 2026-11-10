@@ -11,7 +11,7 @@ import asyncio
 import hashlib
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler

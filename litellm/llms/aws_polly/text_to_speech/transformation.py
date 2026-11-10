@@ -9,7 +9,7 @@ import json
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Union
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import

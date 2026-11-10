@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 
 from tests.integration._support.client import Gateway

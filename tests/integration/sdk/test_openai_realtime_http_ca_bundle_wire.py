@@ -5,7 +5,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, wire_server

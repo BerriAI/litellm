@@ -12,11 +12,13 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from itertools import chain, count, repeat
 from typing import Final, TypeAlias, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import AsyncOpenAI, OpenAI
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
@@ -1318,12 +1320,12 @@ async def test_router_sends_pod_hosts_without_forwarding_discovery_flag(
     monkeypatch.setattr(loop, "getaddrinfo", async_getaddrinfo)
     monkeypatch.setattr(socket, "getaddrinfo", sync_getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(
             url__regex=re.compile(
                 r"http://(?:10\.0\.0\.1|10\.0\.0\.2|vllm-headless\.ns\.svc\.cluster\.local):8000/v1/chat/completions"
             )
-        ).mock(return_value=httpx.Response(200, json=_CHAT_RESPONSE))
+        ).mock(return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE)))
         _clear_proxy_environment(monkeypatch)
         discovery_enabled_router: Final = Router(model_list=[_deployment()])
         control_router: Final = Router(model_list=[_deployment(kubernetes_pod_discovery=None)])
@@ -1397,9 +1399,9 @@ async def test_router_session_requests_stick_to_one_pod_for_sync_and_async(
     monkeypatch.setattr(loop, "getaddrinfo", async_getaddrinfo)
     monkeypatch.setattr(socket, "getaddrinfo", sync_getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
-            return_value=httpx.Response(200, json=_CHAT_RESPONSE)
+            return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE))
         )
         _clear_proxy_environment(monkeypatch)
         async_router: Final = Router(model_list=[_deployment()])
@@ -1441,9 +1443,9 @@ async def test_router_session_mapping_repeats_across_pods(
     monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     session_ids: Final = tuple(f"session-{index}" for index in range(30))
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
-            return_value=httpx.Response(200, json=_CHAT_RESPONSE)
+            return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE))
         )
         _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
@@ -1482,9 +1484,9 @@ async def test_generated_session_id_uses_round_robin_pod_selection(
 
     monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
-            return_value=httpx.Response(200, json=_CHAT_RESPONSE)
+            return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE))
         )
         _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
@@ -1521,9 +1523,9 @@ async def test_empty_session_id_uses_round_robin_pod_selection(
 
     monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
-            return_value=httpx.Response(200, json=_CHAT_RESPONSE)
+            return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE))
         )
         _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
@@ -1554,9 +1556,9 @@ async def test_session_requests_do_not_advance_round_robin_cursor(
 
     monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
-            return_value=httpx.Response(200, json=_CHAT_RESPONSE)
+            return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE))
         )
         _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
@@ -1659,9 +1661,9 @@ async def test_custom_routing_strategy_keeps_sync_and_async_sessions_on_one_pod(
     monkeypatch.setattr(loop, "getaddrinfo", async_getaddrinfo)
     monkeypatch.setattr(socket, "getaddrinfo", sync_getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
-            return_value=httpx.Response(200, json=_CHAT_RESPONSE)
+            return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE))
         )
         _clear_proxy_environment(monkeypatch)
         async_router: Final = Router(model_list=[_deployment()])
@@ -1702,9 +1704,9 @@ async def test_top_level_litellm_session_id_keeps_requests_on_one_pod(
 
     monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
-            return_value=httpx.Response(200, json=_CHAT_RESPONSE)
+            return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE))
         )
         _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
@@ -1815,9 +1817,9 @@ async def test_generated_metadata_ignores_top_level_litellm_session_id(
 
     monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
-            return_value=httpx.Response(200, json=_CHAT_RESPONSE)
+            return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE))
         )
         _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()])
@@ -1870,12 +1872,12 @@ async def test_custom_routing_strategy_resolves_pod_hosts_for_sync_and_async_req
     monkeypatch.setattr(loop, "getaddrinfo", async_getaddrinfo)
     monkeypatch.setattr(socket, "getaddrinfo", sync_getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(
             url__regex=re.compile(
                 r"http://(?:10\.0\.0\.1|10\.0\.0\.2|vllm-headless\.ns\.svc\.cluster\.local):8000/v1/chat/completions"
             )
-        ).mock(return_value=httpx.Response(200, json=_CHAT_RESPONSE))
+        ).mock(return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE)))
         _clear_proxy_environment(monkeypatch)
         async_router: Final = Router(model_list=[_deployment()])
         sync_router: Final = Router(model_list=[_deployment()])
@@ -1915,10 +1917,10 @@ async def test_router_async_retry_uses_next_discovered_pod(monkeypatch: pytest.M
 
     monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(
             url__regex=re.compile(r"http://(?:10\.0\.0\.1|10\.0\.0\.2):8000/v1/chat/completions")
-        ).mock(side_effect=response_for)
+        ).mock(side_effect=side_effect_for_respx(response_for))
         _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()], num_retries=1)
 
@@ -1953,10 +1955,10 @@ def test_router_sync_retry_uses_next_discovered_pod(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(
             url__regex=re.compile(r"http://(?:10\.0\.0\.1|10\.0\.0\.2):8000/v1/chat/completions")
-        ).mock(side_effect=response_for)
+        ).mock(side_effect=side_effect_for_respx(response_for))
         _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()], num_retries=1)
 
@@ -2028,8 +2030,10 @@ async def test_router_session_retry_uses_next_rendezvous_pod(monkeypatch: pytest
     monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     session_id: Final = "retry-session"
-    with respx.mock(assert_all_called=True) as respx_mock:
-        route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(side_effect=response_for)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(url__regex=_THREE_POD_CHAT_PATTERN).mock(
+            side_effect=side_effect_for_respx(response_for)
+        )
         _clear_proxy_environment(monkeypatch)
         router: Final = Router(model_list=[_deployment()], num_retries=1)
 

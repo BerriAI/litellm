@@ -6,7 +6,7 @@ from os import PathLike
 from types import MappingProxyType
 from typing import IO, TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
-import httpx
+import httpx2 as httpx
 from openai import Omit
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,

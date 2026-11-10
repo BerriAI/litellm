@@ -2,7 +2,7 @@ import math
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
-import httpx
+import httpx2 as httpx
 from pydantic import BeforeValidator, ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

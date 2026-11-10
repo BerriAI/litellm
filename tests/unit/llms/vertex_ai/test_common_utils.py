@@ -4,9 +4,10 @@ import time
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 import yaml
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -16,6 +17,7 @@ from litellm import Router
 from litellm.constants import INITIAL_RETRY_DELAY, MAX_RETRY_DELAY
 from litellm.llms.vertex_ai.common_utils import get_gemini_url, get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from tests._support.respx_httpx2 import side_effect_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 CONFIG_PATH: Final = Path(__file__).parent / "google_genai_proxy_test_config.yaml"
@@ -84,8 +86,8 @@ async def test_ci_proxy_config_rides_out_consecutive_429s_with_backoff(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     route: Final = respx_mock.post(GEMINI_GENERATE_CONTENT_URL).mock(
-        side_effect=[httpx.Response(429, json=RESOURCE_EXHAUSTED)] * CONSECUTIVE_RATE_LIMITS
-        + [httpx.Response(200, json=PONG)]
+        side_effect=side_effect_for_respx([httpx.Response(429, json=RESOURCE_EXHAUSTED)] * CONSECUTIVE_RATE_LIMITS
+        + [httpx.Response(200, json=PONG)])
     )
     started: Final = time.monotonic()
     response: Final = await _router_from_ci_proxy_config().agenerate_content(

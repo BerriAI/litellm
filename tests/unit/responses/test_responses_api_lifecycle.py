@@ -5,15 +5,16 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Final, Literal, TypeAlias
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator, SyncResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.proxy.conftest import httpx_transport
 
 pytestmark: Final = pytest.mark.usefixtures(httpx_transport.__name__)
@@ -68,7 +69,7 @@ async def _invoke_get_response(sync_mode: bool, call_kwargs: dict[str, object]) 
     ),
 )
 def test_unsupported_response_lifecycle_operation_fails_before_http(provider: Provider, operation: Operation) -> None:
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         with pytest.raises(litellm.APIConnectionError) as exc_info:
             _invoke_unsupported_response_operation(provider, operation)
         calls: Final = tuple(mock_router.calls)
@@ -103,9 +104,9 @@ async def test_cancel_responses_404_surfaces_openai_api_error_with_exact_url(
         else f"{api_base}/openai/responses/{response_id}/cancel?api-version=2025-03-01-preview"
     )
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post(expected_url).mock(
-            return_value=httpx.Response(status_code=404, json=error_body)
+            return_value=response_for_respx(httpx.Response(status_code=404, json=error_body))
         )
         call_kwargs: Final = {
             "custom_llm_provider": provider,
@@ -237,9 +238,9 @@ async def test_streamed_retrieve_replays_the_stored_events_after_the_cursor(
     resume_kwargs: dict[str, object],
     expected_query: dict[str, str],
 ) -> None:
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = _retrieve_route(mock_router, provider).mock(
-            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+            return_value=response_for_respx(httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3))
         )
         stream: Final = await _retrieve(sync_mode, **_retrieve_kwargs(provider), **resume_kwargs)
         event_types: Final = await _event_types(stream)
@@ -257,9 +258,9 @@ async def test_streamed_retrieve_replays_the_stored_events_after_the_cursor(
 async def test_retrieve_without_stream_still_returns_the_response_object(
     sync_mode: bool, starting_after: object
 ) -> None:
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = _retrieve_route(mock_router, "openai").mock(
-            return_value=httpx.Response(200, json=_stored_response("completed"))
+            return_value=response_for_respx(httpx.Response(200, json=_stored_response("completed")))
         )
         retrieved: Final = await _retrieve(sync_mode, starting_after=starting_after, **_retrieve_kwargs("openai"))
         (call,) = route.calls
@@ -272,9 +273,9 @@ async def test_retrieve_without_stream_still_returns_the_response_object(
 @pytest.mark.parametrize("sync_mode", (True, False))
 @pytest.mark.asyncio
 async def test_a_streamed_retrieve_answered_with_json_returns_the_response_object(sync_mode: bool) -> None:
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = _retrieve_route(mock_router, "openai").mock(
-            return_value=httpx.Response(200, json=_stored_response("completed"))
+            return_value=response_for_respx(httpx.Response(200, json=_stored_response("completed")))
         )
         retrieved: Final = await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
         (call,) = route.calls
@@ -287,8 +288,10 @@ async def test_a_streamed_retrieve_answered_with_json_returns_the_response_objec
 @pytest.mark.parametrize("sync_mode", (True, False))
 @pytest.mark.asyncio
 async def test_resuming_at_the_end_of_a_finished_stream_ends_without_events(sync_mode: bool) -> None:
-    with respx.mock() as mock_router:
-        _retrieve_route(mock_router, "openai").mock(return_value=httpx.Response(200, headers=_STREAM_HEADERS))
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        _retrieve_route(mock_router, "openai").mock(
+            return_value=response_for_respx(httpx.Response(200, headers=_STREAM_HEADERS))
+        )
         stream: Final = await _retrieve(sync_mode, stream=True, starting_after=5, **_retrieve_kwargs("openai"))
         event_types: Final = await _event_types(stream)
 
@@ -298,9 +301,11 @@ async def test_resuming_at_the_end_of_a_finished_stream_ends_without_events(sync
 @pytest.mark.parametrize("sync_mode", (True, False))
 @pytest.mark.asyncio
 async def test_resumed_stream_cut_before_its_terminal_event_raises(sync_mode: bool) -> None:
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         _retrieve_route(mock_router, "openai").mock(
-            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_replay_body(_delta_event(4)))
+            return_value=response_for_respx(
+                httpx.Response(200, headers=_STREAM_HEADERS, content=_replay_body(_delta_event(4)))
+            )
         )
         stream: Final = await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
         with pytest.raises(litellm.APIConnectionError, match="before any terminal event"):
@@ -311,16 +316,16 @@ async def test_resumed_stream_cut_before_its_terminal_event_raises(sync_mode: bo
 @pytest.mark.asyncio
 async def test_a_resumed_stream_relays_the_stored_response_without_inventing_usage(sync_mode: bool) -> None:
     stored_without_usage: Final = {key: value for key, value in _stored_response("completed").items() if key != "usage"}
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         _retrieve_route(mock_router, "openai").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 headers=_STREAM_HEADERS,
                 content=_replay_body(
                     _delta_event(4),
                     {"type": "response.completed", "sequence_number": 5, "response": stored_without_usage},
                 ),
-            )
+            ))
         )
         stream: Final = await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
         if isinstance(stream, SyncResponsesAPIStreamingIterator):
@@ -356,9 +361,9 @@ class _ClosableReplay(httpx.SyncByteStream, httpx.AsyncByteStream):
 @pytest.mark.asyncio
 async def test_closing_a_resumed_stream_early_releases_the_upstream_connection(sync_mode: bool) -> None:
     upstream: Final = _ClosableReplay(_REPLAY_AFTER_3)
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         _retrieve_route(mock_router, "openai").mock(
-            return_value=httpx.Response(200, headers=_STREAM_HEADERS, stream=upstream)
+            return_value=response_for_respx(httpx.Response(200, headers=_STREAM_HEADERS, stream=upstream))
         )
         stream: Final = await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
         if isinstance(stream, SyncResponsesAPIStreamingIterator):
@@ -379,11 +384,11 @@ async def test_closing_a_resumed_stream_early_releases_the_upstream_connection(s
 @pytest.mark.asyncio
 async def test_a_rejected_resume_keeps_the_provider_error(sync_mode: bool) -> None:
     error_message: Final = "Response cannot be streamed, it is more than 5 minutes old."
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = _retrieve_route(mock_router, "openai").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 400, json={"error": {"message": error_message, "type": "invalid_request_error", "param": None}}
-            )
+            ))
         )
         with pytest.raises(openai.BadRequestError, match=error_message) as exc_info:
             await _retrieve(sync_mode, stream=True, starting_after=3, **_retrieve_kwargs("openai"))
@@ -396,8 +401,10 @@ async def test_a_rejected_resume_keeps_the_provider_error(sync_mode: bool) -> No
 @pytest.mark.parametrize("sync_mode", (True, False))
 @pytest.mark.asyncio
 async def test_a_resume_that_times_out_raises_a_timeout(sync_mode: bool) -> None:
-    with respx.mock() as mock_router:
-        route: Final = _retrieve_route(mock_router, "openai").mock(side_effect=httpx.ReadTimeout("slow"))
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(
+            side_effect=side_effect_for_respx(httpx.ReadTimeout("slow"))
+        )
         with pytest.raises(litellm.Timeout):
             await _retrieve(sync_mode, stream=True, timeout=1.0, **_retrieve_kwargs("openai"))
         (call,) = route.calls
@@ -420,7 +427,7 @@ async def test_a_resume_that_times_out_raises_a_timeout(sync_mode: bool) -> None
 async def test_a_malformed_resume_query_is_rejected_before_any_upstream_call(
     sync_mode: bool, resume_kwargs: dict[str, object]
 ) -> None:
-    with respx.mock(assert_all_called=False) as mock_router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as mock_router:
         route: Final = _retrieve_route(mock_router, "openai")
         with pytest.raises(litellm.BadRequestError) as exc_info:
             await _retrieve(sync_mode, **_retrieve_kwargs("openai"), **resume_kwargs)
@@ -449,8 +456,8 @@ async def test_a_malformed_resume_query_is_dropped_under_drop_params(
         if expected_query
         else httpx.Response(200, json=_stored_response("completed"))
     )
-    with respx.mock() as mock_router:
-        route: Final = _retrieve_route(mock_router, "openai").mock(return_value=upstream)
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        route: Final = _retrieve_route(mock_router, "openai").mock(return_value=response_for_respx(upstream))
         retrieved: Final = await _retrieve(sync_mode, drop_params=True, **_retrieve_kwargs("openai"), **resume_kwargs)
         streamed_types: Final = None if isinstance(retrieved, ResponsesAPIResponse) else await _event_types(retrieved)
         (call,) = route.calls
@@ -480,7 +487,7 @@ def _unsupported_provider_route(mock_router: respx.MockRouter, provider: str) ->
 async def test_streamed_retrieve_on_an_unsupported_provider_is_a_400_without_drop_params(
     sync_mode: bool, provider: str
 ) -> None:
-    with respx.mock(assert_all_called=False) as mock_router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as mock_router:
         route: Final = _unsupported_provider_route(mock_router, provider)
         with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
             await _retrieve(sync_mode, stream=True, starting_after=3, **_unsupported_provider_kwargs(provider))
@@ -495,9 +502,9 @@ async def test_streamed_retrieve_on_an_unsupported_provider_is_a_400_without_dro
 async def test_streamed_retrieve_on_an_unsupported_provider_drops_the_stream_under_drop_params(
     sync_mode: bool, provider: str
 ) -> None:
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = _unsupported_provider_route(mock_router, provider).mock(
-            return_value=httpx.Response(200, json=_stored_response("completed"))
+            return_value=response_for_respx(httpx.Response(200, json=_stored_response("completed")))
         )
         retrieved: Final = await _retrieve(
             sync_mode, stream=True, starting_after=3, drop_params=True, **_unsupported_provider_kwargs(provider)
@@ -524,9 +531,9 @@ async def test_a_routed_resume_requested_in_extra_query_gets_the_deployment_stre
             }
         ]
     )
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = _retrieve_route(mock_router, "openai").mock(
-            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+            return_value=response_for_respx(httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3))
         )
         stream: Final = await router.aget_responses(
             model="background-model",
@@ -563,9 +570,9 @@ async def test_a_routed_plain_retrieve_where_config_forces_stream_answers_the_re
         ],
         default_litellm_params=router_defaults,
     )
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = _retrieve_route(mock_router, "openai").mock(
-            return_value=httpx.Response(200, json=_stored_response("completed"))
+            return_value=response_for_respx(httpx.Response(200, json=_stored_response("completed")))
         )
         retrieved: Final = await router.aget_responses(model="background-model", response_id=_STORED_RESPONSE_ID)
         (call,) = route.calls
@@ -589,9 +596,9 @@ async def test_a_routed_create_on_a_deployment_that_forces_stream_still_streams(
             }
         ]
     )
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         route: Final = mock_router.post("https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+            return_value=response_for_respx(httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3))
         )
         stream: Final = await router.aresponses(model="background-model", input="hi", background=True)
         event_types: Final = await _event_types(stream)
@@ -614,9 +621,9 @@ def test_a_sync_streamed_retrieve_logs_success_with_the_finished_response(
 ) -> None:
     success_log: Final = _SuccessLog()
     monkeypatch.setattr(litellm, "callbacks", [success_log])
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         _retrieve_route(mock_router, "openai").mock(
-            return_value=httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3)
+            return_value=response_for_respx(httpx.Response(200, headers=_STREAM_HEADERS, content=_REPLAY_AFTER_3))
         )
         stream: Final = litellm.get_responses(
             response_id=_STORED_RESPONSE_ID, stream=True, starting_after=3, **_retrieve_kwargs("openai")
@@ -650,12 +657,12 @@ async def test_cancel_responses_reply_carries_the_id_retrieve_gives_for_the_same
         "litellm_metadata": {"model_info": {"id": "deployment-1"}},
     }
 
-    with respx.mock() as mock_router:
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
         mock_router.post(f"https://api.openai.com/v1/responses/{upstream_id}/cancel").mock(
-            return_value=httpx.Response(status_code=200, json=reply)
+            return_value=response_for_respx(httpx.Response(status_code=200, json=reply))
         )
         mock_router.get(f"https://api.openai.com/v1/responses/{upstream_id}").mock(
-            return_value=httpx.Response(status_code=200, json=reply)
+            return_value=response_for_respx(httpx.Response(status_code=200, json=reply))
         )
         cancelled: Final = await _invoke_cancel_response(sync_mode, call_kwargs)
         retrieved: Final = await _invoke_get_response(sync_mode, call_kwargs)

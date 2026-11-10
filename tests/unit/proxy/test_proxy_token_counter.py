@@ -20,9 +20,10 @@ from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import anyio
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 import tiktoken
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
@@ -92,6 +93,7 @@ from litellm.types.utils import (
     TokenCountResponse,
 )
 
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -333,7 +335,7 @@ async def test_token_counter_answers_503_when_the_metadata_server_behind_an_oidc
         ),
     )
 
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         upstream.get(url__regex=r"/computeMetadata/v1/instance/service-accounts/default/identity").respond(
             500, text="metadata server unavailable"
         )
@@ -1064,7 +1066,7 @@ async def test_bedrock_token_counter_error_propagation_generic_exception():
 @pytest.mark.asyncio
 async def test_bedrock_handler_httpx_error_status_code_propagation():
     """
-    Test that BedrockCountTokensHandler properly extracts status code from httpx.HTTPStatusError.
+    Test that BedrockCountTokensHandler properly extracts status code from httpx2.HTTPStatusError.
     """
     handler = BedrockCountTokensHandler()
 
@@ -1543,7 +1545,7 @@ async def test_anthropic_count_tokens_drops_a_malformed_tool_result_text_when_dr
 
     with respx.mock:
         route: Final = respx.post("https://api.openai.com/v1/responses/input_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 9})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 9}))
         )
         response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
 
@@ -1669,7 +1671,7 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_malformed_t
 
     with respx.mock:
         route: Final = respx.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 7})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 7}))
         )
         response: Final = await anthropic_count_tokens(request, UserAPIKeyAuth())
 

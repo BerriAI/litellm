@@ -1763,7 +1763,7 @@ def test_streaming_chunk_has_no_top_level_text():
 
 @pytest.mark.asyncio
 async def test_generate_content_sends_response_schema_and_tool_parameters_to_the_provider(respx_mock, monkeypatch):
-    import httpx
+    import httpx2 as httpx
 
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(

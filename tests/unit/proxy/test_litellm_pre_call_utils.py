@@ -8892,7 +8892,7 @@ def test_client_anthropic_api_headers_stay_off_azure_ai_outside_native_messages(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("local_beta_headers_config")
 async def test_client_thinking_binding_beta_reaches_azure_ai_foundry_claude():
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 

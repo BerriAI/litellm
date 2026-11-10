@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Final, Literal, Optional, Union
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from fastapi import HTTPException
@@ -2632,7 +2632,7 @@ def test_bad_request_error_with_response_without_request():
     (e.g., in tests or when manually creating error responses), and we need to
     ensure it doesn't raise RuntimeError when the exception is created.
     """
-    from httpx import Response
+    from httpx2 import Response
 
     from litellm.litellm_core_utils.exception_mapping_utils import (
         extract_and_raise_litellm_exception,
@@ -2668,7 +2668,7 @@ def test_bad_request_error_with_response_without_request():
 
 
 def test_context_window_exceeded_error_from_litellm_proxy():
-    from httpx import Response
+    from httpx2 import Response
 
     from litellm.litellm_core_utils.exception_mapping_utils import (
         extract_and_raise_litellm_exception,
@@ -2954,7 +2954,7 @@ async def test_exception_with_headers_httpx(sync_mode, provider, model, call_typ
 
     def _return_exception(*args, **kwargs):
 
-        from httpx import Headers, HTTPStatusError, Request, Response
+        from httpx2 import Headers, HTTPStatusError, Request, Response
 
         # Create the Request object
         request = Request("POST", "http://0.0.0.0:9000/chat/completions")
@@ -3020,7 +3020,7 @@ def test_openai_gateway_timeout_error():
 
     def _return_exception(*args, **kwargs):
 
-        from httpx import Headers, Request, Response
+        from httpx2 import Headers, Request, Response
 
         kwargs = {
             "request": Request("POST", "https://www.google.com"),

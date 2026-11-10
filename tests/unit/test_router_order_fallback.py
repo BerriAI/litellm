@@ -9,11 +9,13 @@ when lower order deployments fail.
 import json
 from typing import Final, Optional
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import AsyncOpenAI
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
@@ -724,10 +726,12 @@ async def test_responses_order_fallback_hop_drops_the_encrypted_reasoning_the_ne
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     openai_route: Final = respx_mock.post(_OPENAI_RESPONSES_URL).mock(
-        return_value=httpx.Response(500, json=_OVERLOADED_UPSTREAM)
+        return_value=response_for_respx(httpx.Response(500, json=_OVERLOADED_UPSTREAM))
     )
     mantle_route: Final = respx_mock.post(_MANTLE_RESPONSES_URL).mock(
-        return_value=httpx.Response(200, json=_completed_response_body("resp_mantle", "openai.gpt-6-astra", "399"))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_completed_response_body("resp_mantle", "openai.gpt-6-astra", "399"))
+        )
     )
 
     response = await _openai_then_mantle_order_router().aresponses(
@@ -748,10 +752,10 @@ async def test_responses_order_fallback_hop_keeps_the_encrypted_reasoning_the_sa
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     openai_route: Final = respx_mock.post(_OPENAI_RESPONSES_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(500, json=_OVERLOADED_UPSTREAM),
             httpx.Response(200, json=_completed_response_body("resp_order2", "gpt-6-astra-mini", "399")),
-        ]
+        ])
     )
 
     response = await _two_openai_orders_on_one_encryption_boundary_router().aresponses(

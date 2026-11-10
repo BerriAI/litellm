@@ -7,11 +7,13 @@ from threading import get_ident
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue, TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
@@ -334,7 +336,7 @@ async def test_handler_posts_to_count_tokens_path_under_deployment_api_base(http
     the host root, gets a 404, and the official count silently degrades to the local tokenizer."""
     with respx.mock:
         route = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 7})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 7}))
         )
         result = await AnthropicCountTokensHandler().handle_count_tokens_request(
             model="claude-sonnet-4-5",
@@ -384,9 +386,9 @@ async def test_remote_image_fetch_keeps_counting_handler_event_loop_responsive(
         return httpx.Response(200, content=image_bytes, headers={"Content-Type": "image/png"})
 
     with respx.mock:
-        image_route: Final = respx.get(image_url).mock(side_effect=image_response)
+        image_route: Final = respx.get(image_url).mock(side_effect=side_effect_for_respx(image_response))
         count_route: Final = respx.post(f"{api_base}/v1/messages/count_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 7})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 7}))
         )
         handler: Final = handler_type()
         result: Final = await (
@@ -508,7 +510,7 @@ async def test_handler_sends_the_leading_system_run_as_system_not_as_a_message(h
     ``role: "system"``, so a Responses ``instructions`` is counted by Anthropic instead of 400ing."""
     with respx.mock:
         route = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 21})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 21}))
         )
         result = await AnthropicCountTokensHandler().handle_count_tokens_request(
             model="claude-opus-5-5",
@@ -565,7 +567,7 @@ async def _counted_body(
         return httpx.Response(200, json={"input_tokens": 31})
 
     with respx.mock:
-        respx.post(count_endpoint).mock(side_effect=count)
+        respx.post(count_endpoint).mock(side_effect=side_effect_for_respx(count))
         result: Final = await counter_type().count_tokens(
             model_to_use="claude-opus-5-5",
             messages=messages,
@@ -935,7 +937,7 @@ def test_headers_add_the_compaction_beta_only_for_a_compacted_history():
 async def test_handler_sends_the_compaction_beta_with_a_compacted_history(httpx_transport_clients):
     with respx.mock:
         route = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 404})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 404}))
         )
         result = await AnthropicCountTokensHandler().handle_count_tokens_request(
             model="claude-sonnet-5-5",
@@ -986,7 +988,7 @@ async def test_counter_forwards_context_management_with_the_beta_inference_sends
     sends it, the OpenAI list form mapped to edits, and its beta."""
     with respx.mock:
         route: Final = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 259})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 259}))
         )
         result: Final = await AnthropicTokenCounter().count_tokens(
             model_to_use="claude-opus-5-5",
@@ -1011,7 +1013,7 @@ async def test_counter_leaves_out_context_management_without_edits(context_manag
     leaves it out and adds no context-management beta."""
     with respx.mock:
         route: Final = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 11})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 11}))
         )
         result: Final = await AnthropicTokenCounter().count_tokens(
             model_to_use="claude-opus-5-5",

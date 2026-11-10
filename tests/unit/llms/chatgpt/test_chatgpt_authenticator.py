@@ -7,9 +7,10 @@ from typing import Final
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
-import httpx
-import respx
+import httpx2 as httpx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.llms.chatgpt.authenticator import (
@@ -301,10 +302,10 @@ def test_refresh_keeps_saved_workspace(tmp_path: Path, monkeypatch: pytest.Monke
     authenticator: Final = Authenticator(auth_file=str(auth_file))
     with respx.mock as transport:
         transport.post("https://auth.openai.com/oauth/token").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={"access_token": token, "id_token": token, "refresh_token": "example-rotated-refresh"},
-            )
+            ))
         )
         assert authenticator.get_access_token() == token
     assert authenticator.get_account_id(token) == "acct-selected-workspace"

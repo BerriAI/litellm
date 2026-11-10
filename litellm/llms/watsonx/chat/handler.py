@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse

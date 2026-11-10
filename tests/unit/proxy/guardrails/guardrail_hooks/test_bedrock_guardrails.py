@@ -10,9 +10,10 @@ from datetime import datetime, timezone
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 
 
@@ -35,6 +36,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockTextContent,
 )
 from litellm.types.utils import CallTypes, ModelResponse
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
@@ -1056,7 +1058,7 @@ async def test_configured_output_scope_reaches_bedrock_and_preserves_healthy_ass
         )
 
     route: Final = respx_mock.post("https://bedrock.example/guardrail/test-guardrail/version/DRAFT/apply").mock(
-        side_effect=provider
+        side_effect=side_effect_for_respx(provider)
     )
     request_data: Final = {
         "messages": [
@@ -8035,7 +8037,7 @@ async def test_during_call_masking_rewrites_pii_in_messages(
 ) -> None:
     guardrail: Final = _masking_guardrail()
     route: Final = respx_mock.post(_MASKING_GUARDRAIL_URL).mock(
-        return_value=_anonymized_reply(
+        return_value=response_for_respx(_anonymized_reply(
             (
                 "Hello, my phone number is {PHONE}",
                 "Hello, how can I help you today?",
@@ -8043,7 +8045,7 @@ async def test_during_call_masking_rewrites_pii_in_messages(
                 "ok, my credit card number is {CREDIT_DEBIT_CARD_NUMBER}",
             ),
             ("PHONE", "CREDIT_DEBIT_CARD_NUMBER"),
-        )
+        ))
     )
 
     response: Final = await guardrail.async_moderation_hook(
@@ -8082,7 +8084,7 @@ async def test_during_call_masking_rewrites_only_pii_block_in_content_list(
 ) -> None:
     guardrail: Final = _masking_guardrail()
     route: Final = respx_mock.post(_MASKING_GUARDRAIL_URL).mock(
-        return_value=_anonymized_reply(
+        return_value=response_for_respx(_anonymized_reply(
             (
                 "Hello, my phone number is {PHONE}",
                 "what time is it?",
@@ -8090,7 +8092,7 @@ async def test_during_call_masking_rewrites_only_pii_block_in_content_list(
                 "who is the president of the united states?",
             ),
             ("PHONE",),
-        )
+        ))
     )
 
     response: Final = await guardrail.async_moderation_hook(
@@ -8157,7 +8159,9 @@ async def test_guardrail_secret_lookups_leave_the_event_loop_free(
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
     vault: Final = host_in_loop_probing_vault(monkeypatch, "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION_NAME")
     guardrail: Final = BedrockGuardrail(**guardrail_config)
-    upstream: Final = respx_mock.route().mock(return_value=httpx.Response(200, json=upstream_answer))
+    upstream: Final = respx_mock.route().mock(
+        return_value=response_for_respx(httpx.Response(200, json=upstream_answer))
+    )
 
     _ = await guardrail.make_bedrock_api_request(
         source="INPUT",

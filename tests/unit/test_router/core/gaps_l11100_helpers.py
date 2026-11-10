@@ -104,7 +104,7 @@ class ModelsEndpoint:
     ) -> object:  # kwargs-ok: httpx options
         import json
 
-        import httpx
+        import httpx2 as httpx
 
         self.requests.append((url, dict(headers or {})))
         if self.error is not None:

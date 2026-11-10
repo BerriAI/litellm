@@ -1,8 +1,10 @@
+
+from tests._support.respx_httpx2 import response_for_respx
 import base64
 import json
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 from respx import MockRouter
 from typing_extensions import ReadOnly, TypedDict
@@ -98,7 +100,7 @@ def test_embedding_optional_params_max_retries(kwargs: _Kwargs) -> None:
 def test_image_embedding(case: _Case, respx_mock: MockRouter) -> None:
     png_b64: Final = base64.b64encode(b"\x89PNG\r\n\x1a\nFAKEPIXELS").decode()
     data_url: Final = f"data:image/png;base64,{png_b64}"
-    route: Final = respx_mock.post(case["url"]).mock(return_value=_canned_response(case))
+    route: Final = respx_mock.post(case["url"]).mock(return_value=response_for_respx(_canned_response(case)))
     response: Final = embedding(**dict(case["kwargs"]), input=[data_url])
     body: Final = json.loads(route.calls.last.request.content)
     if case["provider"] == "azure":

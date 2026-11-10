@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import unquote, urlsplit
 
-import httpx
+import httpx2 as httpx
 import jwt
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa

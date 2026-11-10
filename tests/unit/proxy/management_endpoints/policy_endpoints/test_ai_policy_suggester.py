@@ -6,10 +6,11 @@ import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 from litellm.proxy._types import ProxyException
@@ -318,7 +319,7 @@ class TestSuggesterToleratesAModelThatRefusesItsSamplingParams:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
         respx.post(url__regex=r".*/responses.*").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 401,
                 json={
                     "error": {
@@ -328,7 +329,7 @@ class TestSuggesterToleratesAModelThatRefusesItsSamplingParams:
                         "code": "invalid_api_key",
                     }
                 },
-            )
+            ))
         )
 
         with pytest.raises(litellm.AuthenticationError):

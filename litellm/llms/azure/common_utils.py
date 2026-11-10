@@ -9,7 +9,7 @@ from contextlib import closing
 from types import MappingProxyType
 from typing import Final, Literal, NamedTuple, NoReturn, cast
 
-import httpx
+import httpx2 as httpx
 from openai import APIError, AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict

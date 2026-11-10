@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai import AsyncOpenAI, OpenAI
 

@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support import prompt_cache_breakpoint as pcb
 from integration._support import responses_vendor as rv

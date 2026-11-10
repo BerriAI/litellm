@@ -6,7 +6,7 @@ Custom exception types for A2A protocol operations, following LiteLLM's exceptio
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 
 class A2AError(Exception):

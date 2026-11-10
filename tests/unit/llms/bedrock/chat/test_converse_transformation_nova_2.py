@@ -10,7 +10,7 @@ Reference: https://docs.aws.amazon.com/nova/latest/nova2-userguide/using-convers
 import pytest
 
 
-import httpx
+import httpx2 as httpx
 import litellm
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 

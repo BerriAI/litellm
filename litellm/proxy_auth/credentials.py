@@ -181,7 +181,7 @@ class GenericOAuth2Credential:
         if self._cached_token and self._cached_token.expires_on > time.time() + 60:
             return self._cached_token
 
-        import httpx
+        import httpx2 as httpx
 
         response: Final = httpx.post(
             self.token_url,

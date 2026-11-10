@@ -12,12 +12,14 @@ import hashlib
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import jwt
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.proxy._types import InvitationClaim, ProxyException
 
@@ -645,7 +647,7 @@ async def test_claim_token_rejects_breached_password_before_consuming_invite(htt
 
     password = "P@ssword123456"
     respx.get(_hibp_url_for(password)).mock(
-        return_value=httpx.Response(200, text=f"{_hibp_suffix_for(password)}:1387")
+        return_value=response_for_respx(httpx.Response(200, text=f"{_hibp_suffix_for(password)}:1387"))
     )
 
     invite = _make_invite(is_accepted=False)
@@ -678,7 +680,9 @@ async def test_claim_token_fails_open_when_hibp_unreachable(httpx_transport):
     from litellm.proxy.proxy_server import claim_onboarding_link
 
     password = "NewP@ssw0rd-2026"
-    respx.get(_hibp_url_for(password)).mock(side_effect=httpx.ConnectError("no route to host"))
+    respx.get(_hibp_url_for(password)).mock(
+        side_effect=side_effect_for_respx(httpx.ConnectError("no route to host"))
+    )
 
     invite = _make_invite(is_accepted=False)
     user = _make_user()

@@ -4,7 +4,7 @@ import ssl
 from types import SimpleNamespace
 from typing import Any, List
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.exceptions import GuardrailRaisedException

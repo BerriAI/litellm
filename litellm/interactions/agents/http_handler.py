@@ -9,7 +9,7 @@ duplicated. BaseAgentsAPIConfig stays as pure transform code.
 from collections.abc import Coroutine, Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.constants import request_timeout
 from litellm.interactions.http_handler import InteractionsHTTPHandler

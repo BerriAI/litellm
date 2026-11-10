@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support.anthropic_sse import CONTENT_BLOCK_START, CONTENT_TAIL, message_start, text_delta

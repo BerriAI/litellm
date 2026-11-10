@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 from litellm.types.router import GenericLiteLLMParams

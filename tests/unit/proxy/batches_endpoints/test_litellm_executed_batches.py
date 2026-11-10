@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts

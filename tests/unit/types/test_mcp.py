@@ -74,7 +74,7 @@ def test_an_https_upgrade_of_the_same_host_is_not_crossing() -> None:
 
 @pytest.mark.asyncio
 async def test_the_hook_drops_the_slot_only_once_the_origin_changes() -> None:
-    import httpx
+    import httpx2 as httpx
 
     hook = credential_redirect_hook("https://upstream.example.com/mcp", "esb-oauth")
 

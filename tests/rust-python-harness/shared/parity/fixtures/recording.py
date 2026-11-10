@@ -6,7 +6,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Final, TypeVar, cast
 
-import httpx
+import httpx2 as httpx
 from vcr.filters import remove_query_parameters
 from vcr.request import Request
 

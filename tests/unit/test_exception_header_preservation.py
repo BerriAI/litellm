@@ -10,7 +10,7 @@ x-ms-region, rate limit headers, etc. should be available even when errors occur
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

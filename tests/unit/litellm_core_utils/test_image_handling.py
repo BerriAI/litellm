@@ -10,7 +10,7 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
-from httpx import Request, Response
+from httpx2 import Request, Response
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache

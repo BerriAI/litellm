@@ -1,3 +1,4 @@
+
 import asyncio
 import importlib
 import json
@@ -5,7 +6,7 @@ import os
 import sys
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import TypeAdapter
 
@@ -28,6 +29,7 @@ from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from litellm.router import Router
 from litellm.utils import get_optional_params
 from litellm.rust_bridge.host.model_cost import publish
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 _MAPPED_PARAMS: Final = TypeAdapter(dict[str, object])
@@ -708,7 +710,7 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
     litellm.set_verbose = True
 
     mock_request = respx_mock.post(url__regex=r".*/chat/completions.*").mock(
-        return_value=httpx.Response(200, json=obj.model_dump(mode="json"))
+        return_value=response_for_respx(httpx.Response(200, json=obj.model_dump(mode="json")))
     )
 
     await router.acompletion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hello world!"}])
@@ -752,7 +754,9 @@ def test_azure_chat_completion_preserves_safety_result(respx_mock: MockRouter) -
         ],
         "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
     }
-    route: Final = respx_mock.post(url__startswith=url).mock(return_value=httpx.Response(200, json=payload))
+    route: Final = respx_mock.post(url__startswith=url).mock(
+        return_value=response_for_respx(httpx.Response(200, json=payload))
+    )
     response: Final = litellm.completion(
         model="azure/gpt-4.1-mini",
         messages=[{"role": "user", "content": "Hello"}],
@@ -783,7 +787,9 @@ def test_azure_deployment_id_selects_chat_completions_endpoint(respx_mock: MockR
         ],
         "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
     }
-    route: Final = respx_mock.post(url__startswith=url).mock(return_value=httpx.Response(200, json=payload))
+    route: Final = respx_mock.post(url__startswith=url).mock(
+        return_value=response_for_respx(httpx.Response(200, json=payload))
+    )
     response: Final = litellm.completion(
         model="gpt-3.5-turbo",
         deployment_id="deployment-gpt-4o",
@@ -809,7 +815,9 @@ def test_responses_api_version_leaves_the_chat_route_and_body_untouched(respx_mo
         "choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello"}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
     }
-    route: Final = respx_mock.post(url__startswith=url).mock(return_value=httpx.Response(200, json=payload))
+    route: Final = respx_mock.post(url__startswith=url).mock(
+        return_value=response_for_respx(httpx.Response(200, json=payload))
+    )
     messages: Final = [{"role": "user", "content": "Hello"}]
 
     response: Final = litellm.completion(

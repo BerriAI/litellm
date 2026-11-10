@@ -1,11 +1,13 @@
 from collections.abc import Iterator
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.types.utils import StandardLoggingPayload
 from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
@@ -43,7 +45,7 @@ async def test_failure_alerts_follow_the_configured_threshold(
     threshold: int,
     request_count: int,
 ) -> None:
-    route: Final = respx_mock.post(PAGERDUTY_URL).mock(return_value=httpx.Response(202))
+    route: Final = respx_mock.post(PAGERDUTY_URL).mock(return_value=response_for_respx(httpx.Response(202)))
     logger: Final = _pagerduty_logger(monkeypatch, threshold)
     payload: Final = cast(
         StandardLoggingPayload,
@@ -78,7 +80,7 @@ async def test_failure_alerts_follow_the_configured_threshold(
 async def test_hanging_requests_alert_at_the_default_threshold(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
-    route: Final = respx_mock.post(PAGERDUTY_URL).mock(return_value=httpx.Response(202))
+    route: Final = respx_mock.post(PAGERDUTY_URL).mock(return_value=response_for_respx(httpx.Response(202)))
     logger: Final = _pagerduty_logger(monkeypatch)
     user: Final = UserAPIKeyAuth(api_key="unit-key", key_alias="unit-alias", user_id="unit-user")
 

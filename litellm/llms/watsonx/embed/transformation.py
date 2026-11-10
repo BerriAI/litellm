@@ -5,7 +5,7 @@ Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 from collections.abc import Iterable, Mapping
 from typing import Final, Protocol
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 

@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 from litellm._logging import verbose_logger

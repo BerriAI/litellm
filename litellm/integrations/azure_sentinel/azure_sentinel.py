@@ -21,7 +21,7 @@ from types import MappingProxyType
 from typing import Final, Protocol, TypeVar
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger

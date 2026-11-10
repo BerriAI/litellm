@@ -151,7 +151,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         instead (see `force_transcription_model`), mirroring the Azure GA handler. Any
         other `api_base` keeps `model`, since an OpenAI-compatible gateway may route on it.
         """
-        from httpx import URL
+        from httpx2 import URL
 
         drops_model: Final = query_params.get("intent") == "transcription" and is_openai_backed_api_base(api_base)
         api_base = api_base.replace("https://", "wss://")

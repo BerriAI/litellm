@@ -31,7 +31,7 @@ import time
 import uuid
 from typing import List, Optional
 
-import httpx
+import httpx2 as httpx
 
 PROXY_URL: str = os.environ.get("LITELLM_PROXY_URL", "http://localhost:4000")
 try:

@@ -3,13 +3,15 @@ import json
 from collections.abc import Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 
@@ -119,9 +121,9 @@ async def test_otel_callback_emits_the_request_and_raw_provider_spans(
         [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter), tracer_provider=tracer_provider)],
     )
     respx_mock.post(_OPENAI_URL).mock(
-        return_value=httpx.Response(200, text=_STREAM, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(httpx.Response(200, text=_STREAM, headers={"content-type": "text/event-stream"})
         if streaming
-        else httpx.Response(200, json=_COMPLETION)
+        else httpx.Response(200, json=_COMPLETION))
     )
 
     response: Final = await litellm.acompletion(

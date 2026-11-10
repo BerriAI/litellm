@@ -19,14 +19,16 @@ from contextlib import AbstractContextManager
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 from starlette.datastructures import FormData, UploadFile
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm.caching.caching import Cache
@@ -555,7 +557,9 @@ def test_streamed_transcription_honors_a_deployment_post_call_guardrail(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor()])
-    respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(side_effect=_streams_when_asked)
+    respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(
+        side_effect=side_effect_for_respx(_streams_when_asked)
+    )
     deployment_params: Final = {
         "model": "openai/gpt-transcribe",
         "api_key": "sk-test",
@@ -615,7 +619,7 @@ def test_streamed_transcription_applies_a_deployment_guardrail_only_in_its_strea
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor(stream_scope=stream_scope)])
     upstream_route: Final = respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(
-        side_effect=_streams_when_asked
+        side_effect=side_effect_for_respx(_streams_when_asked)
     )
     monkeypatch.setattr(
         proxy_server,
@@ -667,7 +671,9 @@ def test_a_deployment_that_streams_transcription_answers_sse_to_a_client_that_se
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor()])
     monkeypatch.setattr(proxy_server, "get_form_data", _form_without_stream_field)
-    respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(side_effect=_streams_when_asked)
+    respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(
+        side_effect=side_effect_for_respx(_streams_when_asked)
+    )
     deployment_params: Final = {
         "model": "openai/gpt-transcribe",
         "api_key": "sk-test",
@@ -721,7 +727,7 @@ def test_cached_guarded_transcription_still_streams_to_a_stream_client(
     monkeypatch.setattr(litellm, "callbacks", [_TranscriptRedactor()])
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
     upstream_route: Final = respx_mock.post("https://transcribe-upstream.example/v1/audio/transcriptions").mock(
-        side_effect=_streams_when_asked
+        side_effect=side_effect_for_respx(_streams_when_asked)
     )
     monkeypatch.setattr(
         proxy_server,
@@ -893,7 +899,7 @@ def test_transcription_stream_form_field_reaches_other_providers_as_sent(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream: Final = respx_mock.post("https://elevenlabs.example/v1/speech-to-text").mock(
-        return_value=httpx.Response(200, json={"text": "hello world", "language_code": "en"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "hello world", "language_code": "en"}))
     )
     monkeypatch.setattr(
         proxy_server,
@@ -955,7 +961,9 @@ def test_streamed_transcription_carries_the_headers_a_streamed_chat_completion_c
     respx_mock: respx.MockRouter,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.route(host="stream-upstream.example").mock(side_effect=_streams_chat_and_transcription)
+    respx_mock.route(host="stream-upstream.example").mock(
+        side_effect=side_effect_for_respx(_streams_chat_and_transcription)
+    )
     upstream: Final = {"api_key": "sk-test", "api_base": "https://stream-upstream.example/v1"}
     monkeypatch.setattr(
         proxy_server,

@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm

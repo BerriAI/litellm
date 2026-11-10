@@ -7,7 +7,7 @@ from typing import (
     cast,  # noqa: TID251  # AllMessageValues variants are read-only TypedDict mappings
 )
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

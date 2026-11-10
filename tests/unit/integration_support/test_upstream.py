@@ -3,7 +3,7 @@ from collections import deque
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from starlette.types import Message, Scope
 from starlette.websockets import WebSocket

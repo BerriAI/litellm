@@ -11,10 +11,11 @@ from collections.abc import Mapping
 from typing import Final
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.azure_ai.common_utils import (
     get_azure_ai_agent_entra_token,
@@ -423,7 +424,7 @@ def test_completion_sends_the_entra_token_only_as_the_bearer_header(
 @pytest.mark.respx(assert_all_called=True)
 def test_embedding_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
-        return_value=httpx.Response(200, json=OPENAI_EMBEDDING)
+        return_value=response_for_respx(httpx.Response(200, json=OPENAI_EMBEDDING))
     )
 
     litellm.embedding(
@@ -452,7 +453,7 @@ def test_image_edit_sends_the_entra_token_only_as_the_bearer_header(
     respx_mock: respx.MockRouter, extra_kwargs: dict[str, dict[str, str]]
 ):
     route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
-        return_value=httpx.Response(200, json=IMAGE_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=IMAGE_RESPONSE))
     )
 
     litellm.image_edit(
@@ -473,7 +474,7 @@ def test_image_edit_sends_the_entra_token_only_as_the_bearer_header(
 @pytest.mark.respx(assert_all_called=True)
 def test_image_generation_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
-        return_value=httpx.Response(200, json=IMAGE_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=IMAGE_RESPONSE))
     )
 
     litellm.image_generation(
@@ -491,7 +492,7 @@ def test_image_generation_sends_the_entra_token_only_as_the_bearer_header(respx_
 @pytest.mark.respx(assert_all_called=True)
 def test_transcription_sends_the_entra_token_only_as_the_bearer_header(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post(url__startswith="https://example-resource.services.ai.azure.com").mock(
-        return_value=httpx.Response(200, json={"text": "hi"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "hi"}))
     )
 
     litellm.transcription(

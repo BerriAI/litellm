@@ -3,11 +3,13 @@ from collections.abc import Mapping
 from queue import SimpleQueue
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.scaledown.chat.transformation import (
     DECISIONS_UPSTREAM_MODEL,
@@ -786,7 +788,7 @@ def test_unsupported_param_is_rejected_unless_dropped(config):
 @respx.mock
 def test_completion_sends_x_api_key_to_the_native_summarize_endpoint():
     route = respx.post(f"{BASE}/summarization/abstractive").mock(
-        return_value=httpx.Response(200, json={"summary": "s", "input_tokens": 120})
+        return_value=response_for_respx(httpx.Response(200, json={"summary": "s", "input_tokens": 120}))
     )
 
     response = litellm.completion(
@@ -807,7 +809,7 @@ def test_completion_sends_x_api_key_to_the_native_summarize_endpoint():
 @respx.mock
 def test_completion_routes_decisions_to_the_decisions_endpoint():
     route = respx.post(f"{BASE}/v1/scaledown").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "model": "classify-1",
@@ -821,7 +823,7 @@ def test_completion_routes_decisions_to_the_decisions_endpoint():
                 },
                 "usage": {"input_tokens": 62, "output_tokens": 1, "cost": 0.00543},
             },
-        )
+        ))
     )
 
     response = litellm.completion(
@@ -855,7 +857,9 @@ def test_completion_extract_converts_response_format_to_entities():
         },
     }
     extract_result = {"entities": [], "structured_result": {"vendor": "Acme Corp"}, "input_tokens": 20}
-    route = respx.post(f"{BASE}/extract").mock(return_value=httpx.Response(200, json=extract_result))
+    route = respx.post(f"{BASE}/extract").mock(
+        return_value=response_for_respx(httpx.Response(200, json=extract_result))
+    )
 
     response = litellm.completion(
         model="scaledown/extract",
@@ -874,14 +878,14 @@ def test_completion_extract_converts_response_format_to_entities():
 @respx.mock
 def test_completion_cost_comes_from_input_tokens_not_upstream_usage_cost():
     respx.post(f"{BASE}/v1/scaledown").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "model": "classify-1",
                 "answers": {"q": {"type": "noul", "noul": 0.8}},
                 "usage": {"input_tokens": 1000, "output_tokens": 1, "cost": 99.0},
             },
-        )
+        ))
     )
 
     response = litellm.completion(
@@ -898,14 +902,14 @@ def test_completion_cost_comes_from_input_tokens_not_upstream_usage_cost():
 def test_completion_honors_scaledown_api_base(monkeypatch):
     monkeypatch.setenv("SCALEDOWN_API_BASE", "https://staging.scaledown.xyz/v1")
     route = respx.post("https://staging.scaledown.xyz/v1/scaledown").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "model": "classify-1",
                 "answers": {"q": {"type": "noul", "noul": 0.8}},
                 "usage": {"input_tokens": 10, "output_tokens": 1, "cost": 0.0},
             },
-        )
+        ))
     )
 
     litellm.completion(
@@ -919,7 +923,9 @@ def test_completion_honors_scaledown_api_base(monkeypatch):
 
 @respx.mock
 def test_upstream_payment_error_surfaces_the_detail():
-    respx.post(f"{BASE}/v1/scaledown").mock(return_value=httpx.Response(402, json={"detail": "Insufficient credits"}))
+    respx.post(f"{BASE}/v1/scaledown").mock(
+        return_value=response_for_respx(httpx.Response(402, json={"detail": "Insufficient credits"}))
+    )
 
     with pytest.raises(litellm.exceptions.BadRequestError) as exc:
         litellm.completion(
@@ -969,14 +975,14 @@ def test_malformed_decisions_request_never_reaches_the_network():
 @respx.mock
 def test_questions_passed_through_extra_body_reach_scaledown():
     route = respx.post(f"{BASE}/v1/scaledown").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "model": "classify-1",
                 "answers": {"q": {"type": "noul", "noul": 0.8}},
                 "usage": {"input_tokens": 10, "output_tokens": 1},
             },
-        )
+        ))
     )
     questions = {"q": {"type": "noul", "instructions": "Positive?"}}
 
@@ -993,7 +999,9 @@ def test_questions_passed_through_extra_body_reach_scaledown():
 @respx.mock
 def test_streaming_request_is_served_as_a_single_chunk():
     respx.post(f"{BASE}/compress/raw/").mock(
-        return_value=httpx.Response(200, json={"compressed_prompt": "c", "original_prompt_tokens": 9})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"compressed_prompt": "c", "original_prompt_tokens": 9})
+        )
     )
 
     chunks = list(
@@ -1096,7 +1104,7 @@ def test_unsupported_system_instructions_are_rejected(config, model):
 @pytest.mark.parametrize("nested", [False, True])
 def test_classify_uses_native_labels_and_preserves_scores(nested):
     payload = {"top_label": "urgent", "scores": {"urgent": 0.9, "routine": 0.1}, "input_tokens": 521}
-    route = respx.post(f"{BASE}/classify").mock(return_value=httpx.Response(200, json=payload))
+    route = respx.post(f"{BASE}/classify").mock(return_value=response_for_respx(httpx.Response(200, json=payload)))
     labels = [
         {"name": "urgent", "rubric": "Service is unavailable."},
         {"name": "routine", "rubric": "A cosmetic issue."},
@@ -1134,14 +1142,14 @@ async def test_async_extraction_keeps_flat_fields_and_usage():
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     route = respx.post(f"{BASE}/extract").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "entities": [{"type": "vendor", "text": "Northwind"}],
                 "structured_result": None,
                 "input_tokens": 161,
             },
-        )
+        ))
     )
     client = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
     try:
@@ -1171,7 +1179,7 @@ async def test_async_extraction_keeps_flat_fields_and_usage():
 @respx.mock
 def test_router_stream_includes_usage_without_sending_stream_options_upstream():
     route = respx.post(f"{BASE}/summarization/abstractive").mock(
-        return_value=httpx.Response(200, json={"summary": "Fixed billing.", "input_tokens": 90})
+        return_value=response_for_respx(httpx.Response(200, json={"summary": "Fixed billing.", "input_tokens": 90}))
     )
     router = litellm.Router(
         model_list=[

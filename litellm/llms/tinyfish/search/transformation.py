@@ -10,7 +10,7 @@ import json
 from typing import Final, Literal
 from urllib.parse import urlencode
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger

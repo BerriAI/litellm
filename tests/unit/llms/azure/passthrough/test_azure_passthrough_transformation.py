@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

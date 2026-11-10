@@ -10,9 +10,10 @@ from types import ModuleType
 from typing import Final, Literal, Protocol
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import AsyncOpenAI, AzureOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import Response as SDKResponse
@@ -45,6 +46,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.rust_bridge.host.model_cost import publish
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from litellm.proxy.utils import model_dump_with_preserved_fields
 
@@ -98,9 +100,9 @@ def test_get_stream_options_passes_caller_stream_options_through_on_any_host(api
     }
 
 
-@pytest.fixture(params=("httpx", "sdk"))
-def http_backend(request: pytest.FixtureRequest) -> ModuleType:
-    return importlib.import_module("httpx" if request.param == "httpx" else SDKResponse.__module__)
+@pytest.fixture
+def http_backend() -> ModuleType:
+    return importlib.import_module("httpx2")
 
 
 @pytest.fixture(params=("openai", "perplexity", "cerebras", "nvidia_nim"))
@@ -678,7 +680,7 @@ def test_azure_o_series_fake_stream_keeps_every_tool_call_and_token_detail():
 @respx.mock
 def test_completion_defaults_missing_message_role_and_preserves_omitted_fields() -> None:
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-missing-role",
@@ -688,7 +690,7 @@ def test_completion_defaults_missing_message_role_and_preserves_omitted_fields()
                 "choices": [{"index": 0, "message": {"content": "hi"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -728,7 +730,7 @@ def test_completion_defaults_missing_message_role_and_preserves_omitted_fields()
         (None, litellm.Timeout),
     ),
 )
-async def test_acompletion_preserves_public_errors_for_both_http_clients(
+async def test_acompletion_preserves_public_errors_for_injected_httpx2_client(
     http_backend: ModuleType,
     sdk_provider: str,
     status: int | None,
@@ -1209,7 +1211,7 @@ def _openai_sse_usage_chunk(chunk_id: str, model: str, *, prompt_tokens: int, co
 @pytest.mark.parametrize("model", ["o1", "o3-mini"])
 def test_o1_parallel_tool_calls_are_dropped_for_unsupported_models(respx_mock: respx.MockRouter, model: str) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-o-series",
@@ -1225,7 +1227,7 @@ def test_o1_parallel_tool_calls_are_dropped_for_unsupported_models(respx_mock: r
                 ],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -1273,7 +1275,9 @@ def test_prediction_parameter_participates_in_completion_cache_key(
             },
         )
 
-    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=respond)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(respond)
+    )
     messages: Final = [{"role": "user", "content": "replace the username"}]
     first_prediction: Final = {"type": "content", "content": "prediction one"}
     second_prediction: Final = {"type": "content", "content": "prediction two"}
@@ -1348,7 +1352,7 @@ def test_openai_tool_calling_sends_schema_and_parses_function_call(respx_mock: r
         }
     ]
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-tool-call",
@@ -1374,7 +1378,7 @@ def test_openai_tool_calling_sends_schema_and_parses_function_call(respx_mock: r
                 ],
                 "usage": {"prompt_tokens": 8, "completion_tokens": 3, "total_tokens": 11},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -1430,7 +1434,9 @@ async def test_openai_via_gemini_streaming_bridge_translates_openai_chunks(
         )
     )
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        )
     )
     router: Final = litellm.Router(
         model_list=[
@@ -1507,7 +1513,9 @@ def test_streaming_content_with_n_greater_than_one_preserves_choice_indices(
         )
     )
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        )
     )
     response: Final = litellm.completion(
         model="openai/gpt-4o",
@@ -1650,7 +1658,9 @@ def test_streaming_tool_calls_with_n_greater_than_one_preserves_choice_indices(
         )
     )
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        )
     )
     response: Final = litellm.completion(
         model="openai/gpt-4o",
@@ -2640,7 +2650,7 @@ async def test_chat_completion_sends_the_caller_params_extra_body_and_extra_head
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=_CHAT_RESPONSE_JSON)
+        return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE_JSON))
     )
     kwargs: Final = {
         **_WIRE_REQUEST,

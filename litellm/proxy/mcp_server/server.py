@@ -17,7 +17,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, M
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol
 
-import httpx
+import httpx2 as httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest

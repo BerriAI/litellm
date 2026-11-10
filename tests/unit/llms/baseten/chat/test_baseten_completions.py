@@ -2,10 +2,11 @@ import os
 from typing import Final
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.model_retirement import is_past_deprecation_date
 from litellm.llms.baseten.chat import BasetenConfig
@@ -121,7 +122,7 @@ class TestBasetenModelDiscovery:
 
     def test_get_models_calls_model_api(self, respx_mock: respx.MockRouter) -> None:
         route: Final = respx_mock.get("https://inference.baseten.co/v1/models").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "object": "list",
@@ -130,7 +131,7 @@ class TestBasetenModelDiscovery:
                         {"id": "moonshotai/Kimi-K2.5", "object": "model"},
                     ],
                 },
-            )
+            ))
         )
 
         models: Final = BasetenConfig().get_models(api_key="test-key")
@@ -140,7 +141,7 @@ class TestBasetenModelDiscovery:
 
     def test_get_models_respects_custom_api_base(self, respx_mock: respx.MockRouter) -> None:
         respx_mock.get("https://custom.baseten.example/v1/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "zai-org/GLM-5"}]})
+            return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "zai-org/GLM-5"}]}))
         )
 
         models: Final = BasetenConfig().get_models(api_key="test-key", api_base="https://custom.baseten.example/v1/")
@@ -154,7 +155,7 @@ class TestBasetenModelDiscovery:
 
     def test_get_models_raises_on_error_status(self, respx_mock: respx.MockRouter) -> None:
         respx_mock.get("https://inference.baseten.co/v1/models").mock(
-            return_value=httpx.Response(403, text="forbidden")
+            return_value=response_for_respx(httpx.Response(403, text="forbidden"))
         )
 
         with pytest.raises(ValueError, match="403"):
@@ -164,7 +165,7 @@ class TestBasetenModelDiscovery:
     def test_get_valid_models_check_provider_endpoint(self, respx_mock: respx.MockRouter) -> None:
         """check_provider_endpoint=True returns the live catalog instead of the static list."""
         respx_mock.get("https://inference.baseten.co/v1/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "brand-new/model"}]})
+            return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "brand-new/model"}]}))
         )
 
         models: Final = get_valid_models(check_provider_endpoint=True, custom_llm_provider="baseten")
@@ -176,7 +177,7 @@ class TestBasetenModelDiscovery:
         assert is_past_deprecation_date(litellm.model_cost["baseten/zai-org/GLM-5"])
         _model_cache.flush_cache()
         respx_mock.get("https://inference.baseten.co/v1/models").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "zai-org/GLM-5"}]})
+            return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "zai-org/GLM-5"}]}))
         )
 
         models: Final = get_valid_models(check_provider_endpoint=True, custom_llm_provider="baseten")

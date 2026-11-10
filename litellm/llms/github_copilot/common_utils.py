@@ -6,7 +6,7 @@ from collections.abc import MutableMapping
 from typing import Final
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 

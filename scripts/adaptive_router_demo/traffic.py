@@ -40,7 +40,7 @@ import sys
 import uuid
 from typing import Dict, List, Tuple
 
-import httpx
+import httpx2 as httpx
 
 # ---- prompts (paired with the RequestType the classifier will assign) ----
 # Each prompt is engineered to (a) classify into the listed type and (b) make

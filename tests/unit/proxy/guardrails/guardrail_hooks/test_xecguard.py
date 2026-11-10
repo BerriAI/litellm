@@ -9,7 +9,7 @@ suite lives in ``test_xecguard_live.py``.
 import os
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from fastapi.exceptions import HTTPException

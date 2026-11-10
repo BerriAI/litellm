@@ -17,7 +17,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict

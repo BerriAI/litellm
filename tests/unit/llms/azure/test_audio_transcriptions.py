@@ -2,11 +2,13 @@ import json
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import AsyncAzureOpenAI, AzureOpenAI
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
@@ -172,7 +174,7 @@ async def test_azure_router_transcription_sends_the_default_api_version(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.delenv("AZURE_API_VERSION", raising=False)
     route: Final = respx_mock.route(host="transcribe-route.openai.azure.com").mock(
-        return_value=httpx.Response(200, json={"text": "hello"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "hello"}))
     )
     router: Final = litellm.Router(
         model_list=[
@@ -213,7 +215,7 @@ def test_azure_sync_transcription_uses_the_deployments_route(
 ) -> None:
     monkeypatch.delenv("AZURE_API_VERSION", raising=False)
     route: Final = respx_mock.route(host="transcribe-route.openai.azure.com").mock(
-        return_value=httpx.Response(200, json={"text": "hello"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "hello"}))
     )
 
     response: Final = litellm.transcription(

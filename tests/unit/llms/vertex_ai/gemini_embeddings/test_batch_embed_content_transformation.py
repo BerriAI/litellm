@@ -12,10 +12,11 @@ import json
 from collections.abc import Callable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -636,7 +637,11 @@ class TestFileContentBlocks:
 def test_gemini_embedding(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
-    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.0123, -0.0456, 0.0789]}]}))
+    ).mock(
+        return_value=response_for_respx(
+            httpx.Response(200, json={"embeddings": [{"values": [0.0123, -0.0456, 0.0789]}]})
+        )
+    )
 
     response: Final = litellm.embedding(
         model="gemini/gemini-embedding-001",

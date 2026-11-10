@@ -3,7 +3,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support import prompt_cache_breakpoint as pcb

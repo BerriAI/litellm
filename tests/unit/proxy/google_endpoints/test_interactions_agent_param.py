@@ -6,15 +6,17 @@ The proxy must not pass the agent name as ``model`` or LiteLLM may route to
 openai/* wildcards instead of Gemini interactions.
 """
 
+from tests._support.respx_httpx2 import response_for_respx
 import asyncio
 import json
 from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 
 
@@ -132,10 +134,10 @@ def test_create_interaction_route_forwards_agent_config(proxy_client: TestClient
         "environment": "remote",
     }
     upstream: Final = respx_mock.post("https://generativelanguage.googleapis.com/v1beta/interactions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={"id": "interaction-agent", "object": "interaction", "status": "completed"},
-        )
+        ))
     )
 
     response: Final = proxy_client.post("/v1beta/interactions", json=request_body)

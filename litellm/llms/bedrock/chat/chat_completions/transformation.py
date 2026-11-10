@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 from typing_extensions import assert_never
 

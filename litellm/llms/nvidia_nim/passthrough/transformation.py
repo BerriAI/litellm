@@ -4,7 +4,7 @@ import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
@@ -18,7 +18,7 @@ from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import LlmProviders, StandardPassThroughResponseObject
 
 if TYPE_CHECKING:
-    from httpx import URL, Response
+    from httpx2 import URL, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.base_llm.ocr.transformation import OCRResponse

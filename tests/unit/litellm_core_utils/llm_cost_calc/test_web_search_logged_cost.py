@@ -4,11 +4,13 @@ from typing import Final, Literal, TypedDict
 
 from typing_extensions import ReadOnly
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 
@@ -156,7 +158,7 @@ async def test_chat_web_search_logged_cost_adds_the_per_query_cost_for_the_conte
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=_CHAT_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=_CHAT_RESPONSE))
     )
     options: Final = {"web_search_options": web_search_options} if web_search_options is not None else {}
 
@@ -190,9 +192,11 @@ async def test_responses_web_search_logged_cost_adds_the_per_query_cost_for_the_
     respx_mock: respx.MockRouter,
 ) -> None:
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, text=_RESPONSES_STREAM, headers={"content-type": "text/event-stream"})
-        if stream
-        else httpx.Response(200, json=_RESPONSES_BODY)
+        return_value=response_for_respx(
+            httpx.Response(200, text=_RESPONSES_STREAM, headers={"content-type": "text/event-stream"})
+            if stream
+            else httpx.Response(200, json=_RESPONSES_BODY)
+        )
     )
 
     response: Final = await litellm.aresponses(

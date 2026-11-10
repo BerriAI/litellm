@@ -1,3 +1,4 @@
+
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Generator, Mapping
@@ -8,12 +9,13 @@ from types import MappingProxyType
 from typing import Final, cast
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -156,8 +158,8 @@ def _error(request: httpx.Request, code: int, message: str) -> httpx.Response:
 
 @contextmanager
 def _transport(upstream: Callable[[httpx.Request], httpx.Response]) -> Generator[respx.Route]:
-    with respx.mock() as transport:
-        yield transport.post("https://api.anthropic.com/v1/messages").mock(side_effect=upstream)
+    with respx.mock(using="httpcore2_and_legacy") as transport:
+        yield transport.post("https://api.anthropic.com/v1/messages").mock(side_effect=side_effect_for_respx(upstream))
 
 
 class _NativeOptions(TypedDict):

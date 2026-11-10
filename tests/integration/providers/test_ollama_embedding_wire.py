@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, list_value, object_value
 from integration._support.timing import assert_cut_short

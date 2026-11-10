@@ -13,7 +13,7 @@ import weakref
 from typing import Final
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from redis.asyncio import ConnectionPool, Redis
 

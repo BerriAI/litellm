@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest

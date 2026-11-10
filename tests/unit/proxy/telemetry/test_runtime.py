@@ -1,7 +1,7 @@
 import asyncio
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import HttpUrl
 

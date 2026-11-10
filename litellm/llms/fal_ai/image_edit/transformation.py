@@ -2,8 +2,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.images.utils import image_to_data_url

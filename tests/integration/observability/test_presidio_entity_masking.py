@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, string_value
 from integration._support.wire import Reply, Request, Wire, wire_server

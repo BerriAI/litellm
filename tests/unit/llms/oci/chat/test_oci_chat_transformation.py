@@ -2,7 +2,7 @@ import datetime
 import copy
 import logging
 from typing import Final
-import httpx
+import httpx2 as httpx
 import pytest
 import json
 

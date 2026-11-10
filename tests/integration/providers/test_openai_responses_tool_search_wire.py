@@ -12,7 +12,7 @@ from types import EllipsisType, MappingProxyType
 from typing import Final
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 import psutil
 import pytest
 import yaml

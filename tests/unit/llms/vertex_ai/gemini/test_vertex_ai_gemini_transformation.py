@@ -4,10 +4,11 @@ from itertools import chain
 from pathlib import Path
 from typing import Final, Literal, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
@@ -2932,7 +2933,9 @@ def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -
     from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
 
     image_url: Final = "https://8.8.8.8/gemini-tool-response.png"
-    respx.get(image_url).mock(return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"}))
+    respx.get(image_url).mock(
+        return_value=response_for_respx(httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"}))
+    )
     content: Final = (
         {"type": content_type, "file": {"file_data": image_url}}
         if content_type == "file" else

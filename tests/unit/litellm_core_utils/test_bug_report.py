@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import parse_qs, unquote_plus, urlparse
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

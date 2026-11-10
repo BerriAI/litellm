@@ -2,10 +2,9 @@ import json
 from typing import Final
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.llms.azure.text_to_speech.transformation import AzureAVATextToSpeechConfig
 from litellm.types.llms.openai import HttpxBinaryResponseContent

@@ -11,13 +11,15 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Any, Final, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 
 # Import required modules
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
@@ -1648,11 +1650,11 @@ def _serve_responses(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
-    return respx_mock.post(url__regex=url_regex).mock(side_effect=list(responses))
+    return respx_mock.post(url__regex=url_regex).mock(side_effect=side_effect_for_respx(list(responses)))
 
 
-def _serve_rounds(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, bodies: Sequence[Mapping[str, object]]
+def _serve_rounds(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, bodies: Sequence[Mapping[str, object]]
 ) -> respx.Route:
     return _serve_responses(
         respx_mock, monkeypatch, tuple(httpx.Response(200, content=json.dumps(body, default=dict)) for body in bodies)
@@ -1696,8 +1698,8 @@ async def _auto_execute(
     return response
 
 
-async def _auto_execute_echo(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+async def _auto_execute_echo(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
 ) -> ResponsesAPIResponse:
     _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
     return await _auto_execute(logging_obj, _ECHO_MCP_TOOL, "PING")
@@ -1776,8 +1778,8 @@ def _assert_one_row_bills_both_rounds(logged: tuple[StandardLoggingPayload, ...]
 
 
 @pytest.mark.asyncio
-async def test_non_stream_auto_execute_logs_the_client_response_billed_for_both_rounds(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_non_stream_auto_execute_logs_the_client_response_billed_for_both_rounds(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     recorder: Final = _RoundRecorder()
     response: Final = await _auto_execute_echo(
@@ -1807,8 +1809,8 @@ async def test_non_stream_auto_execute_deferred_for_a_post_call_guardrail_logs_b
 
 
 @pytest.mark.asyncio
-async def test_non_stream_auto_execute_hands_sync_callbacks_the_client_response(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_non_stream_auto_execute_hands_sync_callbacks_the_client_response(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     recorder: Final = _RoundRecorder()
     response: Final = await _auto_execute_echo(respx_mock, monkeypatch, _rounds_logging_obj(recorder, "mcp-rounds-sync"))
@@ -1828,8 +1830,8 @@ async def test_non_stream_auto_execute_hands_sync_callbacks_the_client_response(
 
 
 @pytest.mark.asyncio
-async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follow_up_fails(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follow_up_fails(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     context_window_error: Final = {
         "error": {
@@ -2076,8 +2078,8 @@ async def _assert_the_listing_logs_in_the_request_trace(
 
 
 @pytest.mark.asyncio
-async def test_non_stream_auto_execute_tool_listing_log_continues_the_request_trace(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_non_stream_auto_execute_tool_listing_log_continues_the_request_trace(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
     listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
@@ -2098,14 +2100,14 @@ async def test_non_stream_auto_execute_tool_listing_log_continues_the_request_tr
 
 
 @pytest.mark.asyncio
-async def test_bridged_auto_execute_tool_listing_log_continues_the_request_trace(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_bridged_auto_execute_tool_listing_log_continues_the_request_trace(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post("https://mcp-rounds.example.com/v1/messages").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(
                 200,
                 json=_anthropic_message(
@@ -2115,7 +2117,7 @@ async def test_bridged_auto_execute_tool_listing_log_continues_the_request_trace
                 ),
             ),
             httpx.Response(200, json=_anthropic_message("msg_answer", ({"type": "text", "text": "PING"},), "end_turn")),
-        ]
+        ])
     )
     listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
     request_recorder: Final = _RoundRecorder()
@@ -2165,8 +2167,8 @@ def _langfuse_trace_of(logged: Mapping[str, object]) -> object:
     [None, {"trace_id": "client-trace", "session_id": "client-session"}],
     ids=["no_body_metadata", "body_metadata_with_its_own_trace_and_session"],
 )
-async def test_auto_execute_mcp_logs_join_the_langfuse_trace_of_a_session_header_request(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, body_metadata: dict[str, str] | None
+async def test_auto_execute_mcp_logs_join_the_langfuse_trace_of_a_session_header_request(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, body_metadata: dict[str, str] | None
 ):
     _serve_rounds(respx_mock, monkeypatch, (_ROUND_ONE_BODY, _ROUND_TWO_BODY))
     listing_recorder: Final = _serve_the_demo_mcp_listing(monkeypatch)
@@ -2321,7 +2323,7 @@ async def test_bridged_auto_execute_follow_up_continues_the_client_conversation_
     litellm.in_memory_llm_clients_cache.flush_cache()
     thinking: Final = {"type": "thinking", "thinking": "Echo PING back.", "signature": "sig-round-one"}
     provider: Final = respx_mock.post("https://mcp-rounds.example.com/v1/messages").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(
                 200,
                 json=_anthropic_message(
@@ -2331,7 +2333,7 @@ async def test_bridged_auto_execute_follow_up_continues_the_client_conversation_
                 ),
             ),
             httpx.Response(200, json=_anthropic_message("msg_answer", ({"type": "text", "text": "PING"},), "end_turn")),
-        ]
+        ])
     )
     echo_tool: Final = MCPTool.model_validate(
         {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
@@ -2386,7 +2388,7 @@ async def _scripted_mcp_stream(
     max_agentic_loops: int | None = None,
 ) -> tuple[tuple[object, ...], respx.Route, AsyncMock, AsyncMock, MCPEnhancedStreamingIterator]:
     upstream: Final = respx.post(upstream_url).mock(
-        side_effect=[httpx.Response(200, content=body, headers=SSE_HEADERS) for body in rounds]
+        side_effect=side_effect_for_respx([httpx.Response(200, content=body, headers=SSE_HEADERS) for body in rounds])
     )
     with (
         patch.object(LiteLLM_Proxy_MCP_Handler, "_get_mcp_tools_from_manager", new_callable=AsyncMock) as fetch,
@@ -2835,8 +2837,8 @@ async def test_stream_auto_execute_bills_every_finished_round_when_the_client_di
 
 
 @pytest.mark.asyncio
-async def test_stream_auto_execute_answered_without_a_tool_call_logs_its_one_round(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_stream_auto_execute_answered_without_a_tool_call_logs_its_one_round(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     _serve_responses(respx_mock, monkeypatch, (_streamed(_ROUND_TWO_BODY),))
     recorder: Final = _RoundRecorder()
@@ -3173,8 +3175,8 @@ async def test_bridged_stream_auto_execute_logs_the_final_response_billed_for_bo
 
 
 @pytest.mark.asyncio
-async def test_bridged_stream_auto_execute_logs_the_provider_usage_of_both_rounds_summed(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_bridged_stream_auto_execute_logs_the_provider_usage_of_both_rounds_summed(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "cost_margin_config", {"anthropic": {"fixed_amount": _FIXED_MARGIN}})
     _serve_responses(
@@ -3386,8 +3388,8 @@ async def test_bridged_stream_auto_execute_bills_a_broken_follow_up_its_own_fixe
 
 
 @pytest.mark.asyncio
-async def test_bridged_stream_auto_execute_answered_without_a_tool_call_logs_its_one_round(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_bridged_stream_auto_execute_answered_without_a_tool_call_logs_its_one_round(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     _serve_responses(respx_mock, monkeypatch, (_bridged_echo_answer_round(),), _ANTHROPIC_MESSAGES_URL)
     recorder: Final = _RoundRecorder()

@@ -353,7 +353,7 @@ async def test_bedrock_guardrail_status_failure():
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (

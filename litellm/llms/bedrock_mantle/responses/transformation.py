@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import partial
 from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm._logging import verbose_logger

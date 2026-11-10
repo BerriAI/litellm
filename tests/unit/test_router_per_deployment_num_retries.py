@@ -3,7 +3,7 @@ Unit tests for per-deployment num_retries in litellm_params
 GitHub Issue: #18968 - Per-deployment max_retries/num_retries in litellm_params is not used in retry logic
 """
 
-import httpx
+import httpx2 as httpx
 import pytest
 import pytest_asyncio
 from queue import SimpleQueue

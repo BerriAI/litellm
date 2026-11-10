@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import Final, TypeVar
 from urllib.parse import parse_qs, urlsplit
 
-import httpx
+import httpx2 as httpx
 import psutil
 import pytest
 import websockets

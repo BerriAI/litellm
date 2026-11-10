@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Coroutine, Mapping
 from typing import ClassVar, Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm import LlmProviders
 from litellm.litellm_core_utils.cloud_storage_security import (

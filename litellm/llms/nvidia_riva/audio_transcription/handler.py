@@ -34,7 +34,7 @@ from collections.abc import Iterable, Sequence
 from contextlib import closing
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.constants import COMPLETION_HTTP_FALLBACK_SECONDS

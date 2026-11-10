@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, eventually
 from integration._support.wire import Request, wire_server
 from integration._support.ports import allocate_port

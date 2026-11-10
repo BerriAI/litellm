@@ -12,7 +12,7 @@ worker thread, off any event loop — and caches it for the process lifetime.
 from collections.abc import Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from pydantic import Field

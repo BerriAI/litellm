@@ -10,7 +10,7 @@ from hashlib import sha256
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from anthropic import Anthropic, AsyncAnthropic
 from integration._support.anthropic_thinking import JSON_LIST, JSON_OBJECT
 from integration._support.client import (

@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 from urllib.parse import parse_qs, urlparse
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

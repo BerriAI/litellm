@@ -6,7 +6,7 @@ from itertools import chain
 from typing import Final, Literal
 from urllib.parse import unquote, urlsplit
 
-import httpx
+import httpx2 as httpx
 from integration._support.anthropic_thinking import (
     JSON_LIST,
     JSON_OBJECT,

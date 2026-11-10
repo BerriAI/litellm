@@ -7,7 +7,7 @@ import threading
 from collections.abc import Container, Iterator, Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai.types.chat import ChatCompletionChunk
 

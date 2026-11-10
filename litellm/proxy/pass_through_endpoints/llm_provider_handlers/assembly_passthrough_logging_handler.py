@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Final, Literal
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import TypedDict
 
 import litellm

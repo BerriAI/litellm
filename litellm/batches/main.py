@@ -17,7 +17,7 @@ from collections.abc import Coroutine
 from functools import partial
 from typing import Any, Final, Literal, cast
 
-import httpx
+import httpx2 as httpx
 from openai.types.batch import BatchRequestCounts
 
 import litellm

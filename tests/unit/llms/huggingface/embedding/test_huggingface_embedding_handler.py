@@ -3,13 +3,14 @@ import re
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from litellm.types.utils import EmbeddingResponse
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.conftest import in_operator_error
 
 MOCK_EMBEDDING_RESPONSE = [[0.1, 0.2, 0.3, 0.4, 0.5]]
@@ -30,7 +31,7 @@ def mock_embedding_http_handler():
 @pytest.fixture
 def mock_hf_config_fetch():
     """Serve the Hugging Face config.json fetched during cost calculation, so no test leaves the process"""
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(
             json={"max_position_embeddings": 512}
         )
@@ -181,7 +182,7 @@ async def test_hf_embedding_sentence_sim_sends_one_similarity_request(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("HUGGINGFACE_API_KEY", "hf-test-token")
-    with respx.mock(assert_all_called=False) as hf:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as hf:
         hf.get(url__regex=r"https://huggingface\.co/api/models/.*").respond(
             json={"pipeline_tag": "sentence-similarity"}
         )
@@ -209,15 +210,17 @@ HF_EMBED_URL: Final = "https://router.huggingface.co/hf-inference/pipeline/featu
 
 @pytest.mark.respx(assert_all_called=False)
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_huggingface_embedding_sends_the_caller_timeout(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+async def test_huggingface_embedding_sends_the_caller_timeout(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(json={"max_position_embeddings": 512})
     lookup: Final = respx_mock.get(HF_MODEL_LOOKUP_URL).mock(
-        return_value=httpx.Response(200, json={"pipeline_tag": "feature-extraction"})
+        return_value=response_for_respx(httpx.Response(200, json={"pipeline_tag": "feature-extraction"}))
     )
-    route: Final = respx_mock.post(HF_EMBED_URL).mock(return_value=httpx.Response(200, json=MOCK_EMBEDDING_RESPONSE))
+    route: Final = respx_mock.post(HF_EMBED_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=MOCK_EMBEDDING_RESPONSE))
+    )
     request: Final = {
         "model": "huggingface/BAAI/bge-m3",
         "input": ["hello"],
@@ -239,8 +242,8 @@ async def _embedding(sync_mode: bool, **kwargs: object) -> object:
 
 @pytest.mark.respx(assert_all_called=False)
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_huggingface_embedding_raises_the_error_the_endpoint_returns(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+async def test_huggingface_embedding_raises_the_error_the_endpoint_returns(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.get(url__regex=r"https://huggingface\.co/.*/config\.json").respond(json={"max_position_embeddings": 512})

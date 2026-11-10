@@ -1,10 +1,11 @@
 import json
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.types.utils import ModelResponse
 
@@ -20,7 +21,7 @@ def test_batch_completion_return_exceptions_true(respx_mock: respx.MockRouter):
     (from connection issues), depending on network conditions.
     """
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={
                 "error": {
@@ -29,7 +30,7 @@ def test_batch_completion_return_exceptions_true(respx_mock: respx.MockRouter):
                     "code": "invalid_api_key",
                 }
             },
-        )
+        ))
     )
     res = litellm.batch_completion(
         model="gpt-3.5-turbo",
@@ -52,7 +53,7 @@ def test_batch_completion_returns_one_response_per_message(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-batch",
@@ -68,7 +69,7 @@ def test_batch_completion_returns_one_response_per_message(
                 ],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
     responses: Final[list[ModelResponse]] = cast(
         list[ModelResponse],
@@ -115,13 +116,15 @@ def test_completion_with_model_list_returns_the_first_deployment_that_succeeds(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     failing: Final = respx_mock.post("https://failing.deployment.test/v1/chat/completions").mock(
-        return_value=httpx.Response(401, json={"error": {"message": "bad key", "type": "invalid_request_error"}})
+        return_value=response_for_respx(
+            httpx.Response(401, json={"error": {"message": "bad key", "type": "invalid_request_error"}})
+        )
     )
     healthy: Final = respx_mock.post("https://healthy.deployment.test/v1/chat/completions").mock(
-        return_value=_chat_reply("from the healthy deployment")
+        return_value=response_for_respx(_chat_reply("from the healthy deployment"))
     )
     other_group: Final = respx_mock.post("https://other-group.deployment.test/v1/chat/completions").mock(
-        return_value=_chat_reply("from another model group")
+        return_value=response_for_respx(_chat_reply("from another model group"))
     )
     model_list: Final = [
         {

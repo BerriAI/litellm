@@ -5,7 +5,7 @@ CometAPI Embedding API support - OpenAI compatible
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

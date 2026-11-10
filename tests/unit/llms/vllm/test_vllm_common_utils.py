@@ -1,16 +1,19 @@
+from tests._support.respx_httpx2 import response_for_respx
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.llms.vllm.common_utils import HostedVLLMModelInfo
 
 
 @respx.mock
 def test_hosted_vllm_get_models_lists_the_server_ids_sending_the_key_as_a_bearer_token() -> None:
     respx.get("http://vllm-sdk.test:8000/v1/models", headers={"Authorization": "Bearer vllm-sdk-key"}).mock(
-        return_value=httpx.Response(200, json={"data": [{"id": "qwen2.5"}, {"id": "meta-llama/Llama-3.1-8B-Instruct"}]})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"data": [{"id": "qwen2.5"}, {"id": "meta-llama/Llama-3.1-8B-Instruct"}]})
+        )
     )
 
     listed: Final = HostedVLLMModelInfo().get_models(api_key="vllm-sdk-key", api_base="http://vllm-sdk.test:8000/v1")

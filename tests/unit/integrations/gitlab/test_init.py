@@ -1,7 +1,8 @@
-import httpx
+from tests._support.respx_httpx2 import response_for_respx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.integrations.gitlab import prompt_initializer_registry
 from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
 
@@ -19,9 +20,9 @@ def _prompt_spec(litellm_params: PromptLiteLLMParams) -> PromptSpec:
 
 def test_gitlab_initializer_loads_the_prompt_file_at_the_per_prompt_git_ref(respx_mock: respx.MockRouter) -> None:
     route = respx_mock.get(host="gitlab.example.test").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, text="---\nmodel: gpt-4o\n---\nHello {{name}}", headers={"content-type": "text/plain"}
-        )
+        ))
     )
     litellm_params = PromptLiteLLMParams(prompt_integration="gitlab", gitlab_config=_GITLAB_CONFIG, git_ref="v1.2.0")
 

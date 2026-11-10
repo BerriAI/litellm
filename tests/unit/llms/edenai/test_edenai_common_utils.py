@@ -1,6 +1,6 @@
 """Credential, endpoint and cost helpers shared by every Eden AI config."""
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

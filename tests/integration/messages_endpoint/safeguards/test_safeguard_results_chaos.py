@@ -12,7 +12,7 @@ from itertools import product
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import eventually
 from integration._support.process import graceful_stop_seconds, stop_root_process

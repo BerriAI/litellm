@@ -12,8 +12,8 @@ from math import gcd
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 import litellm

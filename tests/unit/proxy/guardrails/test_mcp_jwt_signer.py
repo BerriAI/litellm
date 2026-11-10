@@ -900,7 +900,7 @@ def _make_httpx_response(json_body: dict, status_code: int = 200):
     mock_resp.json.return_value = json_body
     mock_resp.raise_for_status = MagicMock()
     if status_code >= 400:
-        from httpx import HTTPStatusError, Request, Response
+        from httpx2 import HTTPStatusError, Request, Response
 
         mock_resp.raise_for_status.side_effect = HTTPStatusError(
             "error", request=MagicMock(), response=MagicMock()

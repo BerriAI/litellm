@@ -10,10 +10,11 @@ from pathlib import Path
 from typing import Final
 from unittest.mock import Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.exceptions import UnsupportedParamsError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -602,10 +603,12 @@ def test_created_video_id_resolves_back_to_the_region_that_created_the_task(
     the other region's host and key with a task id that region never issued."""
     router = _two_region_router(singapore_model)
     respx.post(f"{BEIJING_HOST}/api/v1/services/aigc/video-generation/video-synthesis").mock(
-        return_value=httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+        )
     )
     task_get = respx.get(f"{BEIJING_HOST}/api/v1/tasks/{TASK_ID}").mock(
-        return_value=httpx.Response(200, json=_succeeded_task_payload())
+        return_value=response_for_respx(httpx.Response(200, json=_succeeded_task_payload()))
     )
 
     created = router.video_generation(model="wan3-beijing", prompt="a cat on a roof", metadata=caller_metadata)
@@ -636,10 +639,12 @@ def test_a_video_created_through_a_routing_group_is_polled_in_the_region_that_cr
     )
     for host in (BEIJING_HOST, SINGAPORE_HOST):
         respx.post(f"{host}/api/v1/services/aigc/video-generation/video-synthesis").mock(
-            return_value=httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+            )
         )
         respx.get(f"{host}/api/v1/tasks/{TASK_ID}").mock(
-            return_value=httpx.Response(200, json=_succeeded_task_payload())
+            return_value=response_for_respx(httpx.Response(200, json=_succeeded_task_payload()))
         )
 
     for _ in range(8):
@@ -660,7 +665,7 @@ def test_an_id_naming_a_served_model_its_requested_name_does_not_route_to_is_pol
     cannot send a key allowed only `wan3-beijing` to the Singapore deployment and its key."""
     router = _two_region_router("qwencloud/wan3.0-video")
     task_get = respx.get(f"{BEIJING_HOST}/api/v1/tasks/{TASK_ID}").mock(
-        return_value=httpx.Response(200, json=_succeeded_task_payload())
+        return_value=response_for_respx(httpx.Response(200, json=_succeeded_task_payload()))
     )
     edited = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3-beijing", served_model="wan3-singapore")
 
@@ -694,10 +699,12 @@ def test_a_key_scoped_to_the_requested_alias_or_wildcard_name_can_poll_its_video
         model_group_alias={"video-alias": "wan3"},
     )
     respx.post(f"{host}/api/v1/services/aigc/video-generation/video-synthesis").mock(
-        return_value=httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"output": {"task_id": TASK_ID, "task_status": "PENDING"}})
+        )
     )
     task_get = respx.get(f"{host}/api/v1/tasks/{TASK_ID}").mock(
-        return_value=httpx.Response(200, json=_succeeded_task_payload())
+        return_value=response_for_respx(httpx.Response(200, json=_succeeded_task_payload()))
     )
 
     created = router.video_generation(model=requested, prompt="a cat on a roof")

@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import dotenv
-import httpx
+import httpx2 as httpx
 import openai
 from openai import AsyncStream, Stream
 from openai.types.audio import TranscriptionStreamEvent

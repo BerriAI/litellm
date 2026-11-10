@@ -8,11 +8,13 @@ from typing import Final, Literal, NamedTuple, TypedDict
 
 from typing_extensions import ReadOnly
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.caching.caching import Cache
 from litellm.integrations.custom_logger import CustomLogger
@@ -313,7 +315,7 @@ async def test_router_chat_success_streaming_and_failure_fire_the_hooks_in_order
     route: Final = respx_mock.post(url__startswith=f"{_PRIMARY}/openai/deployments/gpt-4.1-mini/chat/completions")
     router: Final = _router("azure/gpt-4.1-mini")
 
-    route.mock(return_value=httpx.Response(200, json=_COMPLETION))
+    route.mock(return_value=response_for_respx(httpx.Response(200, json=_COMPLETION)))
     await router.acompletion(model="hooks-group", messages=_MESSAGES)
     await recorder.until(_settled(1, posts=1))
     assert recorder.states == ["sync_pre_api_call", "post_api_call", "async_success"]
@@ -327,7 +329,11 @@ async def test_router_chat_success_streaming_and_failure_fire_the_hooks_in_order
     assert _completion(success).choices[0].message.content == "hello"
     assert _completion(success).usage.total_tokens == _USAGE["total_tokens"]
 
-    route.mock(return_value=httpx.Response(200, text=_STREAM, headers={"content-type": "text/event-stream"}))
+    route.mock(
+        return_value=response_for_respx(
+            httpx.Response(200, text=_STREAM, headers={"content-type": "text/event-stream"})
+        )
+    )
     stream: Final = await router.acompletion(model="hooks-group", messages=_MESSAGES, stream=True)
     assert "".join([chunk.choices[0].delta.content or "" async for chunk in stream]) == "hello"
     await recorder.until(_settled(2, posts=2))
@@ -337,7 +343,7 @@ async def test_router_chat_success_streaming_and_failure_fire_the_hooks_in_order
     assert all(event.kwargs["stream"] is True for event in streamed)
     assert _completion(streamed[2]).choices[0].message.content == "hello"
 
-    route.mock(return_value=_AUTH_ERROR)
+    route.mock(return_value=response_for_respx(_AUTH_ERROR))
     with pytest.raises(litellm.AuthenticationError):
         await router.acompletion(model="hooks-group", messages=_MESSAGES)
     await recorder.until(_settled(3, posts=3))
@@ -355,7 +361,7 @@ async def test_router_embedding_success_and_failure_fire_the_hooks_in_order(
     route: Final = respx_mock.post(url__startswith=f"{_PRIMARY}/openai/deployments/text-embedding-3-small/embeddings")
     router: Final = _router("azure/text-embedding-3-small")
 
-    route.mock(return_value=httpx.Response(200, json=_EMBEDDING))
+    route.mock(return_value=response_for_respx(httpx.Response(200, json=_EMBEDDING)))
     await router.aembedding(model="hooks-group", input=["hello"])
     await recorder.until(_settled(1, posts=1))
     assert recorder.states == ["sync_pre_api_call", "post_api_call", "async_success"]
@@ -366,7 +372,7 @@ async def test_router_embedding_success_and_failure_fire_the_hooks_in_order(
     assert embedding.model_dump()["data"][0]["embedding"] == _EMBEDDING_VECTOR
     assert embedding.usage.prompt_tokens == 3
 
-    route.mock(return_value=_AUTH_ERROR)
+    route.mock(return_value=response_for_respx(_AUTH_ERROR))
     with pytest.raises(litellm.AuthenticationError):
         await router.aembedding(model="hooks-group", input=["hello"])
     await recorder.until(_settled(2, posts=2))
@@ -381,11 +387,11 @@ async def test_router_fallback_fires_failure_then_success_hooks(
     recorder: _HookRecorder, respx_mock: respx.MockRouter
 ) -> None:
     respx_mock.post(url__startswith=f"{_PRIMARY}/openai/deployments/gpt-4.1-mini/chat/completions").mock(
-        return_value=_AUTH_ERROR
+        return_value=response_for_respx(_AUTH_ERROR)
     )
     fallback: Final = respx_mock.post(
         url__startswith=f"{_FALLBACK}/openai/deployments/gpt-4.1-mini/chat/completions"
-    ).mock(return_value=httpx.Response(200, json=_COMPLETION))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_COMPLETION)))
     router: Final = Router(
         model_list=[
             {
@@ -436,7 +442,7 @@ async def test_router_completion_cache_hit_fires_a_second_success_hook(
 ) -> None:
     monkeypatch.setattr(litellm, "cache", Cache())
     route: Final = respx_mock.post(url__startswith=f"{_PRIMARY}/openai/deployments/gpt-4.1-mini/chat/completions").mock(
-        return_value=httpx.Response(200, json=_COMPLETION)
+        return_value=response_for_respx(httpx.Response(200, json=_COMPLETION))
     )
     router: Final = _router("azure/gpt-4.1-mini")
 
@@ -460,7 +466,9 @@ async def test_router_streaming_cache_hit_still_fires_the_success_hook(
 ) -> None:
     monkeypatch.setattr(litellm, "cache", Cache())
     route: Final = respx_mock.post(url__startswith=f"{_PRIMARY}/openai/deployments/gpt-4.1-mini/chat/completions").mock(
-        return_value=httpx.Response(200, text=_STREAM, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=_STREAM, headers={"content-type": "text/event-stream"})
+        )
     )
     router: Final = _router("azure/gpt-4.1-mini")
 
@@ -491,7 +499,7 @@ async def test_router_embedding_cache_hit_fires_a_second_success_hook(
     monkeypatch.setattr(litellm, "cache", Cache())
     route: Final = respx_mock.post(
         url__startswith=f"{_PRIMARY}/openai/deployments/text-embedding-3-small/embeddings"
-    ).mock(return_value=httpx.Response(200, json=_EMBEDDING))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_EMBEDDING)))
     router: Final = _router("azure/text-embedding-3-small")
 
     await router.aembedding(model="hooks-group", input=["hello"], caching=True)

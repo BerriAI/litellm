@@ -10,7 +10,7 @@ Reference: https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-bedrock-ful
 import re
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,

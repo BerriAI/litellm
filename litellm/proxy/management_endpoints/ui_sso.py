@@ -35,7 +35,7 @@ from typing import (
 from urllib.parse import parse_qs, urlencode, urlparse
 
 if TYPE_CHECKING:
-    import httpx
+    import httpx2 as httpx
 
     from litellm.caching.redis_cache import RedisCache
 

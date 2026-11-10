@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import polars as pl
 from rich.console import Console
 

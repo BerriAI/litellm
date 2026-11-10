@@ -3,7 +3,7 @@ from collections.abc import AsyncIterable, Callable, Iterable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 from aiohttp import ClientSession, FormData
 
 import litellm

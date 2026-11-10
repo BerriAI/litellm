@@ -15,7 +15,7 @@ from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec

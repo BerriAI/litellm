@@ -2,8 +2,7 @@ import json
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.utils import trim_messages
@@ -23,7 +22,7 @@ def test_refuseless_resolves_environment_and_explicit_credentials(monkeypatch: p
 
 
 def test_refuseless_chat_forwards_reasoning_and_accounts_for_cache(local_model_cost_map: None) -> None:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.refuseless.com/v1/chat/completions").respond(
             200,
             json={
@@ -64,7 +63,7 @@ def test_refuseless_chat_forwards_reasoning_and_accounts_for_cache(local_model_c
 
 
 def test_refuseless_uses_native_responses_endpoint() -> None:
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.refuseless.com/v1/responses").respond(
             200,
             json={

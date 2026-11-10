@@ -4,12 +4,14 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import Request, Response
 from starlette.types import Message
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -88,13 +90,17 @@ async def test_assemblyai_transcribe_create_poll_delete(
 ) -> None:
     recorder: Final = _install_recorder(monkeypatch, "tr_1")
     create_route: Final = respx_mock.post(_UPSTREAM).mock(
-        return_value=httpx.Response(200, json={"id": "tr_1", "status": "queued", "audio_url": _AUDIO_URL})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"id": "tr_1", "status": "queued", "audio_url": _AUDIO_URL})
+        )
     )
     poll_route: Final = respx_mock.get(f"{_UPSTREAM}/tr_1").mock(
-        return_value=httpx.Response(200, json={"id": "tr_1", "status": "completed", "text": "fires near town"})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"id": "tr_1", "status": "completed", "text": "fires near town"})
+        )
     )
     delete_route: Final = respx_mock.delete(f"{_UPSTREAM}/tr_1").mock(
-        return_value=httpx.Response(200, json={"id": "tr_1", "status": "deleted"})
+        return_value=response_for_respx(httpx.Response(200, json={"id": "tr_1", "status": "deleted"}))
     )
     admin: Final = UserAPIKeyAuth(api_key="sk-master", user_role=LitellmUserRoles.PROXY_ADMIN)
     create_body: Final = {"audio_url": _AUDIO_URL, "speech_models": ["universal-2"]}
@@ -141,10 +147,14 @@ async def test_assemblyai_transcribe_with_non_admin_key_logs_key_identity(
 ) -> None:
     recorder: Final = _install_recorder(monkeypatch, "tr_9")
     create_route: Final = respx_mock.post(_UPSTREAM).mock(
-        return_value=httpx.Response(200, json={"id": "tr_9", "status": "queued", "audio_url": _AUDIO_URL})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"id": "tr_9", "status": "queued", "audio_url": _AUDIO_URL})
+        )
     )
     respx_mock.get(f"{_UPSTREAM}/tr_9").mock(
-        return_value=httpx.Response(200, json={"id": "tr_9", "status": "completed", "text": "fires near town"})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"id": "tr_9", "status": "completed", "text": "fires near town"})
+        )
     )
     non_admin: Final = UserAPIKeyAuth(
         api_key="hashed-non-admin-key",

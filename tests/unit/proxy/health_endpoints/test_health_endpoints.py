@@ -12,9 +12,9 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
@@ -780,7 +780,7 @@ async def test_test_model_connection_sends_the_token_behind_an_admin_oidc_api_ke
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.llm_router", router),
             patch("litellm.proxy.proxy_server.premium_user", False),
-            respx.mock(assert_all_called=True) as upstream,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream,
         ):
             upstream.post("https://api.mistral.ai/v1/chat/completions").respond(
                 200,
@@ -5094,7 +5094,7 @@ def test_health_test_connection_keeps_error_and_raw_request_through_the_allowlis
         patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
             "litellm.proxy.proxy_server.prisma_client", MagicMock()
         ),
-        respx.mock(assert_all_called=True) as respx_mock,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock,
     ):
         respx_mock.post(host="api.openai.com", path="/v1/chat/completions").respond(
             status_code=401, json={"error": {"message": "Incorrect API key provided"}}
@@ -5484,7 +5484,7 @@ class TestTestConnectionUsesTheNamedCredential:
             patch(  # test-quality-ok: the deployment the probe is matched against is a proxy global; it has no injection seam
                 "litellm.proxy.proxy_server.llm_router", router
             ),
-            respx.mock(assert_all_called=True) as respx_mock,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock,
         ):
             respx_mock.post(path__regex=r".*/chat/completions").respond(json=self.COMPLETION)
             response = TestClient(app).post(
@@ -5542,7 +5542,7 @@ class TestTestConnectionUsesTheNamedCredential:
         with (
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.llm_router", router),
-            respx.mock(assert_all_called=True) as respx_mock,
+            respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock,
         ):
             token_route: Final = respx_mock.post(endpoint).respond(
                 json={"access_token": "health-graph-token", "expires_in": 3600}
@@ -6025,7 +6025,7 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
         patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
             "litellm.proxy.proxy_server.prisma_client", MagicMock()
         ),
-        respx.mock(assert_all_called=True) as respx_mock,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock,
     ):
         respx_mock.post(host="api.openai.com", path="/v1/images/edits").respond(
             json={"created": 1700000000, "data": [{"b64_json": TEST_IMAGE_BASE64}]}
@@ -6098,7 +6098,7 @@ def test_test_model_connection_accepts_decision_and_extraction_modes(
         patch(  # test-quality-ok: endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
             "litellm.proxy.proxy_server.prisma_client", MagicMock()
         ),
-        respx.mock(assert_all_called=True) as respx_mock,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock,
     ):
         upstream = respx_mock.post(upstream_url).respond(json=upstream_json)
         response = client.post("/health/test_connection", json={"mode": mode, "litellm_params": litellm_params})
@@ -6226,7 +6226,7 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
         "output": [output],
         "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
     }
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         upstream.post("https://chatgpt.com/backend-api/codex/responses").respond(
             200,
             text="data: " + json.dumps({"type": "response.completed", "response": response}) + "\n\n",

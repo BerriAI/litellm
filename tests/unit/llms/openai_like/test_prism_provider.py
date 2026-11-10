@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 
@@ -100,7 +99,7 @@ def test_prism_is_available_in_add_model_form():
 
 
 def test_prism_responses_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.prisminference.com/v1/responses").respond(
             200,
             json={
@@ -141,7 +140,7 @@ def test_prism_responses_request():
 async def test_prism_anthropic_messages_request(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.prisminference.com/v1/messages").respond(
             200,
             json={

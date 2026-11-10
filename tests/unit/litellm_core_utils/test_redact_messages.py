@@ -17,7 +17,7 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, Union
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 import pytest_asyncio
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch

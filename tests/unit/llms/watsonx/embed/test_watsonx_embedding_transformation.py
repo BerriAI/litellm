@@ -4,9 +4,9 @@ import json
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
 import litellm

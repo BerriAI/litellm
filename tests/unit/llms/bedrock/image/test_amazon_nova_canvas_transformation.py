@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.bedrock.image_generation.amazon_nova_canvas_transformation import (
     AmazonNovaCanvasConfig,
@@ -95,7 +96,7 @@ _NOVA_CANVAS_IMAGES: Final = ("b64-first-image", "b64-second-image")
 def test_nova_canvas_image_gen_reports_positive_response_cost(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(
         url__regex=r"^https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/amazon\.nova-canvas-v1(:|%3A)0/invoke$"
-    ).mock(return_value=httpx.Response(200, json={"images": list(_NOVA_CANVAS_IMAGES)}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json={"images": list(_NOVA_CANVAS_IMAGES)})))
 
     response: Final = litellm.image_generation(
         model="bedrock/amazon.nova-canvas-v1:0",

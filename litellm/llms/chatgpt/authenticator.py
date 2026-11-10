@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger

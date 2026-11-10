@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support.client import Gateway, eventually, object_value, string_value

@@ -2,15 +2,16 @@ import json
 from collections.abc import Callable, Iterable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.proxy.conftest import httpx_transport
 
 _PROXY_RESPONSES_URL: Final = "https://my-proxy.example.com/responses"
@@ -18,9 +19,9 @@ _PROXY_RESPONSES_URL: Final = "https://my-proxy.example.com/responses"
 
 @pytest.mark.usefixtures(httpx_transport.__name__)
 def test_litellm_proxy_responses_request_uses_the_openai_wire_format() -> None:
-    with respx.mock(assert_all_called=True) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
         route: Final = mock.post(_PROXY_RESPONSES_URL).mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "resp_proxy_1",
@@ -39,7 +40,7 @@ def test_litellm_proxy_responses_request_uses_the_openai_wire_format() -> None:
                     ],
                     "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
                 },
-            )
+            ))
         )
         response: Final = litellm.responses(
             model="litellm_proxy/gpt-5.5",
@@ -109,8 +110,8 @@ _GUARDRAIL_BLOCK: Final = {
 
 
 def _proxy_rejection(route: str, response: httpx.Response, call: Callable[[], object]) -> litellm.BadRequestError:
-    with respx.mock(assert_all_called=True) as mock:
-        _ = mock.post(f"https://my-proxy.example.com/{route}").mock(return_value=response)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
+        _ = mock.post(f"https://my-proxy.example.com/{route}").mock(return_value=response_for_respx(response))
         with pytest.raises(litellm.BadRequestError) as caught:
             _ = call()
     return caught.value

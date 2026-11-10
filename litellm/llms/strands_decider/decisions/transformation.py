@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import quote, unquote
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm._logging import verbose_logger

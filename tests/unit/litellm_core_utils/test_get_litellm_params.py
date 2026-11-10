@@ -6,7 +6,7 @@ Ensures backward compatibility after sparse kwargs extraction optimization.
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai import OpenAI
 from pydantic import ValidationError

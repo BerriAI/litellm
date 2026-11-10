@@ -1,10 +1,10 @@
+import httpx2 as httpx
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
-import respx
-
-import asyncio, httpx, importlib, os
+from tests._support import respx_httpx2 as respx
+import asyncio, importlib, os
 import pytest
 
 import litellm

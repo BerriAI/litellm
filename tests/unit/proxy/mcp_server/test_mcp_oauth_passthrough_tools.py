@@ -8,7 +8,7 @@ import sys
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 if sys.version_info < (3, 11):

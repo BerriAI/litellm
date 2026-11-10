@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import requests
 from fastapi import HTTPException
-from httpx import HTTPStatusError
+from httpx2 import HTTPStatusError
 from requests.auth import HTTPBasicAuth
 from typing_extensions import ReadOnly, TypedDict, Unpack
 

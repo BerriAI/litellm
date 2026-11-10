@@ -2,7 +2,7 @@ import logging
 from typing import Final, cast
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import JsonValue, TypeAdapter

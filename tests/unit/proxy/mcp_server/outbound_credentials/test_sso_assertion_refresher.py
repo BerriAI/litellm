@@ -15,7 +15,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 
-import httpx
+import httpx2 as httpx
 import jwt as pyjwt
 import pytest
 from pydantic import SecretStr

@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Final
 from urllib.parse import parse_qs, urlencode, urlparse
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger

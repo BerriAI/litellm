@@ -12,7 +12,7 @@ from typing import Final, Literal, TypeAlias, get_args
 from uuid import uuid4
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.process import graceful_stop_seconds, owned_proxy_process

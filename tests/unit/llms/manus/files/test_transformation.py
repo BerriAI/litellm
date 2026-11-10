@@ -3,11 +3,13 @@ import time
 from typing import Final
 from unittest.mock import Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.manus.files.transformation import ManusFilesConfig
 from litellm.types.llms.openai import OpenAIFileObject
@@ -151,13 +153,13 @@ async def test_manus_file_create_retrieve_list_delete(
         "status": "uploaded",
     }
     create_route: Final = respx_mock.post(f"{api_base}/files").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 **file_response,
                 "upload_url": "https://uploads.example.com/file-123",
             },
-        )
+        ))
     )
     upload_route: Final = respx_mock.put("https://uploads.example.com/file-123").respond(status_code=200)
     retrieve_route: Final = respx_mock.get(f"{api_base}/files/{file_id}").respond(json=file_response)

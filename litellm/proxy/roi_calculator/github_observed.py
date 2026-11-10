@@ -1,7 +1,7 @@
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import Field
 
 from litellm.proxy.roi_calculator.github import GitHubIssueSettings, GitHubPullListItem, SourceError, request_github

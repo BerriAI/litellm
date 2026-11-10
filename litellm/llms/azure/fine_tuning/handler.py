@@ -1,7 +1,7 @@
 from collections.abc import Coroutine, Mapping
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 
 from litellm._logging import verbose_logger

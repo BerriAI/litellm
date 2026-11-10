@@ -7,9 +7,10 @@ from collections.abc import Callable
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types.chat import ChatCompletionChunk
 
@@ -29,6 +30,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
 from litellm.types.utils import ChatCompletionDeltaToolCall, ChatCompletionMessageToolCall, Choices, ModelResponseStream
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -147,12 +149,12 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     assert "default_api_key_tpm_limit" not in request_body
 
 
-def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "modify_params", False)
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg_tool_history",
@@ -164,7 +166,7 @@ def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(
                 "stop_sequence": None,
                 "usage": {"input_tokens": 4, "output_tokens": 6},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -229,13 +231,13 @@ def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(
 @respx.mock
 def test_anthropic_tool_call_error_is_mapped_from_the_provider_response():
     route = respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             400,
             json={
                 "type": "error",
                 "error": {"type": "invalid_request_error", "message": "tool input is invalid"},
             },
-        )
+        ))
     )
 
     with pytest.raises(litellm.BadRequestError) as exc_info:
@@ -1048,7 +1050,9 @@ def test_streamed_completion_sets_assistant_role_on_exactly_one_chunk(respx_mock
         {"type": "message_stop"},
     )
     respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+        )
     )
 
     response: Final = litellm.completion(
@@ -1162,7 +1166,7 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
     )
     body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
     route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(httpx.Response(200, text=body, headers={"content-type": "text/event-stream"}))
     )
     chunks: Final = await _collect_anthropic_stream(
         sync_mode,
@@ -1232,7 +1236,9 @@ def _stream_one_anthropic_tool_use(content_block: dict[str, object]) -> tuple[Ch
     body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
     with respx.mock:
         respx.post("https://api.anthropic.com/v1/messages").mock(
-            return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+            return_value=response_for_respx(
+                httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+            )
         )
         chunks: Final = tuple(
             litellm.completion(
@@ -4079,11 +4085,11 @@ def test_anthropic_streaming_function_call_arguments_are_assembled(
     )
     body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
     respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=body,
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     messages: Final = [{"role": "user", "content": "Check the weather in Boston"}]
     stream: Final = litellm.completion(
@@ -4130,7 +4136,7 @@ def test_anthropic_streaming_function_call_arguments_are_assembled(
 @respx.mock
 def test_anthropic_streaming_invalid_key_maps_to_authentication_error() -> None:
     route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={
                 "type": "error",
@@ -4139,7 +4145,7 @@ def test_anthropic_streaming_invalid_key_maps_to_authentication_error() -> None:
                     "message": "invalid API key",
                 },
             },
-        )
+        ))
     )
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:

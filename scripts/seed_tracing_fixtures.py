@@ -22,7 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.rust_bridge.clickhouse import spend_storage_config
@@ -582,7 +582,7 @@ async def seed(profile: str = "default", copies: int | None = None, timeout_seco
             timeout=timeout_seconds,
         ) as client,
         httpx.AsyncClient(base_url=config.url, params={"database": config.database}, timeout=600) as clickhouse,
-        Prisma(http={"timeout": httpx.Timeout(600)}) as database,
+        Prisma(http={"timeout": 600.0}) as database,
         connection.lifespan_client() as lens,
     ):
         storage: Final = RemoteTraceStore(lens)

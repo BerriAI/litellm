@@ -3,7 +3,7 @@ import uuid
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from _langfuse_otel_metadata_support import (
     assert_identity,
     chat_identity_fields,

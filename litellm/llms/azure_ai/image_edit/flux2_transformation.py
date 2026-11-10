@@ -4,7 +4,7 @@ from io import BufferedReader
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from httpx._types import RequestFiles
+from httpx2._types import RequestFiles
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import has_attributes

@@ -4,11 +4,13 @@ import os
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 CONFIG_DIR: Final = Path(__file__).resolve().parent / "test_configs"
@@ -85,7 +87,7 @@ def _custom_logger() -> object:
 
 def test_chat_completion(client: TestClient, respx_mock: respx.MockRouter) -> None:
     upstream: Final = respx_mock.post(f"{OPENAI_BASE}/chat/completions").mock(
-        return_value=httpx.Response(200, json=CHAT_COMPLETION_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=CHAT_COMPLETION_BODY))
     )
     my_custom_logger = _custom_logger()
     litellm.callbacks = [my_custom_logger]
@@ -130,9 +132,9 @@ def test_chat_completion(client: TestClient, respx_mock: respx.MockRouter) -> No
 
 def test_chat_completion_stream(client: TestClient, respx_mock: respx.MockRouter) -> None:
     upstream: Final = respx_mock.post(f"{OPENAI_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, content=STREAM_BODY, headers={"content-type": "text/event-stream"}
-        )
+        ))
     )
     my_custom_logger = _custom_logger()
     litellm.callbacks = [my_custom_logger]
@@ -168,7 +170,7 @@ def test_chat_completion_stream(client: TestClient, respx_mock: respx.MockRouter
 
 def test_embedding(client: TestClient, respx_mock: respx.MockRouter) -> None:
     upstream: Final = respx_mock.post(f"{OPENAI_BASE}/embeddings").mock(
-        return_value=httpx.Response(200, json=EMBEDDING_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=EMBEDDING_BODY))
     )
     my_custom_logger = _custom_logger()
     litellm.callbacks = [my_custom_logger]

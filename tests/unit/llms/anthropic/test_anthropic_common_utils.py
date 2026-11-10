@@ -23,10 +23,11 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.anthropic.common_utils import ToolsWithoutStrict, is_claude_tool_target, tools_without_strict
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -151,12 +152,12 @@ def test_anthropic_accepts_user_id_counts_characters_up_to_the_limit(character: 
 
 
 def test_anthropic_model_not_found_maps_to_not_found_but_authentication_error_does_not() -> None:
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.post("https://api.anthropic.com/v1/messages").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 404,
                 json={"type": "error", "error": {"type": "not_found_error", "message": "model not found"}},
-            )
+            ))
         )
         with pytest.raises(litellm.NotFoundError):
             litellm.completion(
@@ -166,12 +167,12 @@ def test_anthropic_model_not_found_maps_to_not_found_but_authentication_error_do
                 client=HTTPHandler(),
             )
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.post("https://api.anthropic.com/v1/messages").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 401,
                 json={"type": "error", "error": {"type": "authentication_error", "message": "invalid key"}},
-            )
+            ))
         )
         with pytest.raises(litellm.AuthenticationError):
             litellm.completion(
@@ -2137,7 +2138,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert normalize_anthropic_tool_use_id(f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}") == base
 
     def test_anthropic_messages_config_http_retry_helpers(self):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.anthropic.messages.native.transformation import (
             AnthropicMessagesConfig,
@@ -2579,7 +2580,7 @@ def clean_anthropic_env(monkeypatch):
 def wif_engine(monkeypatch, clean_anthropic_env):
     """Route the wiring's WIF tier through a fresh engine (never the module
     singleton, to avoid cross-test cache pollution) and count its consultations."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.anthropic import common_utils as anthropic_common_utils
     from litellm.llms.anthropic.wif import get_anthropic_wif_token
@@ -2607,7 +2608,7 @@ def wif_async_engine(monkeypatch, clean_anthropic_env):
     """Route both WIF facades through one fresh engine; the poster records the
     thread each exchange ran on and sync-facade consultations are counted so
     async tests can prove the mint went through the async seam, off the loop."""
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.anthropic import common_utils as anthropic_common_utils
     from litellm.llms.anthropic.wif import aget_anthropic_wif_token, get_anthropic_wif_token
@@ -3442,8 +3443,8 @@ class TestWifRespxEndToEnd:
         """Drives the REAL kwargs funnel through litellm.completion: the mint hits
         /v1/oauth/token, the data plane carries the minted Bearer + oauth beta, and
         NONE of the six anthropic_* keys leak into the /v1/messages body."""
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
@@ -3483,13 +3484,13 @@ class TestWifRespxEndToEnd:
 
         with respx.mock:
             token_route = respx.post("https://api.anthropic.com/v1/oauth/token").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     200,
                     json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
-                )
+                ))
             )
             messages_route = respx.post("https://api.anthropic.com/v1/messages").mock(
-                return_value=httpx.Response(200, json=anthropic_response)
+                return_value=response_for_respx(httpx.Response(200, json=anthropic_response))
             )
             response = litellm.completion(
                 model="anthropic/claude-sonnet-4-5",
@@ -3523,8 +3524,8 @@ class TestWifRespxEndToEnd:
         """Regression: a trailing-slash api_base defeated the endswith check in
         main.py AND the removesuffix surgery, sending the exchange POST to
         .../v1/messages/v1/oauth/token (404)."""
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
@@ -3556,13 +3557,13 @@ class TestWifRespxEndToEnd:
 
         with respx.mock:
             token_route = respx.post("https://api.anthropic.com/v1/oauth/token").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     200,
                     json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
-                )
+                ))
             )
             messages_route = respx.post(url__regex=r"https://api\.anthropic\.com/v1/messages.*").mock(
-                return_value=httpx.Response(200, json=anthropic_response)
+                return_value=response_for_respx(httpx.Response(200, json=anthropic_response))
             )
             response = litellm.completion(
                 model="anthropic/claude-sonnet-4-5",
@@ -3580,8 +3581,8 @@ class TestWifRespxEndToEnd:
     def test_get_auth_header_with_litellm_params_mints_via_real_engine(
         self, monkeypatch, tmp_path, clean_anthropic_env
     ):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         from litellm.llms.anthropic import common_utils as anthropic_common_utils
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -3601,10 +3602,10 @@ class TestWifRespxEndToEnd:
 
         with respx.mock:
             token_route = respx.post("https://api.anthropic.com/v1/oauth/token").mock(
-                return_value=httpx.Response(
+                return_value=response_for_respx(httpx.Response(
                     200,
                     json={"access_token": FAKE_MINTED_TOKEN, "token_type": "Bearer", "expires_in": 3600},
-                )
+                ))
             )
             result = AnthropicModelInfo.get_auth_header(
                 allow_workload_identity=True,
@@ -3719,7 +3720,7 @@ class TestWifProviderAllowlist:
 
 
 def _models_page_response(page: dict, status_code: int = 200):
-    import httpx
+    import httpx2 as httpx
 
     return httpx.Response(status_code, json=page, request=httpx.Request("GET", "https://api.anthropic.com/v1/models"))
 

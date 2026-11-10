@@ -48,7 +48,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.constants import (
     EVICTED_LLM_CLIENT_CLOSE_GRACE_SECONDS,

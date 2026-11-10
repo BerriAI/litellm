@@ -5,7 +5,7 @@ Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 from functools import cached_property
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 from pydantic import Field
 
 from litellm.litellm_core_utils.url_utils import join_api_base

@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Final, cast
 
-from httpx import Response
+from httpx2 import Response
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (

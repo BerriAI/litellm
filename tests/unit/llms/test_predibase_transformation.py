@@ -2,10 +2,11 @@ import json
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.predibase.chat.handler import PredibaseChatCompletion
 from litellm.llms.predibase.chat.transformation import PredibaseConfig
@@ -130,7 +131,7 @@ def test_predibase_get_complete_url_with_tenant_id_key():
 def test_predibase_authentication_error_does_not_expose_the_api_key(respx_mock: respx.MockRouter) -> None:
     route = respx_mock.post(
         "https://serving.app.predibase.com/c4768f95/deployments/v2/llms/llama-3-8b-instruct/generate"
-    ).mock(return_value=httpx.Response(401, json={"message": "invalid API key"}))
+    ).mock(return_value=response_for_respx(httpx.Response(401, json={"message": "invalid API key"})))
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:
         litellm.completion(
@@ -681,7 +682,7 @@ async def test_predibase_stream_keeps_unicode_line_separators_inside_a_token(
     )
     respx_mock.post(
         "https://serving.app.predibase.com/tenant-1/deployments/v2/llms/llama-3-8b-instruct/generate_stream"
-    ).mock(return_value=httpx.Response(200, content=_generate_stream_body(_LINE_SEPARATED_TEXT)))
+    ).mock(return_value=response_for_respx(httpx.Response(200, content=_generate_stream_body(_LINE_SEPARATED_TEXT))))
 
     contents: Final = await _streamed_contents(sync_stream)
 

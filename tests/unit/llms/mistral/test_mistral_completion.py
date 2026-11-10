@@ -1,9 +1,11 @@
 import json
 
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
-import httpx
+import httpx2 as httpx
 from typing import Final
 
 
@@ -177,7 +179,7 @@ async def test_mistral_transform_request_name_field_removal(
 
 def test_mistral_401_maps_to_authentication_error(respx_mock):
     route = respx_mock.post("https://api.mistral.ai/v1/chat/completions").mock(
-        return_value=httpx.Response(401, json={"message": "invalid API key"})
+        return_value=response_for_respx(httpx.Response(401, json={"message": "invalid API key"}))
     )
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:

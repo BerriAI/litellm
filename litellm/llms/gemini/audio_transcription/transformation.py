@@ -2,7 +2,7 @@ import base64
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS

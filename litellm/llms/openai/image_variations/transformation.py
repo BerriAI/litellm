@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING
 
 from aiohttp import ClientResponse
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_variations.transformation import LiteLLMLoggingObj

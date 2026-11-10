@@ -1,7 +1,7 @@
 import json
 import os
 from unittest.mock import MagicMock, patch
-import httpx
+import httpx2 as httpx
 
 import pytest
 
@@ -303,7 +303,7 @@ class TestOpenAIContainerTransformation:
 
     def test_get_error_class(self):
         """Test error class handling."""
-        import httpx
+        import httpx2 as httpx
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
         with pytest.raises(BaseLLMException) as exc_info:

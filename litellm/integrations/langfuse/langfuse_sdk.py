@@ -18,7 +18,7 @@ from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 import opentelemetry.trace as otel_trace
 from langfuse import LangfuseOtelSpanAttributes
 from langfuse.api import LangfuseAPI, Prompt, Prompt_Chat

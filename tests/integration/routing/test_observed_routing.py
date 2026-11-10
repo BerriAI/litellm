@@ -5,7 +5,7 @@ from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, object_value

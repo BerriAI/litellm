@@ -1510,7 +1510,7 @@ class TestUpstreamStatusIsClassified:
         fake client that simply returns a response cannot observe this, which is why this test builds
         the error the real handler raises.
         """
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 
@@ -1569,7 +1569,7 @@ class TestBoundedOpenAPISpecLoading:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("headers", [{"content-length": "1000000"}, {"content-encoding": "gzip"}])
     async def test_unsafe_response_headers_reject_before_reading(self, respx_mock, monkeypatch, headers):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
         from litellm.proxy.mcp_server.openapi_to_mcp_generator import (
@@ -1594,7 +1594,7 @@ class TestBoundedOpenAPISpecLoading:
 
     @pytest.mark.asyncio
     async def test_chunked_response_is_bounded_and_closed(self, respx_mock, monkeypatch):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
         from litellm.proxy.mcp_server.openapi_to_mcp_generator import (

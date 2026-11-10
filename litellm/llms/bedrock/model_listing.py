@@ -3,7 +3,7 @@ from types import MappingProxyType
 from typing import ClassVar, Final, TypeAlias
 from urllib.parse import quote, urlencode
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix

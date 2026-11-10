@@ -8,11 +8,11 @@ from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 import responses
-import respx
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.litellm_core_utils.health_check_helpers import (
@@ -1591,7 +1591,7 @@ async def test_partial_wildcard_health_check_falls_back_within_the_wildcard_befo
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
-        side_effect=_fail_first_databricks_claude_probe
+        side_effect=side_effect_for_respx(_fail_first_databricks_claude_probe)
     )
 
     response: Final = await ahealth_check(
@@ -1626,7 +1626,7 @@ async def test_partial_wildcard_health_check_stays_healthy_while_any_model_the_p
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
-        side_effect=_answer_only_the_retired_databricks_claude_model
+        side_effect=side_effect_for_respx(_answer_only_the_retired_databricks_claude_model)
     )
 
     response: Final = await ahealth_check(
@@ -1725,7 +1725,7 @@ async def test_wildcard_health_check_falls_back_to_equal_price_provider_models_i
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
-        side_effect=_answer_only_the_first_listed_databricks_free_model
+        side_effect=side_effect_for_respx(_answer_only_the_first_listed_databricks_free_model)
     )
 
     response: Final = await ahealth_check(
@@ -1749,7 +1749,7 @@ async def test_partial_wildcard_health_check_without_a_served_cost_map_model_pro
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     upstream: Final = respx_mock.post(f"{_DATABRICKS_FIXTURE_API_BASE}/chat/completions").mock(
-        side_effect=_fail_first_databricks_claude_probe
+        side_effect=side_effect_for_respx(_fail_first_databricks_claude_probe)
     )
 
     response: Final = await ahealth_check(

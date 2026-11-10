@@ -3,11 +3,13 @@ from typing import Final, Literal, TypedDict
 
 from typing_extensions import ReadOnly
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router import Router
@@ -62,7 +64,9 @@ async def test_moderation_call_is_logged_as_an_amoderation_standard_payload(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-unit-test")
     recorder: Final = _ModerationRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
-    respx_mock.post(_MODERATIONS_URL).mock(return_value=httpx.Response(200, json=_MODERATION_RESPONSE))
+    respx_mock.post(_MODERATIONS_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=_MODERATION_RESPONSE))
+    )
     router: Final = Router(
         model_list=[{"model_name": _MODEL_GROUP, "litellm_params": {"model": "openai/omni-moderation-latest"}}]
     )

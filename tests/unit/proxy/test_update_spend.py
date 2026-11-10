@@ -9,7 +9,7 @@ import litellm
 from unittest.mock import MagicMock, patch, AsyncMock
 
 
-import httpx
+import httpx2 as httpx
 import math
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.proxy.utils import update_spend

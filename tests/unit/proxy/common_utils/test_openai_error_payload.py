@@ -2,7 +2,7 @@ import json
 import sys
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import prisma.errors
 import pytest
 from fastapi import HTTPException

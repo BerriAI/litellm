@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final, NoReturn
 
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.audio_transcription.transformation import (

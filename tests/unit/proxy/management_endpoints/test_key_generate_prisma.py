@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.routing import APIRoute
-import httpx
+import httpx2 as httpx
 
 load_dotenv()
 import io

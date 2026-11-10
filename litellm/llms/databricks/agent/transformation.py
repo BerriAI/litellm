@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 from urllib.parse import quote, urlsplit
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter, ValidationError
 
 import litellm

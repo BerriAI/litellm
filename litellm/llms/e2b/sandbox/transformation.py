@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR

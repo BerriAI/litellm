@@ -8,10 +8,11 @@ from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import litellm
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from litellm import CustomLogger, Router
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import UserAPIKeyAuth
@@ -26,6 +27,7 @@ from litellm.types.videos.utils import encode_video_id_with_provider
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 from tests.unit.conftest import redis_cache_double
 
 EVENT_TIMEOUT_SECONDS: Final = 5
@@ -462,7 +464,7 @@ async def test_router_latency_based_routing_avoids_deployment_that_timed_out(
 ) -> None:
     router: Final = _routing_router(strategy)
     timed_out: Final = respx_mock.post("https://a.test/v1/chat/completions").mock(
-        side_effect=httpx.ReadTimeout("upstream timed out")
+        side_effect=side_effect_for_respx(httpx.ReadTimeout("upstream timed out"))
     )
     respx_mock.post("https://b.test/v1/chat/completions").respond(200, json=CHAT_RESPONSE)
 
@@ -491,7 +493,9 @@ async def test_router_least_busy_routing_avoids_deployment_with_request_in_fligh
         await release_upstream.wait()
         return httpx.Response(200, json=CHAT_RESPONSE)
 
-    respx_mock.post(url__regex=r"https://[ab]\.test/v1/chat/completions").mock(side_effect=hold_request)
+    respx_mock.post(url__regex=r"https://[ab]\.test/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(hold_request)
+    )
     in_flight: Final = asyncio.create_task(router.acompletion(model="gpt", messages=list(ROUTING_MESSAGES)))
     try:
         busy_id: Final = await asyncio.wait_for(upstream_hosts.get(), timeout=EVENT_TIMEOUT_SECONDS)

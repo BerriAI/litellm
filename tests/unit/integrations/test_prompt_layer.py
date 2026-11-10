@@ -2,7 +2,7 @@ import json
 from datetime import datetime, timezone
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

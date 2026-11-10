@@ -15,11 +15,12 @@ import struct
 from typing import AsyncIterator, Final, Iterator
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.llms.sagemaker.common_utils import SagemakerError
 from litellm.llms.sagemaker.completion.handler import SagemakerLLM
 
@@ -319,7 +320,7 @@ async def test_acompletion_sagemaker_non_stream(
         "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+        return_value=response_for_respx(httpx.Response(200, json={"generated_text": "SageMaker reply"}))
     )
     response: Final = await litellm.acompletion(
         model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
@@ -352,7 +353,7 @@ def test_completion_sagemaker_non_stream(
         "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+        return_value=response_for_respx(httpx.Response(200, json={"generated_text": "SageMaker reply"}))
     )
     response: Final = litellm.completion(
         model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
@@ -377,7 +378,7 @@ def test_completion_sagemaker_non_stream(
 def test_completion_sagemaker_sends_the_inference_component_only_as_a_header(respx_mock: respx.MockRouter) -> None:
     url: Final = "https://runtime.sagemaker.us-west-2.amazonaws.com/endpoints/my-endpoint/invocations"
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+        return_value=response_for_respx(httpx.Response(200, json={"generated_text": "SageMaker reply"}))
     )
     litellm.completion(
         model="sagemaker/my-endpoint",
@@ -401,7 +402,7 @@ def test_completion_sagemaker_non_stream_with_aws_params(respx_mock: respx.MockR
         "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+        return_value=response_for_respx(httpx.Response(200, json={"generated_text": "SageMaker reply"}))
     )
     response: Final = litellm.completion(
         model="sagemaker/jumpstart-dft-hf-textgeneration1-mp-20240815-185614",
@@ -434,7 +435,7 @@ def test_completion_sagemaker_prompt_template_non_stream(
     tokenizer_route: Final = respx_mock.get(
         "https://huggingface.co/deepseek-ai/deepseek-coder-6.7b-instruct/raw/main/tokenizer_config.json"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "bos_token": {"content": "<｜begin▁of▁sentence｜>"},
@@ -445,13 +446,13 @@ def test_completion_sagemaker_prompt_template_non_stream(
                     "### Response:"
                 ),
             },
-        )
+        ))
     )
     url: Final = (
         "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/deepseek_coder_6.7_instruct/invocations"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+        return_value=response_for_respx(httpx.Response(200, json={"generated_text": "SageMaker reply"}))
     )
     response: Final = litellm.completion(
         model="sagemaker/deepseek_coder_6.7_instruct",
@@ -495,7 +496,7 @@ def test_sagemaker_region_resolution(
         monkeypatch.setenv(name, value)
     url: Final = f"https://runtime.sagemaker.{expected_region}.amazonaws.com/endpoints/mock-endpoint/invocations"
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+        return_value=response_for_respx(httpx.Response(200, json={"generated_text": "SageMaker reply"}))
     )
     litellm.completion(
         model="sagemaker/mock-endpoint",
@@ -521,7 +522,7 @@ async def test_completion_sagemaker(
         "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
+        return_value=response_for_respx(httpx.Response(200, json={"generated_text": "SageMaker reply"}))
     )
     rate: Final = 0.000420
     response: Final = (
@@ -565,7 +566,7 @@ async def test_completion_sagemaker_stream(
         "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations-response-stream"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(200, content=_token_frame("hello") + _token_frame(" world"))
+        return_value=response_for_respx(httpx.Response(200, content=_token_frame("hello") + _token_frame(" world")))
     )
     stream: Final = (
         litellm.completion(
@@ -615,10 +616,10 @@ async def test_completion_sagemaker_streaming_bad_request(
         "jumpstart-dft-hf-textgeneration1-mp-20240815-185614/invocations-response-stream"
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             400,
             json={"Message": "The request payload failed validation.", "__type": "ValidationException"},
-        )
+        ))
     )
 
     with pytest.raises(litellm.BadRequestError) as exc_info:

@@ -4,15 +4,17 @@ from collections.abc import AsyncIterator, Iterator
 from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai.lib.streaming.chat import ChatCompletionStreamState
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessage
 from pydantic import TypeAdapter
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import (
@@ -1409,7 +1411,7 @@ def test_completion_merges_leading_system_and_developer_messages_for_chat_templa
     respx_mock: respx.MockRouter,
 ):
     upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             json={
                 "id": "chatcmpl-123",
@@ -1419,7 +1421,7 @@ def test_completion_merges_leading_system_and_developer_messages_for_chat_templa
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -1445,7 +1447,7 @@ def test_completion_merges_leading_system_and_developer_messages_for_chat_templa
 
 def test_completion_merges_system_messages_when_one_has_empty_content(respx_mock: respx.MockRouter):
     upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             json={
                 "id": "chatcmpl-123",
@@ -1455,7 +1457,7 @@ def test_completion_merges_system_messages_when_one_has_empty_content(respx_mock
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
             },
-        )
+        ))
     )
 
     litellm.completion(
@@ -2671,10 +2673,10 @@ def test_completion_with_prompt_caching_anthropic_model(
     monkeypatch.setenv("DATABRICKS_API_BASE", DATABRICKS_API_BASE)
     monkeypatch.setenv("DATABRICKS_API_KEY", DATABRICKS_API_KEY)
     route: Final = respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json=_databricks_anthropic_cache_response(cache_read_input_tokens=0, cache_creation_input_tokens=1545),
-        )
+        ))
     )
     cached_block: Final = {"type": "text", "text": "example text" * 512, "cache_control": {"type": "ephemeral"}}
     messages: Final = [
@@ -2939,10 +2941,10 @@ def test_claude_json_schema_stream_returns_the_non_stream_answer(
     respx_mock: respx.MockRouter, call: str, completion: dict[str, object], stream: bytes
 ) -> None:
     respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=completion),
             httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"}),
-        ]
+        ])
     )
     request: Final[dict[str, object]] = {
         "model": "databricks/databricks-claude-haiku-5-5",
@@ -2976,7 +2978,7 @@ def test_claude_json_schema_stream_keeps_the_user_tool_call_to_run(
     )
     tool_calls: Final = (("get_weather", _GET_WEATHER_ARGUMENTS), ("json_tool_call", _JSON_ANSWER))
     respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(
                 200,
                 json=_completion(
@@ -2997,7 +2999,7 @@ def test_claude_json_schema_stream_keeps_the_user_tool_call_to_run(
                 ),
                 headers={"content-type": "text/event-stream"},
             ),
-        ]
+        ])
     )
     request: Final[dict[str, object]] = {
         "model": "databricks/databricks-claude-haiku-5-5",
@@ -3027,7 +3029,9 @@ def test_claude_json_schema_stream_keeps_the_user_tool_call_to_run(
 
 def _json_schema_stream_choices(respx_mock: respx.MockRouter, call: str, stream: bytes) -> tuple[StreamingChoices, ...]:
     respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, content=stream, headers={"content-type": "text/event-stream"})
+        )
     )
     request: Final[dict[str, object]] = {
         "model": "databricks/databricks-claude-haiku-5-5",
@@ -3072,9 +3076,9 @@ def test_claude_json_schema_stream_split_across_json_tools_keeps_the_non_stream_
 ) -> None:
     halves: Final = ('{"name": "Ada"}', '{"meta": {}, "tags": []}')
     respx_mock.post(DATABRICKS_CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json=_completion(None, tuple(("json_tool_call", half) for half in halves), "tool_calls")
-        )
+        ))
     )
     answer: Final = litellm.completion(
         model="databricks/databricks-claude-haiku-5-5",

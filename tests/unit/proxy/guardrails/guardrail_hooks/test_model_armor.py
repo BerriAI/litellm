@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import pytest
 
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 
 import litellm

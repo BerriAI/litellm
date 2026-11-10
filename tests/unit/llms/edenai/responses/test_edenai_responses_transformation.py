@@ -3,7 +3,7 @@ per-request cost at the top level of the body and, on streams, on the final usag
 
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

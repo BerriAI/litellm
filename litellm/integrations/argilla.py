@@ -10,7 +10,7 @@ import types
 from collections.abc import Mapping, Sequence
 from typing import Final, Protocol
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel
 from typing_extensions import ReadOnly, TypedDict
 

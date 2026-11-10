@@ -2,7 +2,7 @@ import json
 from collections.abc import Iterator, Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.anthropic_beta_headers_manager import (

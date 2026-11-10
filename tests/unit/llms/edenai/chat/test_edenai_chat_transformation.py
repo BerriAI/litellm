@@ -4,7 +4,7 @@ per-request cost at the top level of every response instead of leaving it to the
 import json
 from pathlib import Path
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

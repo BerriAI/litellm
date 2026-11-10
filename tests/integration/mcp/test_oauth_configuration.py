@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import parse_qs, urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows

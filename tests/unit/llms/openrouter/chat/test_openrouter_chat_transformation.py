@@ -6,10 +6,11 @@ from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -779,11 +780,11 @@ async def test_openrouter_streaming_completion_assembles_text_and_finish_reason(
     )
     body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
     respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=body,
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     messages: Final = [
         {"role": "system", "content": "You are a helpful assistant."},
@@ -856,11 +857,11 @@ def test_openrouter_streaming_reasoning_is_preserved() -> None:
     )
     body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
     route: Final = respx.post("https://openrouter.ai/api/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=body,
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     parsed_reasoning_chunk: Final = OpenRouterChatCompletionStreamingHandler(
         streaming_response=None, sync_stream=True

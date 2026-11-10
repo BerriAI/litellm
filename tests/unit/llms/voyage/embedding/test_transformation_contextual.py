@@ -5,7 +5,7 @@ import json
 import os
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import ValidationError
 

@@ -1,12 +1,13 @@
+from tests._support.respx_httpx2 import response_for_respx
 import json
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.exceptions import BadRequestError
 from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
     VertexSearchAPIVectorStoreConfig,
@@ -553,7 +554,7 @@ def _mock_google_token_refresh(requests_mock) -> None:
 
 def _mock_vertex_search(respx_mock) -> "respx.Route":
     return respx_mock.post(url__regex=r"https://discoveryengine\.googleapis\.com/.*:search.*").mock(
-        return_value=httpx.Response(200, json=MOCK_VERTEX_SEARCH_RESPONSE)
+        return_value=response_for_respx(httpx.Response(200, json=MOCK_VERTEX_SEARCH_RESPONSE))
     )
 
 

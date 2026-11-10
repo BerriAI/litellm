@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 import litellm

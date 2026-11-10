@@ -12,8 +12,8 @@ from functools import partial
 from types import TracebackType
 from typing import Final, cast
 
-import httpx
-from httpx._types import CookieTypes, QueryParamTypes, RequestContent, RequestFiles
+import httpx2 as httpx
+from httpx2._types import CookieTypes, QueryParamTypes, RequestContent, RequestFiles
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider

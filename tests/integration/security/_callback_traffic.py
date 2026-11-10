@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request

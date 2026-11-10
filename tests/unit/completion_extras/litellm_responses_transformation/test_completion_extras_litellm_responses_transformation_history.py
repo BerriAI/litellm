@@ -2,10 +2,11 @@ import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.completion_extras.litellm_responses_transformation import history
 from litellm.exceptions import MidStreamFallbackError
@@ -195,9 +196,9 @@ def _assistant_turn(
     reply: Final = httpx.Response(
         200, content=json.dumps(_response(output, status)), headers={"content-type": "application/json"}
     )
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         router.post(url__startswith=OPENAI_RESPONSES_URL if model.startswith("openai/") else AZURE_API_BASE).mock(
-            return_value=_sse(output, terminal_event) if stream else reply
+            return_value=response_for_respx(_sse(output, terminal_event) if stream else reply)
         )
         response: Final = litellm.completion(
             model=model,
@@ -221,10 +222,10 @@ def _next_turn_input(
     tools: Sequence[Mapping[str, object]] = TOOLS,
     drop_params: bool = False,
 ) -> list[Mapping[str, object]]:
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         upstream: Final = router.post(
             url__startswith=OPENAI_RESPONSES_URL if model.startswith("openai/") else AZURE_API_BASE
-        ).mock(return_value=httpx.Response(200, json=_response((FOLLOW_UP,))))
+        ).mock(return_value=response_for_respx(httpx.Response(200, json=_response((FOLLOW_UP,)))))
         litellm.completion(
             model=model,
             messages=[USER, dict(assistant), TOOL_RESULT],
@@ -387,9 +388,9 @@ def test_a_phase_openai_does_not_define_is_dropped_under_drop_params() -> None:
 def test_a_phase_openai_does_not_define_is_rejected_without_drop_params() -> None:
     assistant: Final = _assistant_turn(OUTPUT, stream=False)
 
-    with respx.mock(assert_all_called=False) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as router:
         upstream: Final = router.post(url__startswith=OPENAI_RESPONSES_URL).mock(
-            return_value=httpx.Response(200, json=_response((FOLLOW_UP,)))
+            return_value=response_for_respx(httpx.Response(200, json=_response((FOLLOW_UP,))))
         )
         with pytest.raises(litellm.BadRequestError, match="'analysis'"):
             litellm.completion(
@@ -487,8 +488,8 @@ def _chunks_before_error(stream: Iterator[object]) -> Iterator[object]:
 
 
 def test_an_interrupted_stream_records_no_replay() -> None:
-    with respx.mock(assert_all_called=True) as router:
-        router.post(OPENAI_RESPONSES_URL).mock(return_value=_sse(OUTPUT, terminal_event=None))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
+        router.post(OPENAI_RESPONSES_URL).mock(return_value=response_for_respx(_sse(OUTPUT, terminal_event=None)))
         stream: Final = litellm.completion(
             model=f"openai/responses/{MODEL}", messages=[USER], tools=list(TOOLS), api_key="sk-test", stream=True
         )
@@ -598,9 +599,9 @@ PATCH_CALL: Final = {
 def test_a_custom_tool_call_replays_with_its_custom_output(stream: bool) -> None:
     assistant: Final = _assistant_turn((COMMENTARY, PATCH_CALL), stream=stream)
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         upstream: Final = router.post(OPENAI_RESPONSES_URL).mock(
-            return_value=httpx.Response(200, json=_response((FOLLOW_UP,)))
+            return_value=response_for_respx(httpx.Response(200, json=_response((FOLLOW_UP,))))
         )
         litellm.completion(
             model=f"openai/responses/{MODEL}",

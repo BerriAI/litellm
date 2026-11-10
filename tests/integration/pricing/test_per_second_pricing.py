@@ -3,7 +3,7 @@ import uuid
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import litellm
 import pytest
 from pydantic import JsonValue

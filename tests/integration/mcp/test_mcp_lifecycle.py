@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import Event
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import httpx2
 import pytest
 import yaml

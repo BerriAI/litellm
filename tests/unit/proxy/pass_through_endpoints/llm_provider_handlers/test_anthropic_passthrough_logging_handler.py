@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import ValidationError
 
@@ -2364,7 +2364,7 @@ class TestAnthropicPassthroughFastMode:
         return standard_cost * 2.0
 
     def test_non_streaming_applies_fast_multiplier(self):
-        import httpx
+        import httpx2 as httpx
 
         response_body = {
             "id": "msg_1",

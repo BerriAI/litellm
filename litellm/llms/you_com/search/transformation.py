@@ -7,7 +7,7 @@ OpenAPI spec:          https://you.com/specs/openapi_search_v1.yaml
 
 from typing import Final, TypedDict
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base

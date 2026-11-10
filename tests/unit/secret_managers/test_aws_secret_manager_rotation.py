@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

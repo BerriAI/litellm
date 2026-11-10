@@ -9,12 +9,14 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import litellm.llms.custom_httpx.http_handler as http_handler
 import litellm.router_strategy.complexity_router.complexity_router as complexity_module
@@ -1004,7 +1006,7 @@ class TestAutoRouterBenchmarks:
     async def test_an_empty_user_filter_is_rejected_before_querying_deployment_data(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import httpx
+        import httpx2 as httpx
         from fastapi import FastAPI
 
         from litellm.proxy import proxy_server
@@ -1026,7 +1028,7 @@ class TestAutoRouterBenchmarks:
     async def test_an_empty_key_filter_is_rejected_before_querying_deployment_data(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import httpx
+        import httpx2 as httpx
         from fastapi import FastAPI
 
         from litellm.proxy import proxy_server
@@ -2725,7 +2727,7 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
         max_budget=1,
         spend=1 if denial == "budget" else 0,
     )
-    with respx.mock(assert_all_called=False) as http:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as http:
         handler: Final = http_handler.AsyncHTTPHandler()
         handler.client = httpx.AsyncClient(transport=httpx.MockTransport(http.async_handler))
 
@@ -2734,14 +2736,14 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
 
         monkeypatch.setattr(complexity_module, "get_async_httpx_client", http_client)
         evaluation: Final = http.post("https://typesafe.test/v1/systemone").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "answers": {
                         "tier": {"type": "choice", "choice": "SIMPLE", "confidence": 1, "probabilities": {"SIMPLE": 1}}
                     }
                 },
-            )
+            ))
         )
         call: Final = preview_auto_router_routing(
             http_request=ROUTING_HTTP_REQUEST,
@@ -2840,7 +2842,7 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             else {"api_key": "masked-key", "api_base": "https://browser-override.test"}
         ),
     )
-    with respx.mock(assert_all_called=False) as http:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as http:
         handler: Final = http_handler.AsyncHTTPHandler()
         handler.client = httpx.AsyncClient(transport=httpx.MockTransport(http.async_handler))
 
@@ -2849,14 +2851,14 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
 
         monkeypatch.setattr(complexity_module, "get_async_httpx_client", http_client)
         evaluation: Final = http.post("https://saved-jev.test/v1/systemone").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "answers": {
                         "tier": {"type": "choice", "choice": "SIMPLE", "confidence": 1, "probabilities": {"SIMPLE": 1}}
                     }
                 },
-            )
+            ))
         )
         operation: Final = preview_auto_router_routing(request, actor, ROUTING_HTTP_REQUEST)
         if case in ("missing", "blocked", "team", "not-router"):
@@ -3435,7 +3437,10 @@ async def test_team_admin_cannot_preview_or_validate_environment_references(
     with pytest.raises(HTTPException) as denied_validation:
         await auto_router_endpoints.validate_complexity_router_config(validation, actor)
     assert denied_validation.value.status_code == 403
-    with respx.mock(assert_all_called=False) as http, pytest.raises(HTTPException) as denied_preview:
+    with (
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as http,
+        pytest.raises(HTTPException) as denied_preview,
+    ):
         await preview_auto_router_routing(
             _request_from({"prompt": "what is 2+2", "team_id": "admin-preview-team"}, **config),
             actor,

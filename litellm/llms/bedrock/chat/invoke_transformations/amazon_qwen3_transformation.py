@@ -9,7 +9,7 @@ Qwen3 + Invoke API Tutorial: https://docs.aws.amazon.com/bedrock/latest/userguid
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig

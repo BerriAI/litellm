@@ -5,7 +5,7 @@ Base configuration class for Skills API
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

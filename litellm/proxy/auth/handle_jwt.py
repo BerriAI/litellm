@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, NoReturn, Protocol, TypeVar, cast
 
-import httpx
+import httpx2 as httpx
 import jwt
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend

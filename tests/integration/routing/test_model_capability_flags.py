@@ -13,7 +13,7 @@ from typing import Final
 from urllib.parse import unquote
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 import yaml

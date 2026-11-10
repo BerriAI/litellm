@@ -11,7 +11,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.anthropic.batches.transformation import AnthropicBatchesConfig

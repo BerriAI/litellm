@@ -6,7 +6,7 @@ from functools import partial
 from typing import Annotated, Final
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict

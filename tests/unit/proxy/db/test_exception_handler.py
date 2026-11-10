@@ -3,7 +3,7 @@ import sys
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from prisma import errors as prisma_errors
 from prisma.engine.errors import BinaryNotFoundError, EngineConnectionError, EngineRequestError
@@ -126,7 +126,7 @@ def test_is_prisma_data_error_only_true_for_dataerror():
     ``DataError`` (the DB refused the data, e.g. a NUL byte) may be bisected
     into a per-row drop. A connectivity failure or any non-prisma exception
     must not be treated as a data rejection, so the whole batch surfaces."""
-    import httpx
+    import httpx2 as httpx
 
     data_error = DataError(data={"user_facing_error": {"message": "invalid byte sequence for encoding UTF8: 0x00"}})
     assert PrismaDBExceptionHandler.is_prisma_data_error(data_error) is True

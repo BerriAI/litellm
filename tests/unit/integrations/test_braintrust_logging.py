@@ -5,10 +5,12 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from litellm.litellm_core_utils import litellm_logging
 from litellm.integrations.braintrust_logging import BraintrustLogger
 
@@ -357,10 +359,10 @@ async def _assert_completion_is_logged_by_braintrust(
         },
     }
 
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         insert: Final = router.post(
             f"https://api.braintrustdata.com/v1/project_logs/{project_id}/insert"
-        ).mock(return_value=httpx.Response(200, json={"ok": True}))
+        ).mock(return_value=response_for_respx(httpx.Response(200, json={"ok": True})))
         fixed_time: Final = datetime(2024, 1, 1)
         logger.log_success_event(kwargs, response, fixed_time, fixed_time)
 

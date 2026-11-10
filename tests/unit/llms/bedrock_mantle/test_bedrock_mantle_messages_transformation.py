@@ -13,10 +13,10 @@ import json
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -289,7 +289,7 @@ class TestWireRequest:
     @pytest.mark.asyncio
     @respx.mock
     async def test_claude_request_hits_the_native_messages_endpoint(self):
-        route = _mantle_messages_route("us-east-1").mock(return_value=_anthropic_response())
+        route = _mantle_messages_route("us-east-1").mock(return_value=response_for_respx(_anthropic_response()))
 
         response = await litellm.anthropic_messages(
             model="bedrock_mantle/anthropic.claude-sonnet-5",
@@ -314,7 +314,7 @@ class TestWireRequest:
     @pytest.mark.asyncio
     @respx.mock
     async def test_region_prefix_selects_the_host_and_is_not_sent_as_model(self):
-        route = _mantle_messages_route("us-east-2").mock(return_value=_anthropic_response())
+        route = _mantle_messages_route("us-east-2").mock(return_value=response_for_respx(_anthropic_response()))
 
         await litellm.anthropic_messages(
             model="bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5",
@@ -329,7 +329,7 @@ class TestWireRequest:
     @pytest.mark.asyncio
     @respx.mock
     async def test_streaming_sends_stream_and_passes_the_sse_through(self):
-        route = _mantle_messages_route("us-east-1").mock(return_value=_sse_response())
+        route = _mantle_messages_route("us-east-1").mock(return_value=response_for_respx(_sse_response()))
 
         response = await litellm.anthropic_messages(
             model="bedrock_mantle/anthropic.claude-sonnet-5",
@@ -351,7 +351,7 @@ class TestWireRequest:
     @pytest.mark.asyncio
     @respx.mock
     async def test_sigv4_request_signs_against_the_messages_url(self):
-        route = _mantle_messages_route("us-east-1").mock(return_value=_anthropic_response())
+        route = _mantle_messages_route("us-east-1").mock(return_value=response_for_respx(_anthropic_response()))
 
         await litellm.anthropic_messages(
             model="bedrock_mantle/anthropic.claude-sonnet-5",
@@ -375,7 +375,7 @@ def _sent_betas(route: respx.Route) -> list[str]:
 @pytest.mark.usefixtures("local_beta_headers_config")
 class TestBetaHeadersOnTheWire:
     async def _send(self, **request_params) -> respx.Route:
-        route = _mantle_messages_route("us-east-1").mock(return_value=_anthropic_response())
+        route = _mantle_messages_route("us-east-1").mock(return_value=response_for_respx(_anthropic_response()))
         await litellm.anthropic_messages(
             model="bedrock_mantle/anthropic.claude-sonnet-5",
             messages=[{"role": "user", "content": "ping"}],

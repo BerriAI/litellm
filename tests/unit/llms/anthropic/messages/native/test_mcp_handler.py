@@ -2,11 +2,11 @@ from importlib import import_module
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.llms.anthropic.messages.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
@@ -69,8 +69,10 @@ async def test_anthropic_messages_with_mcp_reaches_an_env_only_deployment_with_i
     monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
-        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
+        )
         with pytest.raises(openai.APIError):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,

@@ -7,11 +7,13 @@ from enum import Enum
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue, TypeAdapter
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import anthropic_beta_headers_manager
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -1905,8 +1907,11 @@ async def test_vertex_claude_count_with_an_edit_fetches_the_remote_beta_config_o
     fetch_threads: Final = FetchThreads()
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
     monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
-    with patch.object(handler, "get_async_httpx_client", return_value=FakeHttpClient()), respx.mock:
-        respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=fetch_threads)
+    with (
+        patch.object(handler, "get_async_httpx_client", return_value=FakeHttpClient()),
+        respx.mock,
+    ):
+        respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=side_effect_for_respx(fetch_threads))
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="claude-opus-4-8",
             messages=[{"role": "user", "content": "Hello"}],
@@ -2079,7 +2084,7 @@ async def test_vertex_ai_token_counter_returns_partner_provider_error_as_value(
     from typing import Final
     from unittest.mock import AsyncMock, patch
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
     from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter

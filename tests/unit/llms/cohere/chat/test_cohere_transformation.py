@@ -4,10 +4,11 @@ from collections.abc import Callable, Iterator
 from typing import Final
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
@@ -383,9 +384,11 @@ async def test_chat_completion_cohere_citations(respx_mock: respx.MockRouter, st
     )
     route: Final = respx_mock.post(COHERE_V1_CHAT_URL).mock(
         return_value=(
-            httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
-            if stream
-            else httpx.Response(200, json=final_response)
+            response_for_respx(
+                httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+                if stream
+                else httpx.Response(200, json=final_response)
+            )
         )
     )
 
@@ -409,7 +412,7 @@ async def test_chat_completion_cohere_citations(respx_mock: respx.MockRouter, st
 @pytest.mark.respx(assert_all_called=True)
 def test_completion_cohere_command_r_plus_function_call(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(COHERE_V1_CHAT_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "response_id": "8d1a1e0e-4f4e-4c9a-9a52-3b8d3f0f6c11",
@@ -421,7 +424,7 @@ def test_completion_cohere_command_r_plus_function_call(respx_mock: respx.MockRo
                 ],
                 "meta": {"api_version": {"version": "1"}, "billed_units": {"input_tokens": 30, "output_tokens": 20}},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -462,9 +465,9 @@ async def test_cohere_v2_chat_completion(respx_mock: respx.MockRouter, sync_mode
         {"role": "user", "content": "What about 3+3?"},
     ]
     route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json=_cohere_v2_response({"content": [{"type": "text", "text": "3+3 equals 6."}]})
-        )
+        ))
     )
     kwargs: Final = {
         "model": "cohere_chat/v2/command-a-03-2025",
@@ -504,10 +507,12 @@ async def test_cohere_v2_streaming(respx_mock: respx.MockRouter, stream: bool) -
     )
     respx_mock.post(COHERE_V2_CHAT_URL).mock(
         return_value=(
-            httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
-            if stream
-            else httpx.Response(
-                200, json=_cohere_v2_response({"content": [{"type": "text", "text": "Once upon a time"}]})
+            response_for_respx(
+                httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+                if stream
+                else httpx.Response(
+                    200, json=_cohere_v2_response({"content": [{"type": "text", "text": "Once upon a time"}]})
+                )
             )
         )
     )
@@ -544,7 +549,7 @@ def test_cohere_v2_tool_calling(respx_mock: respx.MockRouter) -> None:
         },
     }
     route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json=_cohere_v2_response(
                 {
@@ -559,7 +564,7 @@ def test_cohere_v2_tool_calling(respx_mock: respx.MockRouter) -> None:
                 },
                 finish_reason="TOOL_CALL",
             ),
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -589,13 +594,13 @@ def test_cohere_v2_maps_finish_reason(
     respx_mock: respx.MockRouter, cohere_finish_reason: str, expected_finish_reason: str
 ) -> None:
     respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json=_cohere_v2_response(
                 {"content": [{"type": "text", "text": "Hello"}]},
                 finish_reason=cohere_finish_reason,
             ),
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -615,7 +620,9 @@ def test_cohere_v2_missing_finish_reason_defaults_to_stop(respx_mock: respx.Mock
         for key, value in _cohere_v2_response({"content": [{"type": "text", "text": "Hello"}]}).items()
         if key != "finish_reason"
     }
-    respx_mock.post(COHERE_V2_CHAT_URL).mock(return_value=httpx.Response(200, json=body_without_finish_reason))
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json=body_without_finish_reason))
+    )
 
     response: Final = litellm.completion(
         model="cohere_chat/v2/command-a-03-2025",
@@ -634,7 +641,7 @@ async def test_cohere_v2_annotations(respx_mock: respx.MockRouter) -> None:
         {"data": {"title": "Environmental Impact Study", "snippet": "Renewables reduce carbon footprint."}},
     ]
     route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json=_cohere_v2_response(
                 {
@@ -662,7 +669,7 @@ async def test_cohere_v2_annotations(respx_mock: respx.MockRouter) -> None:
                     ],
                 }
             ),
-        )
+        ))
     )
 
     response: Final = await litellm.acompletion(
@@ -702,7 +709,9 @@ async def test_cohere_v2_annotations(respx_mock: respx.MockRouter) -> None:
 def test_cohere_v2_parameter_mapping(respx_mock: respx.MockRouter) -> None:
     messages: Final = [{"role": "user", "content": "Generate a creative story."}]
     route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "A story."}]}))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "A story."}]}))
+        )
     )
 
     litellm.completion(
@@ -735,9 +744,9 @@ def test_cohere_v2_parameter_mapping(respx_mock: respx.MockRouter) -> None:
 @pytest.mark.respx(assert_all_called=True)
 def test_cohere_v2_error_handling(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             400, json={"id": "7f0c", "message": "invalid request: model 'invalid-model' not found"}
-        )
+        ))
     )
 
     with pytest.raises(litellm.BadRequestError) as error:
@@ -796,7 +805,9 @@ async def test_cohere_v2_stream_returns_parallel_tool_calls(respx_mock: respx.Mo
         },
     )
     respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+        return_value=response_for_respx(
+            httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+        )
     )
 
     response: Final = await litellm.acompletion(
@@ -850,7 +861,9 @@ async def test_cohere_v2_stream_closes_argument_less_tool_call_with_empty_object
         {"type": "message-end", "delta": {"finish_reason": "TOOL_CALL"}},
     )
     respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+        return_value=response_for_respx(
+            httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+        )
     )
 
     response: Final = await litellm.acompletion(

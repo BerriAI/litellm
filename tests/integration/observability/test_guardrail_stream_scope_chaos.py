@@ -15,7 +15,7 @@ from threading import Barrier, Event
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, JsonValue, eventually

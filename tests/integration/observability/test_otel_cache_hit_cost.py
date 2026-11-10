@@ -8,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, list_value, object_value

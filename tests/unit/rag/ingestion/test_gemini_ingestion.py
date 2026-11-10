@@ -3,11 +3,13 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
 
@@ -46,9 +48,11 @@ async def _store_notes(ingestion: GeminiRAGIngestion) -> tuple[str | None, str |
 def start_upload(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> respx.Route:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    respx_mock.put(_UPLOAD_SESSION_URL).mock(return_value=httpx.Response(200, json={"name": _DOCUMENT}))
+    respx_mock.put(_UPLOAD_SESSION_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"name": _DOCUMENT}))
+    )
     return respx_mock.post(_START_UPLOAD_URL).mock(
-        return_value=httpx.Response(200, headers={"x-goog-upload-url": _UPLOAD_SESSION_URL})
+        return_value=response_for_respx(httpx.Response(200, headers={"x-goog-upload-url": _UPLOAD_SESSION_URL}))
     )
 
 

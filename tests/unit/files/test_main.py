@@ -3,11 +3,13 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs, urlparse
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.openai import OpenAIFileObject
@@ -197,19 +199,23 @@ _FINE_TUNE_FILE_JSON: Final = MappingProxyType(
 async def test_openai_file_operations_roundtrip(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     files_route: Final = respx_mock.post("https://api.openai.com/v1/files").mock(
-        return_value=httpx.Response(200, json=dict(_FINE_TUNE_FILE_JSON))
+        return_value=response_for_respx(httpx.Response(200, json=dict(_FINE_TUNE_FILE_JSON)))
     )
     list_route: Final = respx_mock.get("https://api.openai.com/v1/files").mock(
-        return_value=httpx.Response(200, json={"object": "list", "data": [dict(_FINE_TUNE_FILE_JSON)]})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"object": "list", "data": [dict(_FINE_TUNE_FILE_JSON)]})
+        )
     )
     retrieve_route: Final = respx_mock.get("https://api.openai.com/v1/files/file-abc123").mock(
-        return_value=httpx.Response(200, json=dict(_FINE_TUNE_FILE_JSON))
+        return_value=response_for_respx(httpx.Response(200, json=dict(_FINE_TUNE_FILE_JSON)))
     )
     content_route: Final = respx_mock.get("https://api.openai.com/v1/files/file-abc123/content").mock(
-        return_value=httpx.Response(200, content=_FILE_BODY)
+        return_value=response_for_respx(httpx.Response(200, content=_FILE_BODY))
     )
     delete_route: Final = respx_mock.delete("https://api.openai.com/v1/files/file-abc123").mock(
-        return_value=httpx.Response(200, json={"id": "file-abc123", "object": "file", "deleted": True})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"id": "file-abc123", "object": "file", "deleted": True})
+        )
     )
 
     uploaded: Final = await litellm.acreate_file(

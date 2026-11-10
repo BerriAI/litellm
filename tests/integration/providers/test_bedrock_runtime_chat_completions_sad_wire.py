@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.bedrock_runtime_peer import answer, forwarded_effort, marker_of, respond, target_of

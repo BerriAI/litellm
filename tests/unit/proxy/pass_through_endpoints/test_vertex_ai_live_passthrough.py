@@ -6,10 +6,12 @@ from datetime import datetime
 from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import Request, Response
 from starlette.types import Message
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -955,7 +957,7 @@ async def test_vertex_ai_generate_content_spendlog(
     monkeypatch.setattr(litellm, "success_callback", [])
     contents: Final = [{"role": "user", "parts": [{"text": "hi"}]}]
     route: Final = respx_mock.post(upstream_url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "candidates": [
@@ -963,7 +965,7 @@ async def test_vertex_ai_generate_content_spendlog(
                 ],
                 "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 6, "totalTokenCount": 15},
             },
-        )
+        ))
     )
 
     response: Final = await vertex_proxy_route(

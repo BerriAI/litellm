@@ -4,7 +4,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, repeat
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.integrations.zerobus.client import ZerobusIngestClient

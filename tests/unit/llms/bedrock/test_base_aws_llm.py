@@ -6,10 +6,11 @@ import threading
 import time
 
 import boto3
-import httpx
+import httpx2 as httpx
 import pytest
 import re
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 
 
@@ -32,6 +33,7 @@ from litellm.llms.bedrock.base_aws_llm import (
     run_aws_signing,
     run_off_loop_if_aws,
 )
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -4121,7 +4123,7 @@ def test_dynamic_aws_params_propagation(model, param_name, param_value, expected
 
 
 def test_bearer_request_preparation_does_not_require_botocore():
-    import httpx
+    import httpx2 as httpx
 
     with patch.dict("sys.modules", {"botocore.credentials": None, "botocore.awsrequest": None}):
         target = BaseAWSLLM()._get_boto_credentials_from_optional_params(
@@ -4239,7 +4241,7 @@ _CONVERSE_SIGNED_RESPONSE: Final = {
 def test_explicit_aws_credentials_sign_the_converse_request(model: str, respx_mock: respx.Router) -> None:
     route: Final = respx_mock.post(
         re.compile(r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/[^/]+/converse")
-    ).mock(return_value=httpx.Response(200, json=_CONVERSE_SIGNED_RESPONSE))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_CONVERSE_SIGNED_RESPONSE)))
     response: Final = litellm.completion(
         model=model,
         messages=[{"role": "user", "content": "sign this request"}],
@@ -4264,7 +4266,7 @@ def test_explicit_aws_credentials_sign_the_converse_request(model: str, respx_mo
 def test_external_boto3_client_supplies_credentials_and_region(respx_mock: respx.Router) -> None:
     route: Final = respx_mock.post(
         re.compile(r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/[^/]+/converse")
-    ).mock(return_value=httpx.Response(200, json=_CONVERSE_SIGNED_RESPONSE))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_CONVERSE_SIGNED_RESPONSE)))
     bedrock_client: Final = boto3.client(
         "bedrock-runtime",
         region_name="us-east-1",

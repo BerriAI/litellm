@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (

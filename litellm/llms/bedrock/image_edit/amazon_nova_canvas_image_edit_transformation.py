@@ -16,8 +16,8 @@ import base64
 import os
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger

@@ -12,7 +12,7 @@ from typing import Final
 from unittest.mock import Mock, patch
 
 
-import httpx
+import httpx2 as httpx
 import pytest
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest

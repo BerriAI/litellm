@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterable, Iterator
 from hashlib import sha256
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, Scenario, eventually, held
 from integration._support.wire import Reply, Request, Wire
 from openai.types.chat import ChatCompletionChunk

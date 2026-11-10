@@ -4,7 +4,7 @@ from typing import Final
 from unittest.mock import MagicMock
 from urllib.parse import unquote, urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.valkey.vector_stores.transformation import (

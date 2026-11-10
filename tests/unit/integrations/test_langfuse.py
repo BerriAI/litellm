@@ -8,11 +8,12 @@ import unittest
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
@@ -2730,8 +2731,8 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
 
 @pytest.fixture
 def global_langfuse_logger() -> LangFuseLogger:
-    with respx.mock(assert_all_called=False) as router:
-        router.route().mock(side_effect=httpx.ConnectError("langfuse is unreachable"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as router:
+        router.route().mock(side_effect=side_effect_for_respx(httpx.ConnectError("langfuse is unreachable")))
         return LangFuseLogger(
             langfuse_public_key="global_public_key",
             langfuse_secret="global_secret",

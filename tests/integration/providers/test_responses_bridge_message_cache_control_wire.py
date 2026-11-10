@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from itertools import chain
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support import bedrock_runtime_peer

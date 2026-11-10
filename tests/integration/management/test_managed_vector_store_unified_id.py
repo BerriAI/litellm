@@ -6,7 +6,7 @@ from functools import partial
 from typing import Final
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 from integration._support.client import Gateway, eventually, string_value
 from integration._support.database import read_rows, write_rows
 from integration._support.wire import Reply, Request, Wire, wire_server

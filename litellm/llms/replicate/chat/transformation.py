@@ -2,7 +2,7 @@ import types
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

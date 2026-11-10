@@ -20,7 +20,7 @@ from contextlib import closing
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from fastapi import FastAPI
 from prometheus_client import CollectorRegistry, multiprocess
 from pydantic import ConfigDict

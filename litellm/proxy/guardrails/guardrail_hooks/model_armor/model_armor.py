@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, 
 from enum import Enum, auto
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict

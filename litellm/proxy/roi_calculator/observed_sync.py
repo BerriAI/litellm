@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.roi_calculator.analytics import normalize_email

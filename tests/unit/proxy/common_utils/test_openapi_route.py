@@ -5,7 +5,7 @@ from _collections_abc import dict_items
 from collections.abc import Callable
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import FastAPI
 

@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Final
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (

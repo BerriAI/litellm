@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager

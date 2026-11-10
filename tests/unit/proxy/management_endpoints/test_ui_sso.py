@@ -8,9 +8,10 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException, Request
 from pydantic import SecretStr
 
@@ -50,6 +51,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftServicePrincipalTeam,
     TeamMappings,
 )
+from tests._support.respx_httpx2 import response_for_respx
 from tests._master_key import MASTER_KEY
 
 
@@ -293,7 +295,7 @@ def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
 def stubbed_graph_api(httpx_transport):
     with respx.mock:
         respx.get(url__regex=r".*graph\.microsoft\.com.*").mock(
-            return_value=httpx.Response(200, json={"value": []})
+            return_value=response_for_respx(httpx.Response(200, json={"value": []}))
         )
         yield
 
@@ -9827,10 +9829,12 @@ async def test_non_json_userinfo_falls_back_to_id_token_claims():
         patch(_SSO_HTTP_CLIENT_FACTORY, return_value=_sso_http_handler()),
     ):
         respx.post("https://auth.example.com/token").mock(
-            return_value=httpx.Response(200, json={"access_token": "at", "token_type": "Bearer", "id_token": id_token})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"access_token": "at", "token_type": "Bearer", "id_token": id_token})
+            )
         )
         userinfo_route = respx.get("https://auth.example.com/userinfo").mock(
-            return_value=httpx.Response(401, content=b"", headers={"content-type": "text/html"})
+            return_value=response_for_respx(httpx.Response(401, content=b"", headers={"content-type": "text/html"}))
         )
         result, received_response, _, _ = await get_generic_sso_response(
             request=request,
@@ -9865,10 +9869,10 @@ async def test_non_json_userinfo_without_id_token_raises_401():
         patch(_SSO_HTTP_CLIENT_FACTORY, return_value=_sso_http_handler()),
     ):
         respx.post("https://auth.example.com/token").mock(
-            return_value=httpx.Response(200, json={"access_token": "at", "token_type": "Bearer"})
+            return_value=response_for_respx(httpx.Response(200, json={"access_token": "at", "token_type": "Bearer"}))
         )
         respx.get("https://auth.example.com/userinfo").mock(
-            return_value=httpx.Response(401, content=b"", headers={"content-type": "text/html"})
+            return_value=response_for_respx(httpx.Response(401, content=b"", headers={"content-type": "text/html"}))
         )
         with pytest.raises(ProxyException) as exc_info:
             await get_generic_sso_response(
@@ -9898,10 +9902,10 @@ async def test_non_json_token_response_is_not_swallowed_by_userinfo_fallback():
         patch(_SSO_HTTP_CLIENT_FACTORY, return_value=_sso_http_handler()),
     ):
         respx.post("https://auth.example.com/token").mock(
-            return_value=httpx.Response(200, content=b"", headers={"content-type": "text/html"})
+            return_value=response_for_respx(httpx.Response(200, content=b"", headers={"content-type": "text/html"}))
         )
         userinfo_route = respx.get("https://auth.example.com/userinfo").mock(
-            return_value=httpx.Response(200, json={"sub": "unused"})
+            return_value=response_for_respx(httpx.Response(200, json={"sub": "unused"}))
         )
         with pytest.raises(json.JSONDecodeError):
             await get_generic_sso_response(

@@ -26,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import litellm
 import pytest
 from fastapi import Request as FastAPIRequest, Response

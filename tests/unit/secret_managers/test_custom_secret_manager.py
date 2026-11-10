@@ -4,7 +4,7 @@ Test custom secret manager implementation
 
 from typing import Optional, Union
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 

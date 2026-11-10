@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payloads to public TypedDicts
 
-import httpx
+import httpx2 as httpx
 from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import TypeAdapter, ValidationError
 

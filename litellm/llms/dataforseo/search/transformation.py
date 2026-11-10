@@ -7,7 +7,7 @@ DataForSEO API Reference: https://docs.dataforseo.com/v3/serp/google/organic/liv
 from collections.abc import Iterable, Mapping, Sized
 from typing import Final, Literal, Protocol, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.constants import DEFAULT_DATAFORSEO_LOCATION_CODE

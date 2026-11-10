@@ -101,7 +101,7 @@ async def test_mapped_caller_bearer_reaches_agent_evaluation(
 ) -> None:
     from urllib.parse import parse_qs
 
-    import httpx
+    import httpx2 as httpx
     from mcp.server.auth.middleware.auth_context import auth_context_var
     from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult, TextContent
     from starlette.requests import Request

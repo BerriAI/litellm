@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote
 
-import httpx
+import httpx2 as httpx
 import pytest
 from _pytest.mark.structures import ParameterSet
 from integration._support import claude_code as cc

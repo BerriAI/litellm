@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Final, List
 
-import httpx
+import httpx2 as httpx
 import openai
 import responses
-import respx
+
+from tests._support import respx_httpx2 as respx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter, ValidationError
@@ -19,6 +20,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.anthropic_interface import messages
 from litellm.integrations.custom_logger import CustomLogger
@@ -65,7 +67,9 @@ async def test_openai_messages_forwards_stop_sequences_to_chat_completions(
         )
     )
     with respx.mock as upstream:
-        chat: Final = upstream.post("https://api.openai.com/v1/chat/completions").mock(return_value=response)
+        chat: Final = upstream.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=response_for_respx(response)
+        )
         create: Final = litellm.anthropic.messages.acreate if is_async else litellm.anthropic.messages.create
         pending: Final = create(
             model="openai/gpt-4o-mini",
@@ -1174,9 +1178,9 @@ async def test_azure_ai_on_azure_openai_host_streams_natively_with_the_bare_depl
         else {"api_base": "https://qa-resource.cognitiveservices.azure.com", "api_key": "params-api-key"}
     )
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.route(host="qa-resource.cognitiveservices.azure.com").mock(
-            side_effect=httpx.ConnectError("cut at the wire")
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
         )
         with pytest.raises(openai.APIError):
             await litellm.anthropic.messages.acreate(
@@ -1202,8 +1206,10 @@ async def test_bridged_messages_keep_the_region_of_a_regional_bedrock_mantle_mod
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
-        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
+        )
         with pytest.raises(litellm.exceptions.ServiceUnavailableError):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
@@ -1223,8 +1229,10 @@ async def test_bridged_messages_keep_the_callers_explicit_provider_over_the_mode
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
-        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
+        )
         with pytest.raises(openai.APIError):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
@@ -1249,8 +1257,10 @@ def test_bridged_messages_reach_the_callers_provider_without_signing_in_to_the_p
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
-        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
+        )
         with pytest.raises(openai.APIError):
             litellm.anthropic.messages.create(
                 max_tokens=100,
@@ -1271,8 +1281,10 @@ async def test_bridged_messages_send_the_deployments_key_for_azure_models_served
     monkeypatch.setenv("OPENAI_API_KEY", "server-openai-key")
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
-        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
+        )
         with pytest.raises(openai.APIError):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
@@ -1311,9 +1323,11 @@ async def test_bridged_messages_keep_the_deployments_entra_credential_over_the_e
             "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password",
             return_value=lambda: "entra-token",
         ),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
-        respx.mock(assert_all_called=True) as respx_mock,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock,
     ):
-        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        upstream: Final = respx_mock.route().mock(
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
+        )
         with pytest.raises(openai.APIError):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
@@ -1354,9 +1368,11 @@ async def test_bridged_messages_keep_the_azure_env_credential_when_the_deploymen
 
     with (
         patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id", return_value=lambda: "entra-token"),  # test-quality-ok: stands in for the Entra token fetch so the test can see which credential reaches Azure
-        respx.mock(assert_all_called=True) as respx_mock,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock,
     ):
-        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        upstream: Final = respx_mock.route().mock(
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
+        )
         with pytest.raises(openai.APIError):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
@@ -1380,8 +1396,10 @@ async def test_bridged_messages_still_route_through_the_litellm_proxy_when_asked
     monkeypatch.setenv("AZURE_AI_API_KEY", "azure-env-key")
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
-        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
+        )
         with pytest.raises(openai.APIError):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
@@ -1417,9 +1435,9 @@ async def test_messages_honors_a_chat_pin_on_a_prefixed_responses_deployment(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.route(host="api.perplexity.ai").mock(
-            side_effect=httpx.ConnectError("cut at the wire")
+            side_effect=side_effect_for_respx(httpx.ConnectError("cut at the wire"))
         )
         with pytest.raises(litellm.exceptions.InternalServerError):
             await litellm.anthropic.messages.acreate(
@@ -2857,16 +2875,16 @@ async def test_azure_messages_replay_encrypted_reasoning_only_to_responses(
         '"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\n'
         "data: [DONE]\n\n"
     ).encode()
-    with respx.mock(assert_all_called=True) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as upstream:
         route: Final = upstream.route(host="qa-resource.openai.azure.com").mock(
             return_value=(
-                httpx.Response(
+                response_for_respx(httpx.Response(
                     200,
                     headers={"content-type": "text/event-stream"},
                     content=_sse_body(_RESPONSES_SSE_EVENTS) if responses_target else chat_stream,
                 )
                 if stream
-                else httpx.Response(200, json=_RESPONSES_COMPLETED_BODY if responses_target else chat_reply)
+                else httpx.Response(200, json=_RESPONSES_COMPLETED_BODY if responses_target else chat_reply))
             )
         )
         create: Final = litellm.anthropic.messages.acreate if is_async else litellm.anthropic.messages.create

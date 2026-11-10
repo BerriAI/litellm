@@ -8,14 +8,16 @@ from queue import SimpleQueue
 from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import AsyncOpenAI, OpenAI
 from openai.types.image import Image
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -234,7 +236,9 @@ def test_image_generation_keeps_an_internal_prefixed_kwarg_out_of_the_provider_r
 ) -> None:
     api_base: Final = "http://localhost:12346/v1"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/images/generations.*").mock(
-        return_value=httpx.Response(status_code=200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+        return_value=response_for_respx(
+            httpx.Response(status_code=200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+        )
     )
 
     litellm.image_generation(
@@ -257,7 +261,9 @@ async def test_aimage_generation_routes_a_bare_model_name_to_its_explicit_provid
 ) -> None:
     api_base: Final = "http://localhost:12348/v1"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/images/generations.*").mock(
-        return_value=httpx.Response(status_code=200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+        return_value=response_for_respx(
+            httpx.Response(status_code=200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+        )
     )
 
     response: Final = await litellm.aimage_generation(
@@ -296,7 +302,9 @@ async def test_aimage_generation_ignores_a_non_string_base_url_like_the_sync_pat
 ) -> None:
     api_base: Final = "http://localhost:12349/v1"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/images/generations.*").mock(
-        return_value=httpx.Response(status_code=200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+        return_value=response_for_respx(
+            httpx.Response(status_code=200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+        )
     )
 
     response: Final = await litellm.aimage_generation(
@@ -317,10 +325,10 @@ def test_image_edit_prices_a_vertex_deployment_at_its_configured_location(
 ) -> None:
     api_base: Final = "http://localhost:12347/generateContent"
     respx_mock.post(api_base).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             json={"candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]},
-        )
+        ))
     )
     monkeypatch.setitem(
         litellm.model_cost,
@@ -359,7 +367,9 @@ def test_image_edit_prices_a_vertex_deployment_at_its_configured_location(
 
 def test_image_edit_accepts_a_string_additional_drop_params(respx_mock: respx.MockRouter) -> None:
     edits_route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
-        return_value=httpx.Response(status_code=200, json={"created": 1792551838, "data": [{"b64_json": "aW1n"}]})
+        return_value=response_for_respx(
+            httpx.Response(status_code=200, json={"created": 1792551838, "data": [{"b64_json": "aW1n"}]})
+        )
     )
 
     response: Final = litellm.image_edit(
@@ -491,7 +501,7 @@ async def test_aiml_image_generation_with_dynamic_api_key():
     """
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    import httpx
+    import httpx2 as httpx
 
     # Mock AIML response
     mock_aiml_response = {
@@ -662,7 +672,9 @@ async def test_chatgpt_images_forward_client_login_and_workspace(
         else {transport: {**headers, "cookie": "fake-cookie", "x-litellm-api-key": "fake-gateway-key"}}
     )
     route: Final = respx_mock.post("https://chatgpt.com/backend-api/codex/images/generations").mock(
-        return_value=httpx.Response(200, json={"created": 1700000000, "data": [{"b64_json": "aW1n"}]})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"created": 1700000000, "data": [{"b64_json": "aW1n"}]})
+        )
     )
     params: Final = {
         "model": "chatgpt/gpt-image-2",
@@ -701,7 +713,9 @@ def test_image_generation_without_a_model_or_provider_fails_before_calling_any_p
 
 def test_topaz_image_variation_works_without_a_model(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post("https://api.topazlabs.com/image/v1/enhance").mock(
-        return_value=httpx.Response(200, content=b"enhanced-image", headers={"content-type": "image/png"})
+        return_value=response_for_respx(
+            httpx.Response(200, content=b"enhanced-image", headers={"content-type": "image/png"})
+        )
     )
 
     response: Final = litellm.image_variation(image=b"source-image", custom_llm_provider="topaz", api_key="fake-key")

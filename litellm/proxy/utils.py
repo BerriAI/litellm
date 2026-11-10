@@ -54,7 +54,7 @@ from typing import (
 )
 
 import anyio
-import httpx
+import httpx2 as httpx
 from typing_extensions import Never, NotRequired, ReadOnly, TypedDict
 
 from litellm import _custom_logger_compatible_callbacks_literal

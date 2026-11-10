@@ -11,7 +11,7 @@ from pydantic import BeforeValidator, Field
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 if TYPE_CHECKING:
-    import httpx
+    import httpx2 as httpx
     from aiohttp import ClientSession
     from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 

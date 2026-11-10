@@ -23,7 +23,7 @@ from typing import (
 )
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import httpx
+import httpx2 as httpx
 from openai import Timeout as SDKTimeout
 from pydantic import (
     BaseModel,

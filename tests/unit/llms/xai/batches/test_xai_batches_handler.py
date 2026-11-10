@@ -2,10 +2,11 @@ import json
 import time
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.llms.xai.batches.transformation import XAIBatchesError
 from litellm.types.utils import LiteLLMBatch
@@ -258,7 +259,9 @@ async def test_file_content_of_a_batch_id_walks_every_results_page(sync_mode: bo
             },
         )
 
-    route: Final = respx.get(f"{API_BASE}/v1/batches/batch_1/results").mock(side_effect=_page)
+    route: Final = respx.get(f"{API_BASE}/v1/batches/batch_1/results").mock(
+        side_effect=side_effect_for_respx(_page)
+    )
 
     kwargs: Final = {"file_id": "batch_1", "custom_llm_provider": "xai", "api_key": KEY, "api_base": API_BASE}
     content: Final = litellm.file_content(**kwargs) if sync_mode else await litellm.afile_content(**kwargs)
@@ -283,7 +286,9 @@ async def test_file_content_of_a_batch_id_walks_every_results_page(sync_mode: bo
 @respx.mock
 async def test_file_retrieve_of_a_batch_id_describes_its_results_from_one_batch_read(sync_mode: bool) -> None:
     batch_id: Final = f"batch_retrieve_{sync_mode}"
-    batch: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}").respond(200, json={**_XAI_BATCH, "batch_id": batch_id})
+    batch: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}").respond(
+        200, json={**_XAI_BATCH, "batch_id": batch_id}
+    )
     results: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}/results").respond(
         200, json={"results": [], "pagination_token": None}
     )

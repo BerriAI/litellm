@@ -5,7 +5,7 @@ Test RAGFlow Vector Store helper functions and transformation.
 import os
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

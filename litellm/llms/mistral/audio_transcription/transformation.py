@@ -6,7 +6,7 @@ API reference: https://docs.mistral.ai/api/#tag/audio/operation/audio_transcript
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.url_utils import join_api_base

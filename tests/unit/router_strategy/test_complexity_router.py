@@ -16,11 +16,13 @@ from types import MappingProxyType
 from typing import Dict, Final, List, Literal
 from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import TypeAdapter, ValidationError
 
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm._logging import verbose_router_logger
@@ -3556,8 +3558,8 @@ def native_classifier_http(monkeypatch: pytest.MonkeyPatch) -> Iterator[MagicMoc
     respond: Final = MagicMock(
         return_value=httpx.Response(200, json=_native_classifier_response('{"tier":"REASONING"}').model_dump())
     )
-    with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
-        upstream.post(host="classifier.test").mock(side_effect=lambda request: respond(request))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True, assert_all_called=False) as upstream:
+        upstream.post(host="classifier.test").mock(side_effect=side_effect_for_respx(lambda request: respond(request)))
         yield respond
 
 
@@ -15614,7 +15616,7 @@ class TestHealthFallbackDispatch:
             choices=[{"message": {"role": "assistant", "content": verdict}}],
             usage={"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
         )
-        with respx.mock(assert_all_mocked=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
             upstream.post(host="fallback.test").respond(json=judge_response.model_dump())
             original: Final = await router.async_pre_routing_hook(
                 model="health-router", request_kwargs={}, messages=[{"role": "user", "content": "Hello!"}]
@@ -15902,8 +15904,10 @@ class TestHealthFallbackDispatch:
         router: Final = self._router(surface, session=True)
         self._unavailable(router, "primary-id", source)
         metadata: Final[dict[str, object]] = {"session_id": "outage"}
-        with respx.mock(assert_all_mocked=True) as upstream:
-            upstream.post(host__regex=r"^(primary|peer|fallback)\.test$").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|peer|fallback)\.test$").mock(
+                side_effect=side_effect_for_respx(self._http_response)
+            )
             assert await self._request(router, surface, stream, metadata) == "fallback"
             assert metadata["routing_decision"]["cause"] == "health_default_fallback"
             assert "tier" not in metadata["routing_decision"]
@@ -15939,8 +15943,10 @@ class TestHealthFallbackDispatch:
         strategy: Final = router.complexity_routers["health-router"][0].strategy
         key: Final = strategy._get_session_affinity_cache_key("precedence", {})
         await router.cache.async_set_cache(key=key, value={"model": "primary", "tier": "SIMPLE"}, ttl=600)
-        with respx.mock(assert_all_mocked=True) as upstream:
-            upstream.post(host__regex=r"^(primary|peer|fallback)\.test$").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|peer|fallback)\.test$").mock(
+                side_effect=side_effect_for_respx(self._http_response)
+            )
             for model_id, expected, cause in (
                 ("primary-id", "primary", "session_affinity_pin"),
                 ("primary-sibling-id", "peer", "health_failover"),
@@ -15971,8 +15977,10 @@ class TestHealthFallbackDispatch:
         limiter: Final = router.router_budget_logger
         assert limiter is not None, "a deployment max_budget must install the budget limiter"
         await router.cache.async_set_cache(key="deployment_spend:primary-id:1d", value=2.0)
-        with respx.mock(assert_all_mocked=True) as upstream:
-            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(
+                side_effect=side_effect_for_respx(self._http_response)
+            )
             metadata: Final[dict[str, object]] = {}
             assert await self._request(router, "chat", False, metadata) == "fallback"
             assert metadata["routing_decision"]["cause"] == "health_default_fallback"
@@ -15991,8 +15999,10 @@ class TestHealthFallbackDispatch:
             )
         )
         self._unavailable(router, "primary-id", "cooldown")
-        with respx.mock(assert_all_mocked=True) as upstream:
-            upstream.post(host__regex=r"^(peer|fallback)\.test$").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(peer|fallback)\.test$").mock(
+                side_effect=side_effect_for_respx(self._http_response)
+            )
             scopes: Final = tuple({"tags": [name], "session_id": name} for name in ("peer", "fallback"))
             results: Final = await asyncio.gather(
                 *(self._request(router, "chat", False, metadata) for metadata in scopes)
@@ -16025,7 +16035,7 @@ class TestHealthFallbackDispatch:
             router.delete_deployment(id="fallback-id")
         elif default_state == "cooldown":
             self._unavailable(router, "fallback-id", "cooldown")
-        with respx.mock(assert_all_mocked=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
             with pytest.raises(RouterRateLimitError, match="No deployments available"):
                 await self._request(router, "chat", False, {})
             assert not upstream.calls
@@ -16041,8 +16051,8 @@ class TestHealthFallbackDispatch:
         self._unavailable(router, "primary-id", "cooldown")
         self._unavailable(router, "peer-id", "cooldown")
         metadata: Final = {}
-        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
-            upstream.post(host="fallback.test").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host="fallback.test").mock(side_effect=side_effect_for_respx(self._http_response))
             if plan_active:
                 with pytest.raises(RouterRateLimitError, match="No deployments available"):
                     await router.acompletion(
@@ -16064,8 +16074,10 @@ class TestHealthFallbackDispatch:
         router: Final = self._router(
             config={"tiers": {"SIMPLE": {"model_name": "primary", "litellm_params": {"max_tokens": 9}}}}
         )
-        with respx.mock(assert_all_mocked=True) as upstream:
-            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(
+                side_effect=side_effect_for_respx(self._http_response)
+            )
             await router.acompletion(
                 model="health-router", messages=[{"role": "user", "content": "Hello!"}], max_tokens=32
             )
@@ -16081,8 +16093,10 @@ class TestHealthFallbackDispatch:
     @pytest.mark.parametrize("source", ["health", "cooldown"])
     async def test_pinned_session_returns_to_primary_after_outage(self, source: Literal["health", "cooldown"]) -> None:
         router: Final = self._router(session=True)
-        with respx.mock(assert_all_mocked=True) as upstream:
-            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(primary|fallback)\.test$").mock(
+                side_effect=side_effect_for_respx(self._http_response)
+            )
             assert await self._request(router, "chat", False, {"session_id": "pinned"}) == "primary"
             self._unavailable(router, "primary-id", source)
             outage: Final[dict[str, object]] = {"session_id": "pinned"}
@@ -16110,7 +16124,7 @@ class TestHealthFallbackDispatch:
 
         router: Final = self._router(peer=True, config={"plugins": [PrimaryOnly()]})
         self._unavailable(router, "primary-id", "cooldown")
-        with respx.mock(assert_all_mocked=True) as upstream:
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
             with pytest.raises(RouterRateLimitError, match="No deployments available"):
                 await self._request(router, "chat", False, {})
             assert not upstream.calls
@@ -16152,8 +16166,10 @@ class TestHealthFallbackDispatch:
         assert router.enable_pre_call_checks is False
         metadata: Final = {}
         messages: Final = [{"role": "user", "content": "hello " * 100}]
-        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
-            upstream.post(host__regex=r"^(large|fallback)\.test$").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host__regex=r"^(large|fallback)\.test$").mock(
+                side_effect=side_effect_for_respx(self._http_response)
+            )
             if not live_tier and not default_fits:
                 with pytest.raises(RouterRateLimitError, match="No deployments available"):
                     await router.acompletion(model="health-router", messages=messages, metadata=metadata)
@@ -16185,8 +16201,10 @@ class TestHealthFallbackDispatch:
         self._unavailable(router, "peer-id", "cooldown")
         if not live_tier:
             self._unavailable(router, "vision-id", "cooldown")
-        with respx.mock(assert_all_mocked=True) as upstream:
-            upstream.post(host__regex=r"^(vision|fallback)\.test$").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
+            upstream.post(host__regex=r"^(vision|fallback)\.test$").mock(
+                side_effect=side_effect_for_respx(self._http_response)
+            )
             result: Final = await router.acompletion(
                 model="health-router",
                 messages=[
@@ -16217,8 +16235,8 @@ class TestHealthFallbackDispatch:
         for deployment in router.model_list:
             deployment["model_info"]["supports_vision"] = deployment["model_name"] == "fallback"
             deployment["model_info"]["max_input_tokens"] = 10000 if default_fits else 10
-        with respx.mock(assert_all_mocked=True, assert_all_called=False) as upstream:
-            upstream.post(host="fallback.test").mock(side_effect=self._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True, assert_all_called=False) as upstream:
+            upstream.post(host="fallback.test").mock(side_effect=side_effect_for_respx(self._http_response))
             messages: Final = [
                 {
                     "role": "user",
@@ -17359,8 +17377,10 @@ class TestMaxTokensFromTierModel:
             }],
         )
 
-        with respx.mock(assert_all_mocked=True) as upstream:
-            upstream.post(host="tier.test").mock(side_effect=TestHealthFallbackDispatch._http_response)
+        with respx.mock(using="httpcore2_and_legacy", assert_all_mocked=True) as upstream:
+            upstream.post(host="tier.test").mock(
+                side_effect=side_effect_for_respx(TestHealthFallbackDispatch._http_response)
+            )
             if surface == "responses":
                 await router.aresponses(model="smart-router", input="hi", **request_caps)
             else:

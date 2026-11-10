@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import psycopg
 from integration._support.client import JSON_OBJECT, Gateway, eventually, string_value
 from integration._support.database import read_rows

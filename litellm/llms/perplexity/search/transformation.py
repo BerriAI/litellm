@@ -5,7 +5,7 @@ Calls Perplexity's /search endpoint to search the web.
 from collections.abc import Iterable, Mapping
 from typing import Final, TypedDict
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

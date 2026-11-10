@@ -5,10 +5,11 @@ Unit tests for OVHCloud AI Endpoints chat integration.
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 from litellm.llms.ovhcloud.utils import OVHCloudException
@@ -261,7 +262,7 @@ def test_custom_api_base_uses_chat_completions_endpoint(respx_mock: respx.MockRo
     api_base: Final = "https://custom.ovh.test/v1"
     request_messages: Final = [{"role": "user", "content": "Hello"}]
     route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-ovh",
@@ -277,7 +278,7 @@ def test_custom_api_base_uses_chat_completions_endpoint(respx_mock: respx.MockRo
                 ],
                 "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(

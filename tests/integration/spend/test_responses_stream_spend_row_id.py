@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, list_value, object_value, string_value

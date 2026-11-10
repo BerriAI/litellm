@@ -5,7 +5,7 @@ These tests demonstrate end-to-end usage of the Vertex AI rerank feature.
 
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 
 from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 

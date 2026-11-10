@@ -9,6 +9,7 @@ from unittest import mock
 
 from dotenv import load_dotenv
 
+from tests._support.respx_httpx2 import response_for_respx
 from tests._master_key import MASTER_KEY
 
 import litellm.proxy
@@ -23,10 +24,10 @@ import json
 import asyncio
 import logging
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 
@@ -2449,7 +2450,7 @@ async def test_model_info_alias_without_prisma(hidden):
 
     assert alias_found is (not hidden)
 
-    
+
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
@@ -2713,7 +2714,7 @@ async def test_proxy_server_prisma_setup_invalid_db(monkeypatch):
 
     Think 2-3 times before editing / deleting this test, it's important for PROD
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
@@ -4249,7 +4250,9 @@ def test_detailed_debug_logs_request_body_only_as_received_and_as_sent(
     upstream_json: Mapping[str, object],
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post(url__regex=rf".*{path_suffix}$").mock(return_value=httpx.Response(200, json=upstream_json))
+    respx_mock.post(url__regex=rf".*{path_suffix}$").mock(
+        return_value=response_for_respx(httpx.Response(200, json=upstream_json))
+    )
     collector: Final = _MessageCollector()
     loggers: Final = tuple(logging.getLogger(name) for name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy"))
     original_levels: Final = tuple(lg.level for lg in loggers)

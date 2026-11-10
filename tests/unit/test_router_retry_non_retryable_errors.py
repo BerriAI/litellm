@@ -12,10 +12,10 @@ Regression tests for https://github.com/BerriAI/litellm/issues/21343
 
 from collections.abc import Iterator
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import Router
 
@@ -60,8 +60,10 @@ def _create_router(num_retries=2):
 
 async def _call(router: Router, responses: list[httpx.Response]) -> None:
     """Run one acompletion against upstream replies served in order."""
-    with respx.mock() as mock_router:
-        mock_router.post("https://api.openai.com/v1/chat/completions").mock(side_effect=responses)
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        mock_router.post("https://api.openai.com/v1/chat/completions").mock(
+            side_effect=side_effect_for_respx(responses)
+        )
         await router.acompletion(model="test-model", messages=[{"role": "user", "content": "test"}])
 
 
@@ -121,8 +123,10 @@ async def test_retryable_errors_still_retry_normally():
     router = _create_router(num_retries=3)
     replies = [_rate_limit(i) for i in range(1, 9)]
 
-    with respx.mock() as mock_router:
-        route = mock_router.post("https://api.openai.com/v1/chat/completions").mock(side_effect=replies)
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        route = mock_router.post("https://api.openai.com/v1/chat/completions").mock(
+            side_effect=side_effect_for_respx(replies)
+        )
         with pytest.raises(litellm.RateLimitError):
             await router.acompletion(model="test-model", messages=[{"role": "user", "content": "test"}])
 
@@ -138,8 +142,10 @@ async def test_not_found_error_in_retry_loop_raises_immediately():
     router = _create_router(num_retries=2)
     replies = [_rate_limit(1), _error(404, "Model not found"), _rate_limit(3)]
 
-    with respx.mock() as mock_router:
-        route = mock_router.post("https://api.openai.com/v1/chat/completions").mock(side_effect=replies)
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        route = mock_router.post("https://api.openai.com/v1/chat/completions").mock(
+            side_effect=side_effect_for_respx(replies)
+        )
         with pytest.raises(litellm.NotFoundError):
             await router.acompletion(model="test-model", messages=[{"role": "user", "content": "test"}])
 

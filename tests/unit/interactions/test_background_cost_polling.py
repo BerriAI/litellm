@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import islice
 from typing import Optional
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

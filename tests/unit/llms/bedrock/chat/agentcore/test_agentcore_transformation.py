@@ -10,14 +10,14 @@ Tests:
 
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
-
+from tests._support import respx_httpx2 as respx
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
@@ -1256,7 +1256,11 @@ def test_agentcore_runtime_response_becomes_assistant_message(
     route: Final = respx_mock.post(
         "https://bedrock-agentcore.us-west-2.amazonaws.com/runtimes/"
         "arn%3Aaws%3Abedrock-agentcore%3Aus-west-2%3A888602223428%3Aruntime%2Fhosted_agent_13sf6-cALnp38iZD/invocations"
-    ).mock(return_value=httpx.Response(200, content=body.encode(), headers={"content-type": content_type}))
+    ).mock(
+        return_value=response_for_respx(
+            httpx.Response(200, content=body.encode(), headers={"content-type": content_type})
+        )
+    )
 
     response: Final = litellm.completion(
         model="bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:888602223428:runtime/"
@@ -1329,9 +1333,9 @@ async def test_agentcore_stream_that_signals_its_end_completes(
     ending: str, sync_mode: bool, respx_mock: respx.Router
 ) -> None:
     respx_mock.post(_AGENTCORE_RUNTIME_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, content=(_AGENTCORE_DELTAS + ending).encode(), headers={"content-type": "text/event-stream"}
-        )
+        ))
     )
 
     chunks: Final = await _stream_agentcore(_AGENTCORE_DELTAS + ending, sync_mode)
@@ -1344,9 +1348,9 @@ async def test_agentcore_stream_that_signals_its_end_completes(
 @pytest.mark.respx(assert_all_called=True)
 async def test_agentcore_stream_cut_before_it_signals_its_end_raises(sync_mode: bool, respx_mock: respx.Router) -> None:
     respx_mock.post(_AGENTCORE_RUNTIME_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, content=_AGENTCORE_DELTAS.encode(), headers={"content-type": "text/event-stream"}
-        )
+        ))
     )
 
     with pytest.raises(MidStreamFallbackError, match="Stream ended before a finish_reason was received"):

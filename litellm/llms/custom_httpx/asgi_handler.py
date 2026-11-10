@@ -4,7 +4,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm.llms.custom_httpx.http_handler import (

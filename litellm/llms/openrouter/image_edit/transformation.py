@@ -45,8 +45,8 @@ from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, cast
 
-import httpx
-from httpx._types import RequestFiles
+import httpx2 as httpx
+from httpx2._types import RequestFiles
 from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

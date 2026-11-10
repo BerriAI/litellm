@@ -2,9 +2,9 @@ import json
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from openai import OpenAI
 
 import litellm
@@ -85,7 +85,7 @@ def test_prefixed_model_reaches_zerogpu_chat_completions_without_the_prefix():
 
 
 def test_responses_request_reaches_zerogpu_responses_natively():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post(f"{ZEROGPU_API_BASE}/responses").respond(
             200,
             json={

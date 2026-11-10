@@ -2,9 +2,10 @@ import json
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
-import respx
+import httpx2 as httpx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.oobabooga.chat import oobabooga
 
@@ -62,7 +63,7 @@ def test_stream_keeps_unicode_line_separators_inside_a_data_line(respx_mock: res
     chunk: Final = {"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]}
     data_line: Final = f"data: {json.dumps(chunk, ensure_ascii=False)}"
     respx_mock.post("https://ooba.example/v1/chat/completions").mock(
-        return_value=httpx.Response(200, content=f"{data_line}\n\ndata: [DONE]\n\n".encode())
+        return_value=response_for_respx(httpx.Response(200, content=f"{data_line}\n\ndata: [DONE]\n\n".encode()))
     )
 
     lines: Final = oobabooga.completion(

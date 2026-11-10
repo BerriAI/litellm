@@ -6,7 +6,7 @@ from collections.abc import Coroutine, Mapping
 from functools import partial
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm.constants import request_timeout

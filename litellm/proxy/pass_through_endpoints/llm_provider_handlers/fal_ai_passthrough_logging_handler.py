@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import Final
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger

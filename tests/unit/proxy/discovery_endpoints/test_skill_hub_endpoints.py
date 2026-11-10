@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from prisma import models as prisma_models
 from prisma.errors import ForeignKeyViolationError, UniqueViolationError

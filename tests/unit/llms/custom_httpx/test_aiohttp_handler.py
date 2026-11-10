@@ -3,7 +3,7 @@ from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

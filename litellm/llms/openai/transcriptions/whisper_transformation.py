@@ -2,7 +2,7 @@ import json
 from collections.abc import Mapping
 from typing import Final
 
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (

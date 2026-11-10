@@ -3,7 +3,7 @@ import json
 from collections.abc import Awaitable
 from typing import Final, Literal, Protocol, TypeAlias
 
-import httpx
+import httpx2 as httpx
 from pydantic import ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

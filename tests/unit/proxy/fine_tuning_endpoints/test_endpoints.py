@@ -16,13 +16,13 @@ from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
-
+from tests._support import respx_httpx2 as respx
 from fastapi import Response
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 import litellm.proxy.fine_tuning_endpoints.endpoints as endpoints
 import litellm.proxy.proxy_server as proxy_server
@@ -364,7 +364,7 @@ async def test_list__rejected_when_neither_a_provider_nor_a_target_model_is_name
 @respx.mock
 async def test_list__returns_the_jobs_the_configured_provider_lists(seams):
     respx.get(f"{FINE_TUNING_API_BASE}/fine_tuning/jobs").mock(
-        return_value=httpx.Response(200, json=PROVIDER_JOBS_PAGE)
+        return_value=response_for_respx(httpx.Response(200, json=PROVIDER_JOBS_PAGE))
     )
     provider_config: Final = {
         "custom_llm_provider": "openai",

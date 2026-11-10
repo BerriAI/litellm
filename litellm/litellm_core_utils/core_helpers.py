@@ -9,7 +9,7 @@ from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import TypeIs  # noqa: TID251  # narrows a duck-typed value to the Protocol its caller reads
 

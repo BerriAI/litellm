@@ -14,7 +14,8 @@ from unittest.mock import MagicMock
 from urllib.parse import unquote, urlparse
 
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from botocore.auth import S3SigV4Auth, SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
@@ -23,6 +24,7 @@ import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, BedrockJsonlFilesTransformation
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.proxy.conftest import httpx_transport
 
 
@@ -596,7 +598,7 @@ class TestBedrockFilesTransformation:
         S3 answers PutObject with an empty body, so the returned FileObject must report the
         size of the body that was uploaded instead of the response's Content-Length (always 0).
         """
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -2185,7 +2187,7 @@ class TestBedrockFileDeletion:
     URL: Final = "https://s3.us-west-2.amazonaws.com/my-bucket/litellm-bedrock-files-model-abc.jsonl"
 
     def test_interleaved_deletions_keep_their_own_file_ids(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -2212,15 +2214,15 @@ class TestBedrockFileDeletion:
         assert deleted == file_ids
 
     def test_delete_file_sends_signed_delete_and_returns_matching_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
         monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
         with respx.mock, closing(HTTPHandler()) as client:
-            route: Final = respx.delete(self.URL).mock(return_value=httpx.Response(204))
+            route: Final = respx.delete(self.URL).mock(return_value=response_for_respx(httpx.Response(204)))
             deleted: Final = litellm.file_delete(
                 file_id=self.S3_URI, custom_llm_provider="bedrock", client=client,
                 aws_access_key_id="AKIAEXAMPLE", aws_secret_access_key="test-secret", aws_region_name="us-west-2",
@@ -2240,8 +2242,8 @@ class TestBedrockFileDeletion:
 
     @pytest.mark.asyncio
     async def test_adelete_file_propagates_s3_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -2253,7 +2255,9 @@ class TestBedrockFileDeletion:
             stack.push_async_callback(client.close)
             with respx.mock:
                 route: Final = respx.delete(self.URL).mock(
-                    return_value=httpx.Response(403, content=b"<Error><Code>AccessDenied</Code></Error>")
+                    return_value=response_for_respx(
+                        httpx.Response(403, content=b"<Error><Code>AccessDenied</Code></Error>")
+                    )
                 )
                 from litellm.llms.bedrock.common_utils import BedrockError
 
@@ -2359,7 +2363,7 @@ class TestBedrockFileContentTransformation:
     def test_transform_retrieve_file_response_parses_metadata(
         self, file_id: str, purpose: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -2414,7 +2418,7 @@ class TestBedrockFileContentTransformation:
     def test_transform_retrieve_file_response_uses_the_retrieved_bucket_prefix(
         self, file_id: str, purpose: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -2443,7 +2447,7 @@ class TestBedrockFileContentTransformation:
         assert response.purpose == purpose
 
     def test_transform_retrieve_file_response_accepts_verified_empty_object(self, monkeypatch):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -2469,7 +2473,7 @@ class TestBedrockFileContentTransformation:
         assert response.purpose == "batch_output"
 
     def test_transform_retrieve_file_response_rejects_unverified_empty_object(self, monkeypatch):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -2493,7 +2497,7 @@ class TestBedrockFileContentTransformation:
             )
 
     def test_transform_retrieve_file_response_uses_content_length_when_range_is_ignored(self, monkeypatch):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -2517,7 +2521,7 @@ class TestBedrockFileContentTransformation:
         assert response.bytes == 4321
 
     def test_transform_retrieve_file_response_raises_on_s3_error(self, monkeypatch):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -2830,7 +2834,7 @@ class TestBedrockFileContentTransformation:
         assert S3_SIGNED_REQUEST_HEADERS_PARAM not in litellm_params
 
     def test_transform_file_content_response_wraps_binary_content(self):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
         from litellm.types.llms.openai import HttpxBinaryResponseContent
@@ -2851,7 +2855,7 @@ class TestBedrockFileContentTransformation:
         assert result.response.content == b'{"recordId": "CALL0000001"}'
 
     def test_transform_file_content_response_raises_on_s3_error(self):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -2871,8 +2875,8 @@ class TestBedrockFileContentTransformation:
 
     def test_file_content_end_to_end_sends_signed_get(self, monkeypatch):
         """litellm.file_content must issue a SigV4-signed GET and return the S3 object bytes."""
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -2880,7 +2884,7 @@ class TestBedrockFileContentTransformation:
 
         with respx.mock:
             route = respx.get(self.EXPECTED_URL).mock(
-                return_value=httpx.Response(200, content=b'{"recordId": "x"}')
+                return_value=response_for_respx(httpx.Response(200, content=b'{"recordId": "x"}'))
             )
 
             response = litellm.file_content(
@@ -2898,8 +2902,8 @@ class TestBedrockFileContentTransformation:
     @pytest.mark.asyncio
     async def test_afile_content_end_to_end_sends_signed_get(self, monkeypatch):
         """Async variant: litellm.afile_content over the same signed GET path."""
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -2910,7 +2914,7 @@ class TestBedrockFileContentTransformation:
 
         with respx.mock:
             route = respx.get(self.EXPECTED_URL).mock(
-                return_value=httpx.Response(200, content=b'{"recordId": "x"}')
+                return_value=response_for_respx(httpx.Response(200, content=b'{"recordId": "x"}'))
             )
 
             response = await litellm.afile_content(
@@ -3390,7 +3394,7 @@ class TestBedrockFileDeletionTransformation:
 
 
     def test_transform_delete_file_response_echoes_the_deleted_id(self):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -3405,7 +3409,7 @@ class TestBedrockFileDeletionTransformation:
         assert deleted.object == "file"
 
     def test_transform_delete_file_response_raises_on_s3_error(self):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -3420,15 +3424,15 @@ class TestBedrockFileDeletionTransformation:
         assert excinfo.value.status_code == 403
 
     def test_file_delete_end_to_end_sends_signed_delete(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
         monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
 
         with respx.mock:
-            route = respx.delete(self.EXPECTED_URL).mock(return_value=httpx.Response(204))
+            route = respx.delete(self.EXPECTED_URL).mock(return_value=response_for_respx(httpx.Response(204)))
 
             response = litellm.file_delete(
                 file_id=self.S3_URI,
@@ -3445,8 +3449,8 @@ class TestBedrockFileDeletionTransformation:
 
     @pytest.mark.asyncio
     async def test_afile_delete_end_to_end_sends_signed_delete(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -3455,7 +3459,7 @@ class TestBedrockFileDeletionTransformation:
         litellm.in_memory_llm_clients_cache.flush_cache()
 
         with respx.mock:
-            route = respx.delete(self.EXPECTED_URL).mock(return_value=httpx.Response(204))
+            route = respx.delete(self.EXPECTED_URL).mock(return_value=response_for_respx(httpx.Response(204)))
 
             response = await litellm.afile_delete(
                 file_id=self.S3_URI,
@@ -3470,7 +3474,7 @@ class TestBedrockFileDeletionTransformation:
         assert response.deleted is True
 
     def test_file_delete_end_to_end_answers_400_for_a_foreign_bucket(self, monkeypatch):
-        import respx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.llms.bedrock.common_utils import BedrockError
@@ -3488,7 +3492,7 @@ class TestBedrockFileDeletionTransformation:
         assert "configured storage bucket" in rejection.value.message
 
     def test_file_delete_end_to_end_answers_400_for_a_non_managed_id(self, monkeypatch):
-        import respx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.llms.bedrock.common_utils import BedrockError
@@ -3502,8 +3506,8 @@ class TestBedrockFileDeletionTransformation:
         assert "managed LiteLLM S3 file id" in rejection.value.message
 
     def test_file_delete_end_to_end_surfaces_the_s3_error_body(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.llms.bedrock.common_utils import BedrockError
@@ -3512,7 +3516,7 @@ class TestBedrockFileDeletionTransformation:
 
         with respx.mock:
             respx.delete(self.EXPECTED_URL).mock(
-                return_value=httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>")
+                return_value=response_for_respx(httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>"))
             )
             with pytest.raises(BedrockError) as denied:
                 litellm.file_delete(file_id=self.S3_URI, custom_llm_provider="bedrock", **_bedrock_s3_params())
@@ -3667,7 +3671,7 @@ class TestBedrockFileListTransformation:
         assert params == self.MANAGED_QUERY
 
     def _list_response(self, purpose: str | None, listing: bytes | None = None, status_code: int = 200):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import (
             LIST_FILES_PURPOSE_PARAM,
@@ -3733,8 +3737,8 @@ class TestBedrockFileListTransformation:
         assert excinfo.value.status_code == 403
 
     def test_file_list_end_to_end_sends_signed_listing(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -3742,7 +3746,7 @@ class TestBedrockFileListTransformation:
 
         with respx.mock:
             route = respx.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(
-                return_value=httpx.Response(200, content=self.LISTING)
+                return_value=response_for_respx(httpx.Response(200, content=self.LISTING))
             )
 
             files = litellm.file_list(custom_llm_provider="bedrock", purpose="batch", **_bedrock_s3_params())
@@ -3754,8 +3758,8 @@ class TestBedrockFileListTransformation:
         assert [file.id for file in files] == list(self.BATCH_IDS)
 
     def test_file_list_uses_call_bucket_without_env(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -3763,7 +3767,7 @@ class TestBedrockFileListTransformation:
 
         with respx.mock:
             route = respx.get(self.BUCKET_URL, params__contains=self.MANAGED_QUERY).mock(
-                return_value=httpx.Response(200, content=self.LISTING)
+                return_value=response_for_respx(httpx.Response(200, content=self.LISTING))
             )
 
             files = litellm.file_list(
@@ -3776,8 +3780,8 @@ class TestBedrockFileListTransformation:
 
     @pytest.mark.asyncio
     async def test_afile_list_end_to_end_sends_signed_listing(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -3787,7 +3791,7 @@ class TestBedrockFileListTransformation:
 
         with respx.mock:
             route = respx.get(self.BUCKET_URL, params__contains=self.OUTPUT_QUERY).mock(
-                return_value=httpx.Response(200, content=self.LISTING)
+                return_value=response_for_respx(httpx.Response(200, content=self.LISTING))
             )
 
             files = await litellm.afile_list(
@@ -3865,7 +3869,7 @@ class TestBedrockFileListTransformation:
     NO_KEYS_QUERY = {"list-type": "2", "max-keys": "0"}
 
     def test_transform_list_files_request_asks_for_no_keys_when_bedrock_never_stores_the_purpose(self, monkeypatch):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
@@ -3886,8 +3890,8 @@ class TestBedrockFileListTransformation:
         assert next_request is None
 
     def test_file_list_never_walks_the_bucket_for_a_purpose_bedrock_never_stores(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -3895,7 +3899,7 @@ class TestBedrockFileListTransformation:
 
         with respx.mock:
             route = respx.get(self.BUCKET_URL, params__contains=self.NO_KEYS_QUERY).mock(
-                return_value=httpx.Response(200, content=self.EMPTY_LISTING)
+                return_value=response_for_respx(httpx.Response(200, content=self.EMPTY_LISTING))
             )
 
             files = litellm.file_list(custom_llm_provider="bedrock", purpose="user_data", **_bedrock_s3_params())
@@ -3922,7 +3926,7 @@ class TestBedrockFileListTransformation:
             )
 
     def test_transform_list_files_response_accepts_output_bucket_objects(self, monkeypatch):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import (
             LIST_FILES_PURPOSE_PARAM,
@@ -3944,8 +3948,8 @@ class TestBedrockFileListTransformation:
         assert [(file.id, file.purpose, file.bytes) for file in files] == [(self.OUTPUT_BUCKET_ID, "batch_output", 70)]
 
     def test_file_list_batch_output_end_to_end_lists_output_bucket(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -3954,7 +3958,7 @@ class TestBedrockFileListTransformation:
 
         with respx.mock:
             route = respx.get(self.OUTPUT_BUCKET_URL, params__contains=self.OUTPUT_QUERY).mock(
-                return_value=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING)
+                return_value=response_for_respx(httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING))
             )
 
             files = litellm.file_list(
@@ -3969,8 +3973,8 @@ class TestBedrockFileListTransformation:
         assert [file.id for file in files] == [self.OUTPUT_BUCKET_ID]
 
     def test_file_list_without_purpose_also_walks_a_separate_output_bucket(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -3979,10 +3983,10 @@ class TestBedrockFileListTransformation:
 
         with respx.mock:
             input_route = respx.get(self.BUCKET_URL, params__contains=self.MANAGED_QUERY).mock(
-                return_value=httpx.Response(200, content=self.LISTING)
+                return_value=response_for_respx(httpx.Response(200, content=self.LISTING))
             )
             output_route = respx.get(self.OUTPUT_BUCKET_URL, params__contains=self.OUTPUT_QUERY).mock(
-                return_value=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING)
+                return_value=response_for_respx(httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING))
             )
 
             files = litellm.file_list(
@@ -3998,8 +4002,8 @@ class TestBedrockFileListTransformation:
         assert [file.id for file in files] == [*self.BATCH_IDS, self.OUTPUT_ID, self.OUTPUT_BUCKET_ID]
 
     def test_file_list_without_purpose_walks_the_output_bucket_after_the_last_input_page(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -4008,13 +4012,13 @@ class TestBedrockFileListTransformation:
 
         with respx.mock:
             respx.get(self.BUCKET_URL, params__contains={"continuation-token": self.CONTINUATION_TOKEN}).mock(
-                return_value=httpx.Response(200, content=self.LAST_PAGE)
+                return_value=response_for_respx(httpx.Response(200, content=self.LAST_PAGE))
             )
             respx.get(self.BUCKET_URL, params__contains=self.MANAGED_QUERY).mock(
-                return_value=httpx.Response(200, content=self.FIRST_PAGE)
+                return_value=response_for_respx(httpx.Response(200, content=self.FIRST_PAGE))
             )
             respx.get(self.OUTPUT_BUCKET_URL, params__contains=self.OUTPUT_QUERY).mock(
-                return_value=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING)
+                return_value=response_for_respx(httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING))
             )
 
             files = litellm.file_list(
@@ -4045,8 +4049,8 @@ class TestBedrockFileListTransformation:
     def test_file_list_leaves_the_output_bucket_alone_unless_an_unfiltered_list_needs_it(
         self, monkeypatch, purpose, bucket_params
     ):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -4054,9 +4058,11 @@ class TestBedrockFileListTransformation:
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
 
         with respx.mock:
-            input_route = respx.get(self.BUCKET_URL).mock(return_value=httpx.Response(200, content=self.LISTING))
+            input_route = respx.get(self.BUCKET_URL).mock(
+                return_value=response_for_respx(httpx.Response(200, content=self.LISTING))
+            )
             output_route = respx.get(self.OUTPUT_BUCKET_URL).mock(
-                return_value=httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING)
+                return_value=response_for_respx(httpx.Response(200, content=self.OUTPUT_BUCKET_LISTING))
             )
 
             files = litellm.file_list(
@@ -4067,7 +4073,7 @@ class TestBedrockFileListTransformation:
         assert [file.id for file in files] == [*self.BATCH_IDS, *(() if purpose else (self.OUTPUT_ID,))]
 
     def test_transform_list_files_next_request_walks_an_output_prefix_inside_the_input_bucket(self, monkeypatch):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import (
             S3_SIGNED_REQUEST_HEADERS_PARAM,
@@ -4096,7 +4102,7 @@ class TestBedrockFileListTransformation:
         assert after_output_request is None
 
     def test_transform_list_files_next_request_signs_the_continuation_page(self, monkeypatch):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import (
             S3_SIGNED_REQUEST_HEADERS_PARAM,
@@ -4132,7 +4138,7 @@ class TestBedrockFileListTransformation:
         ],
     )
     def test_transform_list_files_next_request_stops_after_the_last_page(self, monkeypatch, status_code, content):
-        import httpx
+        import httpx2 as httpx
 
         from litellm.llms.bedrock.files.transformation import (
             S3_SIGNED_REQUEST_HEADERS_PARAM,
@@ -4152,13 +4158,13 @@ class TestBedrockFileListTransformation:
         assert S3_SIGNED_REQUEST_HEADERS_PARAM not in litellm_params
 
     def _mock_paged_listing(self, respx_module):
-        import httpx
+        import httpx2 as httpx
 
         last_page = respx_module.get(
             self.BUCKET_URL, params__contains={"continuation-token": self.CONTINUATION_TOKEN}
-        ).mock(return_value=httpx.Response(200, content=self.LAST_PAGE))
+        ).mock(return_value=response_for_respx(httpx.Response(200, content=self.LAST_PAGE)))
         first_page = respx_module.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(
-            return_value=httpx.Response(200, content=self.FIRST_PAGE)
+            return_value=response_for_respx(httpx.Response(200, content=self.FIRST_PAGE))
         )
         return first_page, last_page
 
@@ -4174,7 +4180,7 @@ class TestBedrockFileListTransformation:
         assert [file.id for file in files] == list(self.PAGED_IDS)
 
     def test_file_list_follows_continuation_tokens_across_pages(self, monkeypatch):
-        import respx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -4194,7 +4200,7 @@ class TestBedrockFileListTransformation:
 
     @pytest.mark.asyncio
     async def test_afile_list_follows_continuation_tokens_across_pages(self, monkeypatch):
-        import respx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -4235,13 +4241,15 @@ class TestBedrockFileListTransformation:
         ).encode()
 
     def _mock_oversized_listing(self, respx_module):
-        import httpx
+        import httpx2 as httpx
 
         def page_for(request):
             token = request.url.params.get("continuation-token", "page-0")
             return httpx.Response(200, content=self._oversized_listing_page(int(token.removeprefix("page-"))))
 
-        return respx_module.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(side_effect=page_for)
+        return respx_module.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(
+            side_effect=side_effect_for_respx(page_for)
+        )
 
     def _assert_capped_listing(self, route, files):
         from litellm.constants import MAX_FILE_LIST_LIMIT
@@ -4254,7 +4262,7 @@ class TestBedrockFileListTransformation:
         assert files[-1].id == f"s3://my-bucket/litellm-bedrock-files/page-{pages_needed - 1}/obj-{last_index}.jsonl"
 
     def test_file_list_stops_at_the_openai_listing_ceiling(self, monkeypatch):
-        import respx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -4273,7 +4281,7 @@ class TestBedrockFileListTransformation:
 
     @pytest.mark.asyncio
     async def test_afile_list_stops_at_the_openai_listing_ceiling(self, monkeypatch):
-        import respx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
 
@@ -4293,8 +4301,8 @@ class TestBedrockFileListTransformation:
         self._assert_capped_listing(route, files)
 
     def test_file_list_end_to_end_surfaces_the_s3_error_body(self, monkeypatch):
-        import httpx
-        import respx
+        import httpx2 as httpx
+        from tests._support import respx_httpx2 as respx
 
         import litellm
         from litellm.llms.bedrock.common_utils import BedrockError
@@ -4303,7 +4311,7 @@ class TestBedrockFileListTransformation:
 
         with respx.mock:
             respx.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(
-                return_value=httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>")
+                return_value=response_for_respx(httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>"))
             )
             with pytest.raises(BedrockError) as denied:
                 litellm.file_list(custom_llm_provider="bedrock", purpose="batch", **_bedrock_s3_params())
@@ -4393,8 +4401,8 @@ def test_transform_file_content_request_signs_with_the_s3_pair_from_litellm_para
 
 @pytest.mark.usefixtures(httpx_transport.__name__)
 @pytest.mark.asyncio
-async def test_async_create_file(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_async_create_file(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     signing_time: Final = datetime(2026, 10, 10, tzinfo=timezone.utc)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test-access-key")
@@ -4601,8 +4609,8 @@ def _batch_line_with_body(field: str, value: object) -> str:
         ),
     ],
 )
-async def test_create_file_rejects_a_malformed_batch_line_with_a_400_before_uploading(
-    respx_mock: respx.MockRouter, file_content: bytes, expected_message: str
+async def test_create_file_rejects_a_malformed_batch_line_with_a_400_before_uploading(respx_mock: respx.MockRouter,
+    file_content: bytes, expected_message: str
 ) -> None:
     put_route: Final = respx_mock.put(url__regex=r"https://s3\..+").respond(status_code=200)
 

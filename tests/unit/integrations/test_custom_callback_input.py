@@ -7,11 +7,12 @@ from typing import Final
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
 import pytest_asyncio
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -243,8 +244,8 @@ def provider_router(monkeypatch: pytest.MonkeyPatch) -> Iterator[respx.MockRoute
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("AZURE_API_KEY", "test-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    with respx.mock(assert_all_called=False, assert_all_mocked=True) as router:
-        router.route(url__regex=r"https?://.*").mock(side_effect=_provider_response)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False, assert_all_mocked=True) as router:
+        router.route(url__regex=r"https?://.*").mock(side_effect=side_effect_for_respx(_provider_response))
         yield router
 
 

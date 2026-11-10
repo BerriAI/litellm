@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 
@@ -59,7 +58,7 @@ def test_cortecs_is_available_in_add_model_form():
 
 
 def test_cortecs_chat_completion_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.cortecs.ai/v1/chat/completions").respond(
             200,
             json={
@@ -94,7 +93,7 @@ def test_cortecs_chat_completion_request():
 
 
 def test_cortecs_responses_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.cortecs.ai/v1/responses").respond(
             200,
             json={
@@ -135,7 +134,7 @@ def test_cortecs_responses_request():
 async def test_cortecs_anthropic_messages_request(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.cortecs.ai/v1/messages").respond(
             200,
             json={

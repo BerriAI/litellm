@@ -2,10 +2,11 @@ import json
 from typing import Final
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.azure_ai.common_utils import AZURE_AI_AGENTS_SCOPE
@@ -253,7 +254,7 @@ def _assert_native_responses_request(route, expected_url, expected_model):
 @pytest.mark.parametrize("model,api_base,expected_url,expected_model", NATIVE_RESPONSES_CASES)
 async def test_aresponses_sends_reasoning_and_tools_to_native_endpoint(model, api_base, expected_url, expected_model):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload(expected_model))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload(expected_model)))
     )
 
     await litellm.aresponses(
@@ -273,7 +274,7 @@ async def test_aresponses_sends_reasoning_and_tools_to_native_endpoint(model, ap
 async def test_aresponses_catalog_name_remapped_to_azure_sends_bare_deployment_name(monkeypatch):
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://res.openai.azure.com")
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-5.4-nano"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-5.4-nano")))
     )
 
     await litellm.aresponses(
@@ -291,7 +292,7 @@ async def test_aresponses_catalog_name_remapped_to_azure_sends_bare_deployment_n
 @pytest.mark.parametrize("model,api_base,expected_url,expected_model", NATIVE_RESPONSES_CASES)
 async def test_router_aresponses_sends_bare_deployment_name(model, api_base, expected_url, expected_model):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload(expected_model))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload(expected_model)))
     )
     router = litellm.Router(
         model_list=[{"model_name": "gpt-5.6", "litellm_params": {"model": model, "api_base": api_base, "api_key": "fake-key"}}],
@@ -309,7 +310,7 @@ async def test_router_aresponses_sends_bare_deployment_name(model, api_base, exp
 @respx.mock
 async def test_aresponses_serverless_host_stays_on_chat_bridge():
     chat_route = respx.post(url__regex=r".*/chat/completions$").mock(
-        return_value=httpx.Response(200, json=_chat_completion_payload("gpt-5.6-luna"))
+        return_value=response_for_respx(httpx.Response(200, json=_chat_completion_payload("gpt-5.6-luna")))
     )
     responses_route = respx.post(url__regex=r".*/responses$")
 
@@ -408,7 +409,7 @@ def test_foundry_responses_none_unlocks_temperature_off_the_azure_ai_row(
 )
 async def test_aresponses_sends_agent_reference_instead_of_model(model, expected_reference):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     await litellm.aresponses(
@@ -481,7 +482,7 @@ async def test_router_aresponses_rejects_another_agent_without_drop_params(calle
 )
 async def test_router_aresponses_sends_only_the_deployment_agent(caller_fields, drop_params, placement):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     await _support_agent_router().aresponses(
@@ -512,7 +513,7 @@ async def test_router_aresponses_sends_the_version_of_the_deployment_agent_the_e
     entry_model, caller_fields, drop_params, expected_version, placement
 ):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     await _support_agent_router(entry_model).aresponses(
@@ -555,7 +556,7 @@ NAME_ONLY: Final = {"name": "support-agent"}
 )
 async def test_router_aresponses_keeps_a_version_requested_at_the_top_level_or_in_extra_body(top_level, in_extra_body):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     await _support_agent_router().aresponses(
@@ -596,7 +597,7 @@ AGENT_OWNED_PARAMS = {
 @respx.mock
 async def test_aresponses_drops_agent_owned_params_under_drop_params():
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     await litellm.aresponses(
@@ -618,7 +619,7 @@ async def test_aresponses_drops_agent_owned_params_under_drop_params():
 @respx.mock
 async def test_aresponses_reaches_the_agent_when_the_deployment_declares_reasoning_efforts():
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     await litellm.aresponses(
@@ -670,7 +671,7 @@ SYSTEM_PROMPT = {"type": "message", "role": "system", "content": "Answer in Fren
 )
 async def test_aresponses_sends_instructions_to_the_agent_as_a_leading_system_message(request_input, expected_input):
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     await litellm.aresponses(
@@ -724,7 +725,7 @@ async def test_acompact_responses_rejects_a_foundry_agent_without_calling_the_pr
 @respx.mock
 async def test_aresponses_drops_instructions_on_a_previous_response_turn_under_drop_params():
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     await litellm.aresponses(
@@ -760,7 +761,7 @@ PLAIN_MODEL_RESPONSE_FIELDS = {"agent_reference": None, "instructions": "Answer 
 )
 async def test_aresponses_hides_only_an_agents_own_instructions(model, response_fields, expected_instructions):
     respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json={**_responses_payload("gpt-4.1"), **response_fields})
+        return_value=response_for_respx(httpx.Response(200, json={**_responses_payload("gpt-4.1"), **response_fields}))
     )
 
     response = await litellm.aresponses(
@@ -787,7 +788,7 @@ async def test_follow_ups_hide_only_an_agents_own_instructions(
     follow_up, method, path, response_fields, expected_instructions
 ):
     respx.route(method=method, url__regex=rf".*{path}(\?.*)?$").mock(
-        return_value=httpx.Response(200, json={**_responses_payload("gpt-4.1"), **response_fields})
+        return_value=response_for_respx(httpx.Response(200, json={**_responses_payload("gpt-4.1"), **response_fields}))
     )
 
     response = await follow_up(
@@ -821,7 +822,9 @@ async def test_aresponses_streams_answers_from_foundry_without_an_agents_own_ins
         )
     )
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+        )
     )
 
     stream = await litellm.aresponses(
@@ -859,7 +862,7 @@ async def test_aresponses_mints_the_service_principal_token_for_the_project_scop
     else:
         monkeypatch.setenv("AZURE_SCOPE", env_scope)
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert the scope a project entry requests and the bearer it sends; live service principal path proven by the PR's Foundry e2e QA
@@ -884,7 +887,7 @@ async def test_aresponses_mints_the_service_principal_token_for_the_project_scop
 @respx.mock
 async def test_aget_responses_mints_the_service_principal_token_for_the_project_scope():
     route = respx.get(url__regex=r".*/api/projects/proj/openai/v1/responses/resp_123(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+        return_value=response_for_respx(httpx.Response(200, json=_responses_payload("gpt-4.1")))
     )
 
     with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert the scope a follow-up on a project endpoint requests; live service principal path proven by the PR's Foundry e2e QA
@@ -925,7 +928,7 @@ def _agent_answer_payload(text: str) -> dict:
 @respx.mock
 async def test_acompletion_reaches_the_agent_through_the_project_responses_api():
     route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
-        return_value=httpx.Response(200, json=_agent_answer_payload("4"))
+        return_value=response_for_respx(httpx.Response(200, json=_agent_answer_payload("4")))
     )
 
     response = await litellm.acompletion(

@@ -11,7 +11,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, eventually, held, object_value, string_value
 from integration._support.database import read_rows, scratch_database

@@ -14,11 +14,11 @@ from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.interactions.agents import (
     acreate,
@@ -366,7 +366,9 @@ def _sent_json(route: respx.Route) -> object:
 class TestCreateRequestBody:
     def test_create_sends_every_current_field_verbatim(self, respx_mock: respx.MockRouter) -> None:
         route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
-            return_value=httpx.Response(200, json={"id": "sentinel", "base_agent": "antigravity-preview-09-2026"})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"id": "sentinel", "base_agent": "antigravity-preview-09-2026"})
+            )
         )
 
         response: Final = create(
@@ -416,7 +418,7 @@ class TestCreateRequestBody:
         expected: Mapping[str, str],
     ) -> None:
         route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
-            return_value=httpx.Response(200, json={"id": "slides"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "slides"}))
         )
 
         create(**identifier, **instruction, base_agent="antigravity-preview-09-2026", api_key="AIza-test")
@@ -448,7 +450,7 @@ class TestCreateRequestBody:
         self, respx_mock: respx.MockRouter
     ) -> None:
         route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
-            return_value=httpx.Response(200, json={"id": "slides"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "slides"}))
         )
 
         create(
@@ -464,7 +466,7 @@ class TestCreateRequestBody:
 
     def test_create_with_drop_params_drops_a_clashing_instructions_alias(self, respx_mock: respx.MockRouter) -> None:
         route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
-            return_value=httpx.Response(200, json={"id": "slides"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "slides"}))
         )
 
         create(
@@ -521,7 +523,7 @@ class TestCreateRequestBody:
     ) -> None:
         monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
         route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
-            return_value=httpx.Response(200, json={"id": "sentinel"})
+            return_value=response_for_respx(httpx.Response(200, json={"id": "sentinel"}))
         )
 
         response: Final = await acreate(
@@ -542,7 +544,9 @@ class TestCreateRequestBody:
 class TestAgentIdentifier:
     def test_get_by_id_fetches_that_agent(self, respx_mock: respx.MockRouter) -> None:
         route: Final = respx_mock.get(f"{_GEMINI_AGENTS_URL}/slides").mock(
-            return_value=httpx.Response(200, json={"id": "slides", "base_agent": "antigravity-preview-09-2026"})
+            return_value=response_for_respx(
+                httpx.Response(200, json={"id": "slides", "base_agent": "antigravity-preview-09-2026"})
+            )
         )
 
         response: Final = get(id="slides", api_key="AIza-test")
@@ -552,7 +556,7 @@ class TestAgentIdentifier:
 
     def test_delete_by_id_deletes_that_agent(self, respx_mock: respx.MockRouter) -> None:
         route: Final = respx_mock.delete(f"{_GEMINI_AGENTS_URL}/slides").mock(
-            return_value=httpx.Response(200, json={})
+            return_value=response_for_respx(httpx.Response(200, json={}))
         )
 
         result: Final = delete(id="slides", api_key="AIza-test")
@@ -563,7 +567,7 @@ class TestAgentIdentifier:
     def test_list_versions_by_id_lists_that_agents_versions(self, respx_mock: respx.MockRouter) -> None:
         version: Final = {"agent": "slides", "name": "agents/slides/versions/v1"}
         route: Final = respx_mock.get(f"{_GEMINI_AGENTS_URL}/slides/versions").mock(
-            return_value=httpx.Response(200, json={"agentVersions": [version]})
+            return_value=response_for_respx(httpx.Response(200, json={"agentVersions": [version]}))
         )
 
         response: Final = list_versions(id="slides", api_key="AIza-test")

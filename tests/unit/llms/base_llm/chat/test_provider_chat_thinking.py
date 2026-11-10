@@ -1,8 +1,9 @@
+
 import json
 from itertools import chain
 from typing import Final, Mapping, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import BaseModel, ConfigDict, JsonValue
 from respx import MockRouter
@@ -18,6 +19,7 @@ from litellm.constants import (
 from litellm.main import stream_chunk_builder
 from litellm.utils import get_optional_params
 
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.base_llm.chat.test_provider_chat_translation import (
     _BY_ID,
     _Case,
@@ -254,12 +256,16 @@ def _has_forced_tool_choice(case: _Case, body: Mapping[str, JsonValue]) -> bool:
 
 @pytest.mark.parametrize("case", _RESPONSE_FORMAT_CASES, ids=_case_id)
 def test_anthropic_response_format_streaming_vs_non_streaming(case: _Case, respx_mock: MockRouter) -> None:
-    stream_route: Final = respx_mock.post(case["stream_url"]).mock(return_value=_stream_response(case, thinking=False))
+    stream_route: Final = respx_mock.post(case["stream_url"]).mock(
+        return_value=response_for_respx(_stream_response(case, thinking=False))
+    )
     chunks: Final = tuple(cast(litellm.CustomStreamWrapper, _call(case, **_JSON_SCHEMA_ARGS, stream=True)))
     built: Final = stream_chunk_builder(chunks=list(chunks))
     stream_body: Final = _request_body(stream_route)
 
-    non_stream_route: Final = respx_mock.post(case["url"]).mock(return_value=_non_stream_response(case))
+    non_stream_route: Final = respx_mock.post(case["url"]).mock(
+        return_value=response_for_respx(_non_stream_response(case))
+    )
     non_stream: Final = cast(litellm.ModelResponse, _call(case, **_JSON_SCHEMA_ARGS))
     non_stream_body: Final = _request_body(non_stream_route)
 
@@ -277,7 +283,7 @@ def test_anthropic_response_format_streaming_vs_non_streaming(case: _Case, respx
 
 @pytest.mark.parametrize("case", _THINKING_CASES, ids=_case_id)
 def test_completion_thinking_with_response_format(case: _Case, respx_mock: MockRouter) -> None:
-    route: Final = respx_mock.post(case["url"]).mock(return_value=_non_stream_response(case))
+    route: Final = respx_mock.post(case["url"]).mock(return_value=response_for_respx(_non_stream_response(case)))
     response: Final = cast(
         litellm.ModelResponse,
         _call(case, thinking=_THINKING, **_THINKING_MESSAGES, response_format=cast(JsonValue, _RFormat)),
@@ -292,7 +298,7 @@ def test_completion_thinking_with_response_format(case: _Case, respx_mock: MockR
 
 @pytest.mark.parametrize("case", _THINKING_CASES, ids=_case_id)
 def test_completion_thinking_with_max_tokens(case: _Case, respx_mock: MockRouter) -> None:
-    route: Final = respx_mock.post(case["url"]).mock(return_value=_non_stream_response(case))
+    route: Final = respx_mock.post(case["url"]).mock(return_value=response_for_respx(_non_stream_response(case)))
     response: Final = cast(
         litellm.ModelResponse,
         _call(case, thinking=_THINKING, **_THINKING_MESSAGES, max_completion_tokens=20000),
@@ -305,7 +311,7 @@ def test_completion_thinking_with_max_tokens(case: _Case, respx_mock: MockRouter
 
 @pytest.mark.parametrize("case", _THINKING_CASES, ids=_case_id)
 def test_completion_thinking_without_max_tokens(case: _Case, respx_mock: MockRouter) -> None:
-    route: Final = respx_mock.post(case["url"]).mock(return_value=_non_stream_response(case))
+    route: Final = respx_mock.post(case["url"]).mock(return_value=response_for_respx(_non_stream_response(case)))
     response: Final = cast(litellm.ModelResponse, _call(case, thinking=_THINKING, **_THINKING_MESSAGES))
     body: Final = _request_body(route)
     max_tokens: Final = cast(int, _max_tokens(case, body))
@@ -317,7 +323,9 @@ def test_completion_thinking_without_max_tokens(case: _Case, respx_mock: MockRou
 
 @pytest.mark.parametrize("case", _THINKING_CASES, ids=_case_id)
 def test_anthropic_thinking_output_stream(case: _Case, respx_mock: MockRouter) -> None:
-    route: Final = respx_mock.post(case["stream_url"]).mock(return_value=_stream_response(case, thinking=True))
+    route: Final = respx_mock.post(case["stream_url"]).mock(
+        return_value=response_for_respx(_stream_response(case, thinking=True))
+    )
     chunks: Final = tuple(
         cast(
             litellm.CustomStreamWrapper,
@@ -356,7 +364,7 @@ def test_anthropic_reasoning_effort_thinking_translation(case: _Case, respx_mock
     }
     assert "reasoning_effort" not in optional_params
 
-    route: Final = respx_mock.post(case["url"]).mock(return_value=_non_stream_response(case))
+    route: Final = respx_mock.post(case["url"]).mock(return_value=response_for_respx(_non_stream_response(case)))
     _call(case, reasoning_effort="high", messages=[{"role": "user", "content": "hi"}])
     body: Final = _request_body(route)
     assert _thinking_param(case, body) == {
@@ -378,7 +386,7 @@ def test_anthropic_reasoning_effort_thinking_translation(case: _Case, respx_mock
 def test_reasoning_effort_maps_to_distinct_thinking_budgets(
     case: _Case, effort: str, budget: int, respx_mock: MockRouter
 ) -> None:
-    route: Final = respx_mock.post(case["url"]).mock(return_value=_non_stream_response(case))
+    route: Final = respx_mock.post(case["url"]).mock(return_value=response_for_respx(_non_stream_response(case)))
     _call(case, reasoning_effort=effort, messages=[{"role": "user", "content": "hi"}])
     body: Final = _request_body(route)
     assert _thinking_param(case, body) == {"type": "enabled", "budget_tokens": budget}

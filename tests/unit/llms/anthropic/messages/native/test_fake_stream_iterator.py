@@ -3,7 +3,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, cast
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.anthropic.messages.native.fake_stream_iterator import (

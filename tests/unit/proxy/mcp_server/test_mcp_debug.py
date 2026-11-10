@@ -5,7 +5,7 @@ Tests for MCPDebug — MCP OAuth2 debug response headers.
 import asyncio
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from starlette.types import Message
 

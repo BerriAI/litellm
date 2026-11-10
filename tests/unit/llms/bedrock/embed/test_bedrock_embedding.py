@@ -6,14 +6,15 @@ from unittest.mock import Mock, patch
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import httpx
-import respx
+import httpx2 as httpx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.caching.caching import Cache
 from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Mock responses for different embedding models
@@ -142,7 +143,7 @@ async def test_bedrock_titan_embedding_cache_hit_avoids_a_second_request(
     monkeypatch.setattr(litellm, "cache", Cache())
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/invoke").mock(
-        return_value=httpx.Response(200, json=titan_embedding_response)
+        return_value=response_for_respx(httpx.Response(200, json=titan_embedding_response))
     )
     request = {
         "model": f"bedrock/{model}",
@@ -172,10 +173,10 @@ def test_bedrock_cohere_embedding_returns_the_scripted_vector(respx_mock: respx.
     route = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/cohere.embed-multilingual-v3/invoke"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={"embeddings": [[0.3, 0.2, 0.1]], "inputTextTokenCount": 4},
-        )
+        ))
     )
 
     response = litellm.embedding(
@@ -215,7 +216,7 @@ async def test_bedrock_embedding_calls_the_model_id_region_with_the_bare_model_i
     monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route = respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/model/{model_id}/invoke").mock(
-        return_value=httpx.Response(200, json=embed_response)
+        return_value=response_for_respx(httpx.Response(200, json=embed_response))
     )
     request: Final = {
         "model": f"bedrock/us-gov-west-1/{model_id}",
@@ -234,7 +235,7 @@ def test_bedrock_embedding_prices_a_region_prefixed_model_from_its_region_row(
 ) -> None:
     model: Final = "bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0"
     respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/model/amazon.titan-embed-text-v2:0/invoke").mock(
-        return_value=httpx.Response(200, json=titan_embedding_response)
+        return_value=response_for_respx(httpx.Response(200, json=titan_embedding_response))
     )
 
     response: Final = litellm.embedding(model=model, input=[test_input], api_key="test-bearer-token")
@@ -249,7 +250,7 @@ def test_bedrock_embedding_explicit_aws_region_name_wins_over_the_model_id_regio
 ) -> None:
     route = respx_mock.post(
         "https://bedrock-runtime.us-gov-east-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
-    ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=titan_embedding_response)))
 
     response: Final = litellm.embedding(
         model="bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0",
@@ -271,7 +272,7 @@ def test_bedrock_embedding_model_id_arn_region_wins_over_the_model_path_region_a
 ) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
     route = respx_mock.post(url__startswith=f"{GOVCLOUD_WEST_RUNTIME}/model/").mock(
-        return_value=httpx.Response(200, json=titan_embedding_response)
+        return_value=response_for_respx(httpx.Response(200, json=titan_embedding_response))
     )
 
     litellm.embedding(
@@ -290,7 +291,7 @@ def test_bedrock_embedding_plain_model_id_calls_the_env_region_like_chat(
 ) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
     route = respx_mock.post("https://bedrock-runtime.us-west-2.amazonaws.com/model/cohere.embed-english-v3/invoke").mock(
-        return_value=httpx.Response(200, json=cohere_embedding_response)
+        return_value=response_for_respx(httpx.Response(200, json=cohere_embedding_response))
     )
 
     litellm.embedding(
@@ -307,7 +308,7 @@ def test_bedrock_embedding_rejects_an_empty_aws_region_name_instead_of_using_the
     respx_mock: respx.MockRouter,
 ) -> None:
     route = respx_mock.post(url__startswith=GOVCLOUD_WEST_RUNTIME).mock(
-        return_value=httpx.Response(200, json=titan_embedding_response)
+        return_value=response_for_respx(httpx.Response(200, json=titan_embedding_response))
     )
 
     with pytest.raises(litellm.APIConnectionError, match="Invalid AWS region format"):
@@ -336,7 +337,7 @@ def test_bedrock_embedding_region_path_variants_call_the_path_region_with_the_ba
 ) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
     route = respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/model/amazon.titan-embed-text-v2:0/invoke").mock(
-        return_value=httpx.Response(200, json=titan_embedding_response)
+        return_value=response_for_respx(httpx.Response(200, json=titan_embedding_response))
     )
 
     response: Final = litellm.embedding(model=model, input=[test_input], api_key="test-bearer-token", **extra_params)
@@ -353,7 +354,7 @@ def test_bedrock_embedding_explicit_region_outside_the_known_list_returns_the_ve
 ) -> None:
     route = respx_mock.post(
         "https://bedrock-runtime.zz-unlisted-1.amazonaws.com/model/amazon.titan-embed-text-v2:0/invoke"
-    ).mock(return_value=httpx.Response(200, json=titan_embedding_response))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=titan_embedding_response)))
 
     response: Final = litellm.embedding(
         model="bedrock/us-east-1/amazon.titan-embed-text-v2:0",
@@ -377,7 +378,7 @@ async def test_bedrock_embedding_without_a_region_path_bills_the_row_of_the_regi
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route = respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/model/amazon.titan-embed-text-v2:0/invoke").mock(
-        return_value=httpx.Response(200, json=titan_embedding_response)
+        return_value=response_for_respx(httpx.Response(200, json=titan_embedding_response))
     )
     request: Final = {
         "model": "bedrock/amazon.titan-embed-text-v2:0",
@@ -407,7 +408,7 @@ def test_bedrock_cohere_embedding_bills_the_row_of_the_region_it_calls(
         {**litellm.model_cost["cohere.embed-english-v3"], "input_cost_per_token": 7e-07},
     )
     respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/model/cohere.embed-english-v3/invoke").mock(
-        return_value=httpx.Response(200, json=cohere_embedding_response)
+        return_value=response_for_respx(httpx.Response(200, json=cohere_embedding_response))
     )
 
     response: Final = litellm.embedding(
@@ -427,9 +428,9 @@ def test_bedrock_embedding_with_a_govcloud_arn_model_id_bills_at_the_arn_region_
 ) -> None:
     arn: Final = "arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.nova-2-multimodal-embeddings-v1:0"
     route = respx_mock.post(url__startswith=f"{GOVCLOUD_WEST_RUNTIME}/model/").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]}
-        )
+        ))
     )
 
     response: Final = litellm.embedding(
@@ -458,9 +459,9 @@ def test_bedrock_async_invoke_embedding_with_a_region_path_posts_the_bare_id_to_
     model: str,
 ) -> None:
     route = respx_mock.post(f"{GOVCLOUD_WEST_RUNTIME}/async-invoke").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json={"invocationArn": "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:async-invoke/abc123"}
-        )
+        ))
     )
 
     litellm.embedding(
@@ -1701,7 +1702,7 @@ async def test_marengo_text_embedding_calls_bedrock_and_parses_vector(
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.twelvelabs.marengo-embed-2-7-v1%3A0/invoke"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "embedding": [0.2, 0.4, 0.6],
@@ -1710,7 +1711,7 @@ async def test_marengo_text_embedding_calls_bedrock_and_parses_vector(
                 "endSec": 1.0,
                 "inputTextTokenCount": 5,
             },
-        )
+        ))
     )
 
     embedding_kwargs: Final = {
@@ -1754,10 +1755,10 @@ def test_marengo_text_embedding_resolves_region_from_env(
     route: Final = respx_mock.post(
         f"https://bedrock-runtime.{expected_region}.amazonaws.com/model/us.twelvelabs.marengo-embed-2-7-v1%3A0/invoke"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={"embedding": [0.2, 0.4, 0.6], "embeddingOption": "visual-text", "inputTextTokenCount": 5},
-        )
+        ))
     )
 
     response: Final = litellm.embedding(
@@ -1777,7 +1778,7 @@ def test_marengo_image_embedding_sends_media_source_and_parses_vector(respx_mock
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.twelvelabs.marengo-embed-2-7-v1%3A0/invoke"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "embedding": [0.1, 0.3, 0.5],
@@ -1786,7 +1787,7 @@ def test_marengo_image_embedding_sends_media_source_and_parses_vector(respx_mock
                 "endSec": 1.0,
                 "inputTextTokenCount": 2,
             },
-        )
+        ))
     )
 
     response: Final = litellm.embedding(

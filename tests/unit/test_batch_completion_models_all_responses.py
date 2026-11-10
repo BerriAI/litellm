@@ -2,10 +2,12 @@ import concurrent.futures
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from litellm.batch_completion.main import batch_completion_models_all_responses
 
 
@@ -154,7 +156,7 @@ def test_batch_completion_models_all_responses_returns_each_model_response(
         )
 
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=_response_for_model
+        side_effect=side_effect_for_respx(_response_for_model)
     )
     models: Final = ("openai/model-a", "openai/model-b")
     responses: Final = batch_completion_models_all_responses(

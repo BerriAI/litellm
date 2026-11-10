@@ -115,7 +115,7 @@ async def use_callback_in_llm_call(callback: str, used_in: Literal["callbacks", 
         # Mock BitBucket HTTP calls to prevent actual API requests
         from unittest.mock import MagicMock
 
-        import httpx
+        import httpx2 as httpx
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -131,14 +131,14 @@ async def use_callback_in_llm_call(callback: str, used_in: Literal["callbacks", 
 
     # Mock the httpx call for Argilla dataset retrieval
     if callback == "argilla":
-        import httpx
+        import httpx2 as httpx
 
         mock_response = httpx.Response(status_code=200, json={"items": [{"id": "mocked_dataset_id"}]})
         patch.object(litellm.module_level_client, "get", return_value=mock_response).start()
 
     # Mock the httpx call for Argilla dataset retrieval
     if callback == "argilla":
-        import httpx
+        import httpx2 as httpx
 
         mock_response = httpx.Response(status_code=200, json={"items": [{"id": "mocked_dataset_id"}]})
         patch.object(litellm.module_level_client, "get", return_value=mock_response).start()

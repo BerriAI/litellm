@@ -7,10 +7,11 @@ from importlib.machinery import ModuleSpec
 from types import ModuleType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 
@@ -176,7 +177,7 @@ def test_responses_without_a_gateway_tool_does_not_import_the_gateway_handler(
     tools: list[Mapping[str, object]] | None, respx_mock: respx.MockRouter
 ):
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=RESPONSES_PAYLOAD)
+        return_value=response_for_respx(httpx.Response(200, json=RESPONSES_PAYLOAD))
     )
 
     response: Final = litellm.responses(model="openai/gpt-4o-mini", input="hi", tools=tools, api_key="sk-test")
@@ -198,7 +199,7 @@ async def test_anthropic_messages_with_function_tool_does_not_import_the_gateway
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json=ANTHROPIC_MESSAGE_PAYLOAD)
+        return_value=response_for_respx(httpx.Response(200, json=ANTHROPIC_MESSAGE_PAYLOAD))
     )
 
     response: Final = await litellm.anthropic_interface.messages.acreate(
@@ -272,7 +273,7 @@ def test_responses_sends_a_proxy_path_mcp_url_to_the_provider_without_the_gatewa
     respx_mock: respx.MockRouter,
 ):
     upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=RESPONSES_PAYLOAD)
+        return_value=response_for_respx(httpx.Response(200, json=RESPONSES_PAYLOAD))
     )
 
     response: Final = litellm.responses(

@@ -19,8 +19,8 @@ from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias, TypeVar
 from urllib.request import parse_http_list, parse_keqv_list
 
 import anyio
-import httpx
 import httpx2
+import httpx2 as httpx
 from mcp import MCPError
 from mcp.types import CONNECTION_CLOSED
 from mcp.types import Tool as MCPTool

@@ -13,14 +13,16 @@ from types import MappingProxyType
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-from httpx import Response
+
+from tests._support import respx_httpx2 as respx
+from httpx2 import Response
 from mcp.types import Tool as MCPTool
 from starlette.responses import StreamingResponse
 from starlette.types import Message
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1382,7 +1384,7 @@ async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_p
     monkeypatch.setattr(global_mcp_server_manager, "get_registry", lambda: {})
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     provider = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-zapier",
@@ -1392,7 +1394,7 @@ async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_p
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     result = await acompletion_with_mcp(
@@ -1625,13 +1627,15 @@ async def _settled() -> None:
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
 
 
-def _serve_chat_rounds(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response]
+def _serve_chat_rounds(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response]
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
-    respx_mock.post("https://mcp-chat-rounds.example.com/v1/chat/completions").mock(side_effect=list(rounds))
+    respx_mock.post("https://mcp-chat-rounds.example.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(list(rounds))
+    )
 
 
 def _chat_rounds_logging_obj(recorder: _ChatRoundRecorder, call_id: str, stream: bool) -> Logging:
@@ -1669,8 +1673,8 @@ def _echo_tool_served() -> Iterator[None]:
         yield
 
 
-async def _auto_execute_chat_echo(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response], call_id: str
+async def _auto_execute_chat_echo(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, rounds: Sequence[Response], call_id: str
 ) -> tuple[_ChatRoundRecorder, ModelResponse | Exception]:
     _serve_chat_rounds(respx_mock, monkeypatch, rounds)
     recorder: Final = _ChatRoundRecorder()
@@ -1721,8 +1725,8 @@ async def test_non_stream_auto_execute_logs_one_row_billing_both_rounds_and_matc
 
 
 @pytest.mark.asyncio
-async def test_non_stream_auto_execute_without_a_tool_call_logs_the_one_round_it_made(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_non_stream_auto_execute_without_a_tool_call_logs_the_one_round_it_made(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     recorder, response = await _auto_execute_chat_echo(
         respx_mock, monkeypatch, (_ok(_CHAT_ROUND_TWO),), "mcp-chat-rounds-no-tool-call"
@@ -1737,13 +1741,13 @@ async def test_non_stream_auto_execute_without_a_tool_call_logs_the_one_round_it
 
 
 @pytest.mark.asyncio
-async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follow_up_fails(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_non_stream_auto_execute_bills_the_paid_first_round_when_the_follow_up_fails(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     recorder, outcome = await _auto_execute_chat_echo(
         respx_mock,
         monkeypatch,
-        (_ok(_CHAT_ROUND_ONE), Response(400, content=json.dumps(_CONTEXT_WINDOW_ERROR, default=dict))),
+        (_ok(_CHAT_ROUND_ONE), httpx.Response(400, content=json.dumps(_CONTEXT_WINDOW_ERROR, default=dict))),
         "mcp-chat-rounds-follow-up-fails",
     )
 
@@ -2162,7 +2166,9 @@ async def test_stream_auto_execute_served_through_the_proxy_stream_hook_logs_bot
 async def test_stream_auto_execute_whose_follow_up_streams_nothing_still_bills_the_first_round_once(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
-    nothing_streamed: Final = Response(200, content=b"data: [DONE]\n\n", headers={"content-type": "text/event-stream"})
+    nothing_streamed: Final = httpx.Response(
+        200, content=b"data: [DONE]\n\n", headers={"content-type": "text/event-stream"}
+    )
     _serve_chat_rounds(respx_mock, monkeypatch, (_streamed(_CHAT_ROUND_ONE), nothing_streamed))
     recorder: Final = _ChatRoundRecorder()
     logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-empty-follow-up", stream=True)
@@ -2358,7 +2364,7 @@ async def test_stream_auto_execute_routed_through_the_proxy_bills_the_partial_an
         monkeypatch,
         (
             _streamed(_CHAT_ROUND_ONE),
-            Response(200, stream=_StallsOnceTheAnswerStarts(), headers={"content-type": "text/event-stream"}),
+            httpx.Response(200, stream=_StallsOnceTheAnswerStarts(), headers={"content-type": "text/event-stream"}),
         ),
     )
     router: Final = _chat_rounds_router()
@@ -2500,7 +2506,7 @@ async def test_stream_auto_execute_cancelled_mid_answer_counts_the_partial_off_t
     _serve_chat_rounds(
         respx_mock,
         monkeypatch,
-        (_streamed(_CHAT_ROUND_ONE), Response(200, stream=answer, headers={"content-type": "text/event-stream"})),
+        (_streamed(_CHAT_ROUND_ONE), httpx.Response(200, stream=answer, headers={"content-type": "text/event-stream"})),
     )
     recorder: Final = _ChatRoundRecorder()
     logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-cancelled-off-the-loop", stream=True)
@@ -2576,7 +2582,7 @@ async def test_stream_auto_execute_hung_up_before_the_answer_starts_bills_round_
     _serve_chat_rounds(
         respx_mock,
         monkeypatch,
-        (_streamed(_CHAT_ROUND_ONE), Response(200, stream=answer, headers={"content-type": "text/event-stream"})),
+        (_streamed(_CHAT_ROUND_ONE), httpx.Response(200, stream=answer, headers={"content-type": "text/event-stream"})),
     )
     recorder: Final = _ChatRoundRecorder()
     logging_obj: Final = _chat_rounds_logging_obj(recorder, "mcp-chat-stream-hung-up-before-answer", stream=True)
@@ -2612,8 +2618,8 @@ async def _read_through_the_usage_chunk(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deferred_for_a_post_call_guardrail", [False, True])
-async def test_stream_auto_execute_hung_up_after_its_whole_answer_bills_both_rounds_once(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, deferred_for_a_post_call_guardrail: bool
+async def test_stream_auto_execute_hung_up_after_its_whole_answer_bills_both_rounds_once(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, deferred_for_a_post_call_guardrail: bool
 ):
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 

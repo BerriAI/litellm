@@ -6,10 +6,11 @@ from collections.abc import Mapping
 from typing import Final, cast
 from unittest.mock import Mock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import Router
 from litellm.exceptions import UnsupportedParamsError
@@ -1097,10 +1098,10 @@ def _proxy_poll_model(router: Router, video_id: str) -> str | None:
 def test_a_video_is_polled_on_the_ark_account_that_created_it(caller_metadata: dict[str, object] | None):
     router = _two_account_router()
     _ = respx.post(f"{ACCOUNT_B_HOST}/api/v3/contents/generations/tasks").mock(
-        return_value=httpx.Response(200, json={"id": TASK_ID})
+        return_value=response_for_respx(httpx.Response(200, json={"id": TASK_ID}))
     )
     task_get = respx.get(f"{ACCOUNT_B_HOST}/api/v3/contents/generations/tasks/{TASK_ID}").mock(
-        return_value=httpx.Response(200, json=_task(status="running"))
+        return_value=response_for_respx(httpx.Response(200, json=_task(status="running")))
     )
 
     created = router.video_generation(model="seedance-b", prompt="a cat", seconds="4", metadata=caller_metadata)
@@ -1118,10 +1119,10 @@ def test_a_video_created_through_a_routing_group_is_polled_on_the_member_that_cr
     )
     for host in (ACCOUNT_A_HOST, ACCOUNT_B_HOST):
         _ = respx.post(f"{host}/api/v3/contents/generations/tasks").mock(
-            return_value=httpx.Response(200, json={"id": TASK_ID})
+            return_value=response_for_respx(httpx.Response(200, json={"id": TASK_ID}))
         )
         _ = respx.get(f"{host}/api/v3/contents/generations/tasks/{TASK_ID}").mock(
-            return_value=httpx.Response(200, json=_task(status="running"))
+            return_value=response_for_respx(httpx.Response(200, json=_task(status="running")))
         )
 
     for _ in range(8):

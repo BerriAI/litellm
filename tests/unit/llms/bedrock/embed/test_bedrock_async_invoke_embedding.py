@@ -2,13 +2,14 @@ import json
 import asyncio
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.base import HiddenParams
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Mock async invoke responses
@@ -432,7 +433,7 @@ async def test_async_invoke_status_signs_off_the_event_loop(monkeypatch):
         respx.mock,
     ):
         route = respx.get(url__regex=r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/async-invoke/.*").mock(
-            return_value=httpx.Response(200, json=async_invoke_status_response)
+            return_value=response_for_respx(httpx.Response(200, json=async_invoke_status_response))
         )
         release = asyncio.create_task(probe.release_refresh_from_the_loop())
         status = await embedder.get_async_invoke_status(

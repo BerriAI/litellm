@@ -4,7 +4,7 @@ import time
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
 
-from httpx._models import Headers, Response
+from httpx2._models import Headers, Response
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

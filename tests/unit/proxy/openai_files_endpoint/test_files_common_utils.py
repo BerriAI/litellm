@@ -3,9 +3,10 @@ from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
@@ -24,6 +25,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
 from litellm.types.utils import LiteLLMBatch
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 _RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
@@ -811,9 +813,9 @@ def test_a_provider_credential_lookup_never_lists_an_openrouter_wildcards_live_c
         ]
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         catalog_route: Final = respx_mock.get("https://openrouter.ai/api/v1/models/user").mock(
-            return_value=httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]})
+            return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "openai/gpt-5.4-mini"}]}))
         )
         credentials: Final = get_team_provider_credentials(
             llm_router=router,
@@ -861,8 +863,10 @@ def test_a_key_wildcard_finds_the_deployment_it_grants_without_listing_any_provi
         ]
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
-        catalog_requests: Final = respx_mock.route().mock(return_value=httpx.Response(200, json={"data": []}))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
+        catalog_requests: Final = respx_mock.route().mock(
+            return_value=response_for_respx(httpx.Response(200, json={"data": []}))
+        )
         credentials: Final = get_team_provider_credentials(
             llm_router=router,
             user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=key_models),

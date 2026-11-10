@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])

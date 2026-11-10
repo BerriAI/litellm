@@ -12,7 +12,7 @@ from typing import Final, Literal, TypeAlias
 from urllib.parse import unquote
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from _pytest.mark.structures import ParameterSet

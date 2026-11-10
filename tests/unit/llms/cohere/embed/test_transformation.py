@@ -3,11 +3,13 @@ import json
 from collections.abc import Iterator, Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -305,7 +307,7 @@ async def test_cohere_embed_v4_multiple_texts(respx_mock: respx.MockRouter, sync
     ]
     vectors: Final = [[0.011, -0.022], [0.033, -0.044], [0.055, -0.066], [0.077, -0.088]]
     route: Final = respx_mock.post(COHERE_V2_EMBED_URL).mock(
-        return_value=httpx.Response(200, json=_cohere_v2_embed_response(vectors, texts))
+        return_value=response_for_respx(httpx.Response(200, json=_cohere_v2_embed_response(vectors, texts)))
     )
 
     response: Final = await _embed(sync_mode, input=texts, input_type="search_document")
@@ -328,7 +330,7 @@ async def test_cohere_embed_v4_multiple_texts(respx_mock: respx.MockRouter, sync
 async def test_cohere_embed_v4_input_types(respx_mock: respx.MockRouter, input_type: str) -> None:
     text: Final = f"Test text for {input_type}"
     route: Final = respx_mock.post(COHERE_V2_EMBED_URL).mock(
-        return_value=httpx.Response(200, json=_cohere_v2_embed_response([[0.5, -0.5]], [text]))
+        return_value=response_for_respx(httpx.Response(200, json=_cohere_v2_embed_response([[0.5, -0.5]], [text])))
     )
 
     await _embed(False, input=[text], input_type=input_type)
@@ -344,7 +346,9 @@ async def test_cohere_embed_v4_input_types(respx_mock: respx.MockRouter, input_t
 @pytest.mark.respx(assert_all_called=True)
 async def test_cohere_embed_v4_encoding_format(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(COHERE_V2_EMBED_URL).mock(
-        return_value=httpx.Response(200, json=_cohere_v2_embed_response([[0.25, -0.75, 0.5]], ["Test encoding format"]))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_cohere_v2_embed_response([[0.25, -0.75, 0.5]], ["Test encoding format"]))
+        )
     )
 
     response: Final = await _embed(True, input=["Test encoding format"], encoding_format="float")
@@ -363,7 +367,9 @@ async def test_cohere_embed_v4_encoding_format(respx_mock: respx.MockRouter) -> 
 async def test_cohere_embed_v4_with_optional_params(respx_mock: respx.MockRouter) -> None:
     vector: Final = [round(index * 0.001, 3) for index in range(256)]
     route: Final = respx_mock.post(COHERE_V2_EMBED_URL).mock(
-        return_value=httpx.Response(200, json=_cohere_v2_embed_response([vector], ["Test with optional parameters"]))
+        return_value=response_for_respx(
+            httpx.Response(200, json=_cohere_v2_embed_response([vector], ["Test with optional parameters"]))
+        )
     )
 
     response: Final = await _embed(
@@ -391,7 +397,7 @@ async def test_cohere_embed_v4_image_tokens_are_billed_apart_from_input_tokens(
     respx_mock: respx.MockRouter, input_tokens: int, image_tokens: int
 ) -> None:
     respx_mock.post(COHERE_V2_EMBED_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "5807ee2e-0cda-445a-9ec8-864c60a06606",
@@ -404,7 +410,7 @@ async def test_cohere_embed_v4_image_tokens_are_billed_apart_from_input_tokens(
                 },
                 "response_type": "embeddings_by_type",
             },
-        )
+        ))
     )
     model_info: Final = litellm.get_model_info("cohere/embed-v4.0")
 
@@ -422,7 +428,7 @@ async def test_cohere_embed_v4_image_tokens_are_billed_apart_from_input_tokens(
 async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, sync_mode: bool) -> None:
     image: Final = ONE_PIXEL_PNG
     route: Final = respx_mock.post(COHERE_V2_EMBED_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "5807ee2e-0cda-445a-9ec8-864c60a06606",
@@ -432,7 +438,7 @@ async def test_cohere_embed_v4_image_embedding(respx_mock: respx.MockRouter, syn
                 "meta": {"api_version": {"version": "2"}, "billed_units": {"images": 1}},
                 "response_type": "embeddings_by_type",
             },
-        )
+        ))
     )
 
     response: Final = await _embed(sync_mode, input=[image], input_type="image")

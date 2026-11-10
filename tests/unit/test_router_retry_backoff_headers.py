@@ -5,10 +5,11 @@ Tests for router retry backoff behavior.
 import asyncio
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm import Router
 
@@ -49,8 +50,8 @@ async def test_retry_backoff_uses_current_exception_headers(monkeypatch: pytest.
         slept.append(delay)
         await real_sleep(0)
 
-    with respx.mock() as mock_router:
-        mock_router.post("https://api.openai.com/v1/chat/completions").mock(side_effect=replies)
+    with respx.mock(using="httpcore2_and_legacy") as mock_router:
+        mock_router.post("https://api.openai.com/v1/chat/completions").mock(side_effect=side_effect_for_respx(replies))
         with patch("asyncio.sleep", record_sleep):
             with pytest.raises(litellm.RateLimitError):
                 await router.acompletion(

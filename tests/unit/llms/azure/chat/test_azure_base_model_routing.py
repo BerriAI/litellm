@@ -7,7 +7,7 @@ etc.) so the correct config, supported params, and param mapping are used.
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 

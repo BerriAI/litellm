@@ -8,7 +8,7 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, call, patch
 
-import httpx
+import httpx2 as httpx
 import litellm
 from tests.unit.proxy.db.fake_prisma_engine import statement_timeout_error, statement_timeout_reads
 import pytest

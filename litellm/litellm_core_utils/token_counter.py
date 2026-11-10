@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
 import anyio
 import anyio.lowlevel
-import httpx
+import httpx2 as httpx
 import tiktoken
 from pydantic import TypeAdapter
 from tiktoken.model import MODEL_TO_ENCODING

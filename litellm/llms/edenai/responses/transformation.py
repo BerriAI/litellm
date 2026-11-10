@@ -11,7 +11,7 @@ Docs: https://www.edenai.co/docs/v3/llms/responses
 
 from typing import TYPE_CHECKING, Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

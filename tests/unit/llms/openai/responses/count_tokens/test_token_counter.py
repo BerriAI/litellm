@@ -5,11 +5,13 @@ from collections.abc import Mapping
 from itertools import chain
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import JsonValue, ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management.constants import CLEARED_TOOL_RESULT_PLACEHOLDER
@@ -23,7 +25,7 @@ COUNT_URL: Final = "https://api.openai.com/v1/responses/input_tokens"
 async def _count(monkeypatch: pytest.MonkeyPatch, response: httpx.Response) -> TokenCountResponse | None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        respx.post(COUNT_URL).mock(return_value=response)
+        respx.post(COUNT_URL).mock(return_value=response_for_respx(response))
         return await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
@@ -182,7 +184,9 @@ async def _sent_count_body(
 ) -> object:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 1}))
+        )
         await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o",
             messages=messages,
@@ -344,7 +348,9 @@ async def test_anthropic_format_message_without_a_role_answers_400_without_calli
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 1}))
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 1}))
+        )
         result: Final = await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o",
             messages=[{"role": "user", "content": "hi"}, {"content": "no role"}],
@@ -431,7 +437,9 @@ async def _count_tool_result_turns(
 ) -> tuple[TokenCountResponse | None, respx.Route]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 9}))
+        )
         result: Final = await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o",
             messages=_tool_result_turns_with(text_block),
@@ -507,7 +515,9 @@ async def _count_with_edit(
 ) -> tuple[TokenCountResponse | None, respx.Route]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 9}))
+        )
         result: Final = await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o",
             messages=copy.deepcopy(TOOL_PAIRS),
@@ -608,7 +618,9 @@ async def test_count_uses_the_global_openai_key_chat_would_use(monkeypatch: pyte
     monkeypatch.setattr(litellm, "openai_key", "sk-from-litellm-settings")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=httpx.Response(200, json={"input_tokens": 9}))
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 9}))
+        )
         result: Final = await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o",
             messages=[{"role": "user", "content": "hi"}],
@@ -629,7 +641,7 @@ async def test_count_sends_the_global_key_only_to_the_global_api_base(monkeypatc
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with respx.mock:
         route: Final = respx.post("https://gateway.internal.example/v1/responses/input_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 4})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 4}))
         )
         result: Final = await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-4o",
@@ -670,7 +682,7 @@ async def _native_count(
 ) -> tuple[TokenCountResponse | None, object]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
-        route: Final = respx.post(COUNT_URL).mock(return_value=response)
+        route: Final = respx.post(COUNT_URL).mock(return_value=response_for_respx(response))
         result: Final = await OpenAITokenCounter().count_responses_request(
             model_to_use="gpt-4o",
             request=request,

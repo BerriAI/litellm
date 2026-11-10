@@ -8,7 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa

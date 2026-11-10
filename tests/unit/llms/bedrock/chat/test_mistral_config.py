@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
@@ -46,9 +47,9 @@ def test_mistral_invoke_outputs_become_message_content(respx_mock: respx.Router)
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.mistral-7b-instruct-v0%3A2/invoke"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, json={"outputs": [{"text": " The sky is a canvas of blue.", "stop_reason": "length"}]}
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -85,7 +86,11 @@ def test_mixtral_invoke_system_prompt_variants_render_into_the_prompt(
 ) -> None:
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.mixtral-8x7b-instruct-v0%3A1/invoke"
-    ).mock(return_value=httpx.Response(200, json={"outputs": [{"text": "Hi there", "stop_reason": "stop"}]}))
+    ).mock(
+        return_value=response_for_respx(
+            httpx.Response(200, json={"outputs": [{"text": "Hi there", "stop_reason": "stop"}]})
+        )
+    )
 
     response: Final = litellm.completion(
         model="bedrock/mistral.mixtral-8x7b-instruct-v0:1",

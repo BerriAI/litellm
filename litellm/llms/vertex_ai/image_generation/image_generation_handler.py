@@ -2,7 +2,7 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 from openai.types.image import Image
 from pydantic import ConfigDict, TypeAdapter
 

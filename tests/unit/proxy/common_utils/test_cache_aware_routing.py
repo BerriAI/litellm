@@ -361,7 +361,7 @@ async def test_router_applies_opt_in_and_preserves_failure_semantics(
     import asyncio
     import json
 
-    import httpx
+    import httpx2 as httpx
 
     import litellm
     from litellm.caching.llm_caching_handler import LLMClientCache

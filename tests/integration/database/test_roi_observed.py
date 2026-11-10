@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
-import httpx
+import httpx2 as httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI, HTTPException

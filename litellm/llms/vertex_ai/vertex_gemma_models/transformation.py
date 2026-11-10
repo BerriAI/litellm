@@ -11,7 +11,7 @@ The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final, cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypeAliasType, TypedDict
 

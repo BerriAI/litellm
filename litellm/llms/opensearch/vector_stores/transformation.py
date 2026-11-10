@@ -6,7 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, NoReturn
 from urllib.parse import quote, urlsplit
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger

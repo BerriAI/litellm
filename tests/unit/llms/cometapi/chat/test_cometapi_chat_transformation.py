@@ -7,10 +7,11 @@ Tests the CometAPIChatConfig class methods using mocks
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.cometapi.chat.transformation import (
     CometAPIChatCompletionStreamingHandler,
@@ -184,7 +185,7 @@ class TestCometAPIConfig:
 def test_completion_uses_custom_api_base(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "https://cometapi.example/custom/v1"
     route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-cometapi",
@@ -200,7 +201,7 @@ def test_completion_uses_custom_api_base(respx_mock: respx.MockRouter) -> None:
                 ],
                 "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(

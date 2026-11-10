@@ -2,7 +2,7 @@ import json
 import math
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

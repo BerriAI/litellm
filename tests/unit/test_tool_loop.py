@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.tool_loop import ToolLoopMaxRoundsExceeded
 from litellm.types.llms.openai import ChatCompletionToolMessage
@@ -67,7 +68,7 @@ def _request_bodies(respx_mock: respx.MockRouter) -> list[dict]:
 
 def test_final_answer_without_tool_calls_returns_content(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, json=_openai_response("done"))
+        return_value=response_for_respx(httpx.Response(200, json=_openai_response("done")))
     )
     executor_called: Final = []
 
@@ -94,10 +95,10 @@ def test_two_rounds_appends_assistant_and_tool_messages_in_order(respx_mock: res
         _tool_call("call_2", "get_weather", {"city": "Tokyo"}),
     ]
     route: Final = respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_openai_response(None, tool_calls)),
             httpx.Response(200, json=_openai_response("Paris 72F, Tokyo 60F")),
-        ]
+        ])
     )
     executed: Final = []
 
@@ -153,10 +154,10 @@ def test_two_rounds_appends_assistant_and_tool_messages_in_order(respx_mock: res
 
 def test_response_format_and_tools_forwarded_every_round(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_openai_response(None, [_tool_call("call_1", "get_weather", {"city": "Paris"})])),
             httpx.Response(200, json=_openai_response('{"summary": "sunny"}')),
-        ]
+        ])
     )
     response_format: Final = {
         "type": "json_schema",
@@ -189,7 +190,7 @@ def test_response_format_and_tools_forwarded_every_round(respx_mock: respx.MockR
 def test_max_rounds_exceeded_raises_without_executing_last_round(respx_mock: respx.MockRouter) -> None:
     tool_call: Final = _tool_call("call_1", "get_weather", {"city": "Paris"})
     route: Final = respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, json=_openai_response(None, [tool_call]))
+        return_value=response_for_respx(httpx.Response(200, json=_openai_response(None, [tool_call])))
     )
     executed: Final = []
 
@@ -214,7 +215,7 @@ def test_max_rounds_exceeded_raises_without_executing_last_round(respx_mock: res
 
 def test_max_rounds_below_one_rejected_before_any_request(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, json=_openai_response("done"))
+        return_value=response_for_respx(httpx.Response(200, json=_openai_response("done")))
     )
 
     with pytest.raises(ValueError, match="max_rounds must be >= 1"):
@@ -232,7 +233,7 @@ def test_max_rounds_below_one_rejected_before_any_request(respx_mock: respx.Mock
 
 def test_stream_rejected_before_any_request(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, json=_openai_response("done"))
+        return_value=response_for_respx(httpx.Response(200, json=_openai_response("done")))
     )
 
     with pytest.raises(ValueError, match="stream=True is not supported"):
@@ -254,7 +255,7 @@ def test_custom_tool_call_raises_type_error_without_executing(respx_mock: respx.
         [{"id": "call_custom", "type": "custom", "custom": {"name": "apply_patch", "input": "*** patch"}}],
     )
     route: Final = respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
-        return_value=httpx.Response(200, json=custom_response)
+        return_value=response_for_respx(httpx.Response(200, json=custom_response))
     )
     executor_called: Final = []
 
@@ -329,7 +330,7 @@ def test_responses_bridge_replays_reasoning_items_across_rounds(respx_mock: resp
         ],
     )
     route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        side_effect=[httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)]
+        side_effect=side_effect_for_respx([httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)])
     )
     executed: Final = []
 
@@ -397,7 +398,7 @@ def test_responses_bridge_replays_tool_search_items_across_rounds(respx_mock: re
         ],
     )
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        side_effect=[httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)]
+        side_effect=side_effect_for_respx([httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)])
     )
 
     litellm.run_tool_loop(
@@ -431,10 +432,10 @@ async def test_arun_tool_loop_two_rounds(respx_mock: respx.MockRouter, monkeypat
         _tool_call("call_2", "get_weather", {"city": "Tokyo"}),
     ]
     route: Final = respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_openai_response(None, tool_calls)),
             httpx.Response(200, json=_openai_response("Paris 72F, Tokyo 60F")),
-        ]
+        ])
     )
     executed: Final = []
 
@@ -518,10 +519,10 @@ def _anthropic_response(content: list[dict], stop_reason: str) -> dict:
 def test_tool_search_call_is_replayed_with_its_result_instead_of_executed(respx_mock: respx.MockRouter) -> None:
     search_turn: Final = [TOOL_SEARCH_CALL, _tool_search_result(["get_weather"]), WEATHER_CALL]
     respx_mock.post(ANTHROPIC_MESSAGES_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json=_anthropic_response(search_turn, "tool_use")),
             httpx.Response(200, json=_anthropic_response([{"type": "text", "text": "Paris is 72F"}], "end_turn")),
-        ]
+        ])
     )
     executed: Final = []
 
@@ -552,13 +553,13 @@ async def test_arun_tool_loop_answers_after_a_search_that_found_nothing(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler())
     route: Final = respx_mock.post(ANTHROPIC_MESSAGES_URL).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json=_anthropic_response(
                 [TOOL_SEARCH_CALL, _tool_search_result([]), {"type": "text", "text": "I have no flight tool."}],
                 "end_turn",
             ),
-        )
+        ))
     )
     executed: Final = []
 
@@ -581,7 +582,7 @@ async def test_arun_tool_loop_answers_after_a_search_that_found_nothing(
 
 def test_client_tool_turn_is_replayed_without_its_provider_specific_fields(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(OPENAI_CHAT_COMPLETIONS_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(
                 200,
                 json=_openai_response(
@@ -591,7 +592,7 @@ def test_client_tool_turn_is_replayed_without_its_provider_specific_fields(respx
                 ),
             ),
             httpx.Response(200, json=_openai_response("Paris is 72F")),
-        ]
+        ])
     )
 
     answer: Final = litellm.run_tool_loop(
@@ -645,7 +646,7 @@ def test_responses_bridge_replays_commentary_reasoning_and_tool_call_in_order(re
         ],
     )
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        side_effect=[httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)]
+        side_effect=side_effect_for_respx([httpx.Response(200, json=round_one), httpx.Response(200, json=round_two)])
     )
 
     answer: Final = litellm.run_tool_loop(

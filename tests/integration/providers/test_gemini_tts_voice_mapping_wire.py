@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value

@@ -3,7 +3,7 @@ import os
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # spread dict loses the role literal without a cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError

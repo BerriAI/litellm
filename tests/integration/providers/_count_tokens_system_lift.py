@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 from integration._support.client import Gateway
 from pydantic import JsonValue, TypeAdapter

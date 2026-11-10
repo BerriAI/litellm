@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from prisma import Json, Prisma
 from pydantic import InstanceOf, TypeAdapter
@@ -163,7 +163,7 @@ def test_replay_preserves_identity_between_managed_and_plain_response_ids(upstre
 async def test_seed_copy_uses_lens_authenticated_tenant_for_both_spend_stores(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.tracing.remote import RemoteTraceStore
 

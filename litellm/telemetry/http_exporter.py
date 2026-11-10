@@ -1,7 +1,7 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.telemetry.report import Report, report_to_json
 from litellm.telemetry.sink import ExportOutcome

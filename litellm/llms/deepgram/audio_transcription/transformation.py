@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, Protocol, cast
 from urllib.parse import urlencode
 
-from httpx import Headers, Response
+from httpx2 import Headers, Response
 from pydantic import ConfigDict, InstanceOf, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 

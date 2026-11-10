@@ -1,7 +1,7 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
-from httpx import Response
+from httpx2 import Response
 
 from litellm.constants import PLACEHOLDER_API_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -23,7 +23,7 @@ from litellm.secret_managers.main import (
 from ..common_utils import VLLMModelInfo, endpoint_under_api_base
 
 if TYPE_CHECKING:
-    from httpx import URL
+    from httpx2 import URL
 
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
 

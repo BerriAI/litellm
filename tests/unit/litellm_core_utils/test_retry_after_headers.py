@@ -8,7 +8,7 @@ This test module verifies that:
 4. All these exceptions are in LITELLM_EXCEPTION_TYPES
 """
 
-import httpx
+import httpx2 as httpx
 
 import litellm
 

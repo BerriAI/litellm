@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final
 
 import click
-import httpx
+import httpx2 as httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv
 from pydantic import BeforeValidator, ConfigDict, TypeAdapter

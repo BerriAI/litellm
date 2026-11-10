@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Protocol, TypedDict
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import NotRequired, ReadOnly
 
 import litellm

@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Awaitable, Final, TypedDict, TypeVar
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 import pytest_asyncio
 from pydantic import TypeAdapter

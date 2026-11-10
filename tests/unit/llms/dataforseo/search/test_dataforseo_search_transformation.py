@@ -7,7 +7,7 @@ import os
 import re
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import ValidationError
 

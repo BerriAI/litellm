@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, string_value
 from integration._support.vertex import service_account_json

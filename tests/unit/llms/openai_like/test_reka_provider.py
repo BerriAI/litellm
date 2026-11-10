@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 
@@ -116,7 +115,7 @@ def test_reka_is_available_in_add_model_form():
 
 
 def test_reka_chat_completion_request():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.reka.ai/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
         response: Final = litellm.completion(
             model="reka/reka-flash",
@@ -135,7 +134,7 @@ def test_reka_chat_completion_request():
 
 
 def test_reka_responses_request_is_bridged_to_chat_completions():
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.reka.ai/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
         response: Final = litellm.responses(
             model="reka/reka-flash",
@@ -156,7 +155,7 @@ def test_reka_responses_request_is_bridged_to_chat_completions():
 async def test_reka_anthropic_messages_request_is_bridged_to_chat_completions(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
-    with respx.mock() as upstream:
+    with respx.mock(using="httpcore2_and_legacy") as upstream:
         route: Final = upstream.post("https://api.reka.ai/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
         response: Final = await litellm.anthropic.messages.acreate(
             model="reka/reka-flash",

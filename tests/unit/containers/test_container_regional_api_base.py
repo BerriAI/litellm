@@ -9,7 +9,7 @@ US Data Residency instead of defaulting to https://api.openai.com/v1.
 import os
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 

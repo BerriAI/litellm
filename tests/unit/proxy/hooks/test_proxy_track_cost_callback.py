@@ -8,7 +8,7 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.redis.stores.connection import connect

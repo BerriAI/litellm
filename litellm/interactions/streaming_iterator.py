@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Final, Protocol
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger

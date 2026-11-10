@@ -20,10 +20,11 @@ from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from opentelemetry import trace
 from pydantic import BaseModel, TypeAdapter
@@ -102,6 +103,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
 )
 from litellm.types.utils import CallTypes, CredentialItem, Usage
 from litellm.rust_bridge.host.model_cost import publish
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
@@ -705,12 +707,14 @@ async def test_async_router_acancel_batch_does_not_fall_back_across_model_groups
         default_fallbacks=["openai-gpt"],
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         azure_route = respx_mock.post(host="127.0.0.1").mock(
-            return_value=httpx.Response(401, json={"error": {"code": "401", "message": "invalid subscription key"}})
+            return_value=response_for_respx(
+                httpx.Response(401, json={"error": {"code": "401", "message": "invalid subscription key"}})
+            )
         )
         openai_route = respx_mock.post("https://api.openai.com/v1/batches/batch_owned_by_azure/cancel").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 404,
                 json={
                     "error": {
@@ -719,7 +723,7 @@ async def test_async_router_acancel_batch_does_not_fall_back_across_model_groups
                         "code": "batch_not_found",
                     }
                 },
-            )
+            ))
         )
         with pytest.raises(openai.AuthenticationError, match="invalid subscription key"):
             await router.acancel_batch(model="azure-batch-dep", batch_id="batch_owned_by_azure")
@@ -830,7 +834,7 @@ async def test_async_router_acreate_file_litellm_proxy_sends_target_model_names_
     import json
     from io import BytesIO
 
-    import httpx
+    import httpx2 as httpx
 
     jsonl_file = BytesIO(
         json.dumps({"body": {"model": "chained-batch", "messages": [{"role": "user", "content": "hi"}]}}).encode(
@@ -862,9 +866,9 @@ async def test_async_router_acreate_file_litellm_proxy_sends_target_model_names_
         "status": "processed",
     }
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         create_route = respx_mock.post("http://localhost:4001/v1/files").mock(
-            return_value=httpx.Response(200, json=file_object_json)
+            return_value=response_for_respx(httpx.Response(200, json=file_object_json))
         )
         response = await router.acreate_file(
             model="chained-batch",
@@ -1190,10 +1194,10 @@ def _batch_model_group_router():
 
 def _mock_batch_provider(respx_mock):
     respx_mock.get(f"{_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
-        return_value=httpx.Response(200, json=_BATCH_COMPLETED)
+        return_value=response_for_respx(httpx.Response(200, json=_BATCH_COMPLETED))
     )
     respx_mock.get(f"{_BATCH_API_BASE}/files/file-out-1/content").mock(
-        return_value=httpx.Response(200, text=_BATCH_OUTPUT_JSONL)
+        return_value=response_for_respx(httpx.Response(200, text=_BATCH_OUTPUT_JSONL))
     )
 
 
@@ -1204,13 +1208,13 @@ async def test_arouter_aretrieve_batch_without_model_stamps_model_group(monkeypa
     The router fans out over its deployments, so the model group is only known
     from the deployment that answered.
     """
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     collector = _BatchPayloadCollector()
     monkeypatch.setattr(litellm, "callbacks", [collector])
     router = _batch_model_group_router()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         _mock_batch_provider(respx_mock)
         response = await router.aretrieve_batch(batch_id=_BATCH_ID)
         payload = await collector.retrieve_batch_payload()
@@ -1224,13 +1228,13 @@ async def test_arouter_aretrieve_batch_without_model_stamps_model_group(monkeypa
 @pytest.mark.asyncio
 async def test_arouter_aretrieve_batch_with_model_stamps_requested_model_group(monkeypatch: pytest.MonkeyPatch):
     """An explicitly requested model group is what gets logged."""
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     collector = _BatchPayloadCollector()
     monkeypatch.setattr(litellm, "callbacks", [collector])
     router = _batch_model_group_router()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         _mock_batch_provider(respx_mock)
         await router.aretrieve_batch(model=_BATCH_GROUP, batch_id=_BATCH_ID)
         payload = await collector.retrieve_batch_payload()
@@ -1258,7 +1262,7 @@ async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(m
     The fan-out also probes deployments the caller never named. Neither may reach the
     per-minute tpm/rpm counters that gate live traffic.
     """
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     collector = _BatchPayloadCollector()
     monkeypatch.setattr(litellm, "callbacks", [collector])
@@ -1289,10 +1293,10 @@ async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(m
         ]
     )
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         _mock_batch_provider(respx_mock)
         respx_mock.get(f"{_UNRELATED_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
-            return_value=httpx.Response(404, json=_BATCH_NOT_FOUND)
+            return_value=response_for_respx(httpx.Response(404, json=_BATCH_NOT_FOUND))
         )
         response = await router.aretrieve_batch(batch_id=_BATCH_ID)
         payload = await collector.retrieve_batch_payload()
@@ -1408,17 +1412,17 @@ async def test_arouter_aretrieve_batch_does_not_feed_routing_strategies(
     caller never named, so polling a finished batch must not move the numbers that
     decide where the next chat request goes.
     """
-    import respx
+    from tests._support import respx_httpx2 as respx
 
     collector = _BatchPayloadCollector()
     monkeypatch.setattr(litellm, "callbacks", [collector])
     monkeypatch.setattr(litellm, "input_callback", [])
     router = _batch_fan_out_router(routing_strategy)
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         _mock_batch_provider(respx_mock)
         respx_mock.get(f"{_UNRELATED_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
-            return_value=httpx.Response(404, json=_BATCH_NOT_FOUND)
+            return_value=response_for_respx(httpx.Response(404, json=_BATCH_NOT_FOUND))
         )
         for _ in range(3):
             response = await router.aretrieve_batch(batch_id=_BATCH_ID)
@@ -2705,22 +2709,26 @@ class _SlowFailureRecorder(_SpendRecorder):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cut_groups", [("primary",), ("primary", "middle")], ids=["one_break", "two_breaks"])
-async def test_continued_stream_success_log_bills_every_cut_leg(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, cut_groups: tuple[str, ...]
+async def test_continued_stream_success_log_bills_every_cut_leg(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, cut_groups: tuple[str, ...]
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     recorder: Final = _SpendRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=_CutSSE("Transformers use")
-        )
+        ))
     )
     respx_mock.post(host="api.deepseek.com").mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutSSE(" learned"))
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutSSE(" learned"))
+        )
     )
     respx_mock.post(host="api.mistral.ai").mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_BACKUP_SSE)
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_BACKUP_SSE)
+        )
     )
     router: Final = Router(
         model_list=[
@@ -2797,12 +2805,14 @@ async def test_continued_stream_sharing_the_proxy_logging_object_bills_the_cut_t
     recorder: Final = _SlowFailureRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, headers={"content-type": "text/event-stream"}, stream=_CutSSE("Transformers use")
-        )
+        ))
     )
     respx_mock.post(host="api.mistral.ai").mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_BACKUP_SSE)
+        return_value=response_for_respx(
+            httpx.Response(200, headers={"content-type": "text/event-stream"}, text=_BACKUP_SSE)
+        )
     )
     router: Final = Router(
         model_list=[
@@ -2965,14 +2975,16 @@ async def _route_agentic_request(
     hook: Final = _ScriptedAgenticFollowUps(follow_ups)
     monkeypatch.setattr(litellm, "callbacks", [hook])
     first_calls: Final = (
-        respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=list(first_call_replies))
+        respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            side_effect=side_effect_for_respx(list(first_call_replies))
+        )
         if first_call_replies
         else respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-            return_value=httpx.Response(200, json=_AGENTIC_FIRST_CALL_BODY)
+            return_value=response_for_respx(httpx.Response(200, json=_AGENTIC_FIRST_CALL_BODY))
         )
     )
     respx_mock.post("https://backup.test/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=_AGENTIC_BACKUP_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=_AGENTIC_BACKUP_BODY))
     )
     router: Final = Router(
         model_list=[
@@ -3135,7 +3147,7 @@ async def test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fall
     recorder: Final = _SpendRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     respx_mock.post("https://primary.example/v1/responses").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             text=_responses_sse(
@@ -3160,10 +3172,10 @@ async def test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fall
                     ),
                 },
             ),
-        )
+        ))
     )
     respx_mock.post("https://backup.example/v1/responses").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             text=_responses_sse(
@@ -3190,7 +3202,7 @@ async def test_responses_fallback_sharing_the_proxy_logging_object_logs_the_fall
                     ),
                 },
             ),
-        )
+        ))
     )
     router: Final = Router(
         model_list=[
@@ -3737,7 +3749,7 @@ async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reas
 
     openai_opened: Final = response_body("resp_openai", "gpt-6-astra", "in_progress", [])
     openai_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=sse(
+        return_value=response_for_respx(sse(
             [
                 {"type": "response.created", "sequence_number": 0, "response": openai_opened},
                 {"type": "response.in_progress", "sequence_number": 1, "response": openai_opened},
@@ -3752,7 +3764,7 @@ async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reas
                     },
                 },
             ]
-        )
+        ))
     )
     mantle_answer: Final = [
         {
@@ -3764,7 +3776,7 @@ async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reas
         }
     ]
     mantle_route: Final = respx_mock.post("https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses").mock(
-        return_value=sse(
+        return_value=response_for_respx(sse(
             [
                 {
                     "type": "response.created",
@@ -3777,7 +3789,7 @@ async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reas
                     "response": response_body("resp_mantle", "openai.gpt-6-astra", "completed", mantle_answer),
                 },
             ]
-        )
+        ))
     )
 
     router = litellm.Router(
@@ -3861,7 +3873,7 @@ async def test_aresponses_mid_stream_order_fallback_hop_keeps_the_encrypted_reas
         }
     ]
     openai_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             sse(
                 [
                     {"type": "response.created", "sequence_number": 0, "response": order_1_opened},
@@ -3892,7 +3904,7 @@ async def test_aresponses_mid_stream_order_fallback_hop_keeps_the_encrypted_reas
                     },
                 ]
             ),
-        ]
+        ])
     )
 
     router = litellm.Router(
@@ -4065,9 +4077,9 @@ async def test_aresponses_background_stream_hands_the_response_id_to_the_client_
     output_may_start: Final = asyncio.Event()
     upstream_paused: Final = asyncio.Event()
     respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
-        return_value=_paused_background_stream(
+        return_value=response_for_respx(_paused_background_stream(
             output_may_start, upstream_paused, True, _background_output_then_completed(True)
-        )
+        ))
     )
     router: Final = _background_router("gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, fallbacks)
 
@@ -4120,9 +4132,9 @@ async def test_aresponses_stream_keeps_holding_lifecycle_events_until_output_off
     output_may_start: Final = asyncio.Event()
     upstream_paused: Final = asyncio.Event()
     respx_mock.route(method="POST", path__regex=r"/responses$").mock(
-        return_value=_paused_background_stream(
+        return_value=response_for_respx(_paused_background_stream(
             output_may_start, upstream_paused, background, _background_output_then_completed(background)
-        )
+        ))
     )
     router: Final = _background_router("gpt-bg", litellm_params, fallbacks)
 
@@ -4157,12 +4169,14 @@ async def test_aresponses_background_stream_surfaces_a_later_error_instead_of_a_
         "error": {"type": "server_error", "code": "server_error", "message": "upstream died", "param": None},
     }
     primary_route: Final = respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
-        return_value=_paused_background_stream(output_may_start, upstream_paused, True, (server_error,))
+        return_value=response_for_respx(
+            _paused_background_stream(output_may_start, upstream_paused, True, (server_error,))
+        )
     )
     backup_route: Final = respx_mock.post(_BACKGROUND_BACKUP_URL).mock(
-        return_value=_paused_background_stream(
+        return_value=response_for_respx(_paused_background_stream(
             backup_output_may_start, asyncio.Event(), True, _background_output_then_completed(True)
-        )
+        ))
     )
     router: Final = _background_router("gpt-bg", {"model": "openai/gpt-6.1-terra", "api_key": "k"}, None)
 
@@ -4226,10 +4240,10 @@ async def test_aresponses_background_stream_content_policy_error_reads_the_same_
     }
     after_pause: Final = (*output_before_refusal, refusal)
     primary_route: Final = respx_mock.post(_BACKGROUND_PRIMARY_URL).mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             _paused_background_stream(released_output_may_start, released_upstream_paused, True, after_pause),
             _paused_background_stream(held_output_may_start, asyncio.Event(), False, after_pause),
-        ]
+        ])
     )
     backup_route: Final = respx_mock.post(_BACKGROUND_BACKUP_URL)
     router: Final = _background_router(
@@ -6675,7 +6689,7 @@ def test_synchronous_text_completion_rejects_a_restricted_model_before_the_provi
         ],
         num_retries=0,
     )
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         provider: Final = upstream.post("https://sync-router.invalid/v1/completions").respond(
             200,
             json={
@@ -7952,15 +7966,15 @@ async def test_acreate_batch_on_a_mixed_group_only_reaches_batch_deployments(
         num_retries=0,
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 400,
                 json={"error": {"code": "invalid_deployment_type", "message": "SKU 'GlobalStandard' is not supported"}},
-            )
+            ))
         )
         batch_route: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
         )
         await _create_batches(router, "gpt-mixed", attempts=20)
 
@@ -7993,15 +8007,15 @@ async def test_acreate_batch_on_a_mixed_wildcard_group_only_reaches_batch_deploy
         num_retries=0,
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 400,
                 json={"error": {"code": "invalid_deployment_type", "message": "SKU 'GlobalStandard' is not supported"}},
-            )
+            ))
         )
         batch_route: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
         )
         await _create_batches(router, "mixed-wild/gpt-5.4-mini", attempts=20)
 
@@ -8024,9 +8038,9 @@ async def test_chat_calls_after_a_batch_create_still_use_every_deployment_in_the
         num_retries=0,
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         respx_mock.post(host="batch-sku.openai.azure.com").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
         )
         await _create_batches(router, "gpt-mixed", attempts=2)
 
@@ -8057,12 +8071,12 @@ async def test_acreate_batch_on_a_group_without_batch_deployments_still_uses_eve
         num_retries=0,
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         first_route: Final = respx_mock.post(host="first-chat-sku.openai.azure.com").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
         )
         second_route: Final = respx_mock.post(host="second-chat-sku.openai.azure.com").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
         )
         await _create_batches(router, "gpt-chat-only", attempts=40)
 
@@ -8087,10 +8101,10 @@ async def test_acreate_batch_prefers_only_the_batch_deployments_the_caller_may_u
         num_retries=0,
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         routes: Final = {
             host: respx_mock.post(host=f"{host}.openai.azure.com").mock(
-                return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+                return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
             )
             for host in ("chat-sku", "batch-sku")
         }
@@ -8123,12 +8137,12 @@ async def test_acreate_batch_on_a_legacy_routing_strategy_keeps_shared_deploymen
         num_retries=0,
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
         )
         respx_mock.post(host="batch-sku.openai.azure.com").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
         )
         for _ in range(30):
             await router.acreate_batch(
@@ -8190,9 +8204,9 @@ async def test_acreate_batch_on_a_mixed_group_reaches_chat_as_on_main_while_its_
     )
     _cool_down(router, *(d["model_info"]["id"] for d in router.model_list if d["model_info"]["mode"] == "batch"))
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
-            return_value=_AZURE_CHAT_SKU_REJECTS_BATCH
+            return_value=response_for_respx(_AZURE_CHAT_SKU_REJECTS_BATCH)
         )
         with pytest.raises(openai.BadRequestError):
             await _create_batches(router, "gpt-mixed", attempts=1)
@@ -8218,12 +8232,12 @@ async def test_acreate_batch_with_tags_that_match_only_the_chat_deployment_reach
         num_retries=0,
     )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         chat_route: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
-            return_value=_AZURE_CHAT_SKU_REJECTS_BATCH
+            return_value=response_for_respx(_AZURE_CHAT_SKU_REJECTS_BATCH)
         )
         batch_route: Final = respx_mock.post(host="batch-sku.openai.azure.com").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
         )
         with pytest.raises(openai.BadRequestError):
             await router.acreate_batch(
@@ -8268,9 +8282,9 @@ async def test_acreate_batch_on_an_openai_group_falls_back_to_chat_while_its_bat
     )
     _cool_down(router, *(d["model_info"]["id"] for d in router.model_list if d["model_info"]["mode"] == "batch"))
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         chat_route: Final = respx_mock.post(host="chat.openai.test").mock(
-            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+            return_value=response_for_respx(httpx.Response(200, json=_AZURE_BATCH_CREATED))
         )
         await _create_batches(router, "gpt-mixed", attempts=5)
 
@@ -8279,7 +8293,7 @@ async def test_acreate_batch_on_an_openai_group_falls_back_to_chat_while_its_bat
 
 @pytest.mark.asyncio
 async def test_acreate_batch_request_bedrock_tags_override_deployment_tags():
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
 
@@ -11751,13 +11765,13 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
         disable_cooldowns=True,
     )
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         upstream = respx_mock.post("https://retry-policy.local/v1/chat/completions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 upstream_status,
                 headers={"retry-after": "0"},
                 json={"error": {"message": "model is down", "type": "server_error"}},
-            )
+            ))
         )
         with pytest.raises(error_type):
             await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
@@ -11801,9 +11815,11 @@ async def test_router_not_found_retries_governs_every_404_shape(
         disable_cooldowns=True,
     )
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         upstream = respx_mock.post("https://retry-policy.local/v1/chat/completions").mock(
-            return_value=httpx.Response(404, headers={"retry-after": "0"}, json={"error": error_body})
+            return_value=response_for_respx(
+                httpx.Response(404, headers={"retry-after": "0"}, json={"error": error_body})
+            )
         )
         with pytest.raises(error_type) as raised:
             await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
@@ -11828,9 +11844,9 @@ async def test_generic_call_keeps_the_deployment_name_of_an_azure_ai_model_on_an
         ]
     )
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         upstream = respx_mock.post(host="my-resource.openai.azure.com", path__regex=r"^/openai/.*responses$").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "resp_1",
@@ -11848,7 +11864,7 @@ async def test_generic_call_keeps_the_deployment_name_of_an_azure_ai_model_on_an
                         }
                     ],
                 },
-            )
+            ))
         )
         await router.aresponses(model="aoai-gpt", input="hi")
 
@@ -11909,12 +11925,12 @@ async def test_router_retry_policy_400_retries_on_sibling_deployment(
         disable_cooldowns=True,
     )
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         rejecting = respx_mock.post("https://rejecting.local/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": upstream_error})
+            return_value=response_for_respx(httpx.Response(400, json={"error": upstream_error}))
         )
         accepting = respx_mock.post("https://accepting.local/v1/chat/completions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "chatcmpl-lit-7036",
@@ -11926,7 +11942,7 @@ async def test_router_retry_policy_400_retries_on_sibling_deployment(
                     ],
                     "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
                 },
-            )
+            ))
         )
         response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
@@ -12017,10 +12033,10 @@ async def test_router_retry_policy_400_keeps_upstream_error_when_a_client_forges
 
     with respx.mock as respx_mock:
         respx_mock.post("https://rejecting.local/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+            return_value=response_for_respx(httpx.Response(400, json={"error": _UPSTREAM_400}))
         )
         respx_mock.post("https://sibling.local/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+            return_value=response_for_respx(httpx.Response(400, json={"error": _UPSTREAM_400}))
         )
         with pytest.raises(litellm.BadRequestError) as raised:
             await router.acompletion(
@@ -12047,10 +12063,10 @@ async def test_router_retry_policy_400_keeps_upstream_error_on_order_fallback_ho
 
     with respx.mock as respx_mock:
         order1 = respx_mock.post("https://order1.local/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+            return_value=response_for_respx(httpx.Response(400, json={"error": _UPSTREAM_400}))
         )
         order2 = respx_mock.post("https://order2.local/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+            return_value=response_for_respx(httpx.Response(400, json={"error": _UPSTREAM_400}))
         )
         with pytest.raises(litellm.BadRequestError) as raised:
             await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
@@ -12080,10 +12096,10 @@ async def test_router_retry_policy_400_keeps_upstream_error_when_tags_narrow_the
 
     with respx.mock as respx_mock:
         tagged = respx_mock.post("https://tagged.local/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+            return_value=response_for_respx(httpx.Response(400, json={"error": _UPSTREAM_400}))
         )
         untagged = respx_mock.post("https://untagged.local/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+            return_value=response_for_respx(httpx.Response(400, json={"error": _UPSTREAM_400}))
         )
         with pytest.raises(litellm.BadRequestError) as raised:
             await router.acompletion(
@@ -12116,13 +12132,13 @@ async def test_router_retry_policy_400_never_returns_to_a_deployment_that_alread
 
     with respx.mock as respx_mock:
         first = respx_mock.post("https://first-refuser.local/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+            return_value=response_for_respx(httpx.Response(400, json={"error": _UPSTREAM_400}))
         )
         second = respx_mock.post("https://second-refuser.local/v1/chat/completions").mock(
-            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+            return_value=response_for_respx(httpx.Response(400, json={"error": _UPSTREAM_400}))
         )
         accepting = respx_mock.post("https://accepting.local/v1/chat/completions").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 200,
                 json={
                     "id": "chatcmpl-lit-7036",
@@ -12134,7 +12150,7 @@ async def test_router_retry_policy_400_never_returns_to_a_deployment_that_alread
                     ],
                     "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
                 },
-            )
+            ))
         )
         response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
@@ -12202,8 +12218,8 @@ def _lit_7114_router(litellm_model: str) -> litellm.Router:
     )
 
 
-def _lit_7114_mock_upstreams(
-    respx_mock: respx.MockRouter, path: str, refusal_status: int, success_body: Mapping[str, object] | bytes
+def _lit_7114_mock_upstreams(respx_mock: respx.MockRouter,
+    path: str, refusal_status: int, success_body: Mapping[str, object] | bytes
 ) -> tuple[respx.Route, respx.Route]:
     ok_response: Final = (
         httpx.Response(200, content=success_body)
@@ -12211,11 +12227,13 @@ def _lit_7114_mock_upstreams(
         else httpx.Response(200, json=success_body)
     )
     rejecting: Final = respx_mock.post(f"https://rejecting.local{path}").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             refusal_status, json={"error": _UPSTREAM_400, "message": "upstream refused this request"}
-        )
+        ))
     )
-    accepting: Final = respx_mock.post(f"https://accepting.local{path}").mock(return_value=ok_response)
+    accepting: Final = respx_mock.post(f"https://accepting.local{path}").mock(
+        return_value=response_for_respx(ok_response)
+    )
     return rejecting, accepting
 
 
@@ -12393,7 +12411,7 @@ async def test_router_retries_a_transcription_off_a_deployment_whose_provider_ca
 
     with respx.mock as respx_mock:
         upstream: Final = respx_mock.post(f"{_TRANSCRIPTION_API_BASE}/audio/transcriptions").mock(
-            return_value=httpx.Response(200, json={"text": "hi"})
+            return_value=response_for_respx(httpx.Response(200, json={"text": "hi"}))
         )
         response: Final = await router.atranscription(
             model="transcriber", file=_TRANSCRIPTION_AUDIO, **request_kwargs, **caller_credentials
@@ -12422,7 +12440,10 @@ async def test_router_tries_each_deployment_that_cannot_transcribe_once_then_ans
         disable_cooldowns=True,
     )
 
-    with respx.mock as respx_mock, pytest.raises(litellm.UnsupportedEndpointError) as raised:
+    with (
+        respx.mock as respx_mock,
+        pytest.raises(litellm.UnsupportedEndpointError) as raised,
+    ):
         await router.atranscription(model="transcriber", file=_TRANSCRIPTION_AUDIO, **caller_credentials)
 
     assert raised.value.status_code == 400
@@ -12448,7 +12469,7 @@ async def test_router_falls_back_from_a_group_that_cannot_transcribe_when_unsupp
 
     with respx.mock as respx_mock:
         upstream: Final = respx_mock.post(f"{_TRANSCRIPTION_API_BASE}/audio/transcriptions").mock(
-            return_value=httpx.Response(200, json={"text": "hi"})
+            return_value=response_for_respx(httpx.Response(200, json={"text": "hi"}))
         )
         response: Final = await router.atranscription(model="chat-only", file=_TRANSCRIPTION_AUDIO)
 
@@ -12692,8 +12713,10 @@ async def test_router_max_parallel_requests_admits_the_cap_and_rejects_the_rest_
                 pass
         return "ok"
 
-    with respx.mock(assert_all_called=True) as respx_mock:
-        route: Final = respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(side_effect=upstream)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(
+            side_effect=side_effect_for_respx(upstream)
+        )
         outcomes: Final = await asyncio.wait_for(asyncio.gather(*(one_call() for _ in range(10))), timeout=10)
 
     assert outcomes.count("ok") == 2
@@ -12711,11 +12734,11 @@ async def test_router_max_parallel_requests_slot_held_until_stream_closed_then_r
     tracker: Final = _InFlightTracker()
     router: Final = _max_parallel_router(max_parallel_requests=1)
 
-    with respx.mock() as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy") as respx_mock:
         respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(
-            side_effect=lambda request: httpx.Response(
+            side_effect=side_effect_for_respx(lambda request: httpx.Response(
                 200, headers={"content-type": "text/event-stream"}, stream=_CountingSSEStream(tracker)
-            )
+            ))
         )
         first: Final = await router.acompletion(
             model="gpt-5.6", messages=[{"role": "user", "content": "hi"}], stream=True
@@ -12783,10 +12806,12 @@ async def test_router_max_parallel_requests_overflow_is_429_without_cooldown_or_
             },
         )
 
-    with respx.mock(assert_all_called=False) as respx_mock:
-        route: Final = respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(side_effect=upstream)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
+        route: Final = respx_mock.post("https://max-parallel.local/v1/chat/completions").mock(
+            side_effect=side_effect_for_respx(upstream)
+        )
         sibling_route: Final = respx_mock.post("https://max-parallel-sibling.local/v1/chat/completions").mock(
-            side_effect=upstream
+            side_effect=side_effect_for_respx(upstream)
         )
         results: Final = await asyncio.wait_for(
             asyncio.gather(
@@ -12843,9 +12868,11 @@ async def test_router_embedding_path_rejects_past_max_parallel_requests_without_
 
     # Reap earlier tests' garbage first so only this test's coroutines are recorded
     gc.collect()
-    with respx.mock() as respx_mock, warnings.catch_warnings(record=True) as caught:
+    with respx.mock(using="httpcore2_and_legacy") as respx_mock, warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        route: Final = respx_mock.post("https://max-parallel-embed.local/v1/embeddings").mock(side_effect=upstream)
+        route: Final = respx_mock.post("https://max-parallel-embed.local/v1/embeddings").mock(
+            side_effect=side_effect_for_respx(upstream)
+        )
         results: Final = await asyncio.wait_for(
             asyncio.gather(
                 *(router.aembedding(model="embed", input=["hi"]) for _ in range(3)),
@@ -12907,12 +12934,12 @@ async def test_router_max_parallel_requests_overflow_takes_the_ordinary_429_fall
             },
         )
 
-    with respx.mock() as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy") as respx_mock:
         primary: Final = respx_mock.post("https://max-parallel-primary.local/v1/chat/completions").mock(
-            side_effect=upstream
+            side_effect=side_effect_for_respx(upstream)
         )
         fallback: Final = respx_mock.post("https://max-parallel-fallback.local/v1/chat/completions").mock(
-            side_effect=upstream
+            side_effect=side_effect_for_respx(upstream)
         )
         results: Final = await asyncio.wait_for(
             asyncio.gather(
@@ -13999,7 +14026,7 @@ class TestAutoRouterTraceProvenance:
             )
 
         upstream: Final = respx_mock.post("https://embedding.example/v1/embeddings").mock(
-            side_effect=embedding_response
+            side_effect=side_effect_for_respx(embedding_response)
         )
         router: Final = Router(
             model_list=[
@@ -14686,7 +14713,7 @@ async def test_router_clientside_credential_not_reused_by_other_callers(respx_mo
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-1",
@@ -14696,7 +14723,7 @@ async def test_router_clientside_credential_not_reused_by_other_callers(respx_mo
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
     router = Router(
         model_list=[
@@ -15098,9 +15125,9 @@ async def test_router_fallback_auth_failure_after_an_entra_rejection_still_cools
 
     with respx.mock:
         fallback_route: Final = respx.post(url__startswith="https://litellm-qa-fallback.openai.azure.com").mock(
-            return_value=httpx.Response(
+            return_value=response_for_respx(httpx.Response(
                 401, json={"error": {"code": "401", "message": "Access denied due to invalid subscription key."}}
-            )
+            ))
         )
         with pytest.raises(litellm.AuthenticationError):
             await router.acompletion(
@@ -16027,7 +16054,7 @@ STORE_EMBEDDINGS_URL = "https://embedding.example/v1/embeddings"
 
 def _mock_embedding_route(respx_mock: respx.MockRouter, url: str) -> respx.Route:
     return respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -16035,7 +16062,7 @@ def _mock_embedding_route(respx_mock: respx.MockRouter, url: str) -> respx.Route
                 "model": "text-embedding-3-small",
                 "usage": {"prompt_tokens": 2, "total_tokens": 2},
             },
-        )
+        ))
     )
 
 
@@ -16064,8 +16091,8 @@ class TestRouterEmbeddingIntegration:
     """Integration tests for embedding with router configuration."""
 
     @pytest.mark.asyncio
-    async def test_vector_store_embedding_executors_cover_sdk_and_router_paths(
-        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    async def test_vector_store_embedding_executors_cover_sdk_and_router_paths(respx_mock: respx.MockRouter,
+        self, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -16119,8 +16146,8 @@ class TestRouterEmbeddingIntegration:
         assert _sent(store_route, 1) == ("Bearer store-key", "text-embedding-3-small", ["async query"])
 
     @pytest.mark.asyncio
-    async def test_router_executor_falls_back_to_sdk_for_models_the_router_does_not_serve(
-        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    async def test_router_executor_falls_back_to_sdk_for_models_the_router_does_not_serve(respx_mock: respx.MockRouter,
+        self, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -16140,8 +16167,8 @@ class TestRouterEmbeddingIntegration:
         assert _sent(store_route, 1) == ("Bearer store-key", "text-embedding-3-large", ["async query"])
 
     @pytest.mark.asyncio
-    async def test_router_executor_embeds_unserved_models_through_the_sdk(
-        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    async def test_router_executor_embeds_unserved_models_through_the_sdk(respx_mock: respx.MockRouter,
+        self, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         monkeypatch.setenv("OPENAI_API_KEY", "env-key")
@@ -16159,8 +16186,8 @@ class TestRouterEmbeddingIntegration:
         assert _sent(openai_route, 0) == ("Bearer env-key", "text-embedding-3-large", ["sync query"])
         assert _sent(openai_route, 1) == ("Bearer env-key", "text-embedding-3-large", ["async query"])
 
-    def test_router_executor_routes_deployment_model_names_through_the_router(
-        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    def test_router_executor_routes_deployment_model_names_through_the_router(respx_mock: respx.MockRouter,
+        self, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         openai_route = _mock_embedding_route(respx_mock, OPENAI_EMBEDDINGS_URL)
@@ -16528,7 +16555,7 @@ def _priority_router(default_priority: int | None) -> Router:
 def _priority_provider(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> respx.Route:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     return respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=_PRIORITY_CHAT_COMPLETION)
+        return_value=response_for_respx(httpx.Response(200, json=_PRIORITY_CHAT_COMPLETION))
     )
 
 
@@ -16595,8 +16622,8 @@ async def test_a_request_pinned_to_a_deployment_id_is_served_while_an_earlier_on
 
 
 @pytest.mark.parametrize("priority", ["high", [1], 1.5])
-async def test_acompletion_rejects_a_non_integer_priority_before_the_provider_sees_it(
-    priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_acompletion_rejects_a_non_integer_priority_before_the_provider_sees_it(respx_mock: respx.MockRouter,
+    priority: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     provider: Final = _priority_provider(respx_mock, monkeypatch)
     router: Final = _priority_router(3)
@@ -16616,8 +16643,8 @@ async def test_acompletion_drops_a_non_integer_priority_from_the_provider_call_u
 
 
 @pytest.mark.parametrize("priority", [0, "1"])
-async def test_acompletion_with_an_integer_priority_sends_no_priority_to_the_provider(
-    priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_acompletion_with_an_integer_priority_sends_no_priority_to_the_provider(respx_mock: respx.MockRouter,
+    priority: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     provider: Final = _priority_provider(respx_mock, monkeypatch)
     router: Final = _priority_router(None)
@@ -16831,8 +16858,8 @@ async def test_atext_completion_queues_the_resolved_priority_exactly_once(
     assert "priority" not in json.loads(provider.calls.last.request.content)
 
 
-async def test_atext_completion_without_any_priority_never_enters_the_scheduler(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_atext_completion_without_any_priority_never_enters_the_scheduler(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     provider: Final = _priority_provider(respx_mock, monkeypatch)
     router: Final = _priority_router(None)
@@ -16844,8 +16871,8 @@ async def test_atext_completion_without_any_priority_never_enters_the_scheduler(
 
 
 @pytest.mark.parametrize("priority", ["high", [1], 1.5])
-async def test_atext_completion_rejects_a_non_integer_priority_before_the_provider_sees_it(
-    priority: object, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_atext_completion_rejects_a_non_integer_priority_before_the_provider_sees_it(respx_mock: respx.MockRouter,
+    priority: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     provider: Final = _priority_provider(respx_mock, monkeypatch)
     router: Final = _priority_router(3)
@@ -17379,7 +17406,7 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
     2. Cooled-down deployments appear in get_cooldown_deployments
     3. RouterRateLimitError is raised with the correct cooldown_time when all deployments are cooled down
     """
-    from httpx import Headers, Request, Response
+    from httpx2 import Headers, Request, Response
 
     cooldown_time = 30.0
     router = Router(
@@ -18043,10 +18070,12 @@ def _fallback_wire_router() -> Router:
 
 def _mock_fallback_wire(respx_mock: respx.MockRouter) -> tuple[respx.Route, respx.Route]:
     primary = respx_mock.post(f"{_FALLBACK_WIRE_PRIMARY}/chat/completions").mock(
-        return_value=httpx.Response(500, json={"error": {"message": "primary overloaded", "type": "server_error"}})
+        return_value=response_for_respx(
+            httpx.Response(500, json={"error": {"message": "primary overloaded", "type": "server_error"}})
+        )
     )
     backup = respx_mock.post(f"{_FALLBACK_WIRE_BACKUP}/chat/completions").mock(
-        return_value=httpx.Response(200, json=_FALLBACK_WIRE_BACKUP_REPLY)
+        return_value=response_for_respx(httpx.Response(200, json=_FALLBACK_WIRE_BACKUP_REPLY))
     )
     return primary, backup
 
@@ -18068,7 +18097,7 @@ def _assert_fallback_errors_reached_the_caller_and_not_the_wire(
 
 
 def test_sync_completion_keeps_include_fallback_errors_off_the_wire_and_returns_the_errors():
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         primary, backup = _mock_fallback_wire(respx_mock)
         response = _fallback_wire_router().completion(
             model="primary", messages=[{"role": "user", "content": "hi"}], include_fallback_errors=True
@@ -18079,7 +18108,7 @@ def test_sync_completion_keeps_include_fallback_errors_off_the_wire_and_returns_
 @pytest.mark.asyncio
 async def test_acompletion_keeps_include_fallback_errors_off_the_wire_and_returns_the_errors(monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         primary, backup = _mock_fallback_wire(respx_mock)
         response = await _fallback_wire_router().acompletion(
             model="primary", messages=[{"role": "user", "content": "hi"}], include_fallback_errors=True
@@ -18177,7 +18206,7 @@ async def test_azure_router_acompletion_passes_deployment_credentials_for_plain_
         "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
     }
     route: Final = respx_mock.post(url__regex=r"https://router-azure\.example\.com/.*").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(
                 200,
                 json={
@@ -18196,7 +18225,7 @@ async def test_azure_router_acompletion_passes_deployment_credentials_for_plain_
                 headers={"content-type": "text/event-stream"},
                 text=f"data: {json.dumps(stream_chunk)}\n\ndata: [DONE]\n\n",
             ),
-        ]
+        ])
     )
     router: Final = Router(
         model_list=[
@@ -18255,7 +18284,9 @@ def test_multiple_deployments_route_to_a_configured_model(
             },
         )
 
-    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_deployment_response)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(_deployment_response)
+    )
     router: Final = Router(
         model_list=[
             {
@@ -18291,7 +18322,7 @@ async def test_custom_routing_uses_the_strategy_selected_deployment(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post(f"{FAKE_OPENAI_API_BASE}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-custom-routing",
@@ -18307,7 +18338,7 @@ async def test_custom_routing_uses_the_strategy_selected_deployment(
                 ],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
     router: Final = _create_custom_routing_router()
     router.set_custom_routing_strategy(SpecialEndpointRoutingStrategy(router))
@@ -18405,10 +18436,10 @@ def test_router_retries_transient_server_error(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(500, json={"error": {"message": "temporary failure"}}),
             _openai_chat_response("recovered"),
-        ]
+        ])
     )
     router: Final = Router(
         model_list=[
@@ -18438,7 +18469,7 @@ def test_router_authentication_error_is_not_swallowed(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(
                 401,
                 json={
@@ -18457,7 +18488,7 @@ def test_router_authentication_error_is_not_swallowed(
                     }
                 },
             ),
-        ]
+        ])
     )
     router: Final = Router(
         model_list=[
@@ -18502,10 +18533,10 @@ def test_router_does_not_log_model_list_api_key_after_auth_failure(
         logger.addHandler(caplog.handler)
     api_key: Final = "sensitive-router-test-key"
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={"error": {"message": "invalid api key", "type": "authentication_error"}},
-        )
+        ))
     )
     router: Final = Router(
         model_list=[
@@ -18536,7 +18567,7 @@ def test_router_reads_api_key_from_model_list(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=[_openai_chat_response(), _openai_chat_stream_response()]
+        side_effect=side_effect_for_respx([_openai_chat_response(), _openai_chat_stream_response()])
     )
     router: Final = Router(
         model_list=[
@@ -18577,7 +18608,7 @@ def test_router_calls_requested_specific_deployment(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=_openai_chat_response()
+        return_value=response_for_respx(_openai_chat_response())
     )
     router: Final = Router(
         model_list=[
@@ -18621,7 +18652,7 @@ async def test_router_context_window_error_uses_configured_fallback(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(
                 400,
                 json={
@@ -18633,7 +18664,7 @@ async def test_router_context_window_error_uses_configured_fallback(
                 },
             ),
             _openai_chat_response("fallback response"),
-        ]
+        ])
     )
     router: Final = Router(
         model_list=[
@@ -18672,7 +18703,7 @@ def test_router_function_calling_sends_tools_and_returns_tool_call(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-tools",
@@ -18705,7 +18736,7 @@ def test_router_function_calling_sends_tools_and_returns_tool_call(
                     "total_tokens": 8,
                 },
             },
-        )
+        ))
     )
     tools: Final = [
         {
@@ -18751,12 +18782,12 @@ async def test_router_openai_completion_supports_sync_async_and_streaming(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             _openai_chat_response("async reply"),
             _openai_chat_response("sync reply"),
             _openai_chat_stream_response("async stream"),
             _openai_chat_stream_response("sync stream"),
-        ]
+        ])
     )
     router: Final = Router(
         model_list=[
@@ -18807,7 +18838,7 @@ async def test_router_moderation_returns_provider_result(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/moderations").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "modr-router",
@@ -18820,7 +18851,7 @@ async def test_router_moderation_returns_provider_result(
                     }
                 ],
             },
-        )
+        ))
     )
     router: Final = Router(
         model_list=[
@@ -18847,7 +18878,7 @@ def test_router_anthropic_key_comes_from_model_list(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg-router",
@@ -18859,7 +18890,7 @@ def test_router_anthropic_key_comes_from_model_list(
                 "stop_sequence": None,
                 "usage": {"input_tokens": 2, "output_tokens": 2},
             },
-        )
+        ))
     )
     router: Final = Router(
         model_list=[
@@ -18903,7 +18934,7 @@ def test_router_preserves_provider_rate_limit_error(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             429,
             json={
                 "error": {
@@ -18912,7 +18943,7 @@ def test_router_preserves_provider_rate_limit_error(
                     "code": "rate_limit_exceeded",
                 }
             },
-        )
+        ))
     )
     router: Final = Router(
         model_list=[
@@ -19000,11 +19031,13 @@ def _batch_response(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_batch_completion_multiple_models_returns_each_model_response(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_batch_completion_multiple_models_returns_each_model_response(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post("https://batch-router.test/v1/chat/completions").mock(side_effect=_batch_response)
+    route: Final = respx_mock.post("https://batch-router.test/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(_batch_response)
+    )
     router: Final = _batch_router()
 
     responses: Final = cast(
@@ -19023,11 +19056,13 @@ async def test_batch_completion_multiple_models_returns_each_model_response(
 
 
 @pytest.mark.asyncio
-async def test_batch_completion_multiple_models_and_messages_preserves_each_pair(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_batch_completion_multiple_models_and_messages_preserves_each_pair(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post("https://batch-router.test/v1/chat/completions").mock(side_effect=_batch_response)
+    route: Final = respx_mock.post("https://batch-router.test/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(_batch_response)
+    )
     router: Final = _batch_router()
 
     responses: Final = cast(
@@ -19049,8 +19084,8 @@ async def test_batch_completion_multiple_models_and_messages_preserves_each_pair
 
 
 @pytest.mark.asyncio
-async def test_batch_completion_fastest_response_prefers_the_mocked_deployment(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_batch_completion_fastest_response_prefers_the_mocked_deployment(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     release_provider: Final = asyncio.Event()
@@ -19059,7 +19094,7 @@ async def test_batch_completion_fastest_response_prefers_the_mocked_deployment(
         await release_provider.wait()
         return _batch_response(request)
 
-    respx_mock.post("https://batch-router.test/v1/chat/completions").mock(side_effect=response)
+    respx_mock.post("https://batch-router.test/v1/chat/completions").mock(side_effect=side_effect_for_respx(response))
     router: Final = litellm.Router(
         model_list=[
             {
@@ -19935,8 +19970,8 @@ def test_router_sends_an_image_to_the_text_only_leg_when_the_vision_leg_is_cooli
 @pytest.mark.usefixtures("isolate_litellm_state")
 @pytest.mark.parametrize("surface", ["chat", "messages"])
 @pytest.mark.parametrize("credential_kind", ["oauth", "api_key"])
-async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str, credential_kind: str
+async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, surface: str, credential_kind: str
 ) -> None:
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.types.router import AllowedFailsPolicy
@@ -19965,7 +20000,9 @@ async def test_anthropic_caller_rate_limit_does_not_block_other_credentials(
             },
         )
 
-    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=upstream)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=side_effect_for_respx(upstream)
+    )
     router: Final = Router(
         model_list=[
             {

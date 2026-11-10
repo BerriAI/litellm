@@ -20,7 +20,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -29,7 +29,7 @@ from cryptography.x509.oid import NameOID
 from h2.config import H2Configuration
 from h2.connection import H2Connection
 from h2.events import StreamEnded
-from httpx._config import DEFAULT_LIMITS
+from httpx2._config import DEFAULT_LIMITS
 from hypercorn.asyncio import (
     serve,  # pyright: ignore[reportUnknownVariableType]  # hypercorn's serve signature passes through untyped worker hooks
 )

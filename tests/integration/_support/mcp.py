@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 import anyio
-import httpx
+import httpx2 as httpx
 from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows

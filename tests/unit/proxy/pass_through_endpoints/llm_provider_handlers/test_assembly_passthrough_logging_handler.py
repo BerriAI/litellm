@@ -48,7 +48,7 @@ def test_get_assembly_transcript(assembly_handler, mock_transcript_response):
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
         return_value="test-key",
     ):
-        with patch("httpx.get") as mock_get:
+        with patch("httpx2.get") as mock_get:
             mock_get.return_value.json.return_value = mock_transcript_response
             mock_get.return_value.raise_for_status.return_value = None
 
@@ -72,7 +72,7 @@ def test_poll_assembly_for_transcript_response(assembly_handler, mock_transcript
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
         return_value="test-key",
     ):
-        with patch("httpx.get") as mock_get:
+        with patch("httpx2.get") as mock_get:
             mock_get.return_value.json.return_value = mock_transcript_response
             mock_get.return_value.raise_for_status.return_value = None
 
@@ -147,7 +147,7 @@ def test_get_assembly_transcript_allows_valid_id(assembly_handler, mock_transcri
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
         return_value="test-key",
     ):
-        with patch("httpx.get") as mock_get:
+        with patch("httpx2.get") as mock_get:
             mock_get.return_value.json.return_value = mock_transcript_response
             mock_get.return_value.raise_for_status.return_value = None
 

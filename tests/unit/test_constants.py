@@ -4,9 +4,9 @@ import json
 import sys
 from unittest import mock
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from fastapi.testclient import TestClient
 
 

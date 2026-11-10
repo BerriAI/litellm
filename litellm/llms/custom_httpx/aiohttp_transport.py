@@ -13,7 +13,7 @@ from typing import ClassVar, Final
 import aiohttp
 import aiohttp.client_exceptions
 import aiohttp.http_exceptions
-import httpx
+import httpx2 as httpx
 from aiohttp.client import ClientResponse, ClientSession
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict

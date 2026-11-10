@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, cast
 
-import httpx
+import httpx2 as httpx
 import uvicorn
 from _fake_openai_endpoint_server import (
     chat_completions,

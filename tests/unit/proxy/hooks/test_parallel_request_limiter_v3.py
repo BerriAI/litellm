@@ -14,7 +14,7 @@ from functools import partial
 from typing import Any, Dict, Final, List, Optional
 from unittest.mock import patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import HTTPException
 from pydantic import TypeAdapter

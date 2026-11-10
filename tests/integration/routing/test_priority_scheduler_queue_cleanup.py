@@ -17,7 +17,7 @@ from queue import SimpleQueue
 from typing import Final, Literal, TypeVar
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 import openai
 import psutil
 import pytest

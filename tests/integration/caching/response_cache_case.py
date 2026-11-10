@@ -15,7 +15,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue
 from redis import Redis
 

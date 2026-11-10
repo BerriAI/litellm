@@ -23,10 +23,11 @@ from types import MappingProxyType
 from typing import Final, cast
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import Router
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
@@ -593,7 +594,7 @@ def test_pdf_opt_out_on_one_deployment_does_not_block_its_sibling(respx_mock: re
         }
     ]
     route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             json={
                 "id": "chatcmpl-pdf",
@@ -603,7 +604,7 @@ def test_pdf_opt_out_on_one_deployment_does_not_block_its_sibling(respx_mock: re
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
     model_keys: Final = {
         key: litellm.model_cost.get(key) for key in ("qa-pdf-marked", "qa-pdf-unmarked", backend_model)
@@ -2324,7 +2325,7 @@ def test_a_custom_priced_chat_pin_request_leaves_its_unpinned_sibling_on_respons
 ) -> None:
     _register_routing_test_row(monkeypatch, "responses")
     chat_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-1",
@@ -2334,10 +2335,10 @@ def test_a_custom_priced_chat_pin_request_leaves_its_unpinned_sibling_on_respons
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
     responses_route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "resp_1",
@@ -2356,7 +2357,7 @@ def test_a_custom_priced_chat_pin_request_leaves_its_unpinned_sibling_on_respons
                 ],
                 "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
     router: Final = Router(
         model_list=[

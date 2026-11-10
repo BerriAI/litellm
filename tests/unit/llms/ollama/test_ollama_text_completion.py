@@ -1,9 +1,10 @@
+from tests._support.respx_httpx2 import response_for_respx
 import json
 from typing import Final
 
-import httpx
-import respx
+import httpx2 as httpx
 
+from tests._support import respx_httpx2 as respx
 from litellm import text_completion
 
 
@@ -11,7 +12,7 @@ from litellm import text_completion
 def test_ollama_text_completion_sends_prompt() -> None:
     endpoint: Final = "http://localhost:11434/api/generate"
     route: Final = respx.post(endpoint).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "model": "llama3.1",
@@ -24,7 +25,7 @@ def test_ollama_text_completion_sends_prompt() -> None:
                 "prompt_eval_count": 2,
                 "eval_count": 1,
             },
-        )
+        ))
     )
 
     response: Final = text_completion(

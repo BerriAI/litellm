@@ -15,10 +15,10 @@ from datetime import datetime
 from typing import Final, List, TypeAlias, cast
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -87,6 +87,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
 )
 from litellm.rust_bridge.host.model_cost import publish
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 READ_FILE: Final[list[object]] = [{"name": "read_file", "description": "Read the contents of a file."}]
@@ -406,7 +407,9 @@ def test_convert_to_ollama_image_downloads_an_http_image_url_to_bare_base64(monk
 
     with respx.mock:
         route: Final = respx.get(image_url).mock(
-            return_value=httpx.Response(200, content=png_bytes, headers={"content-type": "image/png"})
+            return_value=response_for_respx(
+                httpx.Response(200, content=png_bytes, headers={"content-type": "image/png"})
+            )
         )
         result: Final = convert_to_ollama_image(image_url)
 
@@ -6983,7 +6986,7 @@ def test_convert_url(monkeypatch):
     import base64
     from unittest.mock import MagicMock
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.litellm_core_utils.prompt_templates.image_handling import (
         in_memory_cache,

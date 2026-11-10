@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from openai import APITimeoutError, AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
@@ -56,6 +57,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     Usage,
 )
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.llms.bedrock.slow_upstream import (
     CONVERSE_ANSWER,
     STREAM_TIMEOUT_SECONDS,
@@ -442,11 +444,13 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()))
     with (
-        respx.mock(assert_all_called=False) as image_host,
+        respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as image_host,
         patch.object(client, "post", new=MagicMock()) as mock_client,
     ):
         image_route = image_host.get(image_url).mock(
-            return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"})
+            return_value=response_for_respx(
+                httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"})
+            )
         )
         try:
             if sync_mode:
@@ -530,7 +534,7 @@ def test_drop_anthropic_only_tool_keys_strips_tool_and_function_levels(key: str)
 def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx.MockRouter, openai_api_response):
     api_base: Final = "http://localhost:12346/v1"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
-        return_value=httpx.Response(status_code=200, json=openai_api_response)
+        return_value=response_for_respx(httpx.Response(status_code=200, json=openai_api_response))
     )
 
     litellm.completion(
@@ -564,11 +568,11 @@ _TWO_TOOLS: Final = [
 
 
 @pytest.mark.parametrize("model", ["openai/gpt-5.5", "azure/my-gpt-deployment"])
-def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat(
-    respx_mock: respx.MockRouter, openai_api_response: dict[str, object], model: str
+def test_completion_forwards_allowed_tools_tool_choice_to_openai_compatible_chat(respx_mock: respx.MockRouter,
+    openai_api_response: dict[str, object], model: str
 ):
     mock_route: Final = respx_mock.post(url__regex=r"http://localhost:12346/.*chat/completions.*").mock(
-        return_value=httpx.Response(status_code=200, json=openai_api_response)
+        return_value=response_for_respx(httpx.Response(status_code=200, json=openai_api_response))
     )
 
     litellm.completion(
@@ -652,8 +656,8 @@ def test_completion_forwards_a_hosted_tool_choice_to_the_responses_api_unchanged
 
 @pytest.mark.parametrize("drop_params", [False, True])
 @pytest.mark.parametrize("model", ["anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "bedrock/converse/x"])
-def test_completion_hosted_tool_choice_is_a_400_where_the_provider_cannot_run_it(
-    respx_mock: respx.MockRouter, model: str, drop_params: bool
+def test_completion_hosted_tool_choice_is_a_400_where_the_provider_cannot_run_it(respx_mock: respx.MockRouter,
+    model: str, drop_params: bool
 ):
     with pytest.raises(
         litellm.BadRequestError, match=r"tool_choice type 'web_search'.*only supported for azure, litellm_proxy, openai"
@@ -727,12 +731,12 @@ _SEARCH_RESULT: Final = {"role": "tool", "tool_call_id": "srvtoolu_01search", "c
         ),
     ],
 )
-def test_completion_drops_unanswered_claude_tool_search_calls_from_history_sent_to_openai(
-    respx_mock: respx.MockRouter, openai_api_response, claude_turn, sent_after_user
+def test_completion_drops_unanswered_claude_tool_search_calls_from_history_sent_to_openai(respx_mock: respx.MockRouter,
+    openai_api_response, claude_turn, sent_after_user
 ):
     api_base: Final = "http://localhost:12346/v1"
     respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
-        return_value=httpx.Response(status_code=200, json=openai_api_response)
+        return_value=response_for_respx(httpx.Response(status_code=200, json=openai_api_response))
     )
 
     litellm.completion(
@@ -879,12 +883,12 @@ def test_completion_strips_an_unanswered_claude_tool_search_call_only_for_routes
     assert called_names(json.loads(route.calls.last.request.content)) == sent_names
 
 
-def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(
-    respx_mock: respx.MockRouter, openai_api_response
+def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_server_tool(respx_mock: respx.MockRouter,
+    openai_api_response
 ):
     api_base: Final = "http://localhost:12346/v1"
     respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
-        return_value=httpx.Response(status_code=200, json=openai_api_response)
+        return_value=response_for_respx(httpx.Response(status_code=200, json=openai_api_response))
     )
     lookalike_call: Final = {**_LOADED_FUNCTION_CALL, "id": "srvtoolu_01weather"}
     history: Final = [
@@ -903,7 +907,7 @@ def test_completion_keeps_a_function_call_whose_id_only_looks_like_a_claude_serv
 def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "http://localhost:12346/v1"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/embeddings.*").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             json={
                 "object": "list",
@@ -911,7 +915,7 @@ def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(
                 "model": "text-embedding-3-small",
                 "usage": {"prompt_tokens": 1, "total_tokens": 1},
             },
-        )
+        ))
     )
 
     litellm.embedding(
@@ -1110,7 +1114,7 @@ async def test_openai_env_base(respx_mock: respx.MockRouter, env_base, openai_ap
 
     # Configure respx mock to intercept the request
     mock_route = respx_mock.post(url__regex=r"http://localhost:12345/v1/chat/completions.*").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             json={
                 "id": "chatcmpl-123",
@@ -1133,7 +1137,7 @@ async def test_openai_env_base(respx_mock: respx.MockRouter, env_base, openai_ap
                     "total_tokens": 21,
                 },
             },
-        )
+        ))
     )
 
     try:
@@ -1224,7 +1228,7 @@ def test_return_raw_request_does_not_call_provider(respx_mock: respx.MockRouter)
 
     model = "gpt-4o"
     route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=_mocked_openai_chat_response(model)
+        return_value=response_for_respx(_mocked_openai_chat_response(model))
     )
 
     request = return_raw_request(
@@ -1241,8 +1245,8 @@ def test_return_raw_request_does_not_call_provider(respx_mock: respx.MockRouter)
     assert request["raw_request_body"]["messages"] == [{"role": "user", "content": "hi"}]
 
 
-def test_return_raw_request_ignores_turn_off_message_logging(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+def test_return_raw_request_ignores_turn_off_message_logging(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     from litellm.types.utils import CallTypes
     from litellm.utils import return_raw_request
@@ -1250,7 +1254,7 @@ def test_return_raw_request_ignores_turn_off_message_logging(
     model: Final = "gpt-4o"
     messages: Final = [{"role": "user", "content": "PRIVATE-PHRASE"}]
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=_mocked_openai_chat_response(model)
+        return_value=response_for_respx(_mocked_openai_chat_response(model))
     )
     monkeypatch.setattr(litellm, "turn_off_message_logging", True)
 
@@ -1271,7 +1275,9 @@ def test_completion_forwards_verbosity_in_raw_request(respx_mock: respx.MockRout
 
     model = "gpt-5.2"
     messages = [{"role": "user", "content": "hi"}]
-    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(return_value=_mocked_openai_chat_response(model))
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=response_for_respx(_mocked_openai_chat_response(model))
+    )
 
     request = return_raw_request(
         endpoint=CallTypes.completion,
@@ -1299,7 +1305,7 @@ async def test_acompletion_forwards_verbosity_to_provider_request(respx_mock: re
         model = "gpt-5.2"
         messages = [{"role": "user", "content": "hi"}]
         mock_route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-            return_value=_mocked_openai_chat_response(model)
+            return_value=response_for_respx(_mocked_openai_chat_response(model))
         )
 
         response = await litellm.acompletion(
@@ -2236,8 +2242,8 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
 
 
 @pytest.fixture
-def openai_responses_route(
-    restore_model_registry, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+def openai_responses_route(respx_mock: respx.MockRouter,
+    restore_model_registry, monkeypatch: pytest.MonkeyPatch
 ) -> respx.Route:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
@@ -2584,8 +2590,8 @@ _BRIDGED_RESPONSE_ANSWER: Final = json.dumps(
 
 
 @pytest.fixture
-def non_openai_responses_bridge(
-    restore_model_registry, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def non_openai_responses_bridge(respx_mock: respx.MockRouter,
+    restore_model_registry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> Callable[[str], tuple[str, Mapping[str, str], respx.Route]]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
@@ -3111,8 +3117,8 @@ _FOUNDRY_RESPONSES_FUNCTION_CALL_BODY: Final = {
 }
 
 
-def test_completion_bridges_azure_ai_foundry_gpt_5_4_plus_function_tools_to_responses(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+def test_completion_bridges_azure_ai_foundry_gpt_5_4_plus_function_tools_to_responses(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
@@ -3561,9 +3567,9 @@ def test_parallel_function_call_stream_over_responses_bridge_ignores_events_it_d
         },
     )
     route: Final = respx.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, headers={"content-type": "text/event-stream"}, content=_responses_sse(events)
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -4182,7 +4188,7 @@ def test_anthropic_disable_url_suffix_env_var(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_BASE", "https://api.example.com")
     default_route: Final = respx_mock.post("https://api.example.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg_test",
@@ -4194,7 +4200,7 @@ def test_anthropic_disable_url_suffix_env_var(
                 "stop_sequence": None,
                 "usage": {"input_tokens": 1, "output_tokens": 2},
             },
-        )
+        ))
     )
     default_response: Final = litellm.completion(
         model="anthropic/claude-3-sonnet",
@@ -4209,7 +4215,7 @@ def test_anthropic_disable_url_suffix_env_var(
     monkeypatch.setenv("ANTHROPIC_API_BASE", "https://api.example.com/custom/path")
     monkeypatch.setenv("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX", "true")
     disabled_route: Final = respx_mock.post("https://api.example.com/custom/path").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg_test",
@@ -4221,7 +4227,7 @@ def test_anthropic_disable_url_suffix_env_var(
                 "stop_sequence": None,
                 "usage": {"input_tokens": 1, "output_tokens": 2},
             },
-        )
+        ))
     )
     disabled_response: Final = litellm.completion(
         model="anthropic/claude-3-sonnet",
@@ -4239,14 +4245,14 @@ def test_anthropic_text_disable_url_suffix_env_var(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_BASE", "https://api.example.com")
     default_route: Final = respx_mock.post("https://api.example.com/v1/complete").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "completion": "test response",
                 "stop_reason": "stop_sequence",
                 "model": "claude-instant-1",
             },
-        )
+        ))
     )
     default_response: Final = litellm.text_completion(
         model="anthropic_text/claude-instant-1",
@@ -4261,14 +4267,14 @@ def test_anthropic_text_disable_url_suffix_env_var(
     monkeypatch.setenv("ANTHROPIC_API_BASE", "https://api.example.com/custom/complete")
     monkeypatch.setenv("LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX", "true")
     disabled_route: Final = respx_mock.post("https://api.example.com/custom/complete").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "completion": "test response",
                 "stop_reason": "stop_sequence",
                 "model": "claude-instant-1",
             },
-        )
+        ))
     )
     disabled_response: Final = litellm.text_completion(
         model="anthropic_text/claude-instant-1",
@@ -5165,12 +5171,12 @@ _REQUEST_BODY: Final = TypeAdapter(dict[str, object])
 
 
 @pytest.mark.parametrize("param", sorted(_OPENAI_BODY_PARAM_CASES))
-def test_completion_sends_openai_body_param_to_openai(
-    param: str, respx_mock: respx.MockRouter, openai_api_response: Mapping[str, object]
+def test_completion_sends_openai_body_param_to_openai(respx_mock: respx.MockRouter,
+    param: str, openai_api_response: Mapping[str, object]
 ):
     api_base: Final = "http://localhost:12346/v1"
     route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
-        return_value=httpx.Response(status_code=200, json=openai_api_response)
+        return_value=response_for_respx(httpx.Response(status_code=200, json=openai_api_response))
     )
     model, call_kwargs = _OPENAI_BODY_PARAM_CASES[param]
 
@@ -5253,8 +5259,8 @@ def test_completion_forwards_store_and_prompt_cache_key_to_mcp_gateway():
     ],
     ids=["web_identity", "static_keys"],
 )
-async def test_acompletion_forwards_aws_credentials_through_responses_bridge(
-    respx_mock: respx.MockRouter, monkeypatch, aws_credential_kwargs: dict
+async def test_acompletion_forwards_aws_credentials_through_responses_bridge(respx_mock: respx.MockRouter,
+    monkeypatch, aws_credential_kwargs: dict
 ):
     from botocore.credentials import Credentials
 
@@ -5767,7 +5773,7 @@ async def test_aspeech_gemini_bridge_bills_one_call_with_proxy_metadata_and_comp
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     mock_route: Final = respx_mock.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
-    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_gemini_tts_generate_content_response())))
 
     await litellm.aspeech(
         model="gemini/gemini-2.5-flash-preview-tts",
@@ -5795,8 +5801,8 @@ async def test_aspeech_gemini_bridge_bills_one_call_with_proxy_metadata_and_comp
 
 
 @pytest.mark.asyncio
-async def test_aspeech_gemini_bridge_logs_a_cached_reply_as_a_free_cache_hit(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_aspeech_gemini_bridge_logs_a_cached_reply_as_a_free_cache_hit(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -5806,7 +5812,7 @@ async def test_aspeech_gemini_bridge_logs_a_cached_reply_as_a_free_cache_hit(
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
     mock_route: Final = respx_mock.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
-    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=_gemini_tts_generate_content_response())))
 
     for _ in range(2):
         await litellm.aspeech(
@@ -6158,7 +6164,9 @@ def test_speech_mistral_dispatches_and_decodes_audio(respx_mock: respx.MockRoute
     monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
     audio_bytes: Final = b"ID3-fake-mp3-bytes"
     mock_route: Final = respx_mock.post("https://api.mistral.ai/v1/audio/speech").mock(
-        return_value=httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     response: Final = litellm.speech(
@@ -6186,7 +6194,9 @@ def test_speech_mistral_routes_to_configured_api_base(respx_mock: respx.MockRout
     monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
     audio_bytes: Final = b"ID3-gateway-bytes"
     gateway_route: Final = respx_mock.post("https://mistral.gateway.internal/v1/audio/speech").mock(
-        return_value=httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+        return_value=response_for_respx(
+            httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+        )
     )
 
     response: Final = litellm.speech(
@@ -6208,7 +6218,7 @@ def test_azure_ai_transcription_on_a_foundry_host_uses_the_azure_openai_deployme
 ):
     route: Final = respx_mock.post(
         url__regex=r"https://my-project\.services\.ai\.azure\.com/openai/deployments/whisper-1/audio/transcriptions\?api-version=.+"
-    ).mock(return_value=httpx.Response(200, json={"text": "hello"}))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json={"text": "hello"})))
 
     response: Final = litellm.transcription(
         model="azure_ai/whisper-1",
@@ -6226,7 +6236,7 @@ def test_azure_ai_speech_on_a_foundry_host_uses_the_azure_openai_deployment_rout
 ):
     route: Final = respx_mock.post(
         url__regex=r"https://my-project\.services\.ai\.azure\.com/openai/deployments/tts-1/audio/speech\?api-version=.+"
-    ).mock(return_value=httpx.Response(200, content=b"mp3-bytes"))
+    ).mock(return_value=response_for_respx(httpx.Response(200, content=b"mp3-bytes")))
 
     response: Final = litellm.speech(
         model="azure_ai/tts-1",
@@ -6246,7 +6256,7 @@ GROQ_WAV_FILE: Final = ("tone.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav")
 
 def test_groq_transcription_honors_base_url_alias(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
-        return_value=httpx.Response(200, json={"text": "hello"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "hello"}))
     )
 
     response: Final = litellm.transcription(
@@ -6263,7 +6273,7 @@ def test_groq_transcription_honors_base_url_alias(respx_mock: respx.MockRouter):
 async def test_groq_atranscription_honors_base_url_alias(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
-        return_value=httpx.Response(200, json={"text": "hello"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "hello"}))
     )
 
     response: Final = await litellm.atranscription(
@@ -6279,7 +6289,7 @@ async def test_groq_atranscription_honors_base_url_alias(respx_mock: respx.MockR
 
 def test_transcription_keeps_the_prompt_passed_by_position(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
-        return_value=httpx.Response(200, json={"text": "hello"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "hello"}))
     )
 
     litellm.transcription(
@@ -6296,11 +6306,11 @@ def test_transcription_keeps_the_prompt_passed_by_position(respx_mock: respx.Moc
     [({"text": "hello", "duration": 2.5}, 0), ({"text": "hello"}, 1)],
     ids=["provider_reports_duration", "provider_omits_duration"],
 )
-def test_transcription_measures_the_upload_only_when_the_provider_omits_the_duration(
-    respx_mock: respx.MockRouter, provider_body: Mapping[str, object], expected_upload_measurements: int
+def test_transcription_measures_the_upload_only_when_the_provider_omits_the_duration(respx_mock: respx.MockRouter,
+    provider_body: Mapping[str, object], expected_upload_measurements: int
 ):
     respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/transcriptions").mock(
-        return_value=httpx.Response(200, json=provider_body)
+        return_value=response_for_respx(httpx.Response(200, json=provider_body))
     )
 
     with patch.object(
@@ -6315,11 +6325,11 @@ def test_transcription_measures_the_upload_only_when_the_provider_omits_the_dura
 
 
 @pytest.mark.parametrize("model_name", ("whisper-1", "gpt-4o-transcribe", "gpt-transcribe"))
-def test_openai_compatible_transcription_with_an_openai_model_name_reaches_the_server(
-    respx_mock: respx.MockRouter, model_name: str
+def test_openai_compatible_transcription_with_an_openai_model_name_reaches_the_server(respx_mock: respx.MockRouter,
+    model_name: str
 ):
     route: Final = respx_mock.post("https://vllm.internal/v1/audio/transcriptions").mock(
-        return_value=httpx.Response(200, json={"text": "served by vllm"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "served by vllm"}))
     )
 
     response: Final = litellm.transcription(
@@ -6336,7 +6346,7 @@ def test_openai_compatible_transcription_with_an_openai_model_name_reaches_the_s
 
 def test_openai_gpt_transcribe_still_rejects_non_json_response_formats(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
-        return_value=httpx.Response(200, json={"text": "should not be sent"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "should not be sent"}))
     )
 
     with pytest.raises(litellm.UnsupportedParamsError, match="only supports response_format 'json' or 'text'"):
@@ -6352,7 +6362,7 @@ def test_openai_gpt_transcribe_still_rejects_non_json_response_formats(respx_moc
 
 def test_groq_speech_honors_base_url_alias(respx_mock: respx.MockRouter):
     route: Final = respx_mock.post(f"{GROQ_INTERNAL_BASE}/audio/speech").mock(
-        return_value=httpx.Response(200, content=b"mp3-bytes")
+        return_value=response_for_respx(httpx.Response(200, content=b"mp3-bytes"))
     )
 
     response: Final = litellm.speech(
@@ -6398,9 +6408,11 @@ def test_bridged_responses_with_openai_http_handler_keeps_forwarded_headers_out_
 ):
     monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", "true")
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, content=_chat_completion_sse(), headers={"content-type": "text/event-stream"})
-        if stream
-        else httpx.Response(200, json=_chat_completion_json())
+        return_value=response_for_respx(
+            httpx.Response(200, content=_chat_completion_sse(), headers={"content-type": "text/event-stream"})
+            if stream
+            else httpx.Response(200, json=_chat_completion_json())
+        )
     )
 
     response: Final = litellm.responses(
@@ -6621,7 +6633,7 @@ def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_reque
 ) -> None:
     api_base: Final = "http://localhost:12346/v1"
     mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             json={
                 "id": "chatcmpl-drop",
@@ -6631,7 +6643,7 @@ def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_reque
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     litellm.completion(
@@ -7266,7 +7278,7 @@ def test_bedrock_deepseek_known_tokenizer_config(monkeypatch):
     )
     from unittest.mock import Mock
 
-    import httpx
+    import httpx2 as httpx
 
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -7347,7 +7359,7 @@ def test_completion_anthropic_hanging():
 @respx.mock
 def test_completion_openai_returns_the_scripted_assistant_message():
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-migration-openai",
@@ -7363,7 +7375,7 @@ def test_completion_openai_returns_the_scripted_assistant_message():
                 ],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -7415,7 +7427,9 @@ def test_completion_openai_response_headers(monkeypatch: pytest.MonkeyPatch, ope
             )
         return httpx.Response(200, json=openai_api_response, headers=headers)
 
-    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=respond)
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(respond)
+    )
     monkeypatch.setattr(litellm, "return_response_headers", True)
 
     response: Final = litellm.completion(
@@ -7439,7 +7453,7 @@ def test_completion_openai_response_headers(monkeypatch: pytest.MonkeyPatch, ope
     assert chunks[0].choices[0].delta.content == "Hello!"
 
     respx.post("https://api.openai.com/v1/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -7448,7 +7462,7 @@ def test_completion_openai_response_headers(monkeypatch: pytest.MonkeyPatch, ope
                 "usage": {"prompt_tokens": 1, "total_tokens": 1},
             },
             headers={"x-ratelimit-remaining-tokens": "98"},
-        )
+        ))
     )
     embedding: Final = litellm.embedding(model="text-embedding-3-small", input="hello")
     assert embedding._response_headers["x-ratelimit-remaining-tokens"] == "98"
@@ -7473,17 +7487,17 @@ async def test_async_completion_openai_response_headers(monkeypatch: pytest.Monk
         + "\n\ndata: [DONE]\n\n"
     )
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(200, json=openai_api_response, headers={"x-ratelimit-remaining-tokens": "99"}),
             httpx.Response(
                 200,
                 text=stream_body,
                 headers={"x-ratelimit-remaining-tokens": "97", "content-type": "text/event-stream"},
             ),
-        )
+        ))
     )
     respx.post("https://api.openai.com/v1/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -7492,7 +7506,7 @@ async def test_async_completion_openai_response_headers(monkeypatch: pytest.Monk
                 "usage": {"prompt_tokens": 1, "total_tokens": 1},
             },
             headers={"x-ratelimit-remaining-tokens": "98"},
-        )
+        ))
     )
     monkeypatch.setattr(litellm, "return_response_headers", True)
 
@@ -7522,11 +7536,11 @@ async def test_azure_rate_limit_error_carries_retry_after_header(async_mode: boo
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx.post("https://example.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             429,
             json={"error": {"message": "Rate Limit Error!", "code": "429"}},
             headers={"retry-after": "30"},
-        )
+        ))
     )
     request: Final = {
         "model": "azure/text-embedding-3-small",
@@ -7560,7 +7574,7 @@ def test_completion_preserves_empty_openai_message_content():
         "usage": {"prompt_tokens": 1, "completion_tokens": 0, "total_tokens": 1},
     }
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=response_data)
+        return_value=response_for_respx(httpx.Response(200, json=response_data))
     )
 
     response: Final = litellm.completion(
@@ -7581,7 +7595,7 @@ def test_completion_preserves_empty_openai_message_content():
 def test_openai_completion_parses_scripted_chat_response(openai_api_response):
     response_data: Final = {**openai_api_response, "model": "gpt-6-sol"}
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=response_data)
+        return_value=response_for_respx(httpx.Response(200, json=response_data))
     )
     messages: Final = [{"role": "user", "content": "hello"}]
 
@@ -7624,7 +7638,7 @@ def test_completion_logprobs_parses_top_logprobs():
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=response_data)
+        return_value=response_for_respx(httpx.Response(200, json=response_data))
     )
 
     response: Final = litellm.completion(
@@ -7693,7 +7707,9 @@ def test_completion_logprobs_stream_parses_top_logprobs():
     )
     stream_body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+        )
     )
 
     streamed_response: Final = litellm.completion(
@@ -7739,7 +7755,7 @@ def test_completion_fireworks_ai_parses_response():
         "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
     }
     route: Final = respx.post("https://api.fireworks.ai/inference/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=response_data)
+        return_value=response_for_respx(httpx.Response(200, json=response_data))
     )
     messages: Final = [{"role": "user", "content": "hello"}]
 
@@ -7769,7 +7785,7 @@ async def test_bedrock_converse_parses_scripted_response(
     route: Final = respx.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-sonnet-5-5/converse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {
@@ -7782,7 +7798,7 @@ async def test_bedrock_converse_parses_scripted_response(
                 "usage": {"inputTokens": 8, "outputTokens": 5, "totalTokens": 13},
                 "metrics": {"latencyMs": 12},
             },
-        )
+        ))
     )
     request: Final = {
         "model": "bedrock/converse/us.anthropic.claude-sonnet-5-5",
@@ -7812,7 +7828,7 @@ def test_bedrock_converse_parses_scripted_tool_call_arguments(
     route: Final = respx.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/converse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {
@@ -7840,7 +7856,7 @@ def test_bedrock_converse_parses_scripted_tool_call_arguments(
                 "stopReason": "tool_use",
                 "usage": {"inputTokens": 8, "outputTokens": 5, "totalTokens": 13},
             },
-        )
+        ))
     )
 
     response: Final = litellm.completion(
@@ -7922,7 +7938,7 @@ def test_bedrock_invoke_signs_request_and_parses_scripted_response(
 ):
     route: Final = respx.post(
         f"https://bedrock-runtime.us-west-2.amazonaws.com/model/{invoke_model_id}/invoke"
-    ).mock(return_value=httpx.Response(200, json=response_body))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=response_body)))
 
     response: Final = litellm.completion(
         model=model,
@@ -7947,7 +7963,7 @@ def test_bedrock_invoke_signs_request_and_parses_scripted_response(
 def test_completion_azure_ad_token_is_forwarded(openai_api_response):
     route: Final = respx.post(
         "https://example.openai.azure.com/openai/deployments/gpt-6.1-sol/chat/completions"
-    ).mock(return_value=httpx.Response(200, json=openai_api_response))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=openai_api_response)))
 
     litellm.completion(
         model="azure/gpt-6.1-sol",
@@ -7964,7 +7980,7 @@ def test_completion_azure_ad_token_is_forwarded(openai_api_response):
 def test_completion_azure_extra_headers_are_forwarded(openai_api_response):
     route: Final = respx.post(
         "https://example.openai.azure.com/openai/deployments/gpt-6.1-sol/chat/completions"
-    ).mock(return_value=httpx.Response(200, json=openai_api_response))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=openai_api_response)))
 
     litellm.completion(
         model="azure/gpt-6.1-sol",
@@ -7987,7 +8003,7 @@ def test_completion_azure_extra_headers_are_forwarded(openai_api_response):
 def test_completion_azure_api_key_argument_is_forwarded(openai_api_response):
     route: Final = respx.post(
         "https://example.openai.azure.com/openai/deployments/gpt-6.1-sol/chat/completions"
-    ).mock(return_value=httpx.Response(200, json=openai_api_response))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=openai_api_response)))
 
     response: Final = litellm.completion(
         model="azure/gpt-6.1-sol",
@@ -8004,7 +8020,7 @@ def test_completion_azure_api_key_argument_is_forwarded(openai_api_response):
 @respx.mock
 def test_completion_forwards_openai_optional_parameters(openai_api_response):
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=openai_api_response)
+        return_value=response_for_respx(httpx.Response(200, json=openai_api_response))
     )
     messages: Final = [{"role": "user", "content": "return json"}]
 
@@ -8038,7 +8054,7 @@ def test_completion_forwards_openai_optional_parameters(openai_api_response):
 @respx.mock
 def test_completion_drops_unsupported_o3_mini_temperature(openai_api_response):
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=openai_api_response)
+        return_value=response_for_respx(httpx.Response(200, json=openai_api_response))
     )
 
     litellm.completion(
@@ -8078,7 +8094,7 @@ async def test_anthropic_tool_result_after_tool_call_is_translated(monkeypatch: 
         "usage": {"input_tokens": 16, "output_tokens": 8},
     }
     route: Final = respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json=response_data)
+        return_value=response_for_respx(httpx.Response(200, json=response_data))
     )
     messages: Final = [
         {"role": "system", "content": "Use the submitFruit function for a fruit."},
@@ -8154,7 +8170,7 @@ def test_gemini_completion_translates_messages_and_parses_candidate():
     }
     route: Final = respx.post(
         "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.8-flash:generateContent"
-    ).mock(return_value=httpx.Response(200, json=response_data))
+    ).mock(return_value=response_for_respx(httpx.Response(200, json=response_data)))
 
     safety_settings: Final = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -8203,7 +8219,7 @@ def test_qwen_text_completion_parses_text_and_logprobs():
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
     route: Final = respx.post("https://api.openai.com/v1/completions").mock(
-        return_value=httpx.Response(200, json=response_data)
+        return_value=response_for_respx(httpx.Response(200, json=response_data))
     )
 
     response: Final = litellm.completion(
@@ -8226,7 +8242,7 @@ def test_replicate_completion_applies_registered_prompt_template(monkeypatch: py
     create_prediction: Final = respx.post(
         "https://api.replicate.com/v1/models/meta/llama-3-70b-instruct/predictions"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "prediction-test",
@@ -8235,10 +8251,10 @@ def test_replicate_completion_applies_registered_prompt_template(monkeypatch: py
                     "cancel": "https://api.replicate.com/v1/predictions/prediction-test/cancel",
                 },
             },
-        )
+        ))
     )
     respx.get("https://api.replicate.com/v1/predictions/prediction-test").mock(
-        return_value=httpx.Response(200, json={"status": "succeeded", "output": ["4"]})
+        return_value=response_for_respx(httpx.Response(200, json={"status": "succeeded", "output": ["4"]}))
     )
     monkeypatch.setattr(litellm, "custom_prompt_dict", dict(litellm.custom_prompt_dict))
     litellm.register_prompt_template(
@@ -8264,7 +8280,7 @@ def test_replicate_completion_applies_registered_prompt_template(monkeypatch: py
 @respx.mock
 def test_petals_completion_sends_model_and_messages_to_custom_base():
     route: Final = respx.post("https://api.petals.dev/").mock(
-        return_value=httpx.Response(200, json={"outputs": "Hello!"})
+        return_value=response_for_respx(httpx.Response(200, json={"outputs": "Hello!"}))
     )
     messages: Final = [{"role": "user", "content": "hello"}]
 
@@ -8286,7 +8302,7 @@ def test_petals_config_fills_unset_params_while_explicit_params_win(monkeypatch:
     monkeypatch.setattr(litellm.PetalsConfig, "temperature", 0.4)
     monkeypatch.setattr(litellm.PetalsConfig, "top_k", 5)
     route: Final = respx.post("https://api.petals.dev/").mock(
-        return_value=httpx.Response(200, json={"outputs": "Hello!"})
+        return_value=response_for_respx(httpx.Response(200, json={"outputs": "Hello!"}))
     )
     messages: Final = [{"role": "user", "content": "hello"}]
 
@@ -8320,7 +8336,7 @@ def test_petals_config_fills_unset_params_while_explicit_params_win(monkeypatch:
 @respx.mock
 def test_moderation_posts_input_to_custom_base_and_parses_results():
     route: Final = respx.post("https://moderation.unit-test/v1/moderations").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "modr-unit-test",
@@ -8333,7 +8349,7 @@ def test_moderation_posts_input_to_custom_base_and_parses_results():
                     }
                 ],
             },
-        )
+        ))
     )
 
     response: Final = litellm.moderation(
@@ -8406,7 +8422,9 @@ def test_mistral_tool_use_round_trip():
             json=first_response if request_body["model"] == "mistral-medium-latest" else final_response,
         )
 
-    route: Final = respx.post("https://api.mistral.ai/v1/chat/completions").mock(side_effect=respond)
+    route: Final = respx.post("https://api.mistral.ai/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(respond)
+    )
     messages: Final = [{"role": "user", "content": "What's the weather in Boston?"}]
     tools: Final = [
         {
@@ -8477,7 +8495,7 @@ def test_mistral_text_content_array_is_sent_as_text():
         "usage": {"prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10},
     }
     route: Final = respx.post("https://api.mistral.ai/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=response_data)
+        return_value=response_for_respx(httpx.Response(200, json=response_data))
     )
 
     response: Final = litellm.completion(
@@ -8569,7 +8587,7 @@ def test_router_mock_request_with_mock_timeout_raises_litellm_timeout():
 @respx.mock
 def test_router_mock_request_fallback_uses_fallback_model(openai_api_response):
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={**openai_api_response, "model": "gpt-5.5"})
+        return_value=response_for_respx(httpx.Response(200, json={**openai_api_response, "model": "gpt-5.5"}))
     )
     router: Final = litellm.Router(
         model_list=[
@@ -8645,7 +8663,7 @@ def test_completion_deep_infra(drop_params):
         "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
     }
     route: Final = respx.post(endpoint).mock(
-        return_value=httpx.Response(200, json=response_body)
+        return_value=response_for_respx(httpx.Response(200, json=response_body))
     )
 
     if not drop_params:
@@ -8711,7 +8729,7 @@ def test_completion_deep_infra_mistral():
         "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
     }
     route: Final = respx.post(endpoint).mock(
-        return_value=httpx.Response(200, json=response_body)
+        return_value=response_for_respx(httpx.Response(200, json=response_body))
     )
 
     response: Final = completion(
@@ -9155,13 +9173,13 @@ SPEECH_INPUT: Final = "the quick brown fox jumped over the lazy dogs"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_speech_azure_returns_binary_audio(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+async def test_speech_azure_returns_binary_audio(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post(
         url__regex=rf"{AZURE_TTS_BASE}/openai/deployments/tts/audio/speech\?api-version=.+"
-    ).mock(return_value=httpx.Response(200, content=b"ID3-fake-mp3"))
+    ).mock(return_value=response_for_respx(httpx.Response(200, content=b"ID3-fake-mp3")))
 
     speech_kwargs: Final = {
         "model": "azure/tts",
@@ -9182,12 +9200,12 @@ async def test_speech_azure_returns_binary_audio(
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_speech_openai_returns_binary_audio(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+async def test_speech_openai_returns_binary_audio(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, sync_mode: bool
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/audio/speech").mock(
-        return_value=httpx.Response(200, content=b"ID3-fake-mp3")
+        return_value=response_for_respx(httpx.Response(200, content=b"ID3-fake-mp3"))
     )
 
     speech_kwargs: Final = {
@@ -9224,17 +9242,17 @@ GETTYSBURG_WAV: Final = ("gettysburg.wav", b"RIFF\x00\x00\x00\x00WAVE-gettysburg
 EAGLE_WAV: Final = ("eagle.wav", b"RIFF\x00\x00\x00\x00WAVE-eagle", "audio/wav")
 
 
-async def test_transcription_caching_hit_same_file_miss_different_file(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_transcription_caching_hit_same_file_miss_different_file(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     cache: Final = _SignallingCache(asyncio.get_running_loop())
     monkeypatch.setattr(litellm, "cache", cache)
     route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json={"text": "gettysburg transcript"}),
             httpx.Response(200, json={"text": "eagle transcript"}),
-        ]
+        ])
     )
 
     response_1: Final = await litellm.atranscription(model="openai/whisper-1", file=GETTYSBURG_WAV, api_key="fake-key")
@@ -9253,7 +9271,7 @@ async def test_transcription_caching_hit_same_file_miss_different_file(
 async def test_whisper_log_pre_call_fires_once(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
-        return_value=httpx.Response(200, json={"text": "hello"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "hello"}))
     )
 
     class _PreCallRecorder(CustomLogger):
@@ -9273,12 +9291,12 @@ async def test_whisper_log_pre_call_fires_once(respx_mock: respx.MockRouter, mon
 
 
 @pytest.mark.parametrize("model", ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"])
-async def test_transcription_model_names_pass_through(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str
+async def test_transcription_model_names_pass_through(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch, model: str
 ):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/audio/transcriptions").mock(
-        return_value=httpx.Response(200, json={"text": "hello"})
+        return_value=response_for_respx(httpx.Response(200, json={"text": "hello"}))
     )
 
     response: Final = await litellm.atranscription(
@@ -9366,14 +9384,14 @@ async def test_async_responses_still_retries_provider_server_errors(monkeypatch)
     monkeypatch.setattr(litellm, "num_retries", None)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock as upstream:
-        response = upstream.post("https://openai-test.invalid/v1/responses").mock(side_effect=[
+        response = upstream.post("https://openai-test.invalid/v1/responses").mock(side_effect=side_effect_for_respx([
             httpx.Response(500, json={"error": {"message": "temporary provider failure", "type": "server_error"}}),
             httpx.Response(200, json={
                 "id": "resp-retry", "object": "response", "created_at": 1, "status": "completed",
                 "model": "test-model", "output": [],
                 "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
             }),
-        ])
+        ]))
         result = await litellm.aresponses(
             model="openai/test-model", input="ping", api_key="test-key",
             api_base="https://openai-test.invalid/v1", num_retries=1, max_retries=0,
@@ -9602,7 +9620,7 @@ def test_openai_chat_stream_routes_legacy_function_calls_and_usage(
         )
     )
     route: Final = respx.post(f"{api_base}/chat/completions").mock(
-        side_effect=lambda _: next(scripted_responses)
+        side_effect=side_effect_for_respx(lambda _: next(scripted_responses))
     )
     stream: Final = litellm.completion(
         model="gpt-4o-mini",
@@ -9716,9 +9734,9 @@ async def test_async_openai_stream_options_include_usage_on_the_last_chunk(
     route: Final = respx.post(
         "https://api.openai.com/v1/chat/completions"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200, text=body, headers={"content-type": "text/event-stream"}
-        )
+        ))
     )
     stream: Final = await litellm.acompletion(
         model="gpt-4o-mini",
@@ -9789,7 +9807,7 @@ async def test_parallel_openai_streams_keep_prompt_responses_separate(
 
     route: Final = respx.post(
         "https://api.openai.com/v1/chat/completions"
-    ).mock(side_effect=respond)
+    ).mock(side_effect=side_effect_for_respx(respond))
 
     async def collect(prompt: str) -> tuple[str, tuple[str, ...]]:
         stream = await litellm.acompletion(
@@ -9856,7 +9874,9 @@ def test_parallel_sync_openai_streams_in_threads_keep_prompt_responses_separate(
         body: Final = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
         return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
 
-    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=respond)
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(respond)
+    )
 
     def collect(prompt: str) -> tuple[str, tuple[str, ...]]:
         stream: Final = litellm.completion(
@@ -9943,11 +9963,11 @@ def test_openai_streaming_tool_call_arguments_are_valid_json(
     )
     body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
     respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=body,
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     messages: Final = [{"role": "user", "content": "What is the weather in Boston?"}]
     stream: Final = litellm.completion(
@@ -10027,11 +10047,11 @@ def test_streaming_openai_usage_includes_test_owned_cost(
     )
     body: Final = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
     respx.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             text=body,
             headers={"content-type": "text/event-stream"},
-        )
+        ))
     )
     stream: Final = litellm.completion(
         model=f"openai/{model_name}",
@@ -10053,7 +10073,7 @@ def test_streaming_openai_usage_includes_test_owned_cost(
 def test_completion_ensure_alternating_roles_sends_continue_messages(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "https://adb-alternating.cloud.databricks.com/serving-endpoints"
     route: Final = respx_mock.post(f"{api_base}/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-databricks",
@@ -10065,7 +10085,7 @@ def test_completion_ensure_alternating_roles_sends_continue_messages(respx_mock:
                 ],
                 "usage": {"prompt_tokens": 40, "completion_tokens": 1, "total_tokens": 41},
             },
-        )
+        ))
     )
 
     litellm.completion(
@@ -10104,8 +10124,8 @@ def test_completion_ensure_alternating_roles_sends_continue_messages(respx_mock:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk(
-    sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk(respx_mock: respx.MockRouter,
+    sync_mode: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     model: Final = "gpt-5.6"
@@ -10128,7 +10148,9 @@ async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk
     )
     stream_body: Final = b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events) + b"data: [DONE]\n\n"
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, content=stream_body, headers={"content-type": "text/event-stream"})
+        return_value=response_for_respx(
+            httpx.Response(200, content=stream_body, headers={"content-type": "text/event-stream"})
+        )
     )
     request: Final = {
         "model": f"openai/{model}",
@@ -10158,13 +10180,13 @@ async def test_text_completion_stream_include_usage_returns_usage_on_final_chunk
     assert (final_usage.prompt_tokens, final_usage.completion_tokens, final_usage.total_tokens) == (3, 2, 5)
 
 
-def test_model_alias_map_resolves_the_outbound_model(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+def test_model_alias_map_resolves_the_outbound_model(respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "model_alias_map", {"test-alias": "openai/resolved-model"})
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-alias",
@@ -10180,7 +10202,7 @@ def test_model_alias_map_resolves_the_outbound_model(
                 ],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
 
     response: Final = completion(
@@ -10206,7 +10228,7 @@ def _chat_body_sent(
     **params: object,
 ) -> Mapping[str, object]:
     route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
-        return_value=_mocked_openai_chat_response(model)
+        return_value=response_for_respx(_mocked_openai_chat_response(model))
     )
     completion(
         model=model,
@@ -10244,8 +10266,8 @@ def remap_log(caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
         ("azure_ai/my-kimi", "medium", "high"),
     ],
 )
-def test_a_deployment_declaring_its_levels_receives_the_level_rounded_up(
-    respx_mock: respx.MockRouter, model: str, requested: str, expected: str
+def test_a_deployment_declaring_its_levels_receives_the_level_rounded_up(respx_mock: respx.MockRouter,
+    model: str, requested: str, expected: str
 ) -> None:
     assert _chat_body_sent(respx_mock, model, requested, _KIMI_DEPLOYMENT)["reasoning_effort"] == expected
 
@@ -10286,8 +10308,8 @@ def test_a_model_map_declaration_alone_leaves_reasoning_effort_to_drop_params(
 
 
 @pytest.mark.parametrize("model_info, expected", [(_KIMI_DEPLOYMENT, "high"), (None, "medium")])
-def test_a_hosted_vllm_thinking_budget_is_rounded_onto_the_declared_levels(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, expected: str
+def test_a_hosted_vllm_thinking_budget_is_rounded_onto_the_declared_levels(respx_mock: respx.MockRouter,
+    model_info: Mapping[str, object] | None, expected: str
 ) -> None:
     sent: Final = _chat_body_sent(
         respx_mock, "hosted_vllm/my-kimi", None, model_info, thinking={"type": "enabled", "budget_tokens": 2048}
@@ -10302,7 +10324,7 @@ def test_an_undeclared_sibling_of_a_declaring_deployment_gets_the_request_untouc
     from litellm.router import Router
 
     route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
-        return_value=_mocked_openai_chat_response("my-kimi")
+        return_value=response_for_respx(_mocked_openai_chat_response("my-kimi"))
     )
     shared_params: Final = {"model": "hosted_vllm/my-kimi", "api_base": _VLLM_API_BASE, "api_key": "fake-key"}
     router: Final = Router(
@@ -10317,11 +10339,11 @@ def test_an_undeclared_sibling_of_a_declaring_deployment_gets_the_request_untouc
     assert json.loads(route.calls.last.request.content)["reasoning_effort"] == "medium"
 
 
-def _anthropic_chat_body_sent(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+def _anthropic_chat_body_sent(respx_mock: respx.MockRouter,
+    model_info: Mapping[str, object] | None, **params: object
 ) -> Mapping[str, object]:
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg_1",
@@ -10332,7 +10354,7 @@ def _anthropic_chat_body_sent(
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 1, "output_tokens": 1},
             },
-        )
+        ))
     )
     completion(model="anthropic/claude-opus-5-5", messages=_HELLO, model_info=model_info, max_tokens=4096, **params)
     return json.loads(route.calls.last.request.content)
@@ -10351,20 +10373,20 @@ def test_an_anthropic_deployment_declaring_its_levels_sends_the_rounded_tier_in_
     assert rounded == asked_for_high
 
 
-def _bedrock_converse_request_fields_sent(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+def _bedrock_converse_request_fields_sent(respx_mock: respx.MockRouter,
+    model_info: Mapping[str, object] | None, **params: object
 ) -> Mapping[str, object]:
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-opus-5-5/converse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
             },
-        )
+        ))
     )
     completion(
         model="bedrock/converse/us.anthropic.claude-opus-5-5",
@@ -10415,13 +10437,13 @@ def test_a_default_effort_beside_a_thinking_budget_sends_no_effort_on_a_declarin
     assert defaulted == adaptive_alone
 
 
-def _bedrock_invoke_body_sent(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, **params: object
+def _bedrock_invoke_body_sent(respx_mock: respx.MockRouter,
+    model_info: Mapping[str, object] | None, **params: object
 ) -> Mapping[str, object]:
     route: Final = respx_mock.post(
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-opus-5-5/invoke"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "msg_1",
@@ -10432,7 +10454,7 @@ def _bedrock_invoke_body_sent(
                 "stop_reason": "end_turn",
                 "usage": {"input_tokens": 1, "output_tokens": 1},
             },
-        )
+        ))
     )
     completion(
         model="bedrock/invoke/us.anthropic.claude-opus-5-5",
@@ -10467,8 +10489,8 @@ def test_an_output_config_effort_beside_a_thinking_budget_reaches_a_declaring_cl
 
 @pytest.mark.parametrize("dropped_effort", ["none", "HIGH"])
 @pytest.mark.parametrize("body_sent", [_anthropic_chat_body_sent, _bedrock_converse_request_fields_sent])
-def test_drop_params_leaves_the_thinking_budget_to_set_the_effort_beside_a_dropped_level(
-    respx_mock: respx.MockRouter, body_sent: Callable[..., Mapping[str, object]], dropped_effort: str
+def test_drop_params_leaves_the_thinking_budget_to_set_the_effort_beside_a_dropped_level(respx_mock: respx.MockRouter,
+    body_sent: Callable[..., Mapping[str, object]], dropped_effort: str
 ) -> None:
     budget: Final = {"type": "enabled", "budget_tokens": 2048}
 
@@ -10529,8 +10551,8 @@ def test_drop_params_drops_a_non_numeric_thinking_budget_on_adaptive_claude_with
 
 
 @pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
-def test_drop_params_drops_a_non_numeric_thinking_budget_on_hosted_vllm_with_one_warning(
-    respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture, model_info: Mapping[str, object] | None
+def test_drop_params_drops_a_non_numeric_thinking_budget_on_hosted_vllm_with_one_warning(respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture, model_info: Mapping[str, object] | None
 ) -> None:
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         sent: Final = _chat_body_sent(
@@ -10550,8 +10572,8 @@ def test_drop_params_drops_a_non_numeric_thinking_budget_on_hosted_vllm_with_one
 
 @pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
 @pytest.mark.parametrize("drop_params", [False, True])
-def test_an_output_config_effort_replaces_a_thinking_budget_the_provider_cannot_read(
-    respx_mock: respx.MockRouter, model: str, drop_params: bool
+def test_an_output_config_effort_replaces_a_thinking_budget_the_provider_cannot_read(respx_mock: respx.MockRouter,
+    model: str, drop_params: bool
 ) -> None:
     sent: Final = _chat_body_sent(
         respx_mock,
@@ -10586,8 +10608,8 @@ def test_a_default_output_config_effort_beside_a_thinking_budget_sends_no_effort
 
 
 @pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
-def test_a_thinking_budget_reaches_a_declaring_deployment_as_its_rounded_effort(
-    respx_mock: respx.MockRouter, model: str
+def test_a_thinking_budget_reaches_a_declaring_deployment_as_its_rounded_effort(respx_mock: respx.MockRouter,
+    model: str
 ) -> None:
     sent: Final = _chat_body_sent(
         respx_mock, model, None, _KIMI_DEPLOYMENT, thinking={"type": "enabled", "budget_tokens": 2048}
@@ -10598,8 +10620,8 @@ def test_a_thinking_budget_reaches_a_declaring_deployment_as_its_rounded_effort(
 
 
 @pytest.mark.parametrize("model", ["azure_ai/my-kimi", "hosted_vllm/my-kimi"])
-def test_an_explicit_reasoning_effort_replaces_a_thinking_budget_the_provider_cannot_read(
-    respx_mock: respx.MockRouter, model: str
+def test_an_explicit_reasoning_effort_replaces_a_thinking_budget_the_provider_cannot_read(respx_mock: respx.MockRouter,
+    model: str
 ) -> None:
     sent: Final = _chat_body_sent(
         respx_mock, model, "medium", _KIMI_DEPLOYMENT, thinking={"type": "enabled", "budget_tokens": 2048}
@@ -10624,8 +10646,8 @@ def test_an_explicit_reasoning_effort_keeps_the_thinking_a_claude_deployment_rea
 
 
 @pytest.mark.parametrize("declared", [["none"], []])
-def test_drop_params_drops_a_thinking_budget_whose_effort_the_deployment_does_not_declare(
-    respx_mock: respx.MockRouter, declared: list[str]
+def test_drop_params_drops_a_thinking_budget_whose_effort_the_deployment_does_not_declare(respx_mock: respx.MockRouter,
+    declared: list[str]
 ) -> None:
     sent: Final = _chat_body_sent(
         respx_mock,
@@ -10662,8 +10684,8 @@ def test_drop_params_keeps_adaptive_thinking_but_drops_a_budget_effort_the_claud
 
 @pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
 @pytest.mark.parametrize("budget_tokens", [500, 9000])
-def test_a_hosted_vllm_deployment_maps_a_thinking_budget_the_same_for_a_claude_model_name(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: int
+def test_a_hosted_vllm_deployment_maps_a_thinking_budget_the_same_for_a_claude_model_name(respx_mock: respx.MockRouter,
+    model_info: Mapping[str, object] | None, budget_tokens: int
 ) -> None:
     thinking: Final = {"type": "enabled", "budget_tokens": budget_tokens}
 
@@ -10677,8 +10699,8 @@ def test_a_hosted_vllm_deployment_maps_a_thinking_budget_the_same_for_a_claude_m
 
 @pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
 @pytest.mark.parametrize("budget_tokens", ["2048", None, True])
-def test_a_non_numeric_thinking_budget_is_rejected_with_a_400(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: str | bool | None
+def test_a_non_numeric_thinking_budget_is_rejected_with_a_400(respx_mock: respx.MockRouter,
+    model_info: Mapping[str, object] | None, budget_tokens: str | bool | None
 ) -> None:
     thinking: Final = {"type": "enabled", "budget_tokens": budget_tokens}
 
@@ -10690,8 +10712,8 @@ def test_a_non_numeric_thinking_budget_is_rejected_with_a_400(
 
 @pytest.mark.parametrize("model_info", [None, _KIMI_DEPLOYMENT])
 @pytest.mark.parametrize("budget_tokens", ["2048", None, True])
-def test_an_explicit_reasoning_effort_wins_over_a_non_numeric_thinking_budget(
-    respx_mock: respx.MockRouter, model_info: Mapping[str, object] | None, budget_tokens: str | bool | None
+def test_an_explicit_reasoning_effort_wins_over_a_non_numeric_thinking_budget(respx_mock: respx.MockRouter,
+    model_info: Mapping[str, object] | None, budget_tokens: str | bool | None
 ) -> None:
     sent: Final = _chat_body_sent(
         respx_mock,
@@ -10744,13 +10766,13 @@ def test_an_adaptive_effort_on_a_declaring_bedrock_converse_claude_deployment_is
     assert rounded == asked_for_high
 
 
-def test_a_routed_remap_is_logged_with_the_deployment_id_and_model_group(
-    respx_mock: respx.MockRouter, remap_log: pytest.LogCaptureFixture
+def test_a_routed_remap_is_logged_with_the_deployment_id_and_model_group(respx_mock: respx.MockRouter,
+    remap_log: pytest.LogCaptureFixture
 ) -> None:
     from litellm.router import Router
 
     route: Final = respx_mock.post(f"{_VLLM_API_BASE}/chat/completions").mock(
-        return_value=_mocked_openai_chat_response("my-kimi")
+        return_value=response_for_respx(_mocked_openai_chat_response("my-kimi"))
     )
     router: Final = Router(
         model_list=[
@@ -10776,11 +10798,11 @@ def test_a_routed_remap_is_logged_with_the_deployment_id_and_model_group(
     ] == [("kimi-vllm-1", "kimi-k3", "minimal", "low")]
 
 
-def test_a_chat_request_bridged_to_responses_is_rounded_and_logged_once(
-    respx_mock: respx.MockRouter, remap_log: pytest.LogCaptureFixture
+def test_a_chat_request_bridged_to_responses_is_rounded_and_logged_once(respx_mock: respx.MockRouter,
+    remap_log: pytest.LogCaptureFixture
 ) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(200, json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY))
     )
 
     completion(
@@ -10798,7 +10820,7 @@ def test_a_chat_request_bridged_to_responses_is_rounded_and_logged_once(
 def test_default_on_a_declaring_deployment_keeps_a_tool_call_on_chat_completions(respx_mock: respx.MockRouter) -> None:
     gateway: Final = "https://openai-gateway.example.test/v1"
     chat: Final = respx_mock.post(f"{gateway}/chat/completions").mock(
-        return_value=_mocked_openai_chat_response("gpt-5.5")
+        return_value=response_for_respx(_mocked_openai_chat_response("gpt-5.5"))
     )
     responses: Final = respx_mock.post(f"{gateway}/responses")
 
@@ -10830,11 +10852,11 @@ _GPT_5_GATEWAY: Final = "https://gpt5-gateway.example.test/v1"
 _AZURE_GPT_5_BASE: Final = "https://gpt5.openai.azure.com"
 
 
-def _gpt_5_chat_body_sent(
-    respx_mock: respx.MockRouter, model: str, reasoning_effort: str, model_info: Mapping[str, object]
+def _gpt_5_chat_body_sent(respx_mock: respx.MockRouter,
+    model: str, reasoning_effort: str, model_info: Mapping[str, object]
 ) -> Mapping[str, object]:
     route: Final = respx_mock.post(url__regex=r"https://gpt5[^/]*/.*chat/completions.*").mock(
-        return_value=_mocked_openai_chat_response(model)
+        return_value=response_for_respx(_mocked_openai_chat_response(model))
     )
     completion(
         model=model,
@@ -10865,8 +10887,8 @@ def _openai_gpt_5_entry_disabling(level: str) -> str:
         ("azure_ai/gpt-5-in-house", "xhigh", ["xhigh"], "xhigh"),
     ],
 )
-def test_a_gpt_5_deployment_receives_a_level_it_declares_that_the_model_map_does_not_list(
-    respx_mock: respx.MockRouter, model: str, requested: str, declared: list[str], expected: str
+def test_a_gpt_5_deployment_receives_a_level_it_declares_that_the_model_map_does_not_list(respx_mock: respx.MockRouter,
+    model: str, requested: str, declared: list[str], expected: str
 ) -> None:
     with pytest.raises(litellm.exceptions.UnsupportedParamsError):
         _gpt_5_chat_body_sent(respx_mock, model, expected, {"id": "gpt-5-in-house-1"})
@@ -10881,7 +10903,7 @@ def test_a_gpt_5_deployment_receives_a_declared_level_the_model_map_disables(
 ) -> None:
     model: Final = f"openai/{_openai_gpt_5_entry_disabling('low')}"
     responses: Final = respx_mock.post(f"{_GPT_5_GATEWAY}/responses").mock(
-        return_value=httpx.Response(200, json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY)
+        return_value=response_for_respx(httpx.Response(200, json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY))
     )
 
     with pytest.raises(litellm.exceptions.UnsupportedParamsError):
@@ -10895,7 +10917,7 @@ def test_a_gpt_5_deployment_receives_a_declared_level_the_model_map_disables(
 async def test_aspeech_routes_a_bare_model_name_to_its_explicit_provider(respx_mock: respx.MockRouter) -> None:
     api_base: Final = "http://localhost:12351/v1"
     route: Final = respx_mock.post(f"{api_base}/audio/speech").mock(
-        return_value=httpx.Response(status_code=200, content=b"ID3-speech")
+        return_value=response_for_respx(httpx.Response(status_code=200, content=b"ID3-speech"))
     )
 
     response: Final = await litellm.aspeech(
@@ -10919,7 +10941,7 @@ async def test_atranscription_routes_a_bare_model_name_to_its_explicit_provider(
 ) -> None:
     api_base: Final = "http://localhost:12352/v1"
     route: Final = respx_mock.post(f"{api_base}/audio/transcriptions").mock(
-        return_value=httpx.Response(status_code=200, json={"text": "four score"})
+        return_value=response_for_respx(httpx.Response(status_code=200, json={"text": "four score"}))
     )
 
     response: Final = await litellm.atranscription(
@@ -11002,7 +11024,7 @@ async def test_atranscription_rejects_an_unsupported_provider_without_an_http_ca
 async def test_aspeech_infers_the_provider_from_base_url(respx_mock: respx.MockRouter) -> None:
     base_url: Final = "https://api.groq.com/openai/v1"
     route: Final = respx_mock.post(f"{base_url}/audio/speech").mock(
-        return_value=httpx.Response(status_code=200, content=b"ID3-speech")
+        return_value=response_for_respx(httpx.Response(status_code=200, content=b"ID3-speech"))
     )
 
     response: Final = await litellm.aspeech(
@@ -11022,7 +11044,7 @@ async def test_aspeech_infers_the_provider_from_base_url(respx_mock: respx.MockR
 async def test_atranscription_infers_the_provider_from_base_url(respx_mock: respx.MockRouter) -> None:
     base_url: Final = "https://api.groq.com/openai/v1"
     route: Final = respx_mock.post(f"{base_url}/audio/transcriptions").mock(
-        return_value=httpx.Response(status_code=200, json={"text": "four score"})
+        return_value=response_for_respx(httpx.Response(status_code=200, json={"text": "four score"}))
     )
 
     response: Final = await litellm.atranscription(
@@ -11043,7 +11065,7 @@ async def test_aspeech_ignores_a_non_string_base_url_when_api_base_is_set_like_t
 ) -> None:
     api_base: Final = "http://localhost:12353/v1"
     route: Final = respx_mock.post(f"{api_base}/audio/speech").mock(
-        return_value=httpx.Response(status_code=200, content=b"ID3-speech")
+        return_value=response_for_respx(httpx.Response(status_code=200, content=b"ID3-speech"))
     )
 
     response: Final = await litellm.aspeech(
@@ -11066,7 +11088,7 @@ async def test_atranscription_ignores_a_non_string_base_url_when_api_base_is_set
 ) -> None:
     api_base: Final = "http://localhost:12354/v1"
     route: Final = respx_mock.post(f"{api_base}/audio/transcriptions").mock(
-        return_value=httpx.Response(status_code=200, json={"text": "four score"})
+        return_value=response_for_respx(httpx.Response(status_code=200, json={"text": "four score"}))
     )
 
     response: Final = await litellm.atranscription(
@@ -11106,7 +11128,7 @@ def _sent_messages(respx_mock: respx.MockRouter) -> list[dict[str, object]]:
 
 def _mock_pdf_chat_route(respx_mock: respx.MockRouter, api_base: str) -> respx.Route:
     return respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             status_code=200,
             json={
                 "id": "chatcmpl-pdf",
@@ -11116,7 +11138,7 @@ def _mock_pdf_chat_route(respx_mock: respx.MockRouter, api_base: str) -> respx.R
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
 
 
@@ -11145,8 +11167,8 @@ def test_drop_params_drops_a_pdf_the_model_cannot_read(respx_mock: respx.MockRou
     ],
     ids=["bare_base64_named_pdf", "file_id_with_pdf_format", "file_id_named_pdf"],
 )
-def test_drop_params_drops_a_pdf_file_part_without_a_data_url(
-    respx_mock: respx.MockRouter, pdf_file: dict[str, str]
+def test_drop_params_drops_a_pdf_file_part_without_a_data_url(respx_mock: respx.MockRouter,
+    pdf_file: dict[str, str]
 ) -> None:
     api_base: Final = "http://localhost:12350/v1"
     _mock_pdf_chat_route(respx_mock, api_base)
@@ -11509,8 +11531,10 @@ class _PreCallParamsRecorder(CustomLogger):
 
 @pytest.mark.parametrize("use_async", [False, True])
 async def test_malformed_routing_kwarg_answers_400_before_reaching_the_provider(use_async: bool):
-    with respx.mock(assert_all_called=False) as mock:
-        route: Final = mock.post("https://api.openai.com/v1/chat/completions").mock(return_value=_openai_chat_answer())
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as mock:
+        route: Final = mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=response_for_respx(_openai_chat_answer())
+        )
         with pytest.raises(litellm.BadRequestError, match="tpm") as raised:
             await _openai_completion(use_async, tpm="abc")
 
@@ -11526,7 +11550,9 @@ async def test_malformed_routing_kwarg_is_dropped_from_the_whole_request_under_d
     recorder: Final = _PreCallParamsRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     with respx.mock:
-        respx.post("https://api.openai.com/v1/chat/completions").mock(return_value=_openai_chat_answer())
+        respx.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=response_for_respx(_openai_chat_answer())
+        )
         response: Final = await _openai_completion(use_async, tpm="abc", drop_params=True)
 
     assert response.choices[0].message.content == "hi"

@@ -2,7 +2,7 @@ import asyncio, base64, importlib, litellm
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.minimax.text_to_speech.transformation import MinimaxException, MinimaxTextToSpeechConfig

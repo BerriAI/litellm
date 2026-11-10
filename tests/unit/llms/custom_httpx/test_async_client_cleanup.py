@@ -1,11 +1,12 @@
+
 import re
 from collections.abc import Iterator
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -62,8 +63,8 @@ def gemini_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("gemini_httpx_transport")
 async def test_acompletion_client_is_closed_by_cleanup() -> None:
-    with respx.mock(assert_all_called=True) as mock:
-        mock.post(GEMINI_GENERATE_URL).mock(return_value=_gemini_reply("Hi there!"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
+        mock.post(GEMINI_GENERATE_URL).mock(return_value=response_for_respx(_gemini_reply("Hi there!")))
         response: Final = await litellm.acompletion(
             model="gemini/gemini-2.0-flash-lite-001",
             messages=[{"role": "user", "content": "Hello"}],
@@ -81,9 +82,9 @@ async def test_acompletion_client_is_closed_by_cleanup() -> None:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("gemini_httpx_transport")
 async def test_repeated_acompletion_calls_reuse_one_client_that_cleanup_closes() -> None:
-    with respx.mock(assert_all_called=True) as mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
         route: Final = mock.post(GEMINI_GENERATE_URL).mock(
-            side_effect=[_gemini_reply(f"Response {index}") for index in range(3)]
+            side_effect=side_effect_for_respx([_gemini_reply(f"Response {index}") for index in range(3)])
         )
         for index in range(3):
             response = await litellm.acompletion(
@@ -104,8 +105,10 @@ async def test_repeated_acompletion_calls_reuse_one_client_that_cleanup_closes()
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("gemini_httpx_transport")
 async def test_cleanup_is_idempotent_and_acompletion_works_afterwards() -> None:
-    with respx.mock(assert_all_called=True) as mock:
-        route: Final = mock.post(GEMINI_GENERATE_URL).mock(side_effect=[_gemini_reply("Hello!"), _gemini_reply("Hi!")])
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
+        route: Final = mock.post(GEMINI_GENERATE_URL).mock(
+            side_effect=side_effect_for_respx([_gemini_reply("Hello!"), _gemini_reply("Hi!")])
+        )
         await litellm.acompletion(
             model="gemini/gemini-2.0-flash-lite-001",
             messages=[{"role": "user", "content": "Hello"}],

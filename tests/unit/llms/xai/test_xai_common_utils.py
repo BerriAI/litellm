@@ -1,10 +1,12 @@
 import re
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.xai.common_utils import XAIModelInfo
 
@@ -19,7 +21,7 @@ def _default_xai_api_base(monkeypatch: pytest.MonkeyPatch):
 
 def _get_models(payload: object) -> list[str]:
     with respx.mock:
-        respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=payload))
+        respx.get(MODELS_URL).mock(return_value=response_for_respx(httpx.Response(200, json=payload)))
         return XAIModelInfo().get_models(api_key="xai-test-key")
 
 
@@ -46,7 +48,9 @@ def test_get_models_returns_no_names_for_an_empty_data_container(data: object):
 
 def test_get_models_sends_the_api_key_as_bearer_token():
     with respx.mock:
-        route = respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json={"data": [{"id": "grok-4"}]}))
+        route = respx.get(MODELS_URL).mock(
+            return_value=response_for_respx(httpx.Response(200, json={"data": [{"id": "grok-4"}]}))
+        )
         XAIModelInfo().get_models(api_key="xai-test-key")
 
     assert route.calls[0].request.headers["authorization"] == "Bearer xai-test-key"
@@ -97,7 +101,7 @@ def test_get_models_rejects_a_malformed_listing_without_echoing_position_or_inpu
 
 def test_get_models_reports_the_upstream_status_and_body_on_an_http_error():
     with respx.mock:
-        respx.get(MODELS_URL).mock(return_value=httpx.Response(401, text="bad key"))
+        respx.get(MODELS_URL).mock(return_value=response_for_respx(httpx.Response(401, text="bad key")))
         with pytest.raises(
             Exception, match=re.escape("Failed to fetch models from XAI. Status code: 401, Response: bad key")
         ):
@@ -118,7 +122,7 @@ def test_get_valid_models_lists_xai_models_and_falls_back_to_empty_on_a_malforme
     api_key: str, payload: object, expected: list[str]
 ):
     with respx.mock:
-        respx.get(MODELS_URL).mock(return_value=httpx.Response(200, json=payload))
+        respx.get(MODELS_URL).mock(return_value=response_for_respx(httpx.Response(200, json=payload)))
         models = litellm.get_valid_models(check_provider_endpoint=True, custom_llm_provider="xai", api_key=api_key)
 
     assert models == expected

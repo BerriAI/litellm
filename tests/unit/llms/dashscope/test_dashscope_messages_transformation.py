@@ -5,8 +5,7 @@ Unit tests for DashScope's Anthropic-compatible Messages endpoint.
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.exceptions import AuthenticationError
 from litellm.llms.dashscope.messages.transformation import (
@@ -200,7 +199,7 @@ async def test_only_a_domain_root_or_anthropic_base_leaves_the_chat_bridge(
     monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
-    with respx.mock(assert_all_called=False) as upstream:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as upstream:
         upstream.route(path__regex=r".*/chat/completions$").respond(200, json=CHAT_COMPLETION)
         upstream.route(path__regex=r".*/v1/messages$").respond(200, json=MESSAGE)
 

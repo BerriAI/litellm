@@ -1,7 +1,7 @@
 from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final, Optional, cast
 
-import httpx
+import httpx2 as httpx
 from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel

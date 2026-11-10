@@ -11,13 +11,15 @@ from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional,
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests._support.respx_httpx2 import response_for_respx
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -12284,7 +12286,7 @@ async def test_handle_llm_api_exception_forwards_provider_headers_on_http_status
     A Bedrock passthrough failure reaches this branch, so the request id was gone
     before the client saw the response.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -12318,7 +12320,7 @@ async def test_handle_llm_api_exception_forwards_litellm_response_headers_when_r
     ``httpx.Response`` and parks the provider's real headers on ``litellm_response_headers``.
     The client must still get the provider request id, as it does on a 200.
     """
-    import httpx
+    import httpx2 as httpx
 
     from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 
@@ -13321,8 +13323,10 @@ def _downstream_proxy_rejection(
             "provider_specific_fields": dict(fields),
         }
     }
-    with respx.mock(assert_all_called=True) as mock:
-        _ = mock.post(f"https://downstream-proxy.example.com/{route}").mock(return_value=httpx.Response(400, json=body))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as mock:
+        _ = mock.post(f"https://downstream-proxy.example.com/{route}").mock(
+            return_value=response_for_respx(httpx.Response(400, json=body))
+        )
         with pytest.raises(litellm.BadRequestError) as caught:
             _ = call()
     return caught.value

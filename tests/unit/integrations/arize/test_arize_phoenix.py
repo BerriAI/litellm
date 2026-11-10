@@ -18,6 +18,7 @@ from litellm.integrations.arize.arize_phoenix import (
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.rust_bridge.host.model_cost import publish
+from tests._support.respx_httpx2 import response_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -972,15 +973,16 @@ def test_arize_phoenix_client_get_prompt_version_rejects_traversal():
 
 
 def test_arize_phoenix_client_error_does_not_echo_prompt_content():
-    import httpx
-    import respx
+    import httpx2 as httpx
+
+    from tests._support import respx_httpx2 as respx
 
     from litellm.integrations.arize.arize_phoenix_client import ArizePhoenixClient
 
     client = ArizePhoenixClient(api_key="test-key", api_base="https://phoenix.test")
     with respx.mock:
         respx.get("https://phoenix.test/v1/prompt_versions/pv-1").mock(
-            return_value=httpx.Response(200, json={"data": "secret system prompt text"})
+            return_value=response_for_respx(httpx.Response(200, json={"data": "secret system prompt text"}))
         )
         with pytest.raises(Exception, match="Error fetching prompt version 'pv-1'") as exc_info:
             client.get_prompt_version("pv-1")

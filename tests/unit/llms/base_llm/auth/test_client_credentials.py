@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Final
 from urllib.parse import parse_qsl, unquote
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.base_llm.auth.client_credentials import (

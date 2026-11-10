@@ -7,7 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from integration._support.client import (
@@ -225,7 +225,7 @@ SPEND_ROW: Final = 'SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE reque
 _RECORDER_CODE: Final = """\
 import os
 
-import httpx
+import httpx2 as httpx
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 

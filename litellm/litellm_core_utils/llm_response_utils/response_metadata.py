@@ -3,7 +3,7 @@ from collections.abc import Mapping
 from functools import reduce
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import LITELLM_DETAILED_TIMING

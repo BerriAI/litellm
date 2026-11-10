@@ -6,7 +6,7 @@ from typing import Final, Optional
 
 import asyncio
 
-import httpx
+import httpx2 as httpx
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 
@@ -1292,7 +1292,7 @@ def test_arize_coerce_response_obj_passes_dicts_through_untouched():
 
 
 def test_arize_coerce_response_obj_parses_httpx_like():
-    """httpx.Response-like objects without `.get` should JSON-decode."""
+    """httpx2.Response-like objects without `.get` should JSON-decode."""
     from litellm.integrations.arize._utils import _coerce_response_obj_for_attrs
 
     class FakeHttpxResponse:

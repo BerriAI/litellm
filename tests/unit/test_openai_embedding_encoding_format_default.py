@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from openai.types import CreateEmbeddingResponse
 
@@ -21,7 +22,7 @@ def _mock_openai_embedding_route(
     respx_mock: respx.MockRouter, api_base: str = "https://api.openai.com/v1"
 ) -> respx.Route:
     return respx_mock.post(f"{api_base}/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -32,7 +33,7 @@ def _mock_openai_embedding_route(
                 "model": "text-embedding-3-small",
                 "usage": {"prompt_tokens": 2, "total_tokens": 2},
             },
-        )
+        ))
     )
 
 
@@ -134,11 +135,11 @@ def test_embedding_openai_omitted_encoding_format_maps_provider_errors(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     respx_mock.post("https://api.openai.com/v1/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             429,
             headers={"retry-after": "42", "x-should-retry": "false"},
             json={"error": {"message": "rate limited", "type": "rate_limit_error"}},
-        )
+        ))
     )
 
     with pytest.raises(litellm.RateLimitError) as exc_info:
@@ -164,7 +165,7 @@ def test_embedding_response_preserves_rate_limit_headers(
     respx_mock: respx.MockRouter, model: str, url: str, extra_params: dict[str, str]
 ) -> None:
     respx_mock.post(url__startswith=url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -177,7 +178,7 @@ def test_embedding_response_preserves_rate_limit_headers(
                 "x-ratelimit-remaining-requests": "9",
                 "x-ratelimit-remaining-tokens": "99",
             },
-        )
+        ))
     )
 
     response: Final = litellm.embedding(model=model, input=["Hello world"], api_key="sk-test", **extra_params)

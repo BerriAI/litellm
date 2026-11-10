@@ -22,10 +22,11 @@ from threading import Event
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -340,7 +341,7 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post(url__regex=r"https://deferred-nested\.openai\.azure\.com/openai/.*responses.*").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "resp_deferred_nested",
@@ -365,7 +366,7 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
                     "total_tokens": 7359,
                 },
             },
-        )
+        ))
     )
     recorder: Final = _RecordingLogger()
     logging_obj: Final = Logging(

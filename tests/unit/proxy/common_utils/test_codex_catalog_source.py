@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.proxy.common_utils.codex_catalog_source import (

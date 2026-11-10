@@ -5,7 +5,7 @@ import threading
 from collections.abc import Iterator, Sequence
 from typing import Final, TypedDict
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly

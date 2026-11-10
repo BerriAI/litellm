@@ -1,13 +1,15 @@
+
 import io
 import json
 from typing import Final, Mapping, Sequence, cast
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from respx import MockRouter
 from typing_extensions import ReadOnly, TypedDict
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm import transcription
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
@@ -128,8 +130,10 @@ def _httpx_only_transport(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _register(case: _Case, respx_mock: MockRouter) -> respx.Route:
     if case["prefix_match"]:
-        return respx_mock.post(url__startswith=case["url"]).mock(return_value=_canned_response(case))
-    return respx_mock.post(case["url"]).mock(return_value=_canned_response(case))
+        return respx_mock.post(url__startswith=case["url"]).mock(
+            return_value=response_for_respx(_canned_response(case))
+        )
+    return respx_mock.post(case["url"]).mock(return_value=response_for_respx(_canned_response(case)))
 
 
 def _assert_translated_request(case: _Case, request: httpx.Request) -> None:

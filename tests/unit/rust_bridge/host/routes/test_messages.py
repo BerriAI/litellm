@@ -214,7 +214,7 @@ def _marked(phase: str | None = None, *args: object) -> ValueError:
 
 
 def test_a_stalled_stream_body_reaches_the_caller_as_the_transport_timeout() -> None:
-    import httpx
+    import httpx2 as httpx
 
     mapped: Final = messages_host.map_failure(_marked("Body"), {"model": _ADAPTIVE_OPUS}, "anthropic")
 
@@ -357,7 +357,7 @@ def test_a_stream_body_cut_reaches_the_caller_as_the_transport_raised_it(
     error_class: str,
     text: str,
 ) -> None:
-    import httpx
+    import httpx2 as httpx
 
     from litellm.rust_bridge.host import http_transport
 

@@ -12,7 +12,7 @@ from typing import Any, Dict, Final, List
 
 from unittest.mock import AsyncMock, patch, Mock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 import litellm

@@ -391,7 +391,7 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         response headers stay reachable on ``e.response.headers`` for
         callers that explicitly want them.
         """
-        import httpx
+        import httpx2 as httpx
 
         vendor_response = httpx.Response(
             status_code=429,

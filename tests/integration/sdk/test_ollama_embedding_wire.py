@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import JSON_OBJECT
 from integration._support.timing import assert_cut_short

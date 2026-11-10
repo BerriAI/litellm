@@ -6,13 +6,14 @@ never rewrite. It is consumed by compress() and by the Headroom guardrail, so
 the two agree on what "never compress this" means.
 """
 
+from tests._support.respx_httpx2 import response_for_respx
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 from litellm.compression.compress import compress, get_protected_indices
 from litellm.types.utils import CallTypes
 
@@ -231,7 +232,7 @@ def test_embedding_scorer(respx_mock: respx.MockRouter) -> None:
     auth_context: Final = "Authentication code " * 2000
     recipe_context: Final = "Unrelated cooking recipes " * 2000
     route: Final = respx_mock.post("https://api.openai.com/v1/embeddings").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "list",
@@ -244,7 +245,7 @@ def test_embedding_scorer(respx_mock: respx.MockRouter) -> None:
                 ],
                 "usage": {"prompt_tokens": 4, "total_tokens": 4},
             },
-        )
+        ))
     )
 
     result: Final = compress(

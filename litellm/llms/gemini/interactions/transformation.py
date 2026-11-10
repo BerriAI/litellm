@@ -12,7 +12,7 @@ Requests use Api-Revision 2026-05-20 (`steps` schema).
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger

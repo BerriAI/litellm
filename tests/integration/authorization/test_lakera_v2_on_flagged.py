@@ -6,7 +6,7 @@ from contextlib import ExitStack
 from itertools import product
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support import responses_stream
 from integration._support.client import Gateway, object_value

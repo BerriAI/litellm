@@ -13,14 +13,16 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from httpx import Response
+from httpx2 import Response
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -325,7 +327,7 @@ def test_a_failure_after_keepalive_pings_keeps_the_client_protocol(monkeypatch: 
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
         with respx.mock as transport:
             transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).mock(
-                side_effect=slow_rate_limit
+                side_effect=side_effect_for_respx(slow_rate_limit)
             )
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
                 result: Final = await client.post(
@@ -1599,8 +1601,10 @@ async def _read_through_proxy(
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
-    with respx.mock(assert_all_called=False) as transport:
-        route: Final = transport.get(_RESUMED_UPSTREAM + "/responses/resp_read").mock(return_value=upstream)
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as transport:
+        route: Final = transport.get(_RESUMED_UPSTREAM + "/responses/resp_read").mock(
+            return_value=response_for_respx(upstream)
+        )
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
             result: Final = await client.get(f"/v1/responses/{_proxy_issued_id('resp_read')}", params=query)
         return result, tuple(call.request for call in route.calls)

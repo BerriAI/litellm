@@ -4,7 +4,7 @@ Tests for Volcengine Responses API transformation.
 
 from typing import List, Literal, Optional, Union
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import BaseModel, Field
 

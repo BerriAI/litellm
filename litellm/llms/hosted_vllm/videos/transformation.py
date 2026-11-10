@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 from urllib.parse import urlparse
 
-from httpx._types import FileTypes, RequestFiles
+from httpx2._types import FileTypes, RequestFiles
 from pydantic import TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils

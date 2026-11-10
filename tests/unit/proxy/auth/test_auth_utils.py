@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException, Request
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
@@ -1223,7 +1224,7 @@ def _cache_prediction_payload(candidate="candidate-id", current="current-id"):
 async def test_cache_prediction_authorizes_route_and_personal_models_before_provider_counts(
     monkeypatch, allowed_routes, user_models, candidate, status_code
 ):
-    import httpx
+    import httpx2 as httpx
 
     app, counts = _cache_prediction_auth_app(monkeypatch, allowed_routes, user_models)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -1250,7 +1251,7 @@ async def test_cache_prediction_authorizes_route_and_personal_models_before_prov
 async def test_cache_prediction_hides_foreign_and_missing_ids_before_model_authorization(
     monkeypatch, arm, team_id, key_models, user_models, team_models
 ):
-    import httpx
+    import httpx2 as httpx
 
     app, counts = _cache_prediction_auth_app(
         monkeypatch,
@@ -1282,7 +1283,7 @@ async def test_cache_prediction_hides_foreign_and_missing_ids_before_model_autho
 async def test_cache_prediction_checks_each_visible_team_deployment_model(
     monkeypatch, arm, key_models, team_models, status_code
 ):
-    import httpx
+    import httpx2 as httpx
 
     app, counts = _cache_prediction_auth_app(
         monkeypatch,
@@ -1302,7 +1303,7 @@ async def test_cache_prediction_checks_each_visible_team_deployment_model(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arm", ["current_deployment_id", "candidate_deployment_id"])
 async def test_cache_prediction_checks_each_visible_personal_deployment_model(monkeypatch, arm):
-    import httpx
+    import httpx2 as httpx
 
     app, counts = _cache_prediction_auth_app(monkeypatch, ["/cost/predict-cache"], ["current-group"])
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
@@ -1328,7 +1329,7 @@ async def test_cache_prediction_checks_each_visible_personal_deployment_model(mo
 async def test_cache_prediction_preserves_authenticated_header_and_key_tag_rpm(
     monkeypatch, header_tag, key_tags, limit, status_code, provider_calls
 ):
-    import httpx
+    import httpx2 as httpx
 
     app, counts = _cache_prediction_auth_app(
         monkeypatch,
@@ -3329,12 +3330,13 @@ class TestClientsideBaseOverrideOutboundKey:
         monkeypatch.setattr(litellm, "api_key", None, raising=False)
 
     def test_caller_key_override_sends_caller_key_never_server_key(self):
-        import httpx
-        import respx
+        import httpx2 as httpx
+
+        from tests._support import respx_httpx2 as respx
 
         with respx.mock:
             route = respx.post("https://caller.example/v1/chat/completions").mock(
-                return_value=httpx.Response(200, json=_OPENAI_CHAT_RESPONSE)
+                return_value=response_for_respx(httpx.Response(200, json=_OPENAI_CHAT_RESPONSE))
             )
             self._router().completion(
                 model="gpt-4",

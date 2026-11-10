@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 
-import httpx
+import httpx2 as httpx
 from _azure_storage_support import (
     SINK_HOSTS,
     RecordingDataLakeSink,

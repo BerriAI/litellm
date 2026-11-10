@@ -9,11 +9,12 @@ from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
@@ -399,7 +400,9 @@ async def test_router_spreads_open_chat_streams_across_least_busy_deployments(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_chat_stream)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(_chat_stream)
+    )
     router: Final = _least_busy_router()
 
     streams: Final = [
@@ -423,7 +426,9 @@ async def test_router_spreads_open_text_completion_streams_across_least_busy_dep
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_chat_stream)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=side_effect_for_respx(_chat_stream)
+    )
     router: Final = _least_busy_router()
 
     for _ in ROUTER_DEPLOYMENT_IDS:
@@ -444,7 +449,7 @@ async def test_router_picks_least_busy_deployment_and_completion_restores_counts
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "chatcmpl-least-busy",
@@ -454,7 +459,7 @@ async def test_router_picks_least_busy_deployment_and_completion_restores_counts
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
-        )
+        ))
     )
     router: Final = _least_busy_router()
     seeded: Final = {"1": 10, "2": 54, "3": 100}
@@ -501,7 +506,7 @@ async def test_router_spreads_requests_that_start_together(
         )
 
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=completion_after_all_started
+        side_effect=side_effect_for_respx(completion_after_all_started)
     )
     router: Final = _least_busy_router()
 
@@ -875,7 +880,7 @@ async def test_a_fallback_hop_rejected_before_its_provider_frees_its_pick_when_e
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(500, json={"error": {"message": "upstream down"}})
+        return_value=response_for_respx(httpx.Response(500, json={"error": {"message": "upstream down"}}))
     )
     router: Final = _fallback_router()
     logging_obj, request = litellm.utils.function_setup(
@@ -939,7 +944,9 @@ async def test_a_batch_create_does_not_keep_its_deployment_busy(
     provider_response: httpx.Response, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post("https://api.openai.com/v1/batches").mock(return_value=provider_response)
+    route: Final = respx_mock.post("https://api.openai.com/v1/batches").mock(
+        return_value=response_for_respx(provider_response)
+    )
     router: Final = _least_busy_router()
 
     with contextlib.suppress(openai.BadRequestError):
@@ -979,7 +986,9 @@ async def test_a_vector_store_create_does_not_keep_its_deployment_busy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    route: Final = respx_mock.post("https://api.openai.com/v1/vector_stores").mock(return_value=provider_response)
+    route: Final = respx_mock.post("https://api.openai.com/v1/vector_stores").mock(
+        return_value=response_for_respx(provider_response)
+    )
     router: Final = _least_busy_router()
 
     with contextlib.suppress(openai.BadRequestError):
@@ -996,7 +1005,7 @@ async def test_listing_fine_tuning_jobs_does_not_keep_its_deployment_busy(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.get(url__startswith="https://api.openai.com/v1/fine_tuning/jobs").mock(
-        return_value=httpx.Response(200, json={"object": "list", "data": [], "has_more": False})
+        return_value=response_for_respx(httpx.Response(200, json={"object": "list", "data": [], "has_more": False}))
     )
     router: Final = _least_busy_router()
 
@@ -1015,7 +1024,7 @@ def test_a_sync_text_completion_does_not_keep_its_deployment_busy(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "cmpl-least-busy",
@@ -1025,7 +1034,7 @@ def test_a_sync_text_completion_does_not_keep_its_deployment_busy(
                 "choices": [{"text": "ok", "index": 0, "finish_reason": "stop", "logprobs": None}],
                 "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
             },
-        )
+        ))
     )
     router: Final = _least_busy_router(TEXT_GROUP)
 
@@ -1052,7 +1061,7 @@ async def test_a_batch_cancel_does_not_keep_its_deployment_busy(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_least_busy/cancel").mock(
-        return_value=httpx.Response(200, json={**_BATCH, "status": "cancelling"})
+        return_value=response_for_respx(httpx.Response(200, json={**_BATCH, "status": "cancelling"}))
     )
     router: Final = _least_busy_router()
 
@@ -1155,7 +1164,7 @@ async def test_a_request_sharing_one_logging_object_that_ends_without_an_answer_
                 await asyncio.Event().wait()
         return httpx.Response(200, json=_CHAT_REPLY)
 
-    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=upstream)
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=side_effect_for_respx(upstream))
     router: Final = Router(
         model_list=[
             {

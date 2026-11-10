@@ -3,7 +3,7 @@ from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
 
-import httpx
+import httpx2 as httpx
 from openai.types.responses import ResponseReasoningItem
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict

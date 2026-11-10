@@ -25,7 +25,7 @@ Reference: https://docs.oracle.com/en-us/iaas/api/#/en/generative-ai-inference/l
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

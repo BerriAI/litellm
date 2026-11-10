@@ -5,7 +5,7 @@ CompactifAI chat completion transformation
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
-import httpx
+import httpx2 as httpx
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException

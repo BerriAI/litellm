@@ -10,8 +10,8 @@ Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messa
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
-import httpx
-from httpx._models import Headers
+import httpx2 as httpx
+from httpx2._models import Headers
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing

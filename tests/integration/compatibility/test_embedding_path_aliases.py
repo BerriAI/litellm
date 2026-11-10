@@ -3,7 +3,7 @@ import json
 import struct
 from typing import Final, Literal
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support.client import Gateway

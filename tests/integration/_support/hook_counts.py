@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import yaml
 from integration._support.client import Gateway, held
 from integration._support.wire import Reply, Request, Wire

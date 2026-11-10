@@ -3,7 +3,7 @@ import json
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 

@@ -6,7 +6,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import TypeAdapter, ValidationError
 from pydantic_core import ErrorDetails
 from typing_extensions import assert_never

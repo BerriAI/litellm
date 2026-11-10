@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import AsyncIterator, Final
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (

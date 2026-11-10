@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import quote
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

@@ -6,7 +6,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import eventually, gateway_from_environment, string_value
 from integration._support.database import scratch_database

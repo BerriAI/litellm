@@ -6,10 +6,11 @@ import logging
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
 from litellm.litellm_core_utils.llm_request_utils import RankedChatModel
@@ -573,7 +574,7 @@ async def test_run_model_health_check_probes_mantle_claude_over_messages(monkeyp
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         messages_route = respx_mock.post("https://bedrock-mantle.us-east-2.api.aws/anthropic/v1/messages").respond(
             json=_mantle_anthropic_response()
         )
@@ -652,7 +653,7 @@ async def test_run_model_health_check_probes_the_api_a_mantle_gpt_deployment_sen
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         chat_route: Final = respx_mock.post(
             url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/chat/completions$"
         ).respond(json=_MANTLE_GPT_CHAT_REPLY)
@@ -688,7 +689,7 @@ async def test_a_health_probe_of_a_custom_priced_chat_pin_leaves_plain_calls_on_
         "aws_region_name": "us-east-2",
     }
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         chat_route: Final = respx_mock.post(
             url__regex=r"^https://bedrock-mantle\.us-east-2\.api\.aws/.*/chat/completions$"
         ).respond(json=_MANTLE_GPT_CHAT_REPLY)
@@ -979,7 +980,7 @@ async def _pegasus_health_check_request_body(
         },
     )
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         invoke_route = respx_mock.post(
             host="bedrock-runtime.us-east-1.amazonaws.com",
             path__regex=r"/model/.+/invoke",
@@ -1416,7 +1417,9 @@ async def test_background_health_check_observes_the_concurrency_limit_and_queue(
             headers={"content-type": "audio/mpeg"},
         )
 
-    upstream: Final = respx_mock.post("https://health.example/v1/audio/speech").mock(side_effect=complete_request)
+    upstream: Final = respx_mock.post("https://health.example/v1/audio/speech").mock(
+        side_effect=side_effect_for_respx(complete_request)
+    )
     model_list: Final = [
         {
             "litellm_params": {
@@ -1461,7 +1464,7 @@ async def test_background_health_check_timeout_marks_a_blocked_provider_unhealth
         await never_release.wait()
         return httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
 
-    respx_mock.post("https://health.example/v1/audio/speech").mock(side_effect=blocked_response)
+    respx_mock.post("https://health.example/v1/audio/speech").mock(side_effect=side_effect_for_respx(blocked_response))
     model_list: Final = [
         {
             "litellm_params": {
@@ -1497,7 +1500,7 @@ async def test_background_health_check_timeout_does_not_cancel_a_sibling(
         await never_release.wait()
         return httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
 
-    respx_mock.post("https://slow.example/v1/audio/speech").mock(side_effect=blocked_response)
+    respx_mock.post("https://slow.example/v1/audio/speech").mock(side_effect=side_effect_for_respx(blocked_response))
     fast_upstream: Final = respx_mock.post("https://fast.example/v1/audio/speech").respond(
         content=b"audio",
         headers={"content-type": "audio/mpeg"},
@@ -1553,12 +1556,12 @@ async def test_a_failing_health_probe_leaves_the_deployment_serving_requests(mon
     }
     router: Final = litellm.Router(model_list=[deployment])
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         respx_mock.post("https://probe.example/v1/chat/completions").mock(
-            side_effect=(
+            side_effect=side_effect_for_respx((
                 httpx.Response(404, json={"error": {"message": "model not found", "type": "invalid_request_error"}}),
                 httpx.Response(200, json={**_MANTLE_GPT_CHAT_REPLY, "model": "gpt-4o-mini"}),
-            )
+            ))
         )
         probe: Final = await hc_module._run_model_health_check(copy.deepcopy(deployment))
         reply: Final = await router.acompletion(model="probe-group", messages=[{"role": "user", "content": "Say ok"}])

@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import anthropic
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, list_value, object_value, string_value

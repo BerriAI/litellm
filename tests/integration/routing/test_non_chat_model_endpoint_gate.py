@@ -8,7 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import openai
 import pytest
 import websockets

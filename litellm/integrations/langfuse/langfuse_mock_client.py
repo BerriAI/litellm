@@ -10,7 +10,7 @@ Usage:
 
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.integrations.mock_client_factory import (
     MockClientConfig,

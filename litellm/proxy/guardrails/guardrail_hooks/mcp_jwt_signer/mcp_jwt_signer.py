@@ -76,7 +76,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
-import httpx
+import httpx2 as httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa

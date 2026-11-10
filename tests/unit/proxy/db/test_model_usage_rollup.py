@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY

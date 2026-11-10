@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, Field, ValidationError
 
 import litellm

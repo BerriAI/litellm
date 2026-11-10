@@ -10,7 +10,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import httpx
+import httpx2 as httpx
 from fastapi import HTTPException
 
 

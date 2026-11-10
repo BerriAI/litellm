@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Final, cast
 from urllib.parse import parse_qs
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import TypeAdapter
 

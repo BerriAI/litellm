@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from httpx import Request, Response
+from httpx2 import Request, Response
 
 from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger
 from litellm.types.utils import StandardLoggingPayload

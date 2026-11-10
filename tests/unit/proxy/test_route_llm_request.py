@@ -11,10 +11,11 @@ from typing import Final
 from unittest.mock import MagicMock
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 import pytest
 import redis
-import respx
+
+from tests._support import respx_httpx2 as respx
 from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
@@ -38,6 +39,7 @@ from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_RESPONSE_HEADER,
 )
 from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -773,7 +775,7 @@ async def test_route_request_realtime_wildcard_model_resolves_credentials(
     """
     from unittest.mock import AsyncMock, patch
 
-    import httpx
+    import httpx2 as httpx
 
     import litellm
 
@@ -813,7 +815,7 @@ async def test_route_request_realtime_team_scoped_model_resolves_credentials(
     """
     from unittest.mock import AsyncMock, patch
 
-    import httpx
+    import httpx2 as httpx
 
     import litellm
 
@@ -861,7 +863,7 @@ async def test_route_request_realtime_litellm_credential_name_resolves_api_key(
     """
     from unittest.mock import AsyncMock, patch
 
-    import httpx
+    import httpx2 as httpx
 
     import litellm
 
@@ -930,7 +932,7 @@ async def test_route_request_realtime_calls_resolves_api_base(monkeypatch):
     """
     from unittest.mock import AsyncMock, patch
 
-    import httpx
+    import httpx2 as httpx
 
     import litellm
 
@@ -975,7 +977,7 @@ async def test_route_request_realtime_transcription_session_resolves_credentials
     """
     from unittest.mock import AsyncMock, patch
 
-    import httpx
+    import httpx2 as httpx
 
     import litellm
 
@@ -1150,15 +1152,15 @@ async def test_route_request_never_forwards_router_settings_override(
         **extra_body,
     }
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         primary: Final = respx_mock.post(f"{upstream_base}/chat/completions", json__model="gpt-3.5-turbo").mock(
-            side_effect=[
+            side_effect=side_effect_for_respx([
                 httpx.Response(500, json={"error": {"message": "boom"}}),
                 _chat_completion_response("gpt-3.5-turbo"),
-            ]
+            ])
         )
         respx_mock.post(f"{upstream_base}/chat/completions", json__model="gpt-4").mock(
-            return_value=_chat_completion_response("gpt-4")
+            return_value=response_for_respx(_chat_completion_response("gpt-4"))
         )
         response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
 
@@ -1183,9 +1185,9 @@ async def test_route_request_treats_null_router_settings_override_as_absent(
         **extra_body,
     }
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
-            return_value=_chat_completion_response("gpt-3.5-turbo")
+            return_value=response_for_respx(_chat_completion_response("gpt-3.5-turbo"))
         )
         response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
 
@@ -1216,9 +1218,9 @@ async def test_route_request_rejects_non_object_router_settings_override(
         **extra_body,
     }
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
-            return_value=_chat_completion_response("gpt-3.5-turbo")
+            return_value=response_for_respx(_chat_completion_response("gpt-3.5-turbo"))
         )
         with pytest.raises(ProxyException) as exc_info:
             await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion")
@@ -1251,9 +1253,9 @@ async def test_route_request_drops_non_object_router_settings_override_under_dro
         **extra_body,
     }
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         upstream: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions").mock(
-            return_value=_chat_completion_response("gpt-3.5-turbo")
+            return_value=response_for_respx(_chat_completion_response("gpt-3.5-turbo"))
         )
         response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
 
@@ -1294,12 +1296,12 @@ async def test_route_request_user_config_router_settings_beat_key_settings(
         },
     }
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         upstream: Final = respx_mock.post(f"{user_config_base}/chat/completions").mock(
-            side_effect=[
+            side_effect=side_effect_for_respx([
                 httpx.Response(500, json={"error": {"message": "boom"}}),
                 _chat_completion_response("gpt-3.5-turbo"),
-            ]
+            ])
         )
         with contextlib.suppress(litellm.InternalServerError):
             await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
@@ -1388,12 +1390,12 @@ async def test_route_request_applies_override_fallbacks_when_request_carries_cre
         **credential,
     }
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions", json__model="gpt-3.5-turbo").mock(
-            return_value=upstream_error
+            return_value=response_for_respx(upstream_error)
         )
         fallback: Final = respx_mock.post(f"{_PROXY_DEPLOYMENT_BASE}/chat/completions", json__model="gpt-4").mock(
-            return_value=_chat_completion_response("gpt-4")
+            return_value=response_for_respx(_chat_completion_response("gpt-4"))
         )
         response: Final = await (await route_request(data, _proxy_router_with_two_model_groups(), None, "acompletion"))
 
@@ -1435,9 +1437,9 @@ async def test_route_request_keeps_router_only_override_settings_out_of_pass_thr
         "router_settings_override": router_only_setting,
     }
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-            return_value=_chat_completion_response("gpt-pass-through")
+            return_value=response_for_respx(_chat_completion_response("gpt-pass-through"))
         )
         await (await route_request(data, router, None, "acompletion"))
 
@@ -1467,9 +1469,9 @@ async def test_route_request_keeps_key_fallbacks_out_of_pass_through_provider_bo
         "router_settings_override": {"fallbacks": [{"gpt-4": ["gpt-4"]}], "num_retries": 0},
     }
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-            return_value=httpx.Response(500, json={"error": {"message": "upstream down"}})
+            return_value=response_for_respx(httpx.Response(500, json={"error": {"message": "upstream down"}}))
         )
         with pytest.raises(litellm.InternalServerError):
             await (await route_request(data, router, None, "acompletion"))
@@ -2487,10 +2489,10 @@ async def test_team_key_search_of_registered_bedrock_store_reaches_bedrock_with_
 
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as respx_mock:
         route: Final = respx_mock.post(
             "https://bedrock-agent-runtime.us-east-1.amazonaws.com/knowledgebases/KB12345678/retrieve"
-        ).mock(return_value=httpx.Response(200, json={"retrievalResults": []}))
+        ).mock(return_value=response_for_respx(httpx.Response(200, json={"retrievalResults": []})))
         response: Final = await (
             await route_request(
                 _registered_bedrock_kb_search("team-a"),
@@ -2929,11 +2931,13 @@ async def test_a_rate_limited_user_config_deployment_cools_down_for_the_next_req
     healthy_base: Final = "https://healthy.example/v1"
     user_config: Final = {"model_list": _ordered_pair("flaky", rate_limited_base, healthy_base)}
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         rate_limited: Final = respx_mock.post(f"{rate_limited_base}/chat/completions").mock(
-            return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+            return_value=response_for_respx(httpx.Response(429, json={"error": {"message": "slow down"}}))
         )
-        respx_mock.post(f"{healthy_base}/chat/completions").mock(return_value=_chat_completion_response("gpt-5.5"))
+        respx_mock.post(f"{healthy_base}/chat/completions").mock(
+            return_value=response_for_respx(_chat_completion_response("gpt-5.5"))
+        )
         for _ in range(3):
             await _user_config_request("flaky", user_config, arrives_with_logging_obj)
             await asyncio.sleep(0.3)
@@ -2955,13 +2959,13 @@ async def _remaining_usage_headers_after_429_then_200s(
         headers: Final = response._hidden_params["additional_headers"]
         return headers.get("x-ratelimit-remaining-requests"), headers.get("x-ratelimit-remaining-tokens")
 
-    with respx.mock(assert_all_called=False) as respx_mock:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
         respx_mock.post(f"{api_base}/chat/completions").mock(
-            side_effect=[
+            side_effect=side_effect_for_respx([
                 httpx.Response(429, json={"error": {"message": "slow down"}}),
                 _chat_completion_response("gpt-5.5"),
                 _chat_completion_response("gpt-5.5"),
-            ]
+            ])
         )
         return [await remaining_usage() for _ in range(3)]
 
@@ -3010,9 +3014,13 @@ async def _first_deployment_calls_over_successes_then_failures(
 ) -> int:
     successes: Final = [_chat_completion_response("gpt-5.5") for _ in range(6)]
     failures: Final = [httpx.Response(500, json={"error": {"message": "boom"}}) for _ in range(6)]
-    with respx.mock(assert_all_called=False) as respx_mock:
-        first: Final = respx_mock.post(f"{first_base}/chat/completions").mock(side_effect=[*successes, *failures])
-        respx_mock.post(f"{second_base}/chat/completions").mock(return_value=_chat_completion_response("gpt-5.5"))
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as respx_mock:
+        first: Final = respx_mock.post(f"{first_base}/chat/completions").mock(
+            side_effect=side_effect_for_respx([*successes, *failures])
+        )
+        respx_mock.post(f"{second_base}/chat/completions").mock(
+            return_value=response_for_respx(_chat_completion_response("gpt-5.5"))
+        )
         for _ in range(len(successes) + len(failures)):
             await send()
             await asyncio.sleep(0.3)

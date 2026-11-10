@@ -13,7 +13,7 @@ from pathlib import Path
 from queue import SimpleQueue
 from typing import Final, Literal, TypeAlias
 
-import httpx
+import httpx2 as httpx
 import psutil
 import pytest
 from integration._support.anthropic_sse import error_body, message_json, message_stream

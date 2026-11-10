@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel
 
 import litellm

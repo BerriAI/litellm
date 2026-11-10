@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable, Mapping
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

@@ -3,7 +3,7 @@ from io import BufferedReader, BytesIO
 from typing import Dict, List
 from unittest.mock import MagicMock, mock_open, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 

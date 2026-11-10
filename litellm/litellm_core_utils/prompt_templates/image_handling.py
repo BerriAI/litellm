@@ -14,8 +14,8 @@ from types import MappingProxyType
 from typing import Final, TypeVar
 from urllib.parse import urlparse
 
-import httpx
-from httpx import USE_CLIENT_DEFAULT, Response
+import httpx2 as httpx
+from httpx2 import USE_CLIENT_DEFAULT, Response
 
 import litellm
 from litellm import verbose_logger

@@ -1,3 +1,4 @@
+
 import asyncio
 import base64
 import json
@@ -9,9 +10,9 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+from tests._support import respx_httpx2 as respx
 from fastapi import HTTPException
 from openai import APIConnectionError
 from pydantic import TypeAdapter
@@ -32,6 +33,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     is_base64_encoded_unified_file_id,
 )
 from litellm.types.llms.openai import OpenAIFileObject
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
 
 
@@ -2449,7 +2451,9 @@ def _xai_completed_batch() -> httpx.Response:
 
 def _provider_file_route(provider: str) -> respx.Route:
     if provider == "xai":
-        return respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(return_value=_xai_completed_batch())
+        return respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(
+            return_value=response_for_respx(_xai_completed_batch())
+        )
     return respx.get(f"{_OPENAI_API_BASE}/files/{_OPENAI_FILE_ID}").respond(
         200,
         json={
@@ -2591,7 +2595,9 @@ async def test_store_batch_output_file_keeps_its_measured_size_when_a_read_refre
         )
         return _xai_completed_batch()
 
-    respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(side_effect=a_read_refreshes_the_row_then_xai_answers)
+    respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(
+        side_effect=side_effect_for_respx(a_read_refreshes_the_row_then_xai_answers)
+    )
     with patch.object(proxy_server_module, "llm_router", _provider_router("xai")):
         await proxy_managed_files.store_batch_output_file(
             unified_file_id="unified-output",
@@ -2639,7 +2645,9 @@ async def test_store_batch_output_file_from_a_batch_read_leaves_a_newer_row_alon
         )
         return _xai_completed_batch()
 
-    respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(side_effect=the_batch_job_writes_then_xai_answers)
+    respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(
+        side_effect=side_effect_for_respx(the_batch_job_writes_then_xai_answers)
+    )
     reads_before_store: Final = len(managed_file_table.find_first_calls)
     with patch.object(proxy_server_module, "llm_router", _provider_router("xai")):
         await proxy_managed_files.store_batch_output_file(
@@ -2867,7 +2875,9 @@ async def test_afile_retrieve_refresh_keeps_a_size_the_batch_job_writes_while_it
         _size_written_by_batch_job(managed_file_table)
         return _xai_completed_batch()
 
-    respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(side_effect=batch_job_writes_then_xai_answers)
+    respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(
+        side_effect=side_effect_for_respx(batch_job_writes_then_xai_answers)
+    )
 
     raced_response: Final = await proxy_managed_files.afile_retrieve(
         file_id="unified-output",
@@ -2913,7 +2923,9 @@ async def test_afile_retrieve_refresh_that_loses_its_write_still_answers_with_th
         managed_file_table.rows["unified-output"] = read_row.model_copy(update={"file_object": newer_file_object})
         return _xai_completed_batch()
 
-    respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(side_effect=another_write_lands_then_xai_answers)
+    respx.get(f"{_XAI_API_BASE}/v1/batches/{_XAI_BATCH_ID}").mock(
+        side_effect=side_effect_for_respx(another_write_lands_then_xai_answers)
+    )
 
     response: Final = await proxy_managed_files.afile_retrieve(
         file_id="unified-output",

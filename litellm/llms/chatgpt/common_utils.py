@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils

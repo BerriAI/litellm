@@ -4,10 +4,11 @@ import json
 import pathlib
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.core_helpers import process_response_headers
@@ -184,7 +185,7 @@ async def test_acompletion_fallbacks_bad_models(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(
                 404,
                 json={
@@ -207,7 +208,7 @@ async def test_acompletion_fallbacks_bad_models(
                     }
                 },
             ),
-        )
+        ))
     )
 
     with pytest.raises(Exception, match="All fallback attempts failed"):
@@ -227,7 +228,7 @@ async def test_acompletion_fallbacks_basic(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(
                 404,
                 json={
@@ -256,7 +257,7 @@ async def test_acompletion_fallbacks_basic(
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 },
             ),
-        )
+        ))
     )
 
     response: Final = await python_acompletion(
@@ -276,7 +277,7 @@ async def test_acompletion_fallbacks_empty_list(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             404,
             json={
                 "error": {
@@ -286,7 +287,7 @@ async def test_acompletion_fallbacks_empty_list(
                     "code": "model_not_found",
                 }
             },
-        )
+        ))
     )
 
     with pytest.raises(litellm.NotFoundError, match="model unavailable"):
@@ -306,7 +307,7 @@ async def test_acompletion_fallbacks_none_response(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(
                 500,
                 json={
@@ -335,7 +336,7 @@ async def test_acompletion_fallbacks_none_response(
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 },
             ),
-        )
+        ))
     )
 
     response: Final = await python_acompletion(
@@ -355,7 +356,7 @@ async def test_acompletion_fallbacks_with_dict_config(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(
                 401,
                 json={
@@ -384,7 +385,7 @@ async def test_acompletion_fallbacks_with_dict_config(
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 },
             ),
-        )
+        ))
     )
 
     response: Final = await python_acompletion(
@@ -406,7 +407,7 @@ def test_completion_fallbacks_sync(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        side_effect=(
+        side_effect=side_effect_for_respx((
             httpx.Response(
                 404,
                 json={
@@ -435,7 +436,7 @@ def test_completion_fallbacks_sync(
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 },
             ),
-        )
+        ))
     )
 
     response: Final = python_completion(
@@ -488,13 +489,13 @@ async def test_acompletion_fallback_sends_the_fallback_model_the_request_a_direc
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     openai_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={"error": {"message": "invalid key", "type": "authentication_error", "param": None, "code": None}},
-        )
+        ))
     )
     anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json=ANTHROPIC_ANSWER)
+        return_value=response_for_respx(httpx.Response(200, json=ANTHROPIC_ANSWER))
     )
 
     await python_acompletion(**_cached_request(model="anthropic/claude-haiku-4-5", api_key="anthropic-key"))
@@ -518,7 +519,7 @@ async def test_cache_dialect_follows_base_url_over_an_api_base_the_call_does_not
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=OPENAI_ANSWER)
+        return_value=response_for_respx(httpx.Response(200, json=OPENAI_ANSWER))
     )
 
     async def send(**kwargs: object) -> None:
@@ -554,23 +555,23 @@ async def test_acompletion_fallback_sends_the_context_a_vector_store_tool_retrie
         ),
     )
     search_route: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/vs_docs/search").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "object": "vector_store.search_results.page",
                 "search_query": "what is litellm?",
                 "data": [{"score": 1.0, "content": [{"type": "text", "text": "litellm is an LLM gateway"}]}],
             },
-        )
+        ))
     )
     openai_route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={"error": {"message": "invalid key", "type": "authentication_error", "param": None, "code": None}},
-        )
+        ))
     )
     anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json=ANTHROPIC_ANSWER)
+        return_value=response_for_respx(httpx.Response(200, json=ANTHROPIC_ANSWER))
     )
 
     async def send(**kwargs: object) -> None:
@@ -604,13 +605,13 @@ async def test_acompletion_fallback_sends_the_prompt_the_primary_model_prefix_te
     monkeypatch.setattr(litellm, "global_prompt_directory", str(tmp_path))
     monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
     _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={"error": {"message": "invalid key", "type": "authentication_error", "param": None, "code": None}},
-        )
+        ))
     )
     anthropic_route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json=ANTHROPIC_ANSWER)
+        return_value=response_for_respx(httpx.Response(200, json=ANTHROPIC_ANSWER))
     )
 
     async def send(**kwargs: object) -> None:

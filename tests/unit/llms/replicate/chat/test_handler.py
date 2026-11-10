@@ -1,8 +1,10 @@
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -21,7 +23,7 @@ def _poll_without_waiting(monkeypatch: pytest.MonkeyPatch):
 
 def _poll(*bodies: object) -> list[dict[str, object]]:
     with respx.mock:
-        respx.get(POLL_URL).mock(side_effect=[httpx.Response(200, json=body) for body in bodies])
+        respx.get(POLL_URL).mock(side_effect=side_effect_for_respx([httpx.Response(200, json=body) for body in bodies]))
         return list(
             handle_prediction_response_streaming(
                 POLL_URL,
@@ -137,10 +139,10 @@ def test_streaming_poll_keeps_the_chunks_yielded_before_a_malformed_body():
     chunks = []
     with respx.mock:
         respx.get(POLL_URL).mock(
-            side_effect=[
+            side_effect=side_effect_for_respx([
                 httpx.Response(200, json={"status": "processing", "output": ["a"]}),
                 httpx.Response(200, json=["not", "an", "object"]),
-            ]
+            ])
         )
         stream = handle_prediction_response_streaming(
             POLL_URL, "replicate-test-key", lambda _message: None, headers={}, http_client=HTTPHandler()
@@ -155,10 +157,10 @@ def test_streaming_poll_keeps_the_chunks_yielded_before_a_malformed_body():
 def test_streaming_poll_retries_after_a_non_200_status():
     with respx.mock:
         respx.get(POLL_URL).mock(
-            side_effect=[
+            side_effect=side_effect_for_respx([
                 httpx.Response(503, text="busy"),
                 httpx.Response(200, json={"status": "succeeded", "output": ["ok"]}),
-            ]
+            ])
         )
         chunks = list(
             handle_prediction_response_streaming(
@@ -171,8 +173,12 @@ def test_streaming_poll_retries_after_a_non_200_status():
 
 def _stream_completion(*poll_bodies: object) -> list[str | None]:
     with respx.mock:
-        respx.post(CREATE_URL).mock(return_value=httpx.Response(201, json={"urls": {"get": POLL_URL}}))
-        respx.get(POLL_URL).mock(side_effect=[httpx.Response(200, json=body) for body in poll_bodies])
+        respx.post(CREATE_URL).mock(
+            return_value=response_for_respx(httpx.Response(201, json={"urls": {"get": POLL_URL}}))
+        )
+        respx.get(POLL_URL).mock(
+            side_effect=side_effect_for_respx([httpx.Response(200, json=body) for body in poll_bodies])
+        )
         stream = litellm.completion(
             model="replicate/meta/meta-llama-3-8b-instruct",
             messages=[{"role": "user", "content": "hi"}],

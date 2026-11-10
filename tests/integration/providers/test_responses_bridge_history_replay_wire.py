@@ -5,7 +5,7 @@ from functools import reduce
 from itertools import chain
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from integration._support.client import Gateway, list_value, object_value
 from integration._support.responses_replay import (

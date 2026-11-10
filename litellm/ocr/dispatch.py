@@ -2,7 +2,7 @@ from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import runtime

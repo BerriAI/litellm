@@ -17,7 +17,7 @@ if "httpx" not in sys.modules:
     httpx_mod.HTTPStatusError = Exception
     sys.modules["httpx"] = httpx_mod
 
-import httpx
+import httpx2 as httpx
 import litellm
 
 from litellm.llms.ollama.common_utils import OllamaModelInfo

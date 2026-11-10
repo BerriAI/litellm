@@ -9,11 +9,10 @@ from datetime import datetime, timedelta
 from typing import Final
 from unittest.mock import MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 import responses
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.llms.vertex_ai.rerank.transformation import VertexAIRerankConfig
 from litellm.types.rerank import RerankResponse

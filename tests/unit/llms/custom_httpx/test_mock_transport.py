@@ -5,7 +5,7 @@ responses parseable by the OpenAI SDK.
 
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.custom_httpx.mock_transport import MockOpenAITransport

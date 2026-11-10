@@ -15,7 +15,7 @@ from enum import Enum
 from itertools import chain, starmap
 from typing import Final, Protocol, TypeAlias, cast
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 import litellm

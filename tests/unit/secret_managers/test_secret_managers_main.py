@@ -12,8 +12,7 @@ from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm._logging import redact_internal_details_from_client_message
 from litellm.integrations.custom_secret_manager import CustomSecretManager
@@ -241,7 +240,7 @@ def test_oidc_google_fetches_the_token_from_the_metadata_host_gce_metadata_host_
     monkeypatch.setenv("GCE_METADATA_HOST", "127.0.0.1:8930")
     audience: Final = f"https://vllm.example.test/{uuid.uuid4().hex}"
 
-    with respx.mock(assert_all_called=True) as metadata:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as metadata:
         metadata.get(
             "http://127.0.0.1:8930/computeMetadata/v1/instance/service-accounts/default/identity",
             params={"audience": audience},
@@ -257,7 +256,7 @@ def test_oidc_google_secret_outside_a_model_api_key_keeps_its_metadata_wait_when
     monkeypatch.setenv("GCE_METADATA_TIMEOUT", "1")
     audience: Final = f"https://sts.example.test/{uuid.uuid4().hex}"
 
-    with respx.mock(assert_all_called=True) as metadata:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as metadata:
         identity: Final = metadata.get(
             "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
             params={"audience": audience},

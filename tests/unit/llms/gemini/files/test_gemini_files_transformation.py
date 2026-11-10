@@ -4,7 +4,7 @@ Test Google AI Studio (Gemini) files transformation functionality
 
 from unittest.mock import Mock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.gemini.files.transformation import GoogleAIStudioFilesHandler

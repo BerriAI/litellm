@@ -7,7 +7,7 @@ WatsonX follows the OpenAI spec for audio transcription.
 from collections.abc import Mapping
 from typing import Final
 
-from httpx import Response
+from httpx2 import Response
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm

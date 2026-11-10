@@ -2992,7 +2992,7 @@ class TestMCPDelegateAuthToUpstream:
         """The provider is asked about the token once per request. A token it vouches for admits a granted
         user by name, and one it reports inactive or rejects outright is forwarded anonymously instead of
         failing the request."""
-        import httpx
+        import httpx2 as httpx
 
         from litellm.proxy import proxy_server
         from litellm.types.mcp import MCPAuth
@@ -3015,7 +3015,7 @@ class TestMCPDelegateAuthToUpstream:
                     "OAUTH_CLIENT_SECRET": "fixture-client-secret",
                 },
             ),
-            patch("httpx.AsyncClient.send", side_effect=introspect) as network,
+            patch("httpx2.AsyncClient.send", side_effect=introspect) as network,
             patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mock_mgr,
         ):
             mock_mgr.get_mcp_server_by_name.return_value = TestMCPDelegateAuthToUpstream._make_server(

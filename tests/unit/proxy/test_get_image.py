@@ -2,7 +2,7 @@ from unittest import mock
 
 # Standard path insertion
 
-import httpx
+import httpx2 as httpx
 import pytest
 from litellm.proxy.proxy_server import app
 

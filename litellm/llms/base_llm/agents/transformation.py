@@ -12,7 +12,7 @@ InteractionsHTTPHandler).
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 
-import httpx
+import httpx2 as httpx
 
 from litellm.types.agents import (
     AgentCreateRequest,

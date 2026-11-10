@@ -8,7 +8,7 @@ from typing import Final
 if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
     from exceptiongroup import BaseExceptionGroup
 
-import httpx
+import httpx2 as httpx
 import httpx2
 import pytest
 from mcp import MCPError

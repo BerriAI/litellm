@@ -16,7 +16,7 @@ import sys
 
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from prisma.errors import PrismaError, ClientNotConnectedError
-import httpx
+import httpx2 as httpx
 import backoff
 
 

@@ -9,7 +9,7 @@ from types import MappingProxyType, SimpleNamespace
 from typing import Dict, Final, Literal, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.encoders import jsonable_encoder

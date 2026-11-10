@@ -3,7 +3,7 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import decoded_json_object

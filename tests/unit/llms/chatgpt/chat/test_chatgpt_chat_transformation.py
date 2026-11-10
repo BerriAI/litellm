@@ -1,3 +1,4 @@
+
 from unittest.mock import MagicMock
 
 import pytest
@@ -65,9 +66,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
-import httpx
-import respx
-
+import httpx2 as httpx
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import side_effect_for_respx
 import litellm
 from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -273,7 +274,9 @@ async def test_requests_use_selected_subscription(
         return response.output[0].content[0].text
 
     with respx.mock as transport:
-        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=_subscription_response)
+        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(
+            side_effect=side_effect_for_respx(_subscription_response)
+        )
         results: Final = await asyncio.gather(*(request(index, path) for index, path in enumerate(auth_files)))
         assert results == ["acct-a", "acct-b"]
         if with_prompt:
@@ -377,7 +380,7 @@ async def test_client_login_keeps_its_account_across_gateway_deployments(
         return response.choices[0].message.content if endpoint == "chat" else response.output[0].content[0].text
 
     with respx.mock as transport:
-        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=reply)
+        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=side_effect_for_respx(reply))
         results: Final = await asyncio.gather(call("acct-client-a"), call("acct-client-b"))
         assert results == ["acct-client-a", "acct-client-b"]
         assert len(transport.calls) == 2
@@ -412,7 +415,7 @@ async def test_one_client_limit_does_not_cool_down_other_subscriptions(
             with pytest.raises(litellm.RateLimitError):
                 await router.aresponses(model="pool", input="Hello", provider_specific_header=headers)
             await asyncio.sleep(0)
-        route.mock(side_effect=_subscription_response)
+        route.mock(side_effect=side_effect_for_respx(_subscription_response))
         response: Final = await router.aresponses(model="pool", input="Hello")
         assert response.output[0].content[0].text in ("acct-a", "acct-b")
 
@@ -545,7 +548,9 @@ async def test_sdk_extra_headers_use_client_login_without_gateway_auth(
             ],
         )
     with respx.mock as transport:
-        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=_subscription_response)
+        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(
+            side_effect=side_effect_for_respx(_subscription_response)
+        )
         if endpoint == "chat":
             params: Final = {
                 "model": "chatgpt/gpt-6.1-sol",
@@ -621,7 +626,7 @@ async def test_requests_preserve_gateway_token_and_selected_workspace(
         }
     )
     with respx.mock as transport:
-        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=reply)
+        transport.post("https://chatgpt.com/backend-api/codex/responses").mock(side_effect=side_effect_for_respx(reply))
         if endpoint == "chat":
             result: Final = (
                 await asyncio.to_thread(litellm.completion, **params, messages=[{"role": "user", "content": "Hello"}])

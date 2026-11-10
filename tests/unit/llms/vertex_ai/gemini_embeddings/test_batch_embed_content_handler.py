@@ -1,11 +1,13 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from google.oauth2.credentials import Credentials
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler import GoogleBatchEmbeddings
@@ -68,11 +70,11 @@ async def test_google_embedding_applies_timeout_and_parses_vectors(
         if is_vertex else GEMINI_BATCH_EMBEDDINGS_URL
     )
     route: Final = respx_mock.post(url).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={"embedding": {"values": [0.1, 0.2, 0.3]}}
             if is_vertex else {"embeddings": [{"values": [0.1, 0.2, 0.3]}]},
-        )
+        ))
     )
 
     response: Final = (

@@ -7,8 +7,8 @@ Maps OpenAI TTS spec to Elevenlabs TTS API
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import urlencode
 
-import httpx
-from httpx import Headers
+import httpx2 as httpx
+from httpx2 import Headers
 
 import litellm
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base

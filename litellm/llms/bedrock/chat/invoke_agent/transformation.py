@@ -8,7 +8,7 @@ import base64
 import json
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid

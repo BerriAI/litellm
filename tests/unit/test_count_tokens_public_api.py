@@ -7,10 +7,11 @@ import json
 import os
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.types.utils import TokenCountResponse
 
@@ -175,9 +176,9 @@ def httpx_transport_clients(monkeypatch):
 
 def test_acount_tokens_sends_chat_tool_use_to_anthropic_in_the_shape_claude_inference_sends(httpx_transport_clients):
     schema = {"type": "object", "properties": {"city": {"type": "string"}}}
-    with respx.mock(assert_all_called=True) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=True) as router:
         route = router.post("https://api.anthropic.com/v1/messages/count_tokens").mock(
-            return_value=httpx.Response(200, json={"input_tokens": 52})
+            return_value=response_for_respx(httpx.Response(200, json={"input_tokens": 52}))
         )
         result = asyncio.run(
             litellm.acount_tokens(

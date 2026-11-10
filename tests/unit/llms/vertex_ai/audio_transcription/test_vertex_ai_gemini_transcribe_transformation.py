@@ -2,7 +2,7 @@ import base64
 import json
 import os
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import ValidationError
 

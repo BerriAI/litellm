@@ -7,7 +7,7 @@ from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import psycopg
 from integration._support.client import (
     JSON_OBJECT,

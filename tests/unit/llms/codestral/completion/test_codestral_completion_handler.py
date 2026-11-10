@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 _LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
@@ -41,7 +42,7 @@ async def test_fim_stream_keeps_unicode_line_separators_inside_a_delta(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route: Final = respx_mock.post("https://codestral.mistral.ai/v1/fim/completions").mock(
-        return_value=httpx.Response(200, content=_fim_stream_body(_LINE_SEPARATED_TEXT))
+        return_value=response_for_respx(httpx.Response(200, content=_fim_stream_body(_LINE_SEPARATED_TEXT)))
     )
 
     texts: Final = await _streamed_texts(sync_stream)

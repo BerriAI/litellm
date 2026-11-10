@@ -4,7 +4,7 @@ import json
 import logging
 import re
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import BaseModel
 

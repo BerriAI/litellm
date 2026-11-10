@@ -1,11 +1,13 @@
+
 from types import SimpleNamespace
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 from respx import MockRouter
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.google_genai import agenerate_content_stream
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
@@ -165,7 +167,7 @@ async def test_generate_content_stream_returns_text_and_usage(
     route: Final = respx_mock.post(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=(
@@ -175,7 +177,7 @@ async def test_generate_content_stream_returns_text_and_usage(
                 b'[{"text":"atoms."}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":15,'
                 b'"candidatesTokenCount":5,"totalTokenCount":20}}\n\n'
             ),
-        )
+        ))
     )
 
     chunks: Final = tuple(
@@ -219,7 +221,7 @@ async def test_generate_content_stream_parses_function_call(
     route: Final = respx_mock.post(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
     ).mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             headers={"content-type": "text/event-stream"},
             content=(
@@ -228,7 +230,7 @@ async def test_generate_content_stream_parses_function_call(
                 b'"date":"2025-03-27","time":"10:00","topic":"Q3 planning"}}}]}}],"usageMetadata":'
                 b'{"promptTokenCount":15,"candidatesTokenCount":5,"totalTokenCount":20}}\n\n'
             ),
-        )
+        ))
     )
     tools: Final = [{"functionDeclarations": [{"name": "schedule_meeting", "parameters": {"type": "object"}}]}]
 

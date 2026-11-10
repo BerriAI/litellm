@@ -1,15 +1,16 @@
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 
 
 def test_openai_401_maps_to_authentication_error(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             401,
             json={
                 "error": {
@@ -19,7 +20,7 @@ def test_openai_401_maps_to_authentication_error(respx_mock: respx.MockRouter) -
                     "code": "invalid_api_key",
                 }
             },
-        )
+        ))
     )
 
     with pytest.raises(litellm.AuthenticationError) as error:
@@ -49,7 +50,7 @@ async def test_openai_invalid_role_error_preserves_provider_fields(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             400,
             json={
                 "error": {
@@ -59,7 +60,7 @@ async def test_openai_invalid_role_error_preserves_provider_fields(
                     "code": "invalid_value",
                 }
             },
-        )
+        ))
     )
     request: Final = {
         "model": "openai/migration-invalid-role-model",

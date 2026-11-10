@@ -15,7 +15,7 @@ from email.utils import parsedate_to_datetime
 from importlib.resources import files
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict
 
 from litellm import verbose_logger

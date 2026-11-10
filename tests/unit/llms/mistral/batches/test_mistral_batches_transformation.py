@@ -11,7 +11,7 @@ set.
 
 import json
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from litellm.llms.mistral.batches.transformation import MistralBatchesConfig

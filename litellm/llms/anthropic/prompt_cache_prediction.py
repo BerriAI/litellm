@@ -11,7 +11,7 @@ from itertools import accumulate, groupby
 from types import MappingProxyType
 from typing import Annotated, ClassVar, Final, Literal, Protocol, TypeAlias
 
-import httpx
+import httpx2 as httpx
 from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, ValidationError
 
 import litellm

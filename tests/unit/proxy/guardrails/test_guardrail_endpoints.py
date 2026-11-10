@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Dict, Final, List, Literal, Optional
 from unittest.mock import AsyncMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from fastapi import FastAPI, HTTPException

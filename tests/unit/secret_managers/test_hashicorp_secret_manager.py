@@ -1,12 +1,14 @@
+from tests._support.respx_httpx2 import side_effect_for_respx
 import datetime
 import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -74,9 +76,9 @@ def test_sync_read_uses_login_namespace_for_approle_and_secret_namespace_for_url
 ) -> None:
     manager: Final = _build_manager(monkeypatch, env)
     login_route: Final = respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
-    read_route: Final = respx.get(f"{VAULT_ADDR}/v1/{expected_secret_namespace}/secret/data/OPENAI_API_KEY").respond(
-        json=SECRET_RESPONSE
-    )
+    read_route: Final = respx.get(
+        f"{VAULT_ADDR}/v1/{expected_secret_namespace}/secret/data/OPENAI_API_KEY"
+    ).respond(json=SECRET_RESPONSE)
 
     assert manager.sync_read_secret("OPENAI_API_KEY") == "sk-from-vault"
 
@@ -470,10 +472,10 @@ async def test_hashicorp_secret_manager_rotate_secret_same_name(
     manager: Final = _build_manager(monkeypatch, {})
     respx.post(f"{VAULT_ADDR}/v1/auth/approle/login").respond(json=LOGIN_RESPONSE)
     secret_route: Final = respx.get(f"{VAULT_ADDR}/v1/secret/data/same-secret").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             httpx.Response(200, json={"data": {"data": {"key": "old-secret-value"}}}),
             httpx.Response(200, json={"data": {"data": {"key": "updated-secret-value"}}}),
-        ]
+        ])
     )
     write_route: Final = respx.post(f"{VAULT_ADDR}/v1/secret/data/same-secret").respond(
         json={"data": {"version": 1}}

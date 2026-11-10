@@ -35,7 +35,7 @@ from datetime import datetime, timedelta
 from typing import Any, List
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
-import httpx
+import httpx2 as httpx
 import pytest
 from prisma import Prisma as GeneratedPrisma
 from prisma.engine.errors import EngineConnectionError

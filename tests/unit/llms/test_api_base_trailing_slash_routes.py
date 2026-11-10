@@ -5,8 +5,7 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
-import respx
-
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.evals.main import cancel_run, create_run, get_run
 
@@ -23,7 +22,7 @@ GATEWAY_HOST: Final = "gateway.test"
 
 @pytest.fixture
 def received_paths() -> Iterator[Callable[[], tuple[str, ...]]]:
-    with respx.mock(assert_all_called=False) as router:
+    with respx.mock(using="httpcore2_and_legacy", assert_all_called=False) as router:
         route: Final = router.route(host=GATEWAY_HOST).respond(
             404, json={"error": {"message": "not found", "code": 404}}
         )

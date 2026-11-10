@@ -1,10 +1,11 @@
 import json
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     A2A_USER_API_KEY_HASH_PARAM,
@@ -85,7 +86,7 @@ def test_agent_completion_kwargs_never_expands_proxy_env_secrets(monkeypatch: py
 @respx.mock
 async def test_databricks_agent_message_send_through_the_bridge(httpx_transport: None) -> None:
     route = respx.post(INVOCATIONS_URL).mock(
-        return_value=httpx.Response(200, json={"object": "response", "output": [MESSAGE_ITEM]})
+        return_value=response_for_respx(httpx.Response(200, json={"object": "response", "output": [MESSAGE_ITEM]}))
     )
     response = await A2ACompletionBridgeHandler.handle_non_streaming(
         request_id="req-1",
@@ -108,7 +109,9 @@ async def test_databricks_agent_message_send_through_the_bridge(httpx_transport:
 
 @respx.mock
 async def test_databricks_app_credential_wins_over_a_forwarded_client_authorization(httpx_transport: None) -> None:
-    route = respx.post(APP_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    route = respx.post(APP_URL).mock(
+        return_value=response_for_respx(httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    )
     await A2ACompletionBridgeHandler.handle_non_streaming(
         request_id="req-1",
         params=_a2a_params(),
@@ -130,7 +133,7 @@ async def test_databricks_agent_message_stream_through_the_bridge(httpx_transpor
     ]
     body = "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
     respx.post(INVOCATIONS_URL).mock(
-        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=body)
+        return_value=response_for_respx(httpx.Response(200, headers={"content-type": "text/event-stream"}, text=body))
     )
     chunks = [
         chunk

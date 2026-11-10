@@ -10,7 +10,7 @@ LiteLLM 1.83.x and started emitting `db_exceptions` alerts on transient
 
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2 as httpx
 import pytest
 from prisma.errors import ClientNotConnectedError, UniqueViolationError
 

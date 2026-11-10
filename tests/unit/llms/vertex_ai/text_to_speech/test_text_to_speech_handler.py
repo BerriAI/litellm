@@ -6,11 +6,13 @@ from typing import Final
 
 import google.auth
 import google.auth.credentials
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
+
+from tests._support import respx_httpx2 as respx
 from pydantic import ValidationError
 
+from tests._support.respx_httpx2 import response_for_respx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.vertex_ai.text_to_speech.text_to_speech_handler import VertexTextToSpeechAPI
@@ -34,7 +36,7 @@ def synthesize_endpoint(respx_mock: respx.MockRouter, monkeypatch: pytest.Monkey
 
 
 async def _synthesized_audio(run_async: bool, endpoint: respx.Route, payload: object) -> bytes:
-    endpoint.mock(return_value=httpx.Response(200, content=json.dumps(payload).encode()))
+    endpoint.mock(return_value=response_for_respx(httpx.Response(200, content=json.dumps(payload).encode())))
     pending: Final = VertexTextToSpeechAPI().audio_speech(
         logging_obj=Logging(
             model="vertex_ai/",

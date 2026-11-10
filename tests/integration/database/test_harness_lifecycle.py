@@ -22,7 +22,7 @@ from types import FrameType
 from typing import Final, Literal
 from xml.etree import ElementTree
 
-import httpx
+import httpx2 as httpx
 import psutil
 import psycopg
 import pytest

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qs, urlencode, urlparse
 
-import httpx
+import httpx2 as httpx
 import pytest
 import yaml
 from pydantic import JsonValue

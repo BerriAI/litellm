@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
-import httpx
+import httpx2 as httpx
 from openai import DEFAULT_MAX_RETRIES as OPENAI_SDK_DEFAULT_MAX_RETRIES
 from openai import NOT_GIVEN, AsyncOpenAI, NotGiven, OpenAI
 

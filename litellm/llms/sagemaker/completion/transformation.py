@@ -10,7 +10,7 @@ import types
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
-from httpx._models import Headers, Response
+from httpx2._models import Headers, Response
 
 import litellm
 from litellm.litellm_core_utils.asyncify import asyncify

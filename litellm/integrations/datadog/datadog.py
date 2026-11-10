@@ -22,8 +22,8 @@ from collections.abc import Sequence
 from datetime import datetime as datetimeObj
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
-from httpx import Response
+import httpx2 as httpx
+from httpx2 import Response
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm

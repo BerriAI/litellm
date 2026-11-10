@@ -4,7 +4,7 @@ from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
 import boto3
-import httpx
+import httpx2 as httpx
 import pytest
 from botocore.exceptions import ClientError
 

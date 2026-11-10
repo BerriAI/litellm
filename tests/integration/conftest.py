@@ -12,7 +12,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
-import httpx
+import httpx2 as httpx
 import pytest
 import pytest_asyncio
 from execnet import XSpec

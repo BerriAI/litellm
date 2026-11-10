@@ -3,10 +3,10 @@
 import asyncio, importlib, json
 from collections.abc import Mapping
 
-import httpx
+import httpx2 as httpx
 import pytest
-import respx
 
+from tests._support import respx_httpx2 as respx
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -26,6 +26,7 @@ from litellm.types.llms.openai import(
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
+from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from typing import Any, Final, List
 from unittest.mock import Mock, patch
@@ -63,7 +64,7 @@ async def test_default_async_transform_delegates_to_the_sync_transform():
 def test_responses_sends_a_caller_extra_body_over_the_request_unchanged(respx_mock, monkeypatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     route = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=httpx.Response(
+        return_value=response_for_respx(httpx.Response(
             200,
             json={
                 "id": "resp",
@@ -73,7 +74,7 @@ def test_responses_sends_a_caller_extra_body_over_the_request_unchanged(respx_mo
                 "model": "m",
                 "output": [],
             },
-        )
+        ))
     )
 
     litellm.responses(
@@ -823,7 +824,7 @@ async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     prompt: Final = "Print the integers 1 through 5, separated by commas."
     primary: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=_openai_stream_cut_after(partial)
+        return_value=response_for_respx(_openai_stream_cut_after(partial))
     )
 
     def no_prefill_provider(request: httpx.Request) -> httpx.Response:
@@ -837,7 +838,9 @@ async def test_responses_fallback_can_continue_on_a_provider_without_prefill(
             )
         return _anthropic_stream("3, 4, 5" if partial else "1, 2, 3, 4, 5")
 
-    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(side_effect=no_prefill_provider)
+    fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        side_effect=side_effect_for_respx(no_prefill_provider)
+    )
     router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
     try:
         stream: Final = await router.aresponses(model="primary", input=prompt, stream=True, max_output_tokens=100)
@@ -862,9 +865,11 @@ async def test_responses_fallback_continues_a_claude_that_takes_prefill_from_its
     claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=response_for_respx(_openai_stream_cut_after("1, 2, "))
+    )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=_anthropic_stream(" 3, 4, 5")
+        return_value=response_for_respx(_anthropic_stream(" 3, 4, 5"))
     )
     router: Final = _primary_with_fallback(claude_with_prefill)
     try:
@@ -890,9 +895,11 @@ async def test_responses_fallback_continuation_drops_reasoning_the_fallback_cann
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=response_for_respx(_openai_stream_cut_after("1, 2, "))
+    )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=_anthropic_stream(" 3, 4, 5")
+        return_value=response_for_respx(_anthropic_stream(" 3, 4, 5"))
     )
     router: Final = _primary_with_fallback(claude_with_prefill if fallback_takes_prefill else "anthropic/claude-opus-5-5")
     try:
@@ -937,10 +944,10 @@ async def test_responses_fallback_surfaces_the_primary_error_once_constrained_ou
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=_openai_stream_cut_after('{"numbers": [1, 2, ')
+        return_value=response_for_respx(_openai_stream_cut_after('{"numbers": [1, 2, '))
     )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=_anthropic_stream("3]}")
+        return_value=response_for_respx(_anthropic_stream("3]}"))
     )
     router: Final = _primary_with_fallback(claude_with_prefill)
     try:
@@ -959,9 +966,11 @@ async def test_responses_fallback_continues_within_the_callers_output_ceiling(
     claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=response_for_respx(_openai_stream_cut_after("1, 2, "))
+    )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=_anthropic_stream("3, 4, 5")
+        return_value=response_for_respx(_anthropic_stream("3, 4, 5"))
     )
     router: Final = _primary_with_fallback(claude_with_prefill)
     try:
@@ -980,9 +989,11 @@ async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream
     claude_with_prefill: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    respx_mock.post("https://api.openai.com/v1/responses").mock(return_value=_openai_stream_cut_after("1, 2, "))
+    respx_mock.post("https://api.openai.com/v1/responses").mock(
+        return_value=response_for_respx(_openai_stream_cut_after("1, 2, "))
+    )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=_anthropic_stream("3, 4, 5")
+        return_value=response_for_respx(_anthropic_stream("3, 4, 5"))
     )
     router: Final = _primary_with_fallback(claude_with_prefill)
     try:
@@ -1043,10 +1054,12 @@ async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=_openai_stream_cut_mid_tool_call("Let me look that up. ", announce_item=announce_item)
+        return_value=response_for_respx(
+            _openai_stream_cut_mid_tool_call("Let me look that up. ", announce_item=announce_item)
+        )
     )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=_anthropic_stream("It is sunny in Paris.")
+        return_value=response_for_respx(_anthropic_stream("It is sunny in Paris."))
     )
     router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
     try:
@@ -1109,10 +1122,10 @@ async def test_responses_fallback_surfaces_the_primary_error_once_the_cut_stream
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=_openai_stream_cut_after_output_item("Let me check the repo. ", item)
+        return_value=response_for_respx(_openai_stream_cut_after_output_item("Let me check the repo. ", item))
     )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=_anthropic_stream("The repo has two files.")
+        return_value=response_for_respx(_anthropic_stream("The repo has two files."))
     )
     router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
     try:
@@ -1144,10 +1157,10 @@ async def test_responses_fallback_continues_after_a_server_run_mcp_call(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=_openai_stream_cut_after_event("Let me check the docs. ", server_run_event)
+        return_value=response_for_respx(_openai_stream_cut_after_event("Let me check the docs. ", server_run_event))
     )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=_anthropic_stream("The docs cover setup.")
+        return_value=response_for_respx(_anthropic_stream("The docs cover setup."))
     )
     router: Final = _primary_with_fallback("anthropic/claude-opus-5-5")
     try:
@@ -1165,7 +1178,7 @@ async def test_responses_fallback_continues_when_allowed_tools_in_auto_mode_leav
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     openai: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             _openai_stream_cut_after("1, 2, "),
             _sse(
                 {
@@ -1181,7 +1194,7 @@ async def test_responses_fallback_continues_when_allowed_tools_in_auto_mode_leav
                     },
                 },
             ),
-        ]
+        ])
     )
     router: Final = _primary_with_fallback("openai/gpt-6.1-terra")
     try:
@@ -1207,7 +1220,7 @@ async def test_responses_fallback_surfaces_a_content_filter_that_cut_the_stream_
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     respx_mock.post("https://api.openai.com/v1/responses").mock(
-        return_value=_sse(
+        return_value=response_for_respx(_sse(
             {
                 "type": "response.output_text.delta", "sequence_number": 0,
                 "item_id": "msg_primary", "output_index": 0, "content_index": 0, "delta": "Step one is to obtain the",
@@ -1219,10 +1232,10 @@ async def test_responses_fallback_surfaces_a_content_filter_that_cut_the_stream_
                     "message": "The response was halted mid-stream.", "param": None,
                 },
             },
-        )
+        ))
     )
     fallback: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=_anthropic_stream(" reagents.")
+        return_value=response_for_respx(_anthropic_stream(" reagents."))
     )
     router: Final = Router(
         model_list=[
@@ -1248,10 +1261,10 @@ async def test_bridged_responses_fallback_surfaces_the_primary_error_once_the_cu
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     provider: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             _anthropic_stream_cut_mid_tool_call("Let me look that up. "),
             _anthropic_stream("It is sunny in Paris."),
-        ]
+        ])
     )
     router: Final = Router(
         model_list=[
@@ -1281,13 +1294,13 @@ async def test_bridged_responses_fallback_continues_after_a_server_run_tool_sear
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     provider: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
-        side_effect=[
+        side_effect=side_effect_for_respx([
             _anthropic_stream_cut_mid_tool_call(
                 "Let me find the right tool. ",
                 {"type": "server_tool_use", "id": "srvtoolu_primary", "name": "tool_search_tool_regex", "input": {}},
             ),
             _anthropic_stream("It is sunny in Paris."),
-        ]
+        ])
     )
     router: Final = Router(
         model_list=[
@@ -1351,7 +1364,7 @@ async def test_responses_fallback_chain_reaches_the_second_entry_after_a_hop_str
             return _openai_stream_cut_after("")
         return _sse(_openai_completed(model))
 
-    respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=upstream)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=side_effect_for_respx(upstream))
     fallbacks: Final = [{"primary": ["fb1", "fb2"]}]
     router: Final = Router(
         model_list=[
@@ -1397,7 +1410,7 @@ async def test_responses_in_stream_error_event_falls_back_only_when_retriable(
             return _sse({"type": "error", "sequence_number": 0, "error": error})
         return _sse(_openai_completed(model))
 
-    respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=upstream)
+    respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=side_effect_for_respx(upstream))
     router: Final = Router(
         model_list=[
             {"model_name": name, "litellm_params": {"model": f"openai/{name}-model", "api_key": "sk-test"}}

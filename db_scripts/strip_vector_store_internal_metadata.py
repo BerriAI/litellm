@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from itertools import accumulate, repeat, takewhile
 from typing import Final, Literal, TextIO
 
-import httpx
+import httpx2 as httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from litellm.vector_stores.utils import is_litellm_written_metadata_key

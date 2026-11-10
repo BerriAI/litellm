@@ -3,7 +3,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import ClassVar, Final
 
-import httpx
+import httpx2 as httpx
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import

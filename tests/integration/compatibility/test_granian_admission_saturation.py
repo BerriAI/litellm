@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from tests._master_key import MASTER_KEY

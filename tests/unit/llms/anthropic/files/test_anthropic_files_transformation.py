@@ -12,7 +12,7 @@ import json
 import threading
 import time
 
-import httpx
+import httpx2 as httpx
 import pytest
 from openai.types.file_deleted import FileDeleted
 from pydantic import ValidationError

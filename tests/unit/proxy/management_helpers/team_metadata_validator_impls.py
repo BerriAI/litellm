@@ -15,7 +15,7 @@ directly from a proxy config via `get_instance_fn` for live verification:
 
 import os
 
-import httpx
+import httpx2 as httpx
 
 from litellm.proxy.management_helpers.team_metadata_validation import (
     TeamMetadataValidationPayload,
