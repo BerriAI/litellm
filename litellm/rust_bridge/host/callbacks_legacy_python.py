@@ -510,9 +510,15 @@ def stream_failure(
     chunks: list[bytes],
     error: Exception,
 ) -> Coroutine[object, object, None]:
+    from litellm._logging import verbose_proxy_logger
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
+    verbose_proxy_logger.error("Error in chunk_processor: %s", error)
+    # Python's stream fails before its success handler records `cache_hit`; only a cache hit
+    # stamps it earlier.
+    if logger.model_call_details.get("cache_hit") is not True:
+        logger.model_call_details.pop("cache_hit", None)
     return PassThroughStreamingHandler.schedule_stream_failure_logging(
         litellm_logging_obj=logger,
         endpoint_type=EndpointType(endpoint_type),
