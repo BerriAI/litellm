@@ -44,6 +44,8 @@ _service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", de
 
 _mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=False)
 
+_resent_on: Final[ContextVar[Callable[[Exception], bool] | None]] = ContextVar("resent_on", default=None)
+
 _request_parent_otel_span: Final[ContextVar[Span | None]] = ContextVar("request_parent_otel_span", default=None)
 
 
@@ -166,6 +168,23 @@ def mirrored_call() -> Generator[None]:
 
 def in_mirrored_call() -> bool:
     return _mirrored_call.get()
+
+
+@contextmanager
+def resent_on(rejection: Callable[[Exception], bool]) -> Generator[None]:
+    """An attempt its caller sends again when it fails with ``rejection``. That failure is not the request's
+    outcome, so it is neither logged as the request's failure nor retried, and its budget reservation and rate-limit
+    slot stay with the attempt sent again."""
+    token: Final = _resent_on.set(rejection)
+    try:
+        yield
+    finally:
+        _restore(_resent_on, token)
+
+
+def is_resent_failure(error: Exception) -> bool:
+    rejection: Final = _resent_on.get()
+    return rejection is not None and rejection(error)
 
 
 def set_request_parent_otel_span(span: Span) -> None:

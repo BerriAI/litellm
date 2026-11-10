@@ -4969,11 +4969,9 @@ def _owning_team_names_for_team_deployment(
     if llm_router is None or team_id is None or not model.startswith(f"model_name_{team_id}_"):
         return ()
     deployment: Final = llm_router.registry().deployments(model, source="first_in_group")
-    public_name: Final = (
-        deployment.model_info.team_public_model_name
-        if deployment is not None and deployment.model_info.team_id == team_id
-        else None
-    )
+    if deployment is None or deployment.model_info.team_id != team_id:
+        return ()
+    public_name: Final = deployment.model_info.team_public_model_name
     legacy_aliases: Final = tuple(alias for alias, target in (team_model_aliases or {}).items() if target == model)
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
@@ -5841,7 +5839,7 @@ async def get_authorized_resources_from_key_access_groups(
             continue
         team_authorized = bool(key_team_id and key_team_id in (ag.assigned_team_ids or []))
         key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
-        if team_authorized or key_authorized:
+        if team_authorized or key_authorized or ag_id in valid_token.access_group_rule_grants:
             authorized_resources.extend(getattr(ag, resource_field, []) or [])
 
     return list(set(authorized_resources))
@@ -7078,6 +7076,27 @@ def team_member_max_budget_alert_check(
 _team_member_max_budget_alert_check: Final = team_member_max_budget_alert_check
 
 
+def _raise_team_member_without_membership(user_id: str, team_id: str) -> None:
+    from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
+
+    verbose_proxy_logger.warning(
+        "fail_closed_budget_enforcement: rejecting request, user_id=%s has no membership row in team_id=%s "
+        "so spend against the team member budget cannot be verified",
+        sanitize_for_log(user_id),
+        sanitize_for_log(team_id),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": (
+                f"User={user_id} has no membership in Team={team_id}, so their spend against the team member "
+                "budget cannot be verified and fail_closed_budget_enforcement is enabled. Add them to the team "
+                "with POST /team/member_add."
+            )
+        },
+    )
+
+
 async def _check_team_member_budget(
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -7127,11 +7146,14 @@ async def _check_team_member_budget(
         )
 
         if team_member_budget is not None:
+            from litellm.proxy.proxy_server import fail_closed_budget_enforcement_enabled, get_current_spend
+
+            if loaded_membership is None and fail_closed_budget_enforcement_enabled():
+                _raise_team_member_without_membership(user_id=valid_token.user_id, team_id=team_object.team_id)
+
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0
 
             # Read from cross-pod counter (Redis-first) if available
-            from litellm.proxy.proxy_server import get_current_spend
-
             team_member_spend = await get_current_spend(
                 counter_key=team_member_counter(valid_token.user_id, team_object.team_id),
                 fallback_spend=team_member_spend,

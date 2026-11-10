@@ -44,6 +44,7 @@ from litellm.proxy.utils import (
     BilledFailedAttempt,
     ProxyUpdateSpend,
 )
+from litellm.types.proxy.carried_budget_state import CommittedBudgetSpend, EntitySpendCounterKeys
 from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.types.utils import CallTypes, LiteLLMBatch, ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
@@ -496,6 +497,50 @@ async def test_async_post_call_failure_hook_honors_the_redaction_header_on_a_lit
     assert ("VERMILION-42" in row["proxy_server_request"]) is code_word_is_stored
     assert stored_request["metadata"].get("headers") == caller_metadata.get("headers")
     assert stored_request["litellm_metadata"]["headers"] == request_headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_metadata", "team_metadata", "code_word_is_stored"),
+    [
+        ({"store_prompts_in_spend_logs": False}, {}, False),
+        ({}, {"store_prompts_in_spend_logs": False}, False),
+        ({"store_prompts_in_spend_logs": True}, {"store_prompts_in_spend_logs": False}, False),
+        ({}, {}, True),
+    ],
+)
+async def test_async_post_call_failure_hook_honors_key_and_team_prompt_storage(
+    monkeypatch: pytest.MonkeyPatch,
+    key_metadata: dict[str, object],
+    team_metadata: dict[str, object],
+    code_word_is_stored: bool,
+):
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    writer: Final = MagicMock(spec=DBSpendUpdateWriter)
+    writer.update_database = AsyncMock()
+    request_input: Final = "The code word is VERMILION-42. Reply OK."
+
+    await ProxyDBLogger(spend_writer=lambda: writer).async_post_call_failure_hook(
+        request_data={
+            "model": "gpt-5.6",
+            "input": request_input,
+            "litellm_metadata": {},
+            "proxy_server_request": {
+                "url": "http://localhost/v1/responses",
+                "body": {"model": "gpt-5.6", "input": request_input},
+            },
+        },
+        original_exception=Exception("temperature must be at most 2"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test_api_key", metadata=key_metadata, team_metadata=team_metadata),
+    )
+
+    row: Final = get_logging_payload(
+        kwargs=writer.update_database.call_args.kwargs["kwargs"],
+        response_obj={},
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert ("VERMILION-42" in row["proxy_server_request"]) is code_word_is_stored
 
 
 @pytest.mark.asyncio
@@ -1086,6 +1131,95 @@ def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "expected_scope"),
+    [
+        (
+            {
+                "user_api_key_auth": UserAPIKeyAuth(
+                    committed_budget_spend=CommittedBudgetSpend(
+                        counter_keys=EntitySpendCounterKeys(key="spend:key:test_api_key")
+                    )
+                )
+            },
+            EntitySpendCounterKeys(key="spend:key:test_api_key"),
+        ),
+        ({}, EntitySpendCounterKeys()),
+    ],
+)
+async def test_charge_moves_only_the_committed_counters_auth_named_as_budgeted(metadata, expected_scope):
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    increment_spend_counters = AsyncMock()
+
+    await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=increment_spend_counters,
+        user_api_key="test_api_key",
+        user_id="test_user_id",
+        end_user_id=None,
+        team_id="test_team_id",
+        org_id="test_org_id",
+        kwargs={"litellm_params": {"metadata": metadata}},
+        completion_response=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        response_cost=0.2,
+        budget_reservation=None,
+    )
+
+    assert increment_spend_counters.await_args.kwargs["committed_spend_scope"] == expected_scope
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tracked", "expected_key", "expected_org"),
+    [(True, pytest.approx(1.2), pytest.approx(2.2)), (False, 1.0, 2.0)],
+)
+async def test_charge_with_no_auth_on_its_row_moves_the_committed_counters_that_exist(
+    tracked, expected_key, expected_org
+):
+    """A background response is billed from its creator's stored attribution, after the request's auth is gone."""
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock()
+    spend_counter_store: Final = SpendCounterStore(connect(None).spend_counters())
+    spend_counter_store.set_local("spend:committed:key:test_api_key", 1.0)
+    spend_counter_store.set_local("spend:committed:org:test_org_id", 2.0)
+
+    with (
+        patch("litellm.proxy.hooks.proxy_track_cost_callback.committed_spend_tracked", return_value=tracked),
+        patch("litellm.proxy.proxy_server.spend_counter_store", spend_counter_store),
+        patch(
+            "litellm.proxy.spend_tracking.committed_spend.SpendCounterReseed.from_db",
+            AsyncMock(return_value=50.0),
+        ),
+    ):
+        await _update_database_and_spend_counters(
+            proxy_logging_obj=proxy_logging_obj,
+            increment_spend_counters=increment_spend_counters,
+            user_api_key="test_api_key",
+            user_id="test_user_id",
+            end_user_id=None,
+            team_id="test_team_id",
+            org_id="test_org_id",
+            kwargs={"litellm_params": {"metadata": {"user_api_key_hash": "test_api_key"}}},
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.2,
+            budget_reservation=None,
+        )
+
+    cached: Final = spend_counter_store.get_local
+    assert cached("spend:committed:key:test_api_key") == expected_key
+    assert cached("spend:committed:org:test_org_id") == expected_org
+    assert cached("spend:committed:team:test_team_id") is None
+    assert cached("spend:committed:user:test_user_id") is None
+
+
+@pytest.mark.asyncio
 async def test_update_database_and_spend_counters_releases_reservation_when_db_update_fails():
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=Exception("db unavailable"))
@@ -1213,6 +1347,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         request_started_at=start_time,
         model_access_groups=("premium",),
         project_id=None,
+        committed_spend_scope=EntitySpendCounterKeys(),
     )
 
 
@@ -2732,7 +2867,9 @@ _LIVE_COUNTERS: Final = {
 }
 
 
-async def _fail_request(logger: ProxyDBLogger, failure: Mapping[str, object]) -> None:
+async def _fail_request(
+    logger: ProxyDBLogger, failure: Mapping[str, object], committed: CommittedBudgetSpend | None = None
+) -> None:
     await logger.async_post_call_failure_hook(
         request_data={
             "model": "gpt-4.1",
@@ -2749,6 +2886,7 @@ async def _fail_request(logger: ProxyDBLogger, failure: Mapping[str, object]) ->
             end_user_id="end-user-1",
             org_id="org-1",
             project_id="project-1",
+            committed_budget_spend=committed,
         ),
     )
 
@@ -2784,6 +2922,43 @@ async def test_failure_spend_rows_raise_the_live_spend_counters_by_their_cost(
 
     assert await _counter_values(live_spend_counters) == pytest.approx(
         {key: spend + charged for key, spend in _LIVE_COUNTERS.items()}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "charged"),
+    [
+        ({"combined_usage_object": Usage(prompt_tokens=30), "response_cost": 0.125}, 0.125),
+        (_failure_with_billed_attempts(), 1.25),
+        ({"standard_logging_object": {"cost_finalized": True, "response_cost": 0.125}}, 0.125),
+    ],
+    ids=["recovered_stream_cost", "billed_retries", "completed_cost"],
+)
+async def test_a_failed_charge_moves_only_the_committed_counters_auth_named_as_budgeted(
+    live_spend_counters: SpendCounterStore, failure: Mapping[str, object], charged: float
+):
+    """The remaining budget gauges read the committed counters, so a charge missing from them shows as budget the
+    request never left behind, until the next reseed from the database."""
+    budgeted: Final = EntitySpendCounterKeys.of(
+        token="hashed-key", team_id="team-1", user_id=None, org_id=None, end_user_id=None
+    )
+    starting: Final = {
+        "spend:committed:key:hashed-key": 0.2,
+        "spend:committed:team:team-1": 0.3,
+        "spend:committed:user:user-1": 0.4,
+    }
+    for key, spend in starting.items():
+        live_spend_counters.set_local(key, spend)
+
+    await _fail_request(ProxyDBLogger(), failure, CommittedBudgetSpend(counter_keys=budgeted))
+
+    assert {key: live_spend_counters.get_local(key) for key in starting} == pytest.approx(
+        {
+            "spend:committed:key:hashed-key": 0.2 + charged,
+            "spend:committed:team:team-1": 0.3 + charged,
+            "spend:committed:user:user-1": 0.4,
+        }
     )
 
 
@@ -3396,6 +3571,43 @@ async def test_async_log_success_event_hands_the_sidecar_a_compact_event_and_ski
     assert not isinstance(event, SpendEventDecodeError)
     assert event.litellm_params["metadata"]["user_api_key_team_id"] == "team-1"
     assert event.response_cost == 0.0125
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tenant_metadata", "stored"),
+    [
+        ({"user_api_key_metadata": {"store_prompts_in_spend_logs": False}}, False),
+        ({"user_api_key_team_metadata": {"store_prompts_in_spend_logs": False}}, False),
+        ({"user_api_key_team_metadata": {"store_prompts_in_spend_logs": "false"}}, False),
+        ({"user_api_key_metadata": {}, "user_api_key_team_metadata": {}}, True),
+    ],
+)
+async def test_spend_event_leaves_out_bodies_for_tenants_that_turned_off_prompt_storage(
+    socket_path: Path, monkeypatch: pytest.MonkeyPatch, tenant_metadata: dict[str, object], stored: bool
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    handler: Final = _RecordingHandler()
+    consumer: Final = SpendEventConsumer(handler)
+    address: Final = UnixAddress(path=str(socket_path))
+    server: Final = await consumer.serve(address)
+    producer: Final = SpendEventProducer(
+        address=address, on_unavailable="fallback", buffer_size=10, connect_timeout=1.0, fallback=_no_fallback
+    )
+    kwargs: Final[dict[str, object]] = _offload_kwargs()
+    kwargs["litellm_params"]["metadata"].update(tenant_metadata)
+
+    await ProxyDBLogger(producer).async_log_success_event(kwargs, _offload_response(), datetime.now(), datetime.now())
+    await producer.close(drain_timeout=5.0)
+    server.close()
+    assert await consumer.drain(timeout=5.0) == 0
+
+    event: Final = decode_spend_event(handler.lines[0])
+    assert not isinstance(event, SpendEventDecodeError)
+    assert (event.litellm_params["proxy_server_request"] is not None) is stored
+    assert ("messages" in event.standard_logging_object) is stored
 
 
 def _completed_batch() -> LiteLLMBatch:

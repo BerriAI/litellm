@@ -1,10 +1,15 @@
+import contextlib
 import copy
+import importlib
 import json
+import warnings
 from collections.abc import Mapping
 from typing import Final, cast
+from unittest import mock
 
 import pytest
 
+from litellm.litellm_core_utils.prompt_templates import common_utils
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -21,6 +26,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_response_only_fields,
     system_messages_first,
 )
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    flatten_combinators_and_drop_non_python_regex_patterns,
+)
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import parse_tool_call_arguments
 from litellm.types.llms.openai import ChatCompletionAudioObject, ChatCompletionFileObject, ChatCompletionImageObject
 from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, ModelResponse
 
@@ -985,6 +994,180 @@ def test_content_list_flattening_returns_new_messages_and_leaves_the_callers_unt
 
     assert flattened == [{"role": "user", "content": "Hello world"}, {"role": "assistant", "content": "Hi"}]
     assert messages == messages_before
+
+
+_MOVED_PRIVATE_NAMES_BY_MODULE: Final = (
+    (
+        "file_id_utils",
+        ("_decode_vector_store_ids_in_tools",),
+    ),
+    (
+        "json_schema_utils",
+        (
+            "_EMPTY_SCHEMA",
+            "_LOCAL_SCHEMA_REF_PREFIXES",
+            "_MAX_SCHEMA_FLATTEN_DEPTH",
+            "_MAX_SCHEMA_NESTING",
+            "_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS",
+            "_REGEX_LOOKAROUND_RE",
+            "_SCHEMA_LIST",
+            "_SUBSCHEMA_KEYWORDS",
+            "_SUBSCHEMA_LIST_KEYWORDS",
+            "_SUBSCHEMA_MAP_KEYWORDS",
+            "_TOP_LEVEL_SCHEMA_COMBINATORS",
+            "_any_of",
+            "_combinator_required_names",
+            "_dropped_pattern_properties",
+            "_flatten_schema_against_root",
+            "_grammar_branches",
+            "_is_not_python_regex",
+            "_is_object_schema",
+            "_is_open_object",
+            "_is_union",
+            "_keyword_value_rebuilt",
+            "_list_at",
+            "_may_be_string",
+            "_mergeable_branch",
+            "_named_schemas",
+            "_node_without_rejected_regex",
+            "_optional_property_names",
+            "_property_schemas",
+            "_refs_in",
+            "_resolve_local_schema_ref",
+            "_root_definitions",
+            "_schema_at",
+            "_schema_branches",
+            "_schema_levels",
+            "_schema_nodes",
+            "_schema_properties",
+            "_schema_required_names",
+            "_schema_without_rejected_regex",
+            "_subschemas",
+            "_uses_regex_lookaround",
+        ),
+    ),
+    (
+        "prompt_cache_breakpoint_utils",
+        (
+            "_BREAKPOINT_BLOCKS",
+            "_BREAKPOINT_BLOCK_LIST_KEYS",
+            "_BREAKPOINT_FIELDS",
+            "_MarkedT",
+            "_PROMPT_CACHE_BREAKPOINT",
+            "_breakpoints_stripped_from",
+            "_without_prompt_cache_breakpoint",
+        ),
+    ),
+    (
+        "reasoning_utils",
+        (
+            "_carries_encrypted_reasoning",
+            "_converse_wrapped_payload",
+            "_encrypted_reasoning_field",
+            "_provider_text_or_none",
+            "_readable_thinking_text",
+            "_reasoning_item_from_block_group",
+            "_reasoning_replay_group_key",
+            "_strip_encrypted_reasoning_from_blocks",
+        ),
+    ),
+    (
+        "tool_call_json_repair",
+        (
+            "_DECODED_JSON",
+            "_attempt_json_repair",
+        ),
+    ),
+    (
+        "tpm_media_utils",
+        (
+            "_TPMMediaProjection",
+            "_tpm_blank_fields",
+            "_tpm_code_output_media",
+            "_tpm_document_media",
+            "_tpm_file_media",
+            "_tpm_image_part",
+            "_tpm_input_media",
+            "_tpm_media_leaf",
+            "_tpm_media_list",
+            "_tpm_replace_field",
+            "_tpm_tool_result_media",
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize(("module_name", "names"), _MOVED_PRIVATE_NAMES_BY_MODULE)
+def test_moved_private_helpers_still_import_from_common_utils(module_name: str, names: tuple[str, ...]) -> None:
+    new_home: Final = importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}")
+    unreachable: Final = [name for name in names if getattr(common_utils, name, None) is not getattr(new_home, name)]
+    assert unreachable == []
+
+
+def test_unknown_private_name_still_raises_attribute_error_on_common_utils() -> None:
+    missing_name: Final = "_not_a_moved_helper"
+    with pytest.raises(AttributeError, match=missing_name):
+        getattr(common_utils, missing_name)
+
+
+def test_old_path_access_warns_from_the_callers_line_with_the_new_home() -> None:
+    moved_name: Final = "_any_of"
+    with pytest.warns(DeprecationWarning, match=r"common_utils\._any_of moved to .*\.json_schema_utils") as caught:
+        getattr(common_utils, moved_name)
+    assert [warning.filename for warning in caught] == [__file__]
+
+
+def test_patching_a_moved_helper_at_its_old_path_reaches_the_callers_in_its_new_home() -> None:
+    patched_result: Final = {"patched": True}
+    with mock.patch(
+        "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=patched_result
+    ):
+        assert parse_tool_call_arguments('{"a": 1') == patched_result
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_patching_a_re_exported_helper_at_its_old_path_reaches_the_callers_in_its_new_home() -> None:
+    schema: Final = {"anyOf": [{"type": "object", "properties": {"a": {"type": "string"}}}]}
+    unpatched: Final = flatten_combinators_and_drop_non_python_regex_patterns(schema)
+    patched_result: Final = {"patched": True}
+    with mock.patch(
+        "litellm.litellm_core_utils.prompt_templates.common_utils.flatten_top_level_schema_combinators",
+        return_value=patched_result,
+    ):
+        assert flatten_combinators_and_drop_non_python_regex_patterns(schema) == patched_result
+    assert flatten_combinators_and_drop_non_python_regex_patterns(schema) == unpatched
+
+
+def test_old_path_patch_restores_the_moved_helper_when_warnings_become_errors_inside_it() -> None:
+    with warnings.catch_warnings(), contextlib.suppress(DeprecationWarning):
+        with mock.patch(
+            "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=None
+        ):
+            warnings.simplefilter("error", DeprecationWarning)
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_old_path_patch_with_create_leaves_the_moved_helper_in_place() -> None:
+    with mock.patch(
+        "litellm.litellm_core_utils.prompt_templates.common_utils._attempt_json_repair", return_value=None, create=True
+    ):
+        assert parse_tool_call_arguments("{}") == {}
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_overriding_a_moved_helper_through_the_old_path_warns_and_deleting_it_restores_the_released_one() -> None:
+    moved_name: Final = "_attempt_json_repair"
+    with pytest.warns(DeprecationWarning, match=r"common_utils\._attempt_json_repair moved to .*\.tool_call_json_repair"):
+        setattr(common_utils, moved_name, mock.Mock(return_value={"overridden": True}))
+    assert parse_tool_call_arguments('{"a": 1') == {"overridden": True}
+    delattr(common_utils, moved_name)
+    assert parse_tool_call_arguments('{"a": 1') == {"a": 1}
+
+
+def test_patching_a_name_common_utils_still_defines_stays_on_common_utils() -> None:
+    with mock.patch.object(common_utils, "invalid_type_message", return_value="patched"):
+        assert common_utils.invalid_type_message("field", 1) == "patched"
+    assert common_utils.invalid_type_message("field", 1) != "patched"
 
 
 def test_get_content_from_model_response_includes_server_tool_calls_before_client_calls() -> None:

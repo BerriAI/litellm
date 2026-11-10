@@ -14690,3 +14690,66 @@ def test_standard_logging_payload_reports_the_per_call_prices_the_request_was_bi
     model_map_value: Final = payload["model_map_information"]["model_map_value"]
     assert model_map_value is not None
     assert (model_map_value["input_cost_per_token"], model_map_value["output_cost_per_token"]) == (3e-06, 7e-06)
+
+
+@pytest.mark.asyncio
+async def test_a_response_discarded_after_its_success_log_was_parked_is_billed_once_on_the_serving_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+    from litellm.utils import _schedule_async_success_logging
+
+    class Recorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: tuple[tuple[dict[str, object], object], ...] = ()
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            self.events = (*self.events, (dict(kwargs), response_obj))
+
+    recorder: Final = Recorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="refused-then-served",
+        function_id="refused-then-served",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini", user="", optional_params={}, litellm_params={"metadata": {}}, custom_llm_provider="openai"
+    )
+    logging_obj.defer_async_logging = True
+    refused: Final = ModelResponse(
+        id="refused", model="gpt-4o-mini", usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    )
+    served: Final = ModelResponse(
+        id="served", model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+    )
+    now: Final = datetime.datetime.now()
+
+    _schedule_async_success_logging(logging_obj, refused, now, now, is_completion_with_fallbacks=False)
+    logging_obj.carry_failed_attempt_usage()
+    _schedule_async_success_logging(logging_obj, served, now, now, is_completion_with_fallbacks=False)
+    prepared: Final = logging_obj.prepare_response_cost(served, now)
+    enqueue: Final = logging_obj.enqueue_deferred_logging
+    assert enqueue is not None
+    enqueue()
+    await drain_logging_tasks()
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    both_attempts: Final = litellm.completion_cost(refused, model="gpt-4o-mini") + litellm.completion_cost(
+        served, model="gpt-4o-mini"
+    )
+    ((kwargs, response_obj),) = recorder.events
+    assert getattr(response_obj, "id", None) == "served"
+    assert kwargs["response_cost"] == pytest.approx(both_attempts)
+    assert prepared is not None
+    assert prepared.amount == pytest.approx(both_attempts)

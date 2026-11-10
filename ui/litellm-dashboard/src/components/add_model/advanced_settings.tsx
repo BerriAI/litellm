@@ -36,6 +36,7 @@ import {
   PTU_END_FIELD,
 } from "../../utils/ptuValidation";
 import { usePtuCostAttributionEnabled } from "@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface AdvancedSettingsProps {
   showAdvancedSettings: boolean;
@@ -230,7 +231,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       value={(control.value as string | undefined) ?? ""}
                       onChange={control.onChange}
                       onBlur={control.onBlur}
-                      placeholder="e.g. 15"
+                      placeholder={t("addModel.advancedSettings.ptuCountPlaceholder")}
                     />
                   )}
                 </MountedFormField>
@@ -257,7 +258,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       value={(control.value as string | undefined) ?? ""}
                       onChange={control.onChange}
                       onBlur={control.onBlur}
-                      placeholder="e.g. 2.00"
+                      placeholder={t("addModel.advancedSettings.ptuRatePlaceholder")}
                     />
                   )}
                 </MountedFormField>
@@ -531,11 +532,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   onChange={control.onChange}
                   onBlur={control.onBlur}
                   rows={4}
-                  placeholder='{
-                  "rpm": 100,
-                  "timeout": 0,
-                  "stream_timeout": 0
-                }'
+                  placeholder={codeSamples.models.advancedLitellmParamsJson}
                 />
               )}
             </MountedFormField>
@@ -572,9 +569,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   onChange={control.onChange}
                   onBlur={control.onBlur}
                   rows={4}
-                  placeholder='{
-                  "mode": "chat"
-                }'
+                  placeholder={codeSamples.models.advancedModelInfoJson}
                 />
               )}
             </MountedFormField>

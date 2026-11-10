@@ -4423,6 +4423,7 @@ dependencies = [
  "pyo3-async-runtimes",
  "reqwest",
  "rstest",
+ "rustls 0.23.42",
  "serde",
  "serde_json",
  "serde_with",
@@ -4558,6 +4559,8 @@ name = "litellm-redis-types"
 version = "0.1.0"
 dependencies = [
  "litellm-secret-value",
+ "rstest",
+ "url",
 ]
 
 [[package]]

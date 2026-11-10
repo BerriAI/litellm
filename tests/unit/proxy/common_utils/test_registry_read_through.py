@@ -433,7 +433,7 @@ async def test_resync_model_deployments_mutates_router_under_model_reconcile_loc
     lock_states: list[bool] = []
 
     def record_add_deployment(db_models) -> None:
-        lock_states.append(proxy_server.MODEL_RECONCILE_LOCK.locked())
+        lock_states.append(proxy_server.DB_RECONCILE_LOCK.locked())
 
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
@@ -443,7 +443,7 @@ async def test_resync_model_deployments_mutates_router_under_model_reconcile_loc
 
     assert await _resync_model_deployments("lock-scope-model") is True
     assert lock_states == [True]
-    assert not proxy_server.MODEL_RECONCILE_LOCK.locked()
+    assert not proxy_server.DB_RECONCILE_LOCK.locked()
 
 
 @pytest.mark.asyncio
@@ -601,7 +601,7 @@ async def test_resync_model_deployments_by_ids_installs_only_the_published_rows(
 
     assert _served_ids(router.registry().deployments()) == {"primary-id", "m-1", "m-2"}
     assert _served_ids(proxy_server.llm_model_list) == {"primary-id", "m-1", "m-2"}
-    assert not proxy_server.MODEL_RECONCILE_LOCK.locked()
+    assert not proxy_server.DB_RECONCILE_LOCK.locked()
 
 
 @pytest.mark.asyncio
@@ -619,7 +619,7 @@ async def test_resync_model_deployments_by_ids_leaves_the_router_alone_for_delet
 
     assert _served_ids(router.registry().deployments()) == {"primary-id"}
     assert proxy_server.llm_model_list is None
-    assert not proxy_server.MODEL_RECONCILE_LOCK.locked()
+    assert not proxy_server.DB_RECONCILE_LOCK.locked()
 
 
 @pytest.mark.asyncio
@@ -1021,7 +1021,7 @@ async def test_unknown_model_name_read_through_reads_the_replica_without_waiting
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "store_model_in_db", True)
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
-    monkeypatch.setattr(proxy_server, "MODEL_RECONCILE_LOCK", reload_in_progress)
+    monkeypatch.setattr(proxy_server, "DB_RECONCILE_LOCK", reload_in_progress)
 
     async with reload_in_progress:
         found: Final = await asyncio.wait_for(_resync_model_deployments("no-such-model"), timeout=2)
@@ -1042,7 +1042,7 @@ async def test_resync_model_deployments_by_ids_installs_the_row_a_concurrent_rel
     router: Final = _router_serving("primary-id")
     _serve_db_models(monkeypatch, _Db(table), router)
     reload_in_progress: Final = asyncio.Lock()
-    monkeypatch.setattr(proxy_server, "MODEL_RECONCILE_LOCK", reload_in_progress)
+    monkeypatch.setattr(proxy_server, "DB_RECONCILE_LOCK", reload_in_progress)
 
     async with reload_in_progress:
         targeted_load: Final = asyncio.create_task(resync_model_deployments_by_ids(("m-1",)))
@@ -1132,4 +1132,4 @@ async def test_resync_model_deployments_by_ids_installs_the_ordinary_rows_queued
     assert _served_ids(proxy_server.llm_model_list) == {"primary-id", "backup-id"}
     assert table.reads == 1
     assert db.other_tables_read == []
-    assert not proxy_server.MODEL_RECONCILE_LOCK.locked()
+    assert not proxy_server.DB_RECONCILE_LOCK.locked()

@@ -6,7 +6,7 @@ import httpx
 from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
-from litellm.redis.store_settings import RedisStoreSettings
+from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 
@@ -37,6 +37,22 @@ class _NativeCooldown(TypedDict):
     status_code: str
     timestamp: float
     cooldown_time: float
+
+@final
+class NativeAdmission:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+    def succeeded(self) -> None: ...
+    def failed(self, timeout: bool) -> None: ...
+
+@final
+class NativeRedisBreaker:
+    def __new__(cls, settings: RedisBreakerSettings) -> NativeRedisBreaker: ...
+    @staticmethod
+    def shared(redis_kwargs: Mapping[str, object], settings: RedisBreakerSettings) -> NativeRedisBreaker: ...
+    def admit(self) -> NativeAdmission | None: ...
+    def failed(self, timeout: bool) -> None: ...
+    @property
+    def state(self) -> Literal["closed", "open", "half_open"]: ...
 
 @final
 class NativeRedisClient:
@@ -343,6 +359,11 @@ class SpendRead:
     def from_redis(self) -> bool: ...
 
 @final
+class PostCallSettlement:
+    @property
+    def settled(self) -> bool: ...
+
+@final
 class NativeSpendCounters:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSpendCounters: ...
     def attach(self, client: NativeRedisClient) -> bool: ...
@@ -350,6 +371,7 @@ class NativeSpendCounters:
     def has_redis(self) -> bool: ...
     @property
     def redis_ttl_seconds(self) -> float | None: ...
+    def set_committed_ttl(self, ttl_seconds: float) -> None: ...
     def read(self, counter: str) -> Future[SpendRead]: ...
     def read_many(
         self, counters: Sequence[str], send: NativeSend
@@ -358,7 +380,7 @@ class NativeSpendCounters:
     def increment_many(self, increments: Sequence[tuple[str, float]]) -> Future[list[float]]: ...
     def increment_many_post_call(
         self, request: NativeRequestRedis, increments: Sequence[tuple[str, float]]
-    ) -> bool: ...
+    ) -> PostCallSettlement | None: ...
     def set_max(self, counter: str, spend: float) -> Future[float | None]: ...
     def seed(self, counter: str, spend: float, *, increment_if_lost: bool) -> Future[float]: ...
     def set(self, counter: str, spend: float, ttl_seconds: float | None = None) -> Future[None]: ...
@@ -563,6 +585,7 @@ __all__ = [
     "GuardedReply",
     "HuggingFaceEncoding",
     "LocalSizes",
+    "NativeAdmission",
     "NativeAuthCache",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
@@ -570,6 +593,7 @@ __all__ = [
     "NativeDiagnosticProcessor",
     "NativePending",
     "NativeRateLimits",
+    "NativeRedisBreaker",
     "NativeRedisClient",
     "NativeRedisStoreError",
     "NativeRequestRedis",
@@ -578,6 +602,7 @@ __all__ = [
     "NativeSend",
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
+    "PostCallSettlement",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RouterCall",

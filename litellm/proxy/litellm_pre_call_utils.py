@@ -23,6 +23,7 @@ from fastapi import HTTPException, Request, status
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -104,7 +105,7 @@ _REDACTED_HEADER_VALUE: Final = "***REDACTED***"
 _DECODED_JSON: Final = TypeAdapter(object)
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
-    {"cookie", "proxy-authorization"}
+    {"cookie", "proxy-authorization", "x-amz-security-token"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -222,12 +223,21 @@ def _caller_session_beside_trace_header(
     return get_chain_id_from_headers(session_headers) or _caller_body_session_id(data, metadata_variable_name)
 
 
+def _claude_code_subagent_tier_session(normalized_headers: Mapping[str, str]) -> str | None:
+    session: Final = normalized_headers.get("x-claude-code-session-id", "")
+    agent: Final = normalized_headers.get("x-claude-code-agent-id", "")
+    if not _SESSION_ID_VALUE_RE.fullmatch(session) or not _SESSION_ID_VALUE_RE.fullmatch(agent):
+        return None
+    return f"{session}:{agent}"
+
+
 def _child_tier_session_metadata(
     normalized_headers: Mapping[str, str], data: Mapping[str, object], metadata_variable_name: str
 ) -> Mapping[str, str | None]:
     parent: Final = normalized_headers.get("x-parent-session-id")
     if not parent or not _SESSION_ID_VALUE_RE.fullmatch(parent):
-        return {}
+        claude_code_subagent: Final = _claude_code_subagent_tier_session(normalized_headers)
+        return {COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: claude_code_subagent} if claude_code_subagent else {}
     own_headers: Final = {
         key: value
         for key, value in normalized_headers.items()
@@ -1643,7 +1653,19 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     }
 
 
+class TenantLoggingMetadata(TypedDict):
+    user_api_key_metadata: ReadOnly[Mapping[str, object] | None]
+    user_api_key_team_metadata: ReadOnly[Mapping[str, object] | None]
+
+
 class LiteLLMProxyRequestSetup:
+    @staticmethod
+    def get_tenant_logging_metadata(user_api_key_dict: UserAPIKeyAuth) -> TenantLoggingMetadata:
+        return {
+            "user_api_key_metadata": strip_callback_config(user_api_key_dict.metadata),
+            "user_api_key_team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
+        }
+
     @staticmethod
     def _get_timeout_from_request(headers: dict) -> float | None:
         """
@@ -2143,7 +2165,14 @@ class LiteLLMProxyRequestSetup:
                 user_api_key_dict.matched_model_access_groups
             )
         # UserAPIKeyAuth object for MCP server access control
-        data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict.model_copy(
+        data[_metadata_variable_name]["user_api_key_auth"] = LiteLLMProxyRequestSetup.auth_for_request_metadata(
+            user_api_key_dict
+        )
+        return data
+
+    @staticmethod
+    def auth_for_request_metadata(user_api_key_dict: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        return user_api_key_dict.model_copy(
             update={
                 "metadata": strip_callback_config(user_api_key_dict.metadata),
                 "team_metadata": strip_callback_config(user_api_key_dict.team_metadata),
@@ -2151,7 +2180,6 @@ class LiteLLMProxyRequestSetup:
                 "organization_metadata": strip_callback_config(user_api_key_dict.organization_metadata),
             }
         )
-        return data
 
     @staticmethod
     def add_management_endpoint_metadata_to_request_metadata(
