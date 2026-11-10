@@ -6193,6 +6193,24 @@ _SUMMARY_INPUT: Final = [{"type": "message", "role": "user", "content": _COMPACT
 def test_input_token_count_reads_a_compaction_item_as_its_summary():
     from litellm.proxy.response_api_endpoints.endpoints import _responses_input_as_token_count_messages
 
-    assert _responses_input_as_token_count_messages(_COMPACTED_INPUT, None) == (
-        _responses_input_as_token_count_messages(_SUMMARY_INPUT, None)
+    assert _responses_input_as_token_count_messages(_COMPACTED_INPUT, {}) == (
+        _responses_input_as_token_count_messages(_SUMMARY_INPUT, {})
     )
+
+
+def test_input_token_count_keeps_the_joined_name_of_a_self_named_namespace_member():
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_input_as_token_count_messages
+
+    echo: Final = [
+        {"role": "user", "content": "Search for the release notes."},
+        {"type": "function_call", "name": "search", "namespace": "search", "call_id": "call_1", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "found"},
+    ]
+    namespace_tools: Final = [{"type": "namespace", "name": "search", "tools": [{"type": "function", "name": "search"}]}]
+
+    def called_names(tools: object) -> list[str]:
+        messages = _responses_input_as_token_count_messages(cast(Any, echo), {"tools": tools})
+        return [call["function"]["name"] for message in messages for call in message.get("tool_calls") or []]
+
+    assert called_names(namespace_tools) == ["search__search"]
+    assert called_names([{"type": "function", "name": "search", "defer_loading": True}]) == ["search"]

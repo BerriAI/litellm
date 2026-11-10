@@ -1664,6 +1664,10 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     }
 
 
+def without_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {header: value for header, value in headers.items() if not _is_credential_header(header)}
+
+
 class TenantLoggingMetadata(TypedDict):
     user_api_key_metadata: ReadOnly[Mapping[str, object] | None]
     user_api_key_team_metadata: ReadOnly[Mapping[str, object] | None]

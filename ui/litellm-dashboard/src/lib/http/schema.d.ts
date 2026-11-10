@@ -36614,6 +36614,8 @@ export interface components {
             cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost Batches */
+            cache_read_input_image_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
@@ -47696,6 +47698,12 @@ export interface components {
              */
             gateway_injected_caching_savings_spend: number;
             /**
+             * Guardrail Spend
+             * @description Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost
+             * @default 0
+             */
+            guardrail_spend: number;
+            /**
              * Prompt Caching Savings Spend
              * @default 0
              */
@@ -52804,6 +52812,8 @@ export interface components {
             cache_read_input_audio_token_cost_priority?: number | null;
             /** Cache Read Input Image Token Cost */
             cache_read_input_image_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost Batches */
+            cache_read_input_image_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 100K Tokens */
