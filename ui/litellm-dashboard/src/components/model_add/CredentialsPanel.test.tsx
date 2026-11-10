@@ -111,6 +111,35 @@ const renderPanel = () =>
   );
 
 describe("CredentialsPanel", () => {
+  it("keeps an open credential menu usable when the panel refreshes", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({ data: { credentials }, isLoading: false, refetch: vi.fn() });
+    const client = createQueryClient();
+    const panel = (
+      <QueryClientProvider client={client}>
+        <CredentialsPanel />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(panel);
+
+    await user.click(screen.getByTestId("credential-actions-openai-key"));
+    expect(await screen.findByTestId("credential-action-edit")).toBeInTheDocument();
+    mockUseCredentials.mockReturnValue({
+      data: { credentials: credentials.map((credential) => ({ ...credential })) },
+      isLoading: false,
+      refetch: vi.fn(),
+    });
+    rerender(
+      <QueryClientProvider client={client}>
+        <CredentialsPanel />
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByTestId("credential-action-edit"));
+    expect(screen.getByTestId("credential-modal-edit-submit")).toBeInTheDocument();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
