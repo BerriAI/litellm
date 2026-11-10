@@ -9916,13 +9916,15 @@ def _format_fallback_metadata_sse_event(
     fallback_model: str | None,
     fallback_errors: list[dict[str, object]],
     error_state: ResponsesStreamErrorState | None,
+    return_raw_model_name: bool,
 ) -> str | bytes:
     litellm_fallback: Final = {"fallback_model": fallback_model, "errors": fallback_errors}
     if error_state is not None:
+        stamped_model: Final = None if return_raw_model_name else fallback_model
         event: Final = {
             "type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE,
             "id": _FALLBACK_METADATA_ID,
-            **({"model": fallback_model} if fallback_model else {}),
+            **({"model": stamped_model} if stamped_model else {}),
             "litellm_fallback": litellm_fallback,
         }
         error_state.observe_chunk(event)
@@ -9942,7 +9944,7 @@ def _restamp_streaming_chunk_model(
     *,
     chunk: object,
     requested_model_from_client: str,
-    request_data: dict,
+    request_data: Mapping[str, object],
     model_mismatch_logged: bool,
     fallback_was_attempted: bool = False,
     fallback_model_from_metadata: str | None = None,
@@ -10491,6 +10493,7 @@ async def async_data_generator(
         model_mismatch_logged = False
         fallback_metadata_event_sent = False
         include_fallback_errors: Final = _should_include_fallback_errors(request_data)
+        return_raw_model_name: Final = should_return_raw_model_name(request_data)
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -10586,6 +10589,7 @@ async def async_data_generator(
                         fallback_model=fallback_model_from_metadata,
                         fallback_errors=fallback_errors,
                         error_state=error_state,
+                        return_raw_model_name=return_raw_model_name,
                     )
                     fallback_metadata_event_sent = True
                 continue
@@ -10640,6 +10644,7 @@ async def async_data_generator(
                     fallback_model=fallback_model_from_metadata,
                     fallback_errors=fallback_errors,
                     error_state=error_state,
+                    return_raw_model_name=return_raw_model_name,
                 )
                 fallback_metadata_event_sent = True
 
