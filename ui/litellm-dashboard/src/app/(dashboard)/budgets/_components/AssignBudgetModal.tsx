@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type FormEvent } from "react";
 
 import type { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
-import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
+import { useCustomers, type EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { teamKeys, useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { apiClient } from "@/components/networking";
 import { Button } from "@/components/ui/button";
@@ -42,11 +42,13 @@ function CustomerField({
   value,
   onChange,
   customers,
+  isError,
 }: {
   id: string;
   value: string;
   onChange: (value: string) => void;
-  customers: ReturnType<typeof useCustomers>;
+  customers: readonly EndUser[];
+  isError: boolean;
 }) {
   return (
     <Field>
@@ -59,7 +61,7 @@ function CustomerField({
         required
       />
       <datalist id={`${id}-customers`}>
-        {customers.data?.map((entry) => (
+        {customers.map((entry) => (
           <option key={entry.user_id} value={entry.user_id}>
             {entry.alias || entry.user_id}
           </option>
@@ -68,7 +70,7 @@ function CustomerField({
       <FieldDescription>
         Use an existing customer name or ID, or enter a new end-user ID. Each customer has its own spend counter
       </FieldDescription>
-      {customers.isError && <p role="alert">Could not load customers. Try reopening this dialog</p>}
+      {isError && <p role="alert">Could not load customers. Try reopening this dialog</p>}
     </Field>
   );
 }
@@ -116,7 +118,8 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
   const [field, setField] = useState("");
   const [pattern, setPattern] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const customers = useCustomers();
+  const customers = useCustomers(20, customer.trim());
+  const customerList = customers.data?.pages.flat() ?? [];
   const teams = useTeams();
   const queryClient = useQueryClient();
   const patterns = useQuery({ queryKey: patternKeys, queryFn: () => loadPatternMappings(apiClient, accessToken) });
@@ -153,8 +156,8 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
     setError(null);
     if (target === "customer") {
       const value = customer.trim();
-      const exact = customers.data?.find((entry) => entry.user_id === value);
-      const aliases = customers.data?.filter((entry) => entry.alias === value) ?? [];
+      const exact = customerList.find((entry) => entry.user_id === value);
+      const aliases = customerList.filter((entry) => entry.alias === value);
       if (!exact && aliases.length > 1) {
         setError("More than one customer has this name. Enter the end-user ID instead");
         return;
@@ -214,7 +217,13 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
               </Select>
             </Field>
             {target === "customer" && (
-              <CustomerField id={id} value={customer} onChange={setCustomer} customers={customers} />
+              <CustomerField
+                id={id}
+                value={customer}
+                onChange={setCustomer}
+                customers={customerList}
+                isError={customers.isError}
+              />
             )}
             {target === "team" && <TeamField id={id} value={teamId} onChange={setTeamId} teams={teams} />}
             {isPattern && (

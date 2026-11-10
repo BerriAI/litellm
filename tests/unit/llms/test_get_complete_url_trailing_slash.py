@@ -137,15 +137,17 @@ API_BASE_IS_THE_FULL_URL: Final[Mapping[str, str]] = MappingProxyType(
             "brave.search.transformation.BraveSearchConfig",
             "cohere.chat.v2_transformation.CohereV2ChatConfig",
             "cohere.embed.transformation.CohereEmbeddingConfig",
+            "dashscope.image_edit.transformation.DashScopeImageEditConfig",
             "dashscope.image_generation.transformation.DashScopeImageGenerationConfig",
             "dataforseo.search.transformation.DataForSEOSearchConfig",
             "datarobot.chat.transformation.DataRobotConfig",
             "duckduckgo.search.transformation.DuckDuckGoSearchConfig",
             "google_pse.search.transformation.GooglePSESearchConfig",
             "searchapi.search.transformation.SearchAPIConfig",
+            "soniox.realtime.transformation.SonioxRealtimeConfig",
             "tinyfish.search.transformation.TinyfishSearchConfig",
             "vertex_ai.text_to_speech.transformation.VertexAITextToSpeechConfig",
-            "vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation."
+            "vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation."
             "VertexAIPartnerModelsAnthropicMessagesConfig",
         )
     }

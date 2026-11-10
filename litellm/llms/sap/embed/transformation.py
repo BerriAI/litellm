@@ -19,7 +19,7 @@ from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..chat.handler import GenAIHubOrchestrationError
-from ..credentials import get_token_creator
+from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
 
 
 class Usage(LiteLLMBaseModel):
@@ -102,10 +102,12 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     def deployment_url(self) -> str:
         with httpx.Client(timeout=30) as client:
             valid_deployments: Final = []
-            deployments: Final = client.get(join_api_base(self.base_url, "lm/deployments"), headers=self.headers).json()
+            deployments: Final[AICoreDeploymentList] = client.get(
+                join_api_base(self.base_url, "lm/deployments"), headers=self.headers
+            ).json()
             for deployment in deployments.get("resources", []):
                 if deployment["scenarioId"] == "orchestration":
-                    config_details = client.get(
+                    config_details: AICoreConfiguration = client.get(
                         join_api_base(self.base_url, f"lm/configurations/{deployment['configurationId']}"),
                         headers=self.headers,
                     ).json()

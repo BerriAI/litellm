@@ -47,11 +47,15 @@ describe("budget assignment form", () => {
     document.cookie = `token=${token}; path=/`;
     fetchMock.mockReset();
     fetchMock.mockImplementation(async (input) => {
-      const path = new URL(input instanceof Request ? input.url : String(input), "http://localhost").pathname;
+      const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost");
+      const path = url.pathname;
       const responses: Record<string, object> = {
         "/management/v1/users/me": { user_id: "qa-admin", user_role: "proxy_admin" },
         "/litellm/.well-known/litellm-ui-config": { admin_ui_disabled: false },
-        "/customer/list": [{ user_id: "qa-end-user", alias: "Support", spend: 0, blocked: false }],
+        "/customer/list":
+          url.searchParams.get("search") === "Support"
+            ? [{ user_id: "qa-end-user", alias: "Support", spend: 0, blocked: false }]
+            : [],
         "/team/list": [{ team_id: "qa-team", team_alias: "Engineering" }],
         "/config/list": [{ field_name: "request_pattern_tag_mappings", field_value: [], editable: true }],
         "/tag/list": [],
@@ -65,7 +69,7 @@ describe("budget assignment form", () => {
     vi.unstubAllGlobals();
   });
 
-  it("resolves an existing customer name to its end-user ID", async () => {
+  it("finds an existing customer by name outside the initial page", async () => {
     const user = userEvent.setup();
     const { onClose } = renderDialog();
     fireEvent.change(screen.getByLabelText("Customer name or end-user ID"), { target: { value: "Support" } });

@@ -1,3 +1,4 @@
+import json
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -639,3 +640,49 @@ def test_predibase_completion_passes_existing_config_to_async_completion(monkeyp
 
     assert result == "async-result"
     assert captured["async_kwargs"]["predibase_config"] is captured["config_instance"]
+
+
+_LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
+
+
+def _generate_stream_body(text: str) -> bytes:
+    events: Final = (
+        {"token": {"text": text}},
+        {"token": {"text": ""}, "generated_text": text, "details": {"finish_reason": "eos_token"}},
+    )
+    return "".join(f"data:{json.dumps(event, ensure_ascii=False)}\n\n" for event in events).encode()
+
+
+async def _streamed_contents(sync_stream: bool) -> list[str | None]:
+    request: Final = {
+        "model": "predibase/llama-3-8b-instruct",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+        "predibase_tenant_id": "tenant-1",
+        "api_key": "pb-key",
+        "max_retries": 0,
+    }
+    if sync_stream:
+        return [chunk.choices[0].delta.content for chunk in litellm.completion(**request)]
+    return [chunk.choices[0].delta.content async for chunk in await litellm.acompletion(**request)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_stream", [True, False])
+async def test_predibase_stream_keeps_unicode_line_separators_inside_a_token(
+    sync_stream: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", True)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "custom_prompt_dict",
+        {"llama-3-8b-instruct": {"roles": {}, "initial_prompt_value": "", "final_prompt_value": ""}},
+    )
+    respx_mock.post(
+        "https://serving.app.predibase.com/tenant-1/deployments/v2/llms/llama-3-8b-instruct/generate_stream"
+    ).mock(return_value=httpx.Response(200, content=_generate_stream_body(_LINE_SEPARATED_TEXT)))
+
+    contents: Final = await _streamed_contents(sync_stream)
+
+    assert contents == [_LINE_SEPARATED_TEXT, None]

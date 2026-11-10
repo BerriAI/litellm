@@ -135,13 +135,16 @@ describe("BudgetTable", () => {
     }
   });
 
-  it("should not make the reset column sortable", async () => {
+  it("should request duration sorting from the server", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<BudgetTable {...defaultProps} list={makeList()} />);
+    const onSortingChange = vi.fn();
+    renderWithProviders(<BudgetTable {...defaultProps} list={makeList({ onSortingChange })} />);
     await showColumn(user, "budget_duration");
     const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
     expect(headers).toContain("Reset");
-    expect(screen.queryByTestId("sort-header-budget_duration")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("sort-header-budget_duration"));
+    expect(onSortingChange).toHaveBeenCalled();
+    expect(onSortingChange.mock.calls[0][0]([])).toEqual([{ id: "budget_duration", desc: false }]);
   });
 
   it("should ask the list for a new sort when a sortable header is clicked", async () => {
@@ -158,6 +161,15 @@ describe("BudgetTable", () => {
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
     expect(screen.getAllByText("n/a")).toHaveLength(3);
     expect(screen.getByText("Unlimited")).toBeInTheDocument();
+  });
+
+  it("assigns the selected budget from the actions menu", async () => {
+    const user = userEvent.setup();
+    const list = makeList();
+    renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
+    await user.click(screen.getByRole("button", { name: "Open budget actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Assign budget" }));
+    expect(defaultProps.onAssignClick).toHaveBeenCalledExactlyOnceWith(list.rows[0]);
   });
 
   it("should call onEditClick from the actions menu", async () => {

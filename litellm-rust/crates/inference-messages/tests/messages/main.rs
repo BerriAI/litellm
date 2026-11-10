@@ -5,7 +5,7 @@ use std::{
 
 use litellm_http::{HttpSettings, Resolution};
 use litellm_inference_messages::{
-    Error, MessagesCall, MessagesSettings, MessagesShaping,
+    Error, MessagesBody, MessagesCall, MessagesSettings, MessagesShaping,
     route::{Messages, MessagesMachine, MessagesOutput},
 };
 use litellm_inference_testing::RecordingSecrets;
@@ -119,7 +119,10 @@ async fn run(call: MessagesCall) -> Result<MessagesOutput, Error> {
 
 async fn run_message(call: MessagesCall) -> MessagesResponse {
     match run(call).await.expect("messages call succeeds") {
-        MessagesOutput::Complete(message) => *message,
+        MessagesOutput::Complete(message) => match message {
+            MessagesBody::Message(message) => *message,
+            MessagesBody::Unchecked(_) => panic!("a call returned no message"),
+        },
         MessagesOutput::StreamEnded | MessagesOutput::Detached => {
             panic!("a non-streaming call returned a stream")
         }
@@ -144,7 +147,7 @@ impl LocalMessagesHost {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
-            .ok_or_else(|| Error::InvalidRequest("messages request was already projected".into()))
+            .ok_or(litellm_llms::Error::MissingField("messages request").into())
     }
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
         litellm_host_native::in_process::Host {

@@ -1,5 +1,6 @@
 import React from "react";
 import { ArrowUp, Code2, Square } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupTextarea } from "@/components/ui/input-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -38,6 +39,7 @@ export function ChatComposer({
   onSuggestionSelect,
   className,
 }: ChatComposerProps) {
+  const { t } = useTranslation();
   const submitIfAllowed = () => {
     if (!submitDisabled && !isLoading) {
       onSubmit();
@@ -49,6 +51,14 @@ export function ChatComposer({
       event.preventDefault();
       submitIfAllowed();
     }
+  };
+
+  const handleToolbarClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const control = (event.target as HTMLElement).closest(
+      "button, input, select, textarea, a[href], [contenteditable='true'], [tabindex]",
+    );
+    if (event.defaultPrevented || (control && event.currentTarget.contains(control))) return;
+    event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-slot=input-group-control]")?.focus();
   };
 
   return (
@@ -99,12 +109,7 @@ export function ChatComposer({
           <InputGroupAddon
             align="block-end"
             className="justify-between gap-2 px-3 pb-3 pt-1"
-            onClick={(event) => {
-              if ((event.target as HTMLElement).closest("button")) {
-                return;
-              }
-              event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-slot=input-group-control]")?.focus();
-            }}
+            onClick={handleToolbarClick}
           >
             <div className="flex min-w-0 items-center gap-1">{tools}</div>
 
@@ -112,7 +117,7 @@ export function ChatComposer({
               <InputGroupButton
                 type="button"
                 size="icon-sm"
-                aria-label="Stop request"
+                aria-label={t("chatComposer.stopRequest")}
                 data-testid="chat-stop-button"
                 className="size-8 rounded-xl bg-foreground text-background hover:bg-foreground/90"
                 onClick={onCancel}
@@ -123,7 +128,7 @@ export function ChatComposer({
               <InputGroupButton
                 type="button"
                 size="icon-sm"
-                aria-label="Send message"
+                aria-label={t("chatComposer.sendMessage")}
                 data-testid="chat-send-button"
                 disabled={submitDisabled || isLoading}
                 onClick={submitIfAllowed}
@@ -150,6 +155,8 @@ interface CodeInterpreterToggleProps {
 }
 
 export function CodeInterpreterToggle({ enabled, onToggle }: CodeInterpreterToggleProps) {
+  const { t } = useTranslation();
+  const label = enabled ? t("chatComposer.codeInterpreterEnabled") : t("chatComposer.enableCodeInterpreter");
   return (
     <Tooltip>
       <TooltipTrigger
@@ -164,16 +171,14 @@ export function CodeInterpreterToggle({ enabled, onToggle }: CodeInterpreterTogg
                 ? "border-info/20 bg-info/10 text-info hover:bg-info/15"
                 : "text-muted-foreground hover:text-foreground",
             )}
-            aria-label={enabled ? "Code Interpreter enabled (click to disable)" : "Enable Code Interpreter"}
+            aria-label={label}
             onClick={onToggle}
           />
         }
       >
         <Code2 className="size-4" />
       </TooltipTrigger>
-      <TooltipContent>
-        {enabled ? "Code Interpreter enabled (click to disable)" : "Enable Code Interpreter"}
-      </TooltipContent>
+      <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   );
 }

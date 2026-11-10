@@ -25,13 +25,16 @@ class ResponseSpec:
     status: int = 200
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
+    chunk_delay: float = 0
     events: tuple[tuple[str, object], ...] = ()
+    # Splits a non-stream body into this many writes, `chunk_delay` apart, so it trickles in.
+    body_chunks: int = 1
 
     def payloads(self) -> tuple[bytes, ...]:
-        if isinstance(self.body, bytes):
-            return (self.body,)
         if not self.events:
-            return (json.dumps(self.body).encode(),)
+            body: Final = self.body if isinstance(self.body, bytes) else json.dumps(self.body).encode()
+            size: Final = max(-(-len(body) // max(self.body_chunks, 1)), 1)
+            return tuple(body[start : start + size] for start in range(0, len(body), size)) or (body,)
         return tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)
 
 
@@ -89,7 +92,9 @@ def recording_service() -> Iterator[RecordingServer]:
                 self.send_header(name, value)
             self.end_headers()
             try:
-                for payload in payloads:
+                for index, payload in enumerate(payloads):
+                    if index and response.chunk_delay:
+                        time.sleep(response.chunk_delay)
                     self.wfile.write(payload)
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):

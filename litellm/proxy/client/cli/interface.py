@@ -189,7 +189,7 @@ def execute_command(path: ShellScope, ctx: click.Context, cli: click.Group) -> N
     try:
         if path[0].startswith("-"):
             cli.main(
-                ["--base-url", ctx.obj["base_url"], *path],
+                ["--base-url", cli_context_obj(ctx)["base_url"], *path],
                 prog_name="lite",
                 obj={"secret_vault": context_secret_vault(ctx)},
                 standalone_mode=False,

@@ -5,8 +5,11 @@ surface and the server-span + shared-provider behavior it produces.
 """
 
 
+import asyncio
 import contextvars
+from contextlib import nullcontext
 from datetime import datetime, timezone
+from typing import Final
 
 import pytest
 
@@ -16,6 +19,7 @@ pytest.importorskip("opentelemetry.instrumentation.fastapi")
 fastapi = pytest.importorskip("fastapi")
 
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request, Response  # noqa: E402  # optional dependencies are skipped first
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.routing import Route  # noqa: E402
@@ -36,6 +40,7 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_OFF  # noqa: E402
 from opentelemetry.trace import SpanKind  # noqa: E402
 
 from litellm.constants import LITELLM_UI_ALLOW_HEADERS  # noqa: E402
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes  # noqa: E402  # optional dependencies are skipped first
 
 from litellm.integrations.otel.model.config import (  # noqa: E402
     OpenTelemetryV2Config,
@@ -382,7 +387,9 @@ def test_every_traced_response_names_its_own_server_span(monkeypatch):
     assert responses["/stream"].text == "data: first\n\ndata: [DONE]\n\n"
     for path, response in responses.items():
         context = server_spans[path].context
-        assert response.headers.get_list("traceresponse") == [f"00-{context.trace_id:032x}-{context.span_id:016x}-01"]
+        assert response.headers.get_list("traceresponse") == [
+            f"00-{context.trace_id:032x}-{context.span_id:016x}-{context.trace_flags:02x}"
+        ]
 
 
 @pytest.mark.parametrize("path", ["/relayed", "/relayed/health"])
@@ -545,4 +552,140 @@ def test_the_unhandled_error_helper_names_the_span_it_is_given_in_any_context(mo
 
     headers = contextvars.Context().run(trace_response_headers, span)
 
-    assert headers["traceresponse"] == f"00-{context.trace_id:032x}-{context.span_id:016x}-01"
+    assert headers["traceresponse"] == f"00-{context.trace_id:032x}-{context.span_id:016x}-{context.trace_flags:02x}"
+
+
+@pytest.mark.parametrize(
+    ("excluded_urls", "path", "root_path", "status", "excluded"),
+    [
+        ("/health,/model/info", "/model/info", "", 200, True),
+        ("/model/info", "/model/info", "", 401, True),
+        ("/model/info", "/v1/models", "", 200, False),
+        (None, "/health/readiness", "", 200, True),
+        (None, "/model/info", "", 200, False),
+        ("", "/health/readiness", "", 200, False),
+        (r"^http://testserver/proxy/model/info$", "/model/info", "/proxy", 200, True),
+        (r"^http://other/model/info$", "/model/info", "", 200, False),
+    ],
+)
+@pytest.mark.parametrize("active_parent", [False, True])
+def test_url_exclusions_cover_auth_and_service_spans(
+    monkeypatch: pytest.MonkeyPatch, excluded_urls: str | None, path: str,
+    root_path: str, status: int, excluded: bool, active_parent: bool,
+) -> None:
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    if excluded_urls is None:
+        monkeypatch.delenv("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", raising=False)
+    else:
+        monkeypatch.setenv("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", excluded_urls)
+    app: Final = FastAPI(root_path=root_path)
+    logger: Final = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    exporter: Final = InMemorySpanExporter()
+    logger.tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    @app.get(path)
+    async def endpoint() -> Response:
+        with logger.start_phase_span(f"auth {path}"), logger.tracer.start_as_current_span("direct SDK span"):
+            await logger.async_service_success_hook(
+                payload=ServiceLoggerPayload(
+                    is_error=False, service=ServiceTypes.DB, duration=1,
+                    call_type="get_data", event_metadata=None,
+                ),
+                start_time=1, end_time=2,
+            )
+            if status == 401:
+                raise HTTPException(status_code=status)
+        return Response(status_code=status)
+
+    instrument_fastapi_app(app, tracer_provider=logger.tracer_provider)
+    with (
+        logger.tracer.start_as_current_span("caller") if active_parent else nullcontext(),
+        TestClient(app) as client,
+    ):
+        response: Final = client.get(f"{root_path}{path}?poll=1")
+
+    names: Final = tuple(span.name for span in exporter.get_finished_spans())
+    expected_request: Final = () if excluded else (
+        "postgres get_data", "direct SDK span", f"auth {path}", f"GET {path}",
+    )
+    assert response.status_code == status
+    assert names == expected_request + (("caller",) if active_parent else ())
+
+
+async def test_exclusion_survives_deferred_work_without_suppressing_other_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    monkeypatch.setenv("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", "/model/info")
+    app: Final = FastAPI()
+    logger: Final = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    exporter: Final = InMemorySpanExporter()
+    logger.tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    finish: Final = asyncio.Event()
+    deferred: Final[asyncio.Queue[asyncio.Task[None]]] = asyncio.Queue()
+
+    async def after_response(path: str) -> None:
+        await finish.wait()
+        with logger.start_phase_span(f"deferred {path}"):
+            pass
+
+    @app.get("/{path:path}")
+    async def endpoint(path: str) -> Response:
+        with logger.start_phase_span(f"auth {path}"):
+            if path == "model/info":
+                entered.set()
+                await release.wait()
+        await deferred.put(asyncio.create_task(after_response(path)))
+        return Response(status_code=200)
+
+    instrument_fastapi_app(app, tracer_provider=logger.tracer_provider)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+        excluded: Final = asyncio.create_task(client.get("/model/info"))
+        await entered.wait()
+        included: Final = await client.get("/v1/models")
+        release.set()
+        assert (await excluded).status_code == included.status_code == 200
+        finish.set()
+        await asyncio.gather(await deferred.get(), await deferred.get())
+    with logger.start_phase_span("independent SDK work"):
+        pass
+
+    assert sorted(span.name for span in exporter.get_finished_spans()) == [
+        "GET /{path:path}", "auth v1/models", "deferred v1/models", "independent SDK work",
+    ]
+
+
+@pytest.mark.parametrize("path", ["/excluded", "/included"])
+def test_url_exclusions_cover_unhandled_error_handlers_after_repeated_mount(
+    monkeypatch: pytest.MonkeyPatch, path: str,
+) -> None:
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    monkeypatch.setenv("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", "/excluded")
+    app: Final = FastAPI()
+    logger: Final = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    exporter: Final = InMemorySpanExporter()
+    logger.tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    async def error_handler(_request: Request, _exc: Exception) -> Response:
+        with logger.start_phase_span("error handler"), logger.tracer.start_as_current_span("error SDK span"):
+            return Response("handled", status_code=500)
+
+    app.add_exception_handler(Exception, error_handler)
+
+    @app.get(path)
+    async def endpoint() -> None:
+        with logger.start_phase_span("auth"):
+            raise ValueError("unhandled")
+
+    instrument_fastapi_app(app, tracer_provider=logger.tracer_provider)
+    instrument_fastapi_app(app, tracer_provider=logger.tracer_provider)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response: Final = client.get(path)
+
+    assert response.status_code == 500
+    assert response.text == "handled"
+    assert tuple(span.name for span in exporter.get_finished_spans()) == (
+        () if path == "/excluded" else ("auth", "error SDK span", "error handler", "GET /included")
+    )

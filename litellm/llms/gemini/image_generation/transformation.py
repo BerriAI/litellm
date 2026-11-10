@@ -37,6 +37,7 @@ else:
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
     Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
 )
@@ -188,7 +189,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         Transform Google AI Imagen response to litellm ImageResponse format
         """
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -226,9 +227,9 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                             )
 
             # Extract usage metadata for Gemini models
-            if "usageMetadata" in response_data:
+            if "usageMetadata" in response_object:
                 model_response.usage = transform_gemini_image_usage(
-                    _JSON_DICT.validate_python(response_data["usageMetadata"])
+                    _JSON_DICT.validate_python(response_object["usageMetadata"])
                 )
             web_search_requests: Final = get_gemini_image_web_search_requests(response_object)
             if web_search_requests and model_response.usage is not None:

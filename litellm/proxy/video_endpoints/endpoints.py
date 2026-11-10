@@ -4,6 +4,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from litellm.proxy._types import *
@@ -21,13 +22,13 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
     VideoRequestRoute,
+    authorized_video_model,
     encode_character_id_in_response,
     encode_video_id_in_response,
     extract_model_from_target_model_names,
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
-    video_model_group,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -36,6 +37,7 @@ from litellm.types.videos.utils import (
 )
 
 router: Final = APIRouter()
+_OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 
 
 @router.post(
@@ -281,7 +283,7 @@ async def video_status(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
@@ -382,7 +384,7 @@ async def video_content(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
@@ -488,7 +490,7 @@ async def video_remix(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
@@ -582,7 +584,9 @@ async def video_create_character(
     if video_file:
         data["video"] = video_file[0]
 
-    target_model_name: Final = extract_model_from_target_model_names(data.get("target_model_names"))
+    target_model_name: Final = extract_model_from_target_model_names(
+        _OPAQUE_VALUE_ADAPTER.validate_python(data.get("target_model_names"))
+    )
     if target_model_name and not data.get("model"):
         data["model"] = target_model_name
 
@@ -697,7 +701,9 @@ async def video_get_character(
     data["custom_llm_provider"] = custom_llm_provider
 
     if model_id_from_decoded and llm_router:
-        resolved_model: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded, provider_from_id)
+        resolved_model: Final = llm_router.registry().resolve(
+            model_id_from_decoded, kind="from_id", custom_llm_provider=provider_from_id
+        )
         if resolved_model:
             data["model"] = resolved_model
 
@@ -808,7 +814,7 @@ async def video_edit(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
@@ -911,7 +917,7 @@ async def video_extension(
     )
     data["custom_llm_provider"] = custom_llm_provider
 
-    resolved_model: Final = video_model_group(decoded, llm_router)
+    resolved_model: Final = await authorized_video_model(decoded, llm_router, user_api_key_dict)
     if resolved_model:
         data["model"] = resolved_model
 
