@@ -303,6 +303,7 @@ async def create_batch(
             general_settings=general_settings_view(),
             llm_router=llm_router,
             team_metadata=user_api_key_dict.team_metadata,
+            team_id=user_api_key_dict.team_id,
         )
         _raise_when_routing_headers_disagree(request, data.get("model"))
         verbose_proxy_logger.debug(
