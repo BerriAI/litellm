@@ -900,13 +900,16 @@ def test_a_provider_wildcard_grant_finds_only_deployments_named_under_it(deploye
 
 
 @pytest.mark.parametrize("field", ["s3_bucket_name", "s3_output_bucket_name"])
-def test_deployment_credentials_keep_a_request_bucket_and_fill_a_missing_one(field: str) -> None:
+def test_create_paths_keep_a_request_bucket_and_reads_keep_the_deployment_bucket(field: str) -> None:
     deployment: Final = {"custom_llm_provider": "bedrock", "api_key": "sk-deployment", field: "model-bucket"}
-    with_request_bucket: Final[dict[str, object]] = {field: "team-a-bucket"}
-    without_request_bucket: Final[dict[str, object]] = {}
+    create_with_bucket: Final[dict[str, object]] = {field: "team-a-bucket"}
+    create_without_bucket: Final[dict[str, object]] = {}
+    read_with_bucket: Final[dict[str, object]] = {field: "team-a-bucket"}
 
-    prepare_data_with_credentials(data=with_request_bucket, credentials=dict(deployment))
-    prepare_data_with_credentials(data=without_request_bucket, credentials=dict(deployment))
+    prepare_data_with_credentials(data=create_with_bucket, credentials=dict(deployment), keep_request_buckets=True)
+    prepare_data_with_credentials(data=create_without_bucket, credentials=dict(deployment), keep_request_buckets=True)
+    prepare_data_with_credentials(data=read_with_bucket, credentials=dict(deployment))
 
-    assert with_request_bucket == {field: "team-a-bucket", "api_key": "sk-deployment"}
-    assert without_request_bucket == {field: "model-bucket", "api_key": "sk-deployment"}
+    assert create_with_bucket == {field: "team-a-bucket", "api_key": "sk-deployment"}
+    assert create_without_bucket == {field: "model-bucket", "api_key": "sk-deployment"}
+    assert read_with_bucket == {field: "model-bucket", "api_key": "sk-deployment"}

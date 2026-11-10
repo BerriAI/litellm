@@ -394,6 +394,7 @@ async def create_batch(
             prepare_data_with_credentials(
                 data=_create_batch_data,
                 credentials=credentials,
+                keep_request_buckets=True,
             )
 
             # Create batch using model credentials
@@ -498,6 +499,7 @@ async def create_batch(
                 prepare_data_with_credentials(
                     data=_create_batch_data,
                     credentials=credentials,
+                    keep_request_buckets=True,
                 )
 
                 # Create batch using model credentials
@@ -516,6 +518,7 @@ async def create_batch(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                     custom_llm_provider=custom_llm_provider,
+                    keep_request_buckets=True,
                 )
                 _raise_not_found_when_openai_fallback_unservable(
                     requested_provider=requested_provider,

@@ -467,6 +467,7 @@ async def route_create_file(
         prepare_data_with_credentials(
             data=_create_file_request,
             credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
+            keep_request_buckets=True,
         )
 
         # Create the file with model credentials
@@ -530,6 +531,7 @@ async def route_create_file(
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
             custom_llm_provider=custom_llm_provider,
+            keep_request_buckets=True,
         )
         # get configs for custom_llm_provider
         llm_provider_config: Final = get_files_provider_config(custom_llm_provider=custom_llm_provider)

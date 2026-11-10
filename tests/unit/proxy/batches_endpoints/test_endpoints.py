@@ -477,15 +477,18 @@ async def test_create__team_with_an_allowlist_and_no_request_bucket_leaves_the_b
 @pytest.mark.parametrize(
     "request_bucket,expected_bucket", [("team-a-bucket", "team-a-bucket"), (None, "model-bucket")]
 )
+@pytest.mark.parametrize(
+    "routing",
+    [
+        {"input_file_id": "file-plain", "model": "bedrock-batch"},
+        {"input_file_id": encode_file_id_with_model("file-plain", "bedrock-batch")},
+    ],
+    ids=["model_in_body", "model_encoded_file_id"],
+)
 async def test_create__model_routed_batch_keeps_the_team_bucket_over_the_deployment_bucket(
-    harness, request_bucket: str | None, expected_bucket: str
+    harness, routing: dict[str, str], request_bucket: str | None, expected_bucket: str
 ):
-    body: Final = {
-        "input_file_id": "file-plain",
-        "endpoint": "/v1/chat/completions",
-        "completion_window": "24h",
-        "model": "bedrock-batch",
-    }
+    body: Final = {"endpoint": "/v1/chat/completions", "completion_window": "24h", **routing}
     set_body(harness, body if request_bucket is None else {**body, "s3_output_bucket_name": request_bucket})
 
     await call_create(harness, user=_TEAM_A_KEY)
