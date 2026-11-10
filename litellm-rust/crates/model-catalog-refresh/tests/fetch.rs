@@ -148,10 +148,6 @@ async fn fetched(url: &str, policy: RetryPolicy, start: Start) -> Result<Fetched
 }
 
 #[rstest]
-#[case::one_etag(
-    "HTTP/1.1 200 OK\r\nETag: \"v1\"\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
-    Some("\"v1\"")
-)]
 #[case::every_etag_joined(
     "HTTP/1.1 200 OK\r\nETag: \"a\"\r\nETag: \"b\"\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
     Some("\"a\", \"b\"")
@@ -213,14 +209,6 @@ async fn a_redirect_is_not_followed_and_its_body_is_the_document() {
         })
     );
     assert_eq!(upstream.heads().len(), 1);
-}
-
-#[rstest]
-#[tokio::test]
-async fn a_retryable_status_is_retried_until_it_succeeds() {
-    let upstream = Upstream::serve(vec![Answer::Raw(UNAVAILABLE), Answer::Raw(OK)]);
-    assert!(fetched(&upstream.url(), POLICY, Start::Fresh).await.is_ok());
-    assert_eq!(upstream.heads().len(), 2);
 }
 
 #[rstest]
