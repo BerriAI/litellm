@@ -395,14 +395,17 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
     def transform_file_content_request(
         self,
         file_content_request: FileContentRequest,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> tuple[str, dict]:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: BaseFilesConfig signature
         file_id: Final = file_content_request.get("file_id")
         if file_id is None:
             raise ValueError("file_id is required to download file content")
-        api_base: Final = self.get_api_base(litellm_params.get("api_base"))
-        url: Final = join_api_base(api_base, f"download/v1beta/{gemini_file_name(file_id)}:download")
+        api_base: Final = litellm_params.get("api_base")
+        url: Final = join_api_base(
+            self.get_api_base(api_base if isinstance(api_base, str) else None),
+            f"download/v1beta/{gemini_file_name(file_id)}:download",
+        )
         return url, {"alt": "media"}
 
     def transform_file_content_response(
