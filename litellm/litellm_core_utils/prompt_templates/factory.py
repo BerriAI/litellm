@@ -2495,10 +2495,23 @@ def _continue_turn_between(previous_role: object, role: object) -> tuple[Mapping
     return ()
 
 
+def _needs_user_continue_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "assistant" and not message.get("prefix")
+
+
+def _with_user_continue_turns(messages: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    first: Final = next((index for index, message in enumerate(messages) if not _is_system_message(message)), None)
+    if not litellm.modify_params or first is None:
+        return tuple(messages)
+    leading: Final = (DEFAULT_USER_CONTINUE_MESSAGE,) if _needs_user_continue_turn(messages[first]) else ()
+    trailing: Final = (DEFAULT_USER_CONTINUE_MESSAGE,) if _needs_user_continue_turn(messages[-1]) else ()
+    return (*messages[:first], *leading, *messages[first:], *trailing)
+
+
 def assistant_turns_as_converse_sends_them(
     messages: Sequence[Mapping[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
-    runs: Final = _role_runs_as_converse_sends_them(messages)
+    runs: Final = _role_runs_as_converse_sends_them(_with_user_continue_turns(messages))
     return tuple(
         itertools.chain.from_iterable(
             (*_continue_turn_between(previous_role, role), *turns)

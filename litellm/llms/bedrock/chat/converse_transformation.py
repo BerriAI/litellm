@@ -379,6 +379,17 @@ class AmazonConverseConfig(BaseConfig):
         return [_rewrite(message) for message in messages]
 
     @staticmethod
+    def with_orphaned_tool_blocks_as_sent(
+        messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]] | None
+    ) -> Sequence[Mapping[str, object]]:
+        if not litellm.bedrock_neutralize_orphaned_tool_blocks:
+            return messages
+        return AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+            cast(list[AllMessageValues], list(messages)),  # cast-ok: the same chat messages inference neutralizes
+            {"tools": list(tools)} if tools else {},
+        )
+
+    @staticmethod
     def _handle_orphaned_tool_blocks(messages: list[AllMessageValues], optional_params: dict) -> list[AllMessageValues]:
         if litellm.bedrock_neutralize_orphaned_tool_blocks:
             return AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params)

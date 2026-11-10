@@ -197,7 +197,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
         chat_config: Final = _deployment_chat_config(litellm_params) if is_mantle_claude_model(resolved_model) else None
         counted_input: Final = (
-            assistant_turns_as_converse_sends_them(messages)
+            assistant_turns_as_converse_sends_them(chat_config.with_orphaned_tool_blocks_as_sent(messages, tools))
             if messages_format == "openai" and isinstance(chat_config, litellm.AmazonConverseConfig)
             else messages
         )
