@@ -1,21 +1,25 @@
 import hashlib
+import json
 from collections.abc import Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # Prisma's generated delegates are dynamic
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.models.plugin_upload import (
     PluginPublication,
     PluginPublicationBase,
     PluginPublicationError,
+    PluginReview,
     PublishedPlugin,
     uploaded_plugin_source,
 )
 from litellm.models.skill_submission import (
     SkillProposal,
+    SkillScanInput,
     SkillSubmission,
     SubmissionConflict,
     SubmissionLimitExceeded,
@@ -26,8 +30,9 @@ from litellm.models.skill_submission import (
     SubmissionReviewResult,
     SubmissionStatus,
 )
-from litellm.repositories.plugin_publication import PluginPublicationTransaction, publish_plugin
+from litellm.repositories.plugin_publication import PluginPublicationTransaction, publish_plugin, verified_archive
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.types.proxy.skill_scanning import SkillScan
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -90,6 +95,7 @@ class _SubmissionRow(BaseModel):
         )
 
 
+_SCAN_ROWS: Final = TypeAdapter(tuple[Mapping[str, str | None], ...])
 _ROWS: Final = TypeAdapter(tuple[_SubmissionRow, ...])
 _DESCRIPTION: Final = TypeAdapter[str | None](str | None)
 _SOURCE: Final = TypeAdapter(dict[str, str])
@@ -124,6 +130,81 @@ class SkillSubmissionRepository:
         self._database = cast(  # cast-ok: Prisma dynamically exposes generated delegates and transactions
             SubmissionDatabase, prisma_client.writer_db
         )
+
+    async def get_scan(self, submission_id: str) -> SkillScan | SubmissionMissing | None:
+        rows: Final = _SCAN_ROWS.validate_python(
+            await self._database.query_raw(
+                'SELECT scan_json FROM "LiteLLM_SkillSubmission" WHERE id = $1', submission_id
+            )
+        )
+        if not rows:
+            return SubmissionMissing()
+        value: Final = rows[0]["scan_json"]
+        return None if value is None else SkillScan.model_validate_json(value)
+
+    async def start_scan(
+        self, submission_id: str, scan: SkillScan
+    ) -> SkillScanInput | SubmissionMissing | SubmissionConflict:
+        async with self._database.tx() as transaction:
+            await transaction.query_raw(
+                'SELECT id FROM "LiteLLM_SkillSubmission" WHERE id = $1 FOR UPDATE', submission_id
+            )
+            row: Final = await transaction.litellm_skillsubmission.find_unique(where={"id": submission_id})
+            if row is None:
+                return SubmissionMissing()
+            if row.status != "pending_review":
+                return SubmissionConflict("Only pending submissions can be scanned.")
+            previous: Final = None if row.scan_json is None else SkillScan.model_validate_json(row.scan_json)
+            if previous is not None and previous.at(scan.started_at).status == "running":
+                return SubmissionConflict("A scan is already running for this submission.")
+            stored: Final = _StoredProposal.model_validate_json(row.proposal_json)
+            source: Final = _SOURCE.validate_python(stored.manifest.get("source", {}))
+            inherited: Final = (
+                await transaction.litellm_claudecodepluginupload.find_unique(where={"plugin_name": row.plugin_name})
+                if row.archive_content is None and source.get("source") == "archive"
+                else None
+            )
+            content: Final = (
+                row.archive_content.decode()
+                if row.archive_content is not None
+                else verified_archive(
+                    None if inherited is None else inherited.content.decode(), json.dumps(stored.manifest)
+                )
+            )
+            managed_archive: Final = urlsplit(source.get("url", "")).path.endswith(
+                f"/claude-code/plugins/{row.plugin_name}/archive/{source.get('sha256', '')}.zip"
+            )
+            if source.get("source") == "archive" and managed_archive and content is None:
+                return SubmissionConflict("The proposal's archive is no longer available. Submit a new ZIP to scan it.")
+            started: Final = scan.model_copy(
+                update={"archive_sha256": None if content is None else hashlib.sha256(content).hexdigest()}
+            )
+            await transaction.litellm_skillsubmission.update(
+                where={"id": submission_id}, data={"scan_json": started.model_dump_json()}
+            )
+            return SkillScanInput(started, source, content)
+
+    async def finish_scan(self, submission_id: str, scan: SkillScan) -> None:
+        async with self._database.tx() as transaction:
+            rows: Final = _SCAN_ROWS.validate_python(
+                await transaction.query_raw(
+                    'SELECT scan_json FROM "LiteLLM_SkillSubmission" WHERE id = $1 FOR UPDATE', submission_id
+                )
+            )
+            value: Final = rows[0]["scan_json"] if rows else None
+            if value is None:
+                return
+            current: Final = SkillScan.model_validate_json(value)
+            if current.id != scan.id or current.status != "running":
+                return
+            result: Final = (
+                current.at(scan.completed_at)
+                if scan.completed_at is not None and scan.completed_at >= current.expires_at
+                else scan
+            )
+            await transaction.litellm_skillsubmission.update(
+                where={"id": submission_id}, data={"scan_json": result.model_dump_json()}
+            )
 
     async def submit(
         self, upload: PluginPublication, submitted_by: str, base: PluginPublicationBase | None
@@ -232,7 +313,9 @@ class SkillSubmissionRepository:
                     if approve and content is not None and publication_base_url
                     else _SOURCE.validate_python(submission.proposal.manifest.get("source"))
                 )
-                publication: Final = await _publish_submission(transaction, row, source, content) if approve else None
+                publication: Final = (
+                    await _publish_submission(transaction, row, source, content, reviewer) if approve else None
+                )
                 if isinstance(publication, PluginPublicationError):
                     return publication
                 reviewed_at: Final = datetime.now(timezone.utc)
@@ -266,6 +349,7 @@ async def _publish_submission(
     row: "prisma_models.LiteLLM_SkillSubmission",
     source: Mapping[str, str],
     content: bytes | None,
+    reviewer: str,
 ) -> PublishedPlugin | PluginPublicationError:
     stored: Final = _StoredProposal.model_validate_json(row.proposal_json)
     proposal: Final = stored.proposal(row.plugin_name)
@@ -283,6 +367,24 @@ async def _publish_submission(
             manifest={**stored.manifest, "source": dict(source)},
             content=content,
             created_by=row.submitted_by,
+            review=PluginReview(reviewer, scan_passed_for_archive(row.scan_json, source.get("sha256"))),
         ),
         base,
+    )
+
+
+def scan_passed_for_archive(scan_json: str | None, digest: str | None) -> bool:
+    if not scan_json or not digest:
+        return False
+    try:
+        scan: Final = SkillScan.model_validate_json(scan_json)
+    except ValidationError:
+        return False
+    return (
+        scan.status == "completed"
+        and scan.archive_sha256 == digest
+        and scan.report is not None
+        and scan.report.complete
+        and scan.report.risk_score == 0
+        and not scan.report.findings
     )

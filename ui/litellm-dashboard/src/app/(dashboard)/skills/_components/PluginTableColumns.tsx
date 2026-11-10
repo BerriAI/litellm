@@ -1,11 +1,13 @@
 "use client";
 
+import { getSkillMetadataColumns } from "@/components/claude_code_plugins/SkillMetadataColumns";
+
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { DateCell, IdentityCell, StatusBadge } from "@/components/shared/table_cells";
+import { IdentityCell, StatusBadge } from "@/components/shared/table_cells";
 import i18n from "@/i18n/i18n";
 import { SkillHubSkill } from "@/components/claude_code_plugins/types";
 import { buttonVariants } from "@/components/ui/button";
@@ -143,16 +145,7 @@ export const getPluginTableColumns = ({
       />
     ),
   },
-  {
-    id: "updated_at",
-    accessorKey: "updated_at",
-    sortingFn: "datetime",
-    meta: { title: i18n.t("skills.table.columns.updatedAt") },
-    header: ({ column }) => <DataTableSortHeader column={column} title={i18n.t("skills.table.columns.updatedAt")} />,
-    size: 160,
-    enableSorting: true,
-    cell: ({ row }) => <DateCell value={row.original.updated_at} />,
-  },
+  ...getSkillMetadataColumns<SkillHubSkill>(),
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },

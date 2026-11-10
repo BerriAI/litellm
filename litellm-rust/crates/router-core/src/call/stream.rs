@@ -37,6 +37,9 @@ pub struct StreamOrigin {
     pub attempted_retries: u32,
     /// The budget the first stream retry committed to (`committed_retry_budget_for_request`).
     pub committed_budget: Option<u32>,
+    /// The group a pre-routing hook selected for `group`, which the fallback lookup keys on first.
+    #[serde(default)]
+    pub routed: Option<String>,
 }
 
 /// What may still take over a stream that fails before content.
@@ -61,14 +64,22 @@ impl StreamOrigin {
             params: None,
             excluded: Arc::from([]),
             failover_excluded: Arc::from([]),
+            routed: self.routed.clone(),
         }
     }
 
     /// `fallback_lookup_groups`: the served group, then the group the request was for.
     fn lookup<'a>(&'a self, request: &'a RouterRequest) -> Vec<&'a str> {
-        let mut lookup = vec![self.group.as_str()];
-        if request.model != self.group {
-            lookup.push(request.model.as_str());
+        let mut lookup: Vec<&str> = Vec::new();
+        for group in self
+            .routed
+            .as_deref()
+            .into_iter()
+            .chain([self.group.as_str(), request.model.as_str()])
+        {
+            if !lookup.contains(&group) {
+                lookup.push(group);
+            }
         }
         lookup
     }
@@ -186,7 +197,10 @@ impl Router {
                     scope: 0,
                 },
                 &mut chain,
-                Failed::from(Error::Attempt(failure)),
+                Failed {
+                    routed: origin.routed.clone(),
+                    ..Failed::from(Error::Attempt(failure))
+                },
             )
             .await
     }

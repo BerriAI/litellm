@@ -1,7 +1,8 @@
+import userEvent from "@testing-library/user-event";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
-import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { setGlobalLitellmHeaderName } from "@/components/networking";
 import type { SkillHubSkill, SkillSubmission } from "@/components/claude_code_plugins/types";
 import { toast } from "@/lib/toast";
@@ -25,6 +26,7 @@ const published: SkillHubSkill = {
   download_url: "/skill-hub/skills/shared-skill/archive",
   content_url: "/skill-hub/skills/shared-skill/content",
   updated_at: "2026-10-20T00:00:00Z",
+  download_count: 0,
 };
 
 const pending: SkillSubmission = {
@@ -60,6 +62,7 @@ const pending: SkillSubmission = {
 const fetchMock = vi.fn<typeof fetch>();
 const queryDefaults = testQueryClient.getDefaultOptions();
 let catalog: SkillHubSkill[];
+let catalogRequests: URL[];
 let submissions: SkillSubmission[];
 let pageRequests: { limit: number; offset: number }[];
 let writes: { path: string; method: string; body: RequestInit["body"] }[];
@@ -115,10 +118,52 @@ const makeSubmissions = (count: number): SkillSubmission[] =>
     proposal: { ...pending.proposal, description: `Instructions ${index + 1}` },
   }));
 
+let scanFailure = false;
+let scanRequested = false;
+
+function scanResponse(method: string) {
+  if (method === "POST") scanRequested = true;
+  return Response.json({
+    configured: true,
+    scan: !scanRequested
+      ? null
+      : {
+          id: "scan-1",
+          status: scanFailure ? "failed" : "completed",
+          requested_by: "admin",
+          started_at: "2026-01-01T00:00:00Z",
+          expires_at: "2026-01-01T00:03:00Z",
+          archive_sha256: "a".repeat(64),
+          error: scanFailure ? "Scanner was unreachable" : null,
+          report: scanFailure
+            ? null
+            : {
+                scanner_version: "test-version",
+                complete: false,
+                scan_mode: "static-only",
+                risk_score: 85,
+                findings: [
+                  {
+                    rule_id: "unsafe-upload",
+                    severity: "HIGH",
+                    message: "Potential data exfiltration",
+                    file: "SKILL.md",
+                    start_line: 8,
+                  },
+                ],
+                limitations: [],
+              },
+        },
+  });
+}
+
 beforeEach(() => {
+  scanFailure = false;
+  scanRequested = false;
   testQueryClient.clear();
   vi.clearAllMocks();
   catalog = [published];
+  catalogRequests = [];
   submissions = [pending];
   pageRequests = [];
   writes = [];
@@ -129,20 +174,26 @@ beforeEach(() => {
     const url = new URL(request?.url ?? String(input), "http://localhost");
     const path = url.pathname;
     const method = request?.method ?? options?.method ?? "GET";
+    if (path === `/skill-hub/submissions/${pending.id}/scan`) {
+      return scanResponse(method);
+    }
     if (method !== "GET") {
       const body = request ? await request.text() : options?.body;
       writes.push({ path, method, body });
       return respondToWrite(path, body);
     }
     if (path === "/skill-hub/skills") {
+      catalogRequests.push(url);
       const limit = Number(url.searchParams.get("limit"));
       const offset = Number(url.searchParams.get("offset"));
       const skills = catalog.slice(offset, offset + limit);
-      return Response.json({
+      const result = {
+        tags: ["review", "engineering"],
         skills,
         count: skills.length,
         next_offset: offset + limit < catalog.length ? offset + limit : null,
-      });
+      };
+      return Response.json(result);
     }
     if (path === `/skill-hub/skills/${published.name}`)
       return Response.json(catalog.find((skill) => skill.name === published.name));
@@ -191,6 +242,24 @@ const openEdit = async () => {
   return screen.getByRole("dialog");
 };
 
+it.each(["current", "retained"])("refreshes published counts after a %s download", async (kind) => {
+  URL.createObjectURL = vi.fn(() => "blob:skill-download");
+  renderWithProviders(<ClaudeCodePluginsPanel accessToken="admin-token" userRole="Admin" />);
+  expect(await screen.findByRole("cell", { name: "0" })).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByText(published.name));
+  await screen.findByRole("button", { name: "Edit Skill" });
+  if (kind === "retained") fireEvent.click(screen.getByRole("tab", { name: "Version history" }));
+  const button = await screen.findByRole("button", {
+    name: kind === "retained" ? "Download retained ZIP" : "Download ZIP",
+  });
+  catalog = [{ ...published, download_count: 1 }];
+  fireEvent.click(button);
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.click(screen.getByText("Skills Hub"));
+  expect(await screen.findByRole("cell", { name: "1" })).toBeInTheDocument();
+});
+
 it("paginates the neutral catalog and refreshes detail for a recreated skill", async () => {
   catalog = [
     published,
@@ -203,7 +272,7 @@ it("paginates the neutral catalog and refreshes detail for a recreated skill", a
   renderWithProviders(<ClaudeCodePluginsPanel accessToken="member-token" userRole="Internal User" />);
   fireEvent.click(await screen.findByText(published.name));
   expect(await screen.findByRole("button", { name: "Edit Skill" })).toBeInTheDocument();
-  fireEvent.click(screen.getByText("Skills"));
+  fireEvent.click(screen.getByText("Skills Hub"));
   catalog = [
     { ...published, id: "filler", name: "catalog-0" },
     ...catalog.slice(1),
@@ -218,7 +287,7 @@ it("paginates the neutral catalog and refreshes detail for a recreated skill", a
   fireEvent.click(screen.getByText(published.name));
   expect(await screen.findByRole("button", { name: "Edit Skill" })).toBeInTheDocument();
   expect(screen.getByText("Recreated instructions")).toBeInTheDocument();
-  fireEvent.click(screen.getByText("Skills"));
+  fireEvent.click(screen.getByText("Skills Hub"));
   fireEvent.click(screen.getByRole("button", { name: "Previous" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled());
 });
@@ -331,7 +400,7 @@ it("allows a member submission, explains approval and refreshes their pending li
   await waitFor(() =>
     expect(screen.getByRole("tab", { name: "Published skills" })).toHaveAttribute("aria-selected", "true"),
   );
-  fireEvent.click(screen.getByRole("button", { name: "+ Add Skill" }));
+  fireEvent.click(screen.getByRole("button", { name: "+ Register your skill" }));
   fireEvent.click(screen.getByRole("radio", { name: "Import URL" }));
   fireEvent.change(screen.getByRole("textbox", { name: "Source URL" }), {
     target: { value: "https://github.com/example/new-skill" },
@@ -530,10 +599,10 @@ it("refreshes detail after a review conflict and removes actions when another re
 
 it("keeps an effective Admin viewer read-only while allowing full submission inspection", async () => {
   renderWithProviders(<ClaudeCodePluginsPanel accessToken="viewer-token" userRole="Admin" isViewOnly />);
-  expect(screen.getByRole("button", { name: "+ Add Skill" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "+ Register your skill" })).toBeDisabled();
   fireEvent.click(await screen.findByText(published.name));
   expect(screen.queryByRole("button", { name: "Edit Skill" })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByText("Skills"));
+  fireEvent.click(screen.getByText("Skills Hub"));
   fireEvent.click(screen.getByRole("tab", { name: "Submissions" }));
   fireEvent.click(await screen.findByRole("button", { name: "View details" }));
   expect(await screen.findByText("Currently published")).toBeInTheDocument();
@@ -580,6 +649,7 @@ it.each(["role", "read-only"])("does not reuse a published admin snapshot after 
   expect(screen.queryByText("Approved instructions")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Edit Skill" })).not.toBeInTheDocument();
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not refresh published skills");
+  expect(screen.getByRole("columnheader", { name: "Downloads" })).toBeInTheDocument();
 });
 
 it("does not reuse admin review metadata when the same account loses its role and detail refresh fails", async () => {
@@ -629,4 +699,96 @@ it("ignores an in-flight admin submission list that resolves after the same acco
   expect(screen.getByText("No submissions yet")).toBeInTheDocument();
   expect(screen.queryByText("Proposed instructions")).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Review" })).not.toBeInTheDocument();
+});
+
+it.each([false, true])("keeps approval available after manual scanning, failure=%s", async (failure) => {
+  scanFailure = failure;
+  renderSubmissions();
+  fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+  const scan = await screen.findByRole("button", { name: "Scan for threats" });
+  await waitFor(() => expect(scan).toBeEnabled());
+  expect(screen.getByRole("button", { name: "Approve and publish" })).toBeEnabled();
+  fireEvent.click(scan);
+  expect(
+    await screen.findByText(failure ? "Scanner was unreachable" : "Potential data exfiltration"),
+  ).toBeInTheDocument();
+  if (!failure) {
+    expect(screen.getByText("SKILL.md:8")).toBeInTheDocument();
+    expect(
+      screen.getByText("Analysis was incomplete. This report does not establish that the skill is safe."),
+    ).toBeInTheDocument();
+  }
+  expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Approve and publish" }));
+  expect(await screen.findByText("Approved")).toBeInTheDocument();
+  expect(writes).toHaveLength(1);
+  expect(writes[0].path).toBe(`/skill-hub/submissions/${pending.id}/approve`);
+});
+
+it.each([200, 409])("refreshes the running scan after POST %s and ignores an older GET", async (status) => {
+  renderSubmissions();
+  fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+  const scan = await screen.findByRole("button", { name: "Scan for threats" });
+  await waitFor(() => expect(scan).toBeEnabled());
+  const older = Promise.withResolvers<Response>();
+  const refreshed = Promise.withResolvers<Response>();
+  const running = {
+    configured: true,
+    scan: {
+      id: "current-scan",
+      status: "running",
+      requested_by: "another-admin",
+      started_at: "2026-01-01T00:00:00Z",
+      expires_at: "2026-01-01T00:03:00Z",
+    },
+  };
+  const originalFetch = fetchMock.getMockImplementation()!;
+  let reads = 0;
+  fetchMock.mockImplementation((input, options) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (!url.endsWith(`/submissions/${pending.id}/scan`)) return originalFetch(input, options);
+    if ((input instanceof Request ? input.method : options?.method) === "POST") {
+      return Promise.resolve(
+        Response.json(status === 409 ? { detail: "A scan is already running" } : running, { status }),
+      );
+    }
+    return ++reads === 1 ? older.promise : refreshed.promise;
+  });
+  void testQueryClient.refetchQueries({ type: "active" });
+  await waitFor(() => expect(reads).toBe(1));
+  fireEvent.click(scan);
+  await waitFor(() => expect(reads).toBe(2));
+  expect(screen.getByRole("button", { name: "Scanning…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Approve and publish" })).toBeEnabled();
+  refreshed.resolve(Response.json(running));
+  expect(await screen.findByText("Requested by another-admin")).toBeInTheDocument();
+  await act(async () => older.resolve(Response.json({ configured: true, scan: null })));
+  expect(screen.getByRole("button", { name: "Scanning…" })).toBeDisabled();
+  expect(screen.getByText("Requested by another-admin")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Approve and publish" }));
+  expect(await screen.findByText("Approved")).toBeInTheDocument();
+});
+
+it("applies tag and scan filters across the catalog and resets pagination when searching", async () => {
+  const user = userEvent.setup();
+  catalog = [published, { ...published, id: "second", name: "second-skill" }];
+  renderWithProviders(<ClaudeCodePluginsPanel accessToken="member-token" userRole="Internal User" />, {
+    searchParams: { skills_page: "2", skills_page_size: "1" },
+  });
+  await waitFor(() => expect(catalogRequests.at(-1)?.searchParams.get("offset")).toBe("1"));
+  await screen.findByRole("cell", { name: "Approved instructions" });
+  await user.click(screen.getByRole("button", { name: "Downloads" }));
+  await waitFor(() => expect(catalogRequests.at(-1)?.searchParams.get("sort_by")).toBe("download_count"));
+  expect(catalogRequests.at(-1)?.searchParams.get("offset")).toBe("0");
+  await chooseSelectOption(user, screen.getByRole("combobox", { name: "Filter by tag" }), "engineering");
+  await waitFor(() => expect(catalogRequests.at(-1)?.searchParams.get("tag")).toBe("engineering"));
+  expect(catalogRequests.at(-1)?.searchParams.get("offset")).toBe("0");
+  await chooseSelectOption(user, screen.getByRole("combobox", { name: "Security scan" }), "Security scan: Yes");
+  await waitFor(() => expect(catalogRequests.at(-1)?.searchParams.get("security_scan_passed")).toBe("true"));
+  fireEvent.change(screen.getByRole("textbox", { name: /Search skills/ }), {
+    target: { value: "reviewer@example.test" },
+  });
+  await waitFor(() => expect(catalogRequests.at(-1)?.searchParams.get("query")).toBe("reviewer@example.test"));
+  expect(catalogRequests.at(-1)?.searchParams.get("tag")).toBe("engineering");
+  expect(catalogRequests.at(-1)?.searchParams.get("security_scan_passed")).toBe("true");
 });

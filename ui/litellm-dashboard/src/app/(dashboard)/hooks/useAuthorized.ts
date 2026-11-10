@@ -3,7 +3,7 @@
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
 import { useEffect, useMemo } from "react";
-import { effectiveSessionRole, formatUserRole, isViewOnlySessionRole } from "@/utils/roles";
+import { effectiveSessionRole, formatUserRole, isViewOnlySessionRole, userRoleDisplayLabel } from "@/utils/roles";
 import { useCurrentUser } from "./currentUser/useCurrentUser";
 import { redirectToLogin } from "./redirectToLogin";
 import { useUIConfig } from "./uiConfig/useUIConfig";
@@ -44,7 +44,7 @@ const useAuthorized = () => {
     userId: currentUser?.user_id ?? null,
     userEmail: currentUser?.user_email ?? null,
     userRole: effectiveSessionRole(serverRole),
-    userRoleLabel: formatUserRole(serverRole),
+    userRoleLabel: userRoleDisplayLabel(formatUserRole(serverRole)),
     isViewOnly: isViewOnlySessionRole(serverRole),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,

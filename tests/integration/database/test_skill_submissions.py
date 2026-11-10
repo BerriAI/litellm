@@ -5,7 +5,7 @@ import os
 import uuid
 import zipfile
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 import psycopg
@@ -134,6 +134,8 @@ async def test_approval_commits_version_archive_history_and_review(pending_updat
     assert current is not None
     published_manifest: Final = {
         **case.proposal.manifest,
+        "_litellm_review": {"approved_by": "integration-reviewer", "security_scan_passed": False},
+        "_litellm_published_by": "integration-reviewer",
         "source": {
             **TypeAdapter(dict[str, str]).validate_python(case.submission.proposal.manifest["source"]),
             "url": f"https://skills.example.test/claude-code/plugins/{case.original.name}/archive/"
@@ -148,17 +150,22 @@ async def test_approval_commits_version_archive_history_and_review(pending_updat
     )
     metadata: Final = await case.publications.get_metadata(case.original.name)
     assert metadata is not None
+    assert metadata.created_by == before.created_by == case.original.created_by
+    assert metadata.created_at == before.created_at
+    assert metadata.updated_at is not None and before.updated_at is not None
+    assert metadata.updated_at > before.updated_at
     assert await case.publications.get_content(metadata) == case.proposal.content
     history: Final = await case.publications.versions(metadata, 10, 0)
     assert tuple((version.version, version.description, version.archive_available) for version in history) == (
         ("1.0.1", case.proposal.description, True),
         ("1.0.0", case.original.description, True),
     )
+    assert history[0].published_by == "integration-reviewer"
+    assert history[1].published_by == case.original.created_by
     for version, publication, manifest in zip(
-        history, (case.proposal, case.original), (published_manifest, case.original.manifest), strict=True
+        history, (case.proposal, case.original), (published_manifest, {**case.original.manifest, "_litellm_published_by": case.original.created_by}), strict=True
     ):
         assert version.manifest == {**manifest, "version": version.version}
-        assert version.published_by == publication.created_by
         assert await case.publications.version_content(metadata, version.id) == publication.content
 
 
@@ -371,3 +378,84 @@ async def test_submission_pages_filter_owner_and_status_before_limit(pending_upd
     global_pending: Final = await case.submissions.list(None, "pending_review", 3, 0)
     all_pending: Final = tuple(sorted((*own_pending, submitted[1].id, submitted[3].id), reverse=True))
     assert (tuple(row.id for row in global_pending.submissions), global_pending.has_more) == (all_pending[:3], True)
+
+
+@pytest.mark.parametrize("completion_seconds", (13, 21), ids=("before-deadline", "at-deadline"))
+async def test_scan_claim_retry_and_late_result_preserve_proposal(
+    pending_update: PendingUpdate, completion_seconds: int,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.models.skill_submission import SkillScanInput
+    from litellm.types.proxy.skill_scanning import SkillScan, SkillScanReport
+
+    case: Final = pending_update
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    first: Final = SkillScan(
+        id="first", status="running", requested_by="reviewer", started_at=now,
+        expires_at=now + timedelta(seconds=10),
+    )
+    started: Final = await case.submissions.start_scan(case.submission.id, first)
+    assert isinstance(started, SkillScanInput)
+    assert started.content == case.proposal.content
+    assert started.scan.archive_sha256 == hashlib.sha256(case.proposal.content or b"").hexdigest()
+    duplicate: Final = await case.submissions.start_scan(case.submission.id, first.model_copy(update={"id": "duplicate"}))
+    assert isinstance(duplicate, SubmissionConflict)
+    second: Final = first.model_copy(update={
+        "id": "second", "started_at": now + timedelta(seconds=11), "expires_at": now + timedelta(seconds=21),
+    })
+    retry: Final = await case.submissions.start_scan(case.submission.id, second)
+    assert isinstance(retry, SkillScanInput)
+    report: Final = SkillScanReport(
+        scanner_version="test-version", complete=False, scan_mode="static-only", risk_score=90, findings=(),
+    )
+    await case.submissions.finish_scan(case.submission.id, started.scan.model_copy(update={
+        "status": "completed", "report": report, "completed_at": now + timedelta(seconds=12),
+    }))
+    assert await case.submissions.get_scan(case.submission.id) == retry.scan
+    completed: Final = retry.scan.model_copy(update={
+        "status": "completed", "report": report, "completed_at": now + timedelta(seconds=completion_seconds),
+    })
+    expected: Final = completed if completion_seconds < 21 else retry.scan.at(now + timedelta(seconds=21))
+    await case.submissions.finish_scan(case.submission.id, completed)
+    assert await case.submissions.get_scan(case.submission.id) == expected
+    assert await case.submissions.get(case.submission.id, None) == case.submission
+    approved: Final = await case.submissions.review(case.submission.id, "reviewer", True, None, publication_base_url="https://gateway.test")
+    assert isinstance(approved, SubmissionReviewed)
+    assert await case.submissions.get_scan(case.submission.id) == expected
+    denied: Final = await case.submissions.start_scan(case.submission.id, second)
+    assert isinstance(denied, SubmissionConflict)
+
+
+@pytest.mark.parametrize("available, remote", ((True, False), (False, False), (False, True)))
+async def test_metadata_scan_requires_the_matching_managed_archive(
+    pending_update: PendingUpdate, available: bool, remote: bool
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.models.skill_submission import SkillScanInput
+    from litellm.types.proxy.skill_scanning import SkillScan
+
+    case: Final = pending_update
+    submission: Final = await case.submissions.submit(
+        replace(case.original, content=None, manifest={
+            **case.original.manifest,
+            **({"source": {"source": "archive", "url": "https://example.org/skill.zip"}} if remote else {}),
+        }), "member", PluginPublicationBase(case.base.id, case.base.updated_at)
+    )
+    if not available:
+        write_rows('DELETE FROM "LiteLLM_ClaudeCodePluginUpload" WHERE plugin_name=%s', (case.original.name,))
+    now: Final = datetime.now(timezone.utc)
+    result: Final = await case.submissions.start_scan(submission.id, SkillScan(
+        id="metadata-scan", status="running", requested_by="admin", started_at=now,
+        expires_at=now + timedelta(seconds=10),
+    ))
+    if available or remote:
+        assert isinstance(result, SkillScanInput)
+        assert result.content == (None if remote else case.original.content)
+        if remote:
+            assert result.source == {"source": "archive", "url": "https://example.org/skill.zip"}
+            assert result.scan.archive_sha256 is None
+    else:
+        assert isinstance(result, SubmissionConflict)
+        assert await case.submissions.get_scan(submission.id) is None

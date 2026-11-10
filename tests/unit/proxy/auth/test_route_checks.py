@@ -363,18 +363,24 @@ def test_proxy_admin_viewer_allowed_management_reads(allowed_read_route):
     )
 
 
-def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed():
+@pytest.mark.parametrize("group, route", (
+    ("openai_routes", "/chat/completions"),
+    ("skill_hub_routes", "/skill-hub/skills/release-notes/downloads"),
+    ("management_routes", "/skill-hub/skills/release-notes/downloads"),
+    ("anthropic_routes", "/claude-code/plugins/release-notes/downloads"),
+))
+def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed(group: str, route: str) -> None:
     """Test that virtual key is allowed to call routes when allowed_routes contains LiteLLMRoutes member name"""
 
     # Create a UserAPIKeyAuth with allowed_routes containing a LiteLLMRoutes member name
     valid_token = UserAPIKeyAuth(
         user_id="test_user",
-        allowed_routes=["openai_routes"],  # This is a member name in LiteLLMRoutes enum
+        allowed_routes=[group],
     )
 
     # Test that a route from the openai_routes group is allowed
     result = RouteChecks.is_virtual_key_allowed_to_call_route(
-        route="/chat/completions",  # This is in LiteLLMRoutes.openai_routes.value
+        route=route,
         valid_token=valid_token,
     )
 

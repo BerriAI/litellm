@@ -7,7 +7,15 @@ use crate::error::{AttemptError, FailureKind};
 
 /// Which mock failure a request asks for.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Deserialize, strum::IntoStaticStr, strum::EnumString,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Deserialize,
+    serde::Serialize,
+    strum::IntoStaticStr,
+    strum::EnumString,
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]

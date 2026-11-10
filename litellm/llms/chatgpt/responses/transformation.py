@@ -143,6 +143,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "reasoning",
             "previous_response_id",
             "truncation",
+            "text",
+            "max_output_tokens",
         }
 
         filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
@@ -218,7 +220,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
                 continue
 
-            if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            if event_type in (
+                ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            ):
                 # Real OUTPUT_ITEM_DONE events take precedence at any given
                 # output_index, but text-only items at indices without a
                 # matching OUTPUT_ITEM_DONE must still be preserved (e.g.

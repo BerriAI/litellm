@@ -37,13 +37,13 @@ interface Announcement {
   href: string;
 }
 
-const AUTO_ROUTER_ANNOUNCEMENT: Announcement = {
+const autoRouterAnnouncement = (): Announcement => ({
   readKey: "litellmHideAutoRouterAnnouncement",
-  title: "LiteLLM Auto Router",
-  description: "Route every request to the cheapest model that can handle it, no prompt changes needed.",
-  linkLabel: "Read the docs",
+  title: i18n.t("shell.notifications.autoRouter.title"),
+  description: i18n.t("shell.notifications.autoRouter.description"),
+  linkLabel: i18n.t("shell.notifications.autoRouter.link"),
   href: AUTO_ROUTER_DOCS_URL,
-};
+});
 
 const describeRelease = ({ new_features, bug_fixes, other_updates }: LatestReleaseInfo): string =>
   [
@@ -121,7 +121,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
 }) => {
   const { t } = useTranslation();
   const upgrade = upgradeAnnouncement(currentVersion, latestRelease);
-  const announcements = upgrade ? [upgrade, AUTO_ROUTER_ANNOUNCEMENT] : [AUTO_ROUTER_ANNOUNCEMENT];
+  const announcements = upgrade ? [upgrade, autoRouterAnnouncement()] : [autoRouterAnnouncement()];
   const unreadCount = useUnreadAnnouncementCount(announcements.map((announcement) => announcement.readKey));
 
   const openAlerts = (deprecationAlerts ?? []).filter((alert) => effectiveAlertStatus(alert) === AlertStatus.Open);
@@ -131,7 +131,7 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
       ? t("shell.notifications.bell.triggerUnread", { unread: unreadCount })
       : t("shell.notifications.bell.trigger");
   if (openDeprecations > 0) {
-    label = `Notifications, ${openDeprecations} model deprecation ${openDeprecations === 1 ? "alert needs" : "alerts need"} attention`;
+    label = t("shell.notifications.bell.triggerDeprecations", { count: openDeprecations });
   }
 
   return (
@@ -166,12 +166,14 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
               <>
                 <div>
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold">Model deprecations</p>
+                    <p className="text-sm font-semibold">{t("shell.notifications.bell.deprecationsTitle")}</p>
                     <a className="text-xs text-primary hover:underline" href={migrationHref()}>
-                      View all {openDeprecations}
+                      {t("shell.notifications.bell.viewAllDeprecations", { total: openDeprecations })}
                     </a>
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">Model migrations across your keys and teams.</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {t("shell.notifications.bell.deprecationsDescription")}
+                  </p>
                 </div>
                 {openAlerts.slice(0, 3).map((alert) => (
                   <Fragment key={alert.id}>
@@ -180,12 +182,14 @@ export const NotificationsBellView: React.FC<NotificationsBellViewProps> = ({
                   </Fragment>
                 ))}
                 <Separator />
-                <p className="text-xs font-medium text-muted-foreground">Announcements</p>
+                <p className="text-xs font-medium text-muted-foreground">
+                  {t("shell.notifications.bell.announcementsHeading")}
+                </p>
               </>
             )}
             {deprecationAlerts && openAlerts.length === 0 && (
               <a href={migrationHref()} className="text-sm font-medium text-primary hover:underline">
-                View model deprecations
+                {t("shell.notifications.bell.viewDeprecations")}
               </a>
             )}
 

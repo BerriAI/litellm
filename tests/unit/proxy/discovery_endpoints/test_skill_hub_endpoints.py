@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from prisma import models as prisma_models
-from prisma.errors import UniqueViolationError
+from prisma.errors import ForeignKeyViolationError, UniqueViolationError
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -75,6 +75,8 @@ class HubClient:
     client: httpx.AsyncClient
     plugins: MagicMock
     archives: MagicMock
+    downloads: MagicMock
+    anonymous_counter: AsyncMock
     upstream: MagicMock
     clock: MagicMock
     database: MagicMock
@@ -84,15 +86,18 @@ class HubClient:
 async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
+    prisma.db.execute_raw = AsyncMock(return_value=1)
     prisma.get_data = AsyncMock(return_value=None)
     prisma.db.litellm_skillstable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     plugins: Final = prisma.db.litellm_claudecodeplugintable
     archives: Final = prisma.db.litellm_claudecodepluginupload
     async def create_row(data: Mapping[str, object]) -> prisma_models.LiteLLM_ClaudeCodePluginTable:
-        return prisma_models.LiteLLM_ClaudeCodePluginTable.model_validate({"id": "hub-id", "enabled": True, **data})
+        return prisma_models.LiteLLM_ClaudeCodePluginTable.model_validate({"id": "hub-id", "enabled": True, "anonymous_download_count": 0, **data})
 
     plugins.create = AsyncMock(side_effect=create_row)
+    downloads: Final = prisma.db.litellm_claudecodeplugindownload
+    downloads.create = AsyncMock()
     plugins.find_unique = AsyncMock(return_value=None)
     plugins.find_many = AsyncMock(return_value=[])
 
@@ -154,7 +159,7 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
             get_skill_submission_repository: lambda: SkillSubmissionRepository(prisma),
             import_http_client: lambda: source_client,
         })
-        yield HubClient(client, plugins, archives, upstream, clock, prisma.db)
+        yield HubClient(client, plugins, archives, downloads, prisma.db.execute_raw, upstream, clock, prisma.db)
 
 
 async def _upload(
@@ -171,7 +176,7 @@ async def _upload(
 def _stored_upload(hub: HubClient, enabled: bool = True) -> prisma_models.LiteLLM_ClaudeCodePluginTable:
     data: Final = hub.plugins.create.await_args.kwargs["data"]
     record: Final = prisma_models.LiteLLM_ClaudeCodePluginTable(
-        id="hub-id", name=data["name"], version=data["version"], description=data["description"],
+        id="hub-id", name=data["name"], version=data["version"], description=data["description"], anonymous_download_count=0,
         manifest_json=data["manifest_json"], enabled=enabled, updated_at=data["updated_at"],
     )
     hub.plugins.find_unique.return_value = record
@@ -189,6 +194,27 @@ def _assert_portable(response: httpx.Response) -> None:
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         assert {name: archive.read(name) for name in archive.namelist()} == FILES
         assert stat.S_IMODE(archive.getinfo("scripts/check.sh").external_attr >> 16) == 0o755
+
+
+@pytest.mark.parametrize("route", (f"{HUB}?limit=1", "/claude-code/plugins"))
+@pytest.mark.parametrize("key", (MASTER_KEY, PLAIN_KEY))
+async def test_catalog_counts_are_batched_for_the_page(
+    hub: HubClient, key: str, route: str,
+) -> None:
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    record: Final = _stored_upload(hub)
+    hub.plugins.find_many.return_value = [record, record.model_copy(update={"id": "other", "name": "zzz-other"})]
+    hub.database.query_raw.reset_mock()
+    hub.database.query_raw.return_value = [{"id": record.id, "download_count": 7}]
+    response: Final = await hub.client.get(route, headers=_headers(key))
+    assert response.status_code == 200, response.text
+    items: Final = response.json()["plugins" if route == "/claude-code/plugins" else "skills"]
+    expected: Final = {record.id: 7, "other": 0} if route == "/claude-code/plugins" else {record.id: 7}
+    assert {item["id"]: item["download_count"] for item in items} == expected
+    assert hub.database.query_raw.await_count == 1
+    assert set(hub.database.query_raw.await_args.args[1]) == set(expected)
+    assert (await hub.client.get(f"{HUB}?offset=2", headers=_headers(key))).json()["skills"] == []
+    assert hub.database.query_raw.await_count == 1
 
 
 @pytest.mark.parametrize("operation", ("upload", "import"))
@@ -222,6 +248,8 @@ async def test_publication_round_trips_both_formats_without_inflating_on_the_req
     assert details.json()["content_url"] == f"{serving_base}{HUB}/{NAME}/content"
     catalog: Final = await hub.client.get("/claude-code/plugins", headers=_headers(PLAIN_KEY))
     assert catalog.status_code == 200 and "has_agent_skill_metadata" not in catalog.text
+    hub.downloads.create.assert_not_awaited()
+    hub.anonymous_counter.assert_not_awaited()
     request_thread: Final = threading.get_ident()
     decompress: Final = zlib.decompressobj
 
@@ -241,10 +269,13 @@ async def test_publication_round_trips_both_formats_without_inflating_on_the_req
     assert (await hub.client.get(entry["url"])).content == portable.content
     assert (await hub.client.get(f"{HUB}/{NAME}/archive?digest=sha256:stale")).status_code == 404
     legacy_path: Final = httpx.URL(manifest["source"]["url"]).path
-    legacy: Final = await hub.client.get(legacy_path)
+    legacy: Final = await hub.client.get(legacy_path, headers=_headers(GRANTED_KEY))
     assert legacy.status_code == 200
     assert hashlib.sha256(legacy.content).hexdigest() == manifest["source"]["sha256"]
     assert (await hub.client.get(legacy_path.replace(manifest["source"]["sha256"], "stale"))).status_code == 404
+    assert hub.anonymous_counter.await_count == 2
+    assert hub.anonymous_counter.await_args.args[1:] == (record.id,)
+    hub.downloads.create.assert_awaited_once()
     monkeypatch.setattr(zlib, "decompressobj", decompress)
     _assert_portable(portable)
     with zipfile.ZipFile(io.BytesIO(legacy.content)) as archive:
@@ -317,12 +348,29 @@ async def test_download_policy_requires_publication_or_a_valid_grant(
     for suffix in ("archive", "content"):
         response: Final = await hub.client.get(f"{HUB}/{NAME}/{suffix}", headers=_headers(key))
         assert response.status_code == status, response.text
+    assert hub.downloads.create.await_count == int(status == 200 and key is not None)
+    assert hub.anonymous_counter.await_count == int(status == 200 and key is None)
     if status != 200:
         hub.archives.find_first.assert_not_awaited()
     index: Final = await hub.client.get(INDEX)
     assert index.status_code == (200 if public_index else 404)
     if public_index:
         assert [entry["name"] for entry in index.json()["skills"]] == ([NAME] if enabled and not auth_required else [])
+
+
+@pytest.mark.parametrize("key", (None, GRANTED_KEY))
+async def test_deleted_skill_is_not_served_when_download_cannot_be_recorded(hub: HubClient, key: str | None) -> None:
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    record: Final = _stored_upload(hub)
+    legacy_url: Final = json.loads(record.manifest_json)["source"]["url"]
+    hub.anonymous_counter.return_value = 0
+    hub.downloads.create.side_effect = ForeignKeyViolationError(data={})
+    for path in (f"{HUB}/{NAME}/archive", legacy_url):
+        response: Final = await hub.client.get(path, headers=_headers(key))
+        assert response.status_code == 404, response.text
+        assert "Skill archive not found" in response.text
+    assert hub.anonymous_counter.await_count == (2 if key is None else 0)
+    assert hub.downloads.create.await_count == (0 if key is None else 2)
 
 
 async def test_search_paginates_visible_matches(hub: HubClient) -> None:
@@ -516,6 +564,7 @@ async def test_neutral_history_list_detail_and_portable_download_share_current_v
     original: Final = _stored_upload(hub, enabled=False)
     data: Final = hub.database.litellm_claudecodepluginversion.create.await_args.kwargs["data"]
     version: Final = prisma_models.LiteLLM_ClaudeCodePluginVersion.model_validate({"id": "retained", **data})
+    hub.plugins.find_unique.return_value = original.model_copy(update={"version": "3.0.0"})
     hub.database.litellm_claudecodepluginversion.find_first.return_value = version
     hub.database.query_raw.return_value = [{
         "id": version.id, "version": version.version, "description": version.description,
@@ -526,7 +575,11 @@ async def test_neutral_history_list_detail_and_portable_download_share_current_v
     detail: Final = await hub.client.get(f"{HUB}/{NAME}/versions/retained", headers=_headers(key))
     downloaded: Final = await hub.client.get(f"{HUB}/{NAME}/versions/retained/archive", headers=_headers(key))
     assert listed.status_code == detail.status_code == downloaded.status_code == status
+    assert hub.downloads.create.await_count == int(status == 200)
     if status == 200:
+        event: Final = hub.downloads.create.await_args.kwargs["data"]
+        assert event["version"] == version.version != "3.0.0"
+        assert event["digest"] == hashlib.sha256(downloaded.content).hexdigest()
         assert listed.json() == {"versions": [detail.json()], "next_offset": None}
         assert detail.json()["manifest"]["agent_skill"] == json.loads(original.manifest_json)["agent_skill"]
         assert detail.json()["download_url"] == f"http://test{HUB}/{NAME}/versions/retained/archive"
@@ -684,3 +737,167 @@ async def test_replacement_rejections_do_not_stage_or_change_files(pending_hub: 
     assert hub.database.litellm_skillsubmission.rows == ()
     hub.plugins.update.assert_not_awaited()
     hub.archives.upsert.assert_not_awaited()
+
+
+@pytest.mark.parametrize("key", (MEMBER_KEY, OTHER_KEY, VIEWER_KEY))
+@pytest.mark.parametrize("method", ("GET", "POST"))
+async def test_skill_scan_requires_full_admin(hub: HubClient, key: str, method: str) -> None:
+    response = await hub.client.request(method, "/skill-hub/submissions/absent/scan", headers=_headers(key))
+    assert response.status_code == 403, response.text
+
+
+async def test_unconfigured_scanning_preserves_manual_approval(pending_hub: HubClient) -> None:
+    hub = pending_hub
+    created = await _upload(hub, _zip(FILES), MEMBER_KEY, version=None)
+    path = f"/skill-hub/submissions/{created.json()['submission_id']}"
+    state = await hub.client.get(path + "/scan", headers=_headers(MASTER_KEY))
+    assert state.status_code == 200, state.text
+    assert state.json() == {"configured": False, "scan": None}
+    unavailable = await hub.client.post(path + "/scan", headers=_headers(MASTER_KEY))
+    assert unavailable.status_code == 503, unavailable.text
+    approved = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY))
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["submission"]["status"] == "approved"
+
+
+@pytest.mark.parametrize("scanner_status", (200, 503), ids=("report", "error"))
+async def test_configured_scan_persists_result_without_changing_manual_approval(
+    pending_hub: HubClient, monkeypatch: pytest.MonkeyPatch, scanner_status: int,
+) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.discovery_endpoints import skill_scanning
+
+    hub: Final = pending_hub
+    report: Final = {
+        "scanner_version": "test-version", "complete": True, "scan_mode": "static-only",
+        "risk_score": 0, "findings": [], "limitations": [],
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer scanner-only-token"
+        return httpx.Response(scanner_status, json=report)
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+
+    def scanner_client(provider: str, params: Mapping[str, object]) -> AsyncHTTPHandler:
+        return handler
+
+    monkeypatch.setattr(skill_scanning, "get_async_httpx_client", scanner_client)
+    monkeypatch.setattr(proxy_server, "general_settings", {"skill_scanner": {
+        "endpoint": "https://scanner.example/scan", "api_key_env": "SCANNER_TEST_KEY",
+    }})
+    monkeypatch.setenv("SCANNER_TEST_KEY", "scanner-only-token")
+    created: Final = await _upload(hub, _zip(FILES), MEMBER_KEY, version=None)
+    path: Final = f"/skill-hub/submissions/{created.json()['submission_id']}"
+    before: Final = (await hub.client.get(path, headers=_headers(MASTER_KEY))).json()
+    async with handler.client:
+        started: Final = await hub.client.post(path + "/scan", headers=_headers(MASTER_KEY))
+    assert started.status_code == 200, started.text
+    completed: Final = (await hub.client.get(path + "/scan", headers=_headers(MASTER_KEY))).json()["scan"]
+    assert completed["id"] == started.json()["scan"]["id"]
+    expected: Final = ("completed", report) if scanner_status == 200 else ("failed", None)
+    assert (completed["status"], completed["report"]) == expected
+    assert completed["error"] is None if scanner_status == 200 else "HTTP 503" in completed["error"]
+    monkeypatch.setattr(proxy_server, "general_settings", {"skill_scanner": {"endpoint": "invalid"}})
+    retained: Final = await hub.client.get(path + "/scan", headers=_headers(MASTER_KEY))
+    assert retained.status_code == 200 and retained.json() == {"configured": False, "scan": completed}
+    unavailable: Final = await hub.client.post(path + "/scan", headers=_headers(MASTER_KEY))
+    assert unavailable.status_code == 503 and "configuration is invalid" in unavailable.text
+    assert (await hub.client.get(path, headers=_headers(MASTER_KEY))).json() == before
+    approved: Final = await hub.client.put(path + "/approve", headers=_headers(MASTER_KEY))
+    assert approved.status_code == 200 and approved.json()["submission"]["status"] == "approved"
+
+
+async def test_catalog_filters_metadata_before_pagination_and_preserves_tag_facets(hub: HubClient) -> None:
+    hub.plugins.find_many.return_value = [
+        prisma_models.LiteLLM_ClaudeCodePluginTable(
+            id=name, name=name, enabled=True, anonymous_download_count=0, created_by="author@example.test",
+            created_at=datetime(2026, 1, 2), updated_at=datetime(2026, 2, 3),
+            manifest_json=json.dumps({
+                "source": {"source": "github", "repo": "example/skills"},
+                "keywords": tags,
+                "_litellm_published_by": "publisher@example.test",
+                **({"_litellm_review": {"approved_by": "reviewer@example.test", "security_scan_passed": scanned}} if approved else {}),
+            }),
+        )
+        for name, tags, approved, scanned in (
+            ("a-other", ["support"], False, False),
+            ("b-review", ["engineering"], True, False),
+            ("c-review", ["engineering"], True, True),
+        )
+    ]
+    response = await hub.client.get(HUB, headers=_headers(MASTER_KEY), params={
+        "query": " REVIEWER ", "tag": "ENGINEERING", "limit": 1, "offset": 1,
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    assert body["tags"] == ["engineering", "support"]
+    assert [skill["name"] for skill in body["skills"]] == ["c-review"]
+    skill = body["skills"][0]
+    assert skill["created_by"] == "author@example.test"
+    assert skill["published_by"] == "publisher@example.test"
+    assert skill["approved_by"] == "reviewer@example.test"
+    assert skill["created_at"].startswith("2026-01-02")
+    assert skill["updated_at"].startswith("2026-02-03")
+    assert skill["security_scan_passed"] is True
+    scanned = await hub.client.get(HUB, headers=_headers(MASTER_KEY), params={"security_scan_passed": "true"})
+    assert [skill["name"] for skill in scanned.json()["skills"]] == ["c-review"]
+    unscanned = await hub.client.get(HUB, headers=_headers(MASTER_KEY), params={"security_scan_passed": "false"})
+    assert [skill["name"] for skill in unscanned.json()["skills"]] == ["a-other", "b-review"]
+    assert unscanned.json()["skills"][0]["approved_by"] is None
+
+
+@pytest.mark.parametrize("has_issues", (False, True))
+async def test_admin_approval_does_not_override_scan_result(pending_hub: HubClient, has_issues: bool) -> None:
+    hub: Final = pending_hub
+    pending: Final = await _upload(hub, _zip(FILES), MEMBER_KEY, version=None)
+    receipt: Final = pending.json()
+    submission: Final = hub.database.litellm_skillsubmission.rows[0]
+    digest: Final = hashlib.sha256(submission.archive_content.decode()).hexdigest()
+    await hub.database.litellm_skillsubmission.update(
+        where={"id": submission.id}, data={"scan_json": json.dumps({
+            "id": "scan", "requested_by": "admin", "started_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-01-01T00:03:00Z", "status": "completed", "archive_sha256": digest,
+            "report": {"scanner_version": "test", "scan_mode": "static-only", "complete": True,
+                       "risk_score": 0, "findings": [{"rule_id": "rule", "severity": "LOW",
+                       "message": "Issue", "file": "SKILL.md"}] if has_issues else []},
+        })},
+    )
+    approved: Final = await hub.client.put(
+        f"/skill-hub/submissions/{receipt['submission_id']}/approve", headers=_headers(MASTER_KEY),
+    )
+    assert approved.status_code == 200
+    skill: Final = approved.json()["skill"]
+    assert skill["security_scan_passed"] is not has_issues
+    assert skill["created_by"] == MEMBER_KEY
+    assert skill["approved_by"] == approved.json()["submission"]["reviewed_by"]
+    assert skill["published_by"] == skill["approved_by"]
+    _stored_upload(hub)
+    listed: Final = (await hub.client.get(HUB, headers=_headers(MASTER_KEY))).json()["skills"][0]
+    assert listed["security_scan_passed"] is not has_issues
+    assert listed["published_by"] == skill["published_by"]
+
+
+@pytest.mark.parametrize("field,order,expected", [
+    ("name", "asc", "a"), ("name", "desc", "c"),
+    ("download_count", "desc", "a"), ("download_count", "asc", "b"),
+    ("updated_at", "desc", "c"), ("updated_at", "asc", "b"),
+])
+async def test_catalog_sorts_all_matches_before_pagination(
+    hub: HubClient, field: str, order: str, expected: str,
+) -> None:
+    hub.plugins.find_many.return_value = [
+        prisma_models.LiteLLM_ClaudeCodePluginTable(
+            id=name, name=name, enabled=True, anonymous_download_count=0, updated_at=datetime(2026, 1, day),
+            manifest_json=json.dumps({"source": {"source": "github", "repo": "example/skills"}}),
+        ) for name, day in (("a", 2), ("b", 1), ("c", 3))
+    ]
+    hub.database.query_raw.return_value = [
+        {"id": name, "download_count": count} for name, count in (("a", 8), ("b", 0), ("c", 3))
+    ]
+    response = await hub.client.get(HUB, headers=_headers(PLAIN_KEY), params={
+        "sort_by": field, "sort_order": order, "limit": 1, "offset": 0,
+    })
+    assert response.status_code == 200, response.text
+    assert [skill["name"] for skill in response.json()["skills"]] == [expected]

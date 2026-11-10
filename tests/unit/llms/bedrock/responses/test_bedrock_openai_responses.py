@@ -296,6 +296,28 @@ class TestCodexHistoryNormalization:
             "user",
         ]
 
+    def test_agent_message_with_encrypted_content_reaches_the_endpoint_intact(self):
+        """Only the endpoint can decrypt the block for the recipient model; as assistant text it is gibberish."""
+        agent_message = {
+            "type": "agent_message",
+            "author": "/root/reviewer",
+            "recipient": "/root",
+            "content": [
+                {"type": "input_text", "text": "Worker message:\n"},
+                {"type": "encrypted_content", "encrypted_content": "gAAAAABpZ3ciphertext=="},
+            ],
+        }
+        cfg = BedrockOpenAIResponsesConfig.for_model(MODEL)
+        assert cfg is not None
+        body = cfg.transform_responses_api_request(
+            model=MODEL,
+            input=[json.loads(json.dumps(agent_message)), {"role": "user", "content": "carry on"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"] == [agent_message, {"role": "user", "content": "carry on"}]
+
     def test_a_first_turn_request_is_untouched(self):
         """The rejected types are history items, so turn one exercises none of this."""
         original = [{"role": "user", "content": "first turn"}]
