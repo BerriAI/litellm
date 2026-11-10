@@ -970,7 +970,7 @@ def _generic_attempt(
 ) -> AttemptCall:
     """`_ageneric_api_call_with_fallbacks_helper` for one deployment."""
     from litellm.llms.base_llm.passthrough.transformation import replace_path_segment
-    from litellm.router_rust.invoke.websocket import turn_admission
+    from litellm.router_rust.invoke.websocket import turn_admission, turn_usage_recorder
 
     handler: Final = invoked_handler_name(core, plan)
     socket: Final = handler == "_aresponses_websocket"
@@ -1005,7 +1005,14 @@ def _generic_attempt(
         **kwargs,
         "model": model_name,
         **_session_with_model(kwargs.get("session"), model_name),
-        **({"turn_admission": turn_admission(core, requested, deployment, kwargs)} if socket else {}),
+        **(
+            {
+                "turn_admission": turn_admission(core, requested, deployment, kwargs),
+                "turn_usage_recorder": turn_usage_recorder(core, requested, kwargs),
+            }
+            if socket
+            else {}
+        ),
     }
     if provider is not None:
         final["custom_llm_provider"] = provider
@@ -2118,7 +2125,10 @@ class RustEndpoints:
 
     def text_completion(self, request: Mapping[str, object]) -> object:
         """The sync `text_completion`: one pick, no retries, the group name as the model."""
-        from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin
+        from litellm.litellm_core_utils.routing_common_utils import (
+            deployment_model_id_pin,
+            metadata_defaults_under_request,
+        )
 
         kwargs: Final = without(request, "is_retry", "is_fallback", "is_async")
         model: Final = kwargs.get("model")
@@ -2139,9 +2149,9 @@ class RustEndpoints:
             if key not in kwargs:
                 kwargs[key] = value
             elif key == "metadata":
-                bucket = kwargs[key]
-                if isinstance(bucket, dict):
-                    bucket.update(as_dict(value))  # pyright: ignore[reportUnknownMemberType]  # the request's metadata dict
+                metadata_bucket(kwargs, key).update(
+                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(kwargs[key]))
+                )
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
             kwargs["model_id"] = pinned

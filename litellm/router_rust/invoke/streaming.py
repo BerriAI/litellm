@@ -684,7 +684,10 @@ def _mid_stream_continuation_eligible(
     lookup_groups: Final = fallback_lookup_groups(
         request, requested_group if isinstance(requested_group, str) else None
     )
-    targets: Final = continuation_fallback_targets(core.settings().fallbacks, lookup_groups)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # fallbacks as Python spells them
+    targets: Final = continuation_fallback_targets(
+        request.get("fallbacks", core.settings().fallbacks),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request's list replaces the router's
+        lookup_groups,
+    )
     if any(fallback_target_overrides_request_params(target) for target in targets):
         return False
     if any(_names_deployment_that_cannot_continue(core, target) for target in targets):

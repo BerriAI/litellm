@@ -384,7 +384,7 @@ class RedisBatch:
                 return await pipe.execute(raise_on_error=False)
 
         try:
-            replies: Final = await _run_under_circuit_breaker(self.redis_cache._circuit_breaker, self.name, run)  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
+            replies: Final = await _run_under_circuit_breaker(self.redis_cache._health, self.name, run)  # pyright: ignore[reportPrivateUsage]  # same breaker as the cache's own methods
         except Exception as e:  # noqa: BLE001  # each declaring caller applies its own Redis fallback
             log_redis_failure(verbose_logger, logging.WARNING, f"{self.name}: pipeline of {len(ops)} ops failed", e)
             with service_target(target):
@@ -450,6 +450,13 @@ def _backend_key(redis_cache: RedisCache) -> object:
 
 class NativePending(Protocol[_T_co]):
     def resolve(self) -> Awaitable[_T_co]: ...
+
+
+class PostCallSettlement(Protocol):
+    """Post-call writes declared together: settled once every reply is back, whoever sent their batch."""
+
+    @property
+    def settled(self) -> bool: ...
 
 
 class NativeBatchResult(Generic[_T]):
@@ -526,6 +533,7 @@ class RequestRedisBatches:
         "_native_misses",
         "_native_send_factory",
         "_post_call",
+        "_post_call_settlements",
         "post_call_deadline",
         "prefetched",
     )
@@ -538,6 +546,7 @@ class RequestRedisBatches:
     ) -> None:
         self._batches: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
         self._post_call: Final[dict[object, RedisBatch]] = {}  # mutable-ok: lazily filled per backend
+        self._post_call_settlements: tuple[PostCallSettlement, ...] = ()
         self.post_call_deadline: Final = post_call_deadline
         self._native_factory: Final = native_factory
         self._native_send_factory: Final = native_send_factory
@@ -640,6 +649,14 @@ class RequestRedisBatches:
         )
         if not any(batch.pending for batch in self._post_call.values()):
             _open_post_call.discard(self)
+
+    def track_post_call_settlement(self, settlement: PostCallSettlement) -> None:
+        """Post-call writes a later reader in this request must know have landed, such as its committed spend."""
+        self._post_call_settlements = (*self._post_call_settlements, settlement)
+
+    @property
+    def post_call_settlements(self) -> tuple[PostCallSettlement, ...]:
+        return self._post_call_settlements
 
     @property
     def batches(self) -> tuple[RedisBatch, ...]:

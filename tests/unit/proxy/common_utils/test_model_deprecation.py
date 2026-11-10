@@ -15,7 +15,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+from litellm.rust_bridge.host.model_cost import AliasedCostEntry
 from litellm.proxy.common_utils.model_deprecation import (
     _classify,
     _parse_deprecation_date,

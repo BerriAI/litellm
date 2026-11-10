@@ -2,8 +2,8 @@ use litellm_llms_types::{
     formats::{
         chat_completions::ReasoningEffort,
         messages::{
-            AdaptiveThinking, EffortLevel, MessagesOptionalParams, MessagesRequest, OutputConfig,
-            ThinkingConfig, ThinkingDisplay,
+            AdaptiveThinking, DisabledThinking, EffortLevel, MessagesOptionalParams,
+            MessagesRequest, OutputConfig, ThinkingConfig, ThinkingDisplay,
         },
     },
     recognized::Recognized,
@@ -172,7 +172,11 @@ fn translate_reasoning_effort(
     ) else {
         return Ok(MessagesRequest {
             params: MessagesOptionalParams {
-                thinking: None,
+                thinking: (context.capabilities.thinking_on_by_default
+                    && !context.capabilities.thinking_always_on)
+                    .then(|| {
+                        Recognized::Known(ThinkingConfig::Disabled(DisabledThinking::default()))
+                    }),
                 output_config: None,
                 ..request.params
             },
@@ -745,6 +749,33 @@ mod tests {
                 "max_tokens": 32000,
                 "thinking": {"type": "enabled", "budget_tokens": expected_budget}
             })))
+        );
+    }
+
+    #[rstest]
+    #[case::default_thinking(true, false, Some(serde_json::json!({"type": "disabled"}))) ]
+    #[case::legacy(false, false, None)]
+    #[case::always_on(true, true, None)]
+    fn none_disables_only_optional_default_thinking(
+        #[case] thinking_on_by_default: bool,
+        #[case] thinking_always_on: bool,
+        #[case] thinking: Option<Value>,
+    ) {
+        let capabilities = MessagesModelCapabilities {
+            thinking_on_by_default,
+            thinking_always_on,
+            ..opus_4_7()
+        };
+        let expected = match thinking {
+            Some(thinking) => serde_json::json!({"max_tokens": 1024, "thinking": thinking}),
+            None => serde_json::json!({"max_tokens": 1024}),
+        };
+        assert_eq!(
+            translate(
+                capabilities,
+                serde_json::json!({"max_tokens": 1024, "reasoning_effort": "none"})
+            ),
+            Ok(request(expected))
         );
     }
 
