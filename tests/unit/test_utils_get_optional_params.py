@@ -2365,14 +2365,17 @@ def test_completion_passes_vector_store_params_to_custom_handler(
     assert received_params.items() >= vector_store_params.items()
 
 
-def test_completion_passes_vector_store_params_to_custom_handler_listed_after_other_entries(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "shared_name_handlers",
+    ((OpenAIVideoConfig(), OptionalParamsEchoHandler()), (OptionalParamsEchoHandler(), OpenAIVideoConfig())),
+)
+def test_completion_passes_vector_store_params_to_custom_handler_among_other_map_entries(
+    monkeypatch: pytest.MonkeyPatch, shared_name_handlers: tuple[CustomLLM | BaseVideoConfig, ...]
 ) -> None:
     _register_handlers(
         monkeypatch,
         ("other-handler", OptionalParamsEchoHandler()),
-        ("echo-handler", OpenAIVideoConfig()),
-        ("echo-handler", OptionalParamsEchoHandler()),
+        *(("echo-handler", handler) for handler in shared_name_handlers),
     )
 
     response: Final = litellm.completion(
