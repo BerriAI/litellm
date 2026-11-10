@@ -4878,9 +4878,12 @@ class ProxyBaseLLMRequestProcessing:
     _finalize_streaming_generator_cleanup = finalize_streaming_generator_cleanup
 
     @staticmethod
-    def record_first_chunk_overhead(logging_obj: LiteLLMLoggingObj | None, chunk_received_at: float) -> None:
-        """The proxy's own work on a chunk; the logging object keeps the first one for the stamped overhead."""
-        if logging_obj is not None:
+    def record_first_chunk_overhead(
+        logging_obj: LiteLLMLoggingObj | None, chunk_received_at: float, is_provider_output: bool = True
+    ) -> None:
+        """The proxy's own work on a chunk; the logging object keeps the first one for the stamped overhead.
+        A keepalive ping carries no provider output, so it is never that first chunk."""
+        if logging_obj is not None and is_provider_output:
             logging_obj.set_first_chunk_overhead(time.perf_counter() - chunk_received_at)
 
     @staticmethod
@@ -4986,7 +4989,9 @@ class ProxyBaseLLMRequestProcessing:
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 serialized = serialize_chunk(chunk)
                 recent_tail = advance_sse_tail(recent_tail, serialized)
-                ProxyBaseLLMRequestProcessing.record_first_chunk_overhead(timing_sink, chunk_received_at)
+                ProxyBaseLLMRequestProcessing.record_first_chunk_overhead(
+                    timing_sink, chunk_received_at, is_provider_output=chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
+                )
                 yield serialized
             held_tail: Final = flush_tail() if flush_tail is not None else b""
             if held_tail:

@@ -5544,28 +5544,24 @@ class TestAsyncStreamingDataGeneratorFastPath:
     async def test_slow_path_records_first_chunk_work_on_the_logging_object(self, monkeypatch: pytest.MonkeyPatch):
         """The overhead header is stamped before any chunk is read, so the time the proxy spends in
         the hook on the first chunk is recorded on the logging object for the success callback to add.
-        Later chunks are not summed, a 20 ms hook on 3 chunks delays the client by 20 ms, not 60."""
+        Later chunks are not summed, a 20 ms hook on 3 chunks delays the client by 20 ms, not 60, and a
+        keepalive ping that arrives before any provider output is not the first chunk."""
         import litellm.proxy.common_request_processing as common_request_processing_module
 
         clock: Final = _FakeClock()
         monkeypatch.setattr(common_request_processing_module, "time", _TimeWithFakeClock(clock))
 
-        class _StreamingCb(CustomLogger):
+        class _SlowStreamingCb(CustomLogger):
             async def async_post_call_streaming_hook(
                 self, user_api_key_dict: UserAPIKeyAuth, response: object
             ) -> object:
+                clock.advance(0.5 if response == STREAM_SSE_KEEPALIVE_PING_BYTES else 0.02)
                 return response
 
-        monkeypatch.setattr(litellm, "callbacks", [_StreamingCb()])
+        monkeypatch.setattr(litellm, "callbacks", [_SlowStreamingCb()])
         ProxyLogging._callback_capabilities_cache.clear()
 
         proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
-
-        async def slow_hook(**kw: object) -> object:
-            clock.advance(0.02)
-            return kw["response"]
-
-        monkeypatch.setattr(proxy_logging_obj, "async_post_call_streaming_hook", slow_hook)
         logging_obj = Logging(
             model="claude-x",
             messages=[{"role": "user", "content": "hi"}],
@@ -5575,7 +5571,13 @@ class TestAsyncStreamingDataGeneratorFastPath:
             litellm_call_id="call-stream",
             function_id="fn",
         )
-        chunks = [{"type": "content_block_delta"}, {"type": "content_block_delta"}, {"type": "message_stop"}]
+        chunks = [
+            STREAM_SSE_KEEPALIVE_PING_BYTES,
+            *(
+                ModelResponseStream(choices=[StreamingChoices(delta=Delta(content=word))])
+                for word in ("Hello", " world", " more")
+            ),
+        ]
 
         out = [
             c
