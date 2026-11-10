@@ -322,7 +322,8 @@ _rsa_key_exchange_excluded: Final = threading.Event()
 def _set_ciphers(context: ssl.SSLContext, ssl_security_level: str | None, rsa_key_exchange_excluded: bool) -> None:
     """
     Offer TLS 1.2 and up with SSL_SECURITY_LEVEL's cipher string if set, else DEFAULT_SSL_CIPHERS.
-    With RSA key exchange excluded, drop it, or offer only TLS 1.3 when the string has no other TLS 1.2 suite.
+    With RSA key exchange excluded, drop it, or offer only TLS 1.3 and log a warning when the string has no other
+    TLS 1.2 suite.
     """
     ciphers: Final = (
         ssl_security_level if ssl_security_level and isinstance(ssl_security_level, str) else DEFAULT_SSL_CIPHERS
@@ -334,6 +335,10 @@ def _set_ciphers(context: ssl.SSLContext, ssl_security_level: str | None, rsa_ke
             context.set_ciphers(f"{ciphers}:!kRSA")
         except ssl.SSLError:
             context.minimum_version = ssl.TLSVersion.TLSv1_3  # rebind-ok: sets up the caller's context in place
+            verbose_logger.warning(
+                "fips_mode: cipher list '%s' has no TLS 1.2 suite without RSA key exchange, so outbound TLS offers only TLS 1.3 and TLS 1.2-only servers will fail.",
+                ciphers,
+            )
 
 
 def exclude_rsa_key_exchange(excluded: bool) -> None:

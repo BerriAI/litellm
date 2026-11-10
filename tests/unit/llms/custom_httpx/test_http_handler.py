@@ -403,6 +403,7 @@ def test_fips_mode_drops_rsa_key_exchange_from_the_outbound_cipher_list(
 
 def test_fips_mode_offers_only_tls_1_3_when_the_cipher_list_has_only_rsa_key_exchange(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from litellm.llms.custom_httpx.http_handler import _ssl_context_cache
     from litellm.proxy.common_utils.fips import enforce_fips_mode, fips_mode_active
@@ -419,6 +420,7 @@ def test_fips_mode_offers_only_tls_1_3_when_the_cipher_list_has_only_rsa_key_exc
     held: Final = get_ssl_configuration()
     assert isinstance(held, ssl.SSLContext)
     _fake_fips_openssl(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
     enforce_fips_mode({"fips_mode": True})
     try:
         started_in_fips: Final = fips_mode_active()
@@ -433,6 +435,7 @@ def test_fips_mode_offers_only_tls_1_3_when_the_cipher_list_has_only_rsa_key_exc
     assert started_in_fips is True
     assert in_fips == (ssl.TLSVersion.TLSv1_3, ssl.TLSVersion.TLSv1_3)
     assert after_fips == ssl.TLSVersion.TLSv1_2
+    assert any("offers only TLS 1.3" in record.getMessage() for record in caplog.records)
 
 
 # Session Reuse Tests
