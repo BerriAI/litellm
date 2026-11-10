@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -24,6 +25,15 @@ _CONNECT_FAILURES: Final[MappingProxyType[UserConnectionPollStatus, str]] = Mapp
         "no_copilot_seat": "That GitHub account has no GitHub Copilot seat",
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PollClock:
+    now: Callable[[], float]
+    sleep: Callable[[float], None]
+
+
+SYSTEM_CLOCK: Final = PollClock(now=time.monotonic, sleep=time.sleep)
 
 
 class _CredentialInfo(TypedDict):
@@ -206,25 +216,33 @@ def _poll_until_settled(
     credential_name: str,
     flow_handle: str,
     interval: int,
-    sleep: Callable[[float], None],
+    last_poll_at: float,
+    clock: PollClock,
 ) -> UserConnectionPollResponse:
-    sleep(interval)
+    if clock.now() + interval > last_poll_at:
+        return UserConnectionPollResponse(status="expired")
+    clock.sleep(interval)
     poll: Final = client.poll_user_connection(credential_name, flow_handle)
     if poll.status in ("pending", "slow_down"):
-        return _poll_until_settled(client, credential_name, flow_handle, _next_poll_interval(poll, interval), sleep)
+        return _poll_until_settled(
+            client, credential_name, flow_handle, _next_poll_interval(poll, interval), last_poll_at, clock
+        )
     return poll
 
 
 def connect_user_credential(
     client: CredentialsManagementClient,
     credential_name: str,
-    sleep: Callable[[float], None],
+    clock: PollClock,
 ) -> UserConnectionPollResponse:
-    """Run the GitHub device login for the calling key's user and return the final poll result."""
+    """Run the GitHub device login for the calling key's user and return the final poll result.
+
+    Polling stops one interval before the code expires, since the proxy rejects polls on an expired code."""
     started: Final = client.start_user_connection(credential_name)
     click.echo(f"Go to {started.verification_uri} and enter code {started.user_code}")
     click.echo("Waiting for approval...")
-    return _poll_until_settled(client, credential_name, started.flow_handle, started.interval, sleep)
+    last_poll_at: Final = clock.now() + started.expires_in - started.interval
+    return _poll_until_settled(client, credential_name, started.flow_handle, started.interval, last_poll_at, clock)
 
 
 def _report_http_error(response: requests.Response) -> None:
@@ -244,13 +262,19 @@ def connect(ctx: click.Context, credential_name: str) -> None:
     context: Final = cli_context_values(ctx)
     client: Final = CredentialsManagementClient(context["base_url"], context["api_key"])
     try:
-        result: Final = connect_user_credential(client, credential_name, time.sleep)
+        result: Final = connect_user_credential(client, credential_name, SYSTEM_CLOCK)
     except UnauthorizedError as e:
         if isinstance(e.orig_exception, requests.exceptions.HTTPError) and e.orig_exception.response is not None:
             _report_http_error(e.orig_exception.response)
         raise click.Abort()
     except requests.exceptions.HTTPError as e:
         _report_http_error(e.response)
+        raise click.Abort()
+    except requests.exceptions.RequestException as e:
+        click.echo(
+            f"Error: could not reach the proxy at {context['base_url']} ({type(e).__name__}). Run the command again",
+            err=True,
+        )
         raise click.Abort()
     if result.status != "connected":
         click.echo(f"Error: {_CONNECT_FAILURES.get(result.status, result.status)}", err=True)

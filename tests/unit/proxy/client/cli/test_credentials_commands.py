@@ -6,9 +6,7 @@ import requests
 import responses
 from click.testing import CliRunner
 
-
-
-from litellm.proxy.client.cli.commands.credentials import connect_user_credential
+from litellm.proxy.client.cli.commands.credentials import PollClock, connect_user_credential
 from litellm.proxy.client.cli.main import cli
 from litellm.proxy.client.credentials import CredentialsManagementClient
 
@@ -139,9 +137,7 @@ def test_acreate_credential_http_error(cli_runner, mock_credentials_client):
     mock_error_response = MagicMock()
     mock_error_response.status_code = 400
     mock_error_response.json.return_value = {"error": "Invalid request"}
-    mock_instance.create.side_effect = requests.exceptions.HTTPError(
-        response=mock_error_response
-    )
+    mock_instance.create.side_effect = requests.exceptions.HTTPError(response=mock_error_response)
 
     # Run command
     result = cli_runner.invoke(
@@ -185,9 +181,7 @@ def test_adelete_credential_http_error(cli_runner, mock_credentials_client):
     mock_error_response = MagicMock()
     mock_error_response.status_code = 404
     mock_error_response.json.return_value = {"error": "Credential not found"}
-    mock_instance.delete.side_effect = requests.exceptions.HTTPError(
-        response=mock_error_response
-    )
+    mock_instance.delete.side_effect = requests.exceptions.HTTPError(response=mock_error_response)
 
     # Run command
     result = cli_runner.invoke(cli, ["credentials", "delete", "test-cred"])
@@ -273,14 +267,27 @@ PROXY = "http://proxy.test"
 CONNECT_URL = f"{PROXY}/credentials/team%2Fcopilot/user_connection"
 
 
-def _start_body(interval: int = 0) -> dict[str, object]:
+def _start_body(interval: int = 0, expires_in: int = 900) -> dict[str, object]:
     return {
         "user_code": "ABCD-1234",
         "verification_uri": "https://github.com/login/device",
-        "expires_in": 900,
+        "expires_in": expires_in,
         "interval": interval,
         "flow_handle": "sealed-handle",
     }
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.elapsed = 0.0
+        self.waits: tuple[float, ...] = ()
+
+    def sleep(self, seconds: float) -> None:
+        self.elapsed += seconds
+        self.waits = (*self.waits, seconds)
+
+    def as_poll_clock(self) -> PollClock:
+        return PollClock(now=lambda: self.elapsed, sleep=self.sleep)
 
 
 def _run_connect(cli_runner):
@@ -349,9 +356,40 @@ def test_connect_waits_the_interval_github_asks_for_and_backs_off_on_slow_down()
         {"status": "connected", "github_login": "octocat"},
     ):
         responses.add(responses.POST, f"{CONNECT_URL}/poll", json=poll)
-    waits: list[float] = []  # mutable-ok: records the injected sleep calls
+    clock = _FakeClock()
 
-    result = connect_user_credential(CredentialsManagementClient(PROXY, "sk-user"), "team/copilot", waits.append)
+    result = connect_user_credential(
+        CredentialsManagementClient(PROXY, "sk-user"), "team/copilot", clock.as_poll_clock()
+    )
 
     assert result.status == "connected"
-    assert waits == [5, 10, 10, 20]
+    assert clock.waits == (5, 10, 10, 20)
+
+
+@responses.activate
+def test_connect_stops_polling_before_the_code_expires_and_reports_it_expired():
+    responses.add(responses.POST, f"{CONNECT_URL}/start", json=_start_body(interval=5, expires_in=19))
+    responses.add(responses.POST, f"{CONNECT_URL}/poll", json={"status": "pending"})
+    responses.add(responses.POST, f"{CONNECT_URL}/poll", json={"status": "pending"})
+    responses.add(responses.POST, f"{CONNECT_URL}/poll", status=400, json={"detail": "invalid or expired flow_handle"})
+    clock = _FakeClock()
+
+    result = connect_user_credential(
+        CredentialsManagementClient(PROXY, "sk-user"), "team/copilot", clock.as_poll_clock()
+    )
+
+    assert result.status == "expired"
+    assert clock.waits == (5, 5)
+    assert sum(call.request.url.endswith("/poll") for call in responses.calls) == 2
+
+
+@responses.activate
+def test_connect_reports_a_lost_connection_while_waiting_and_asks_to_rerun(cli_runner):
+    responses.add(responses.POST, f"{CONNECT_URL}/start", json=_start_body())
+    responses.add(responses.POST, f"{CONNECT_URL}/poll", body=requests.exceptions.ConnectionError("connection reset"))
+
+    result = _run_connect(cli_runner)
+
+    assert result.exit_code == 1
+    assert "ABCD-1234" in result.output
+    assert f"could not reach the proxy at {PROXY} (ConnectionError). Run the command again" in result.output
