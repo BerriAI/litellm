@@ -44,6 +44,8 @@ pytestmark: Final = pytest.mark.shares_worker_state
 CLAUDE_ID: Final = "anthropic.claude-sonnet-5-v1:0"
 LLAMA_ID: Final = "meta.llama4-maverick-17b-instruct-v1:0"
 PROFILE_ID: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/relayprofile"
+INPUT_COST_PER_TOKEN: Final = 0.001
+OUTPUT_COST_PER_TOKEN: Final = 0.002
 CLAUDE: Final = "invoke-relay"
 LLAMA: Final = "invoke-relay-llama"
 PROFILE: Final = "invoke-relay-profile"
@@ -335,6 +337,7 @@ def _deployment(name: str, model_id: str, upstream: Wire) -> dict[str, JsonValue
             "aws_secret_access_key": "synthetic-relay-secret",
             "aws_region_name": "us-east-1",
         },
+        "model_info": {"input_cost_per_token": INPUT_COST_PER_TOKEN, "output_cost_per_token": OUTPUT_COST_PER_TOKEN},
     }
 
 
@@ -843,15 +846,16 @@ def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: 
         assert _spend_statuses(call_id, 1) == ["success"], marker
     for marker, (_, _, _, call_id) in during:
         assert len(_spend_statuses(call_id, 1)) == 1, marker
+    stream_cost: Final = 9 * INPUT_COST_PER_TOKEN + 4 * OUTPUT_COST_PER_TOKEN
     costs: Final = [_logged_spend(call_id) for _, (_, _, _, call_id) in after]
-    assert min(costs) > 0 and max(costs) == pytest.approx(min(costs)), costs
+    assert costs == [pytest.approx(stream_cost)] * len(after), costs
     charged: Final = eventually(
         lambda: _key_spend(rig.keys[OUTAGE]) - spend_before,
-        lambda spend: spend == pytest.approx(len((*during, *after)) * costs[0]),
+        lambda spend: spend == pytest.approx(len((*during, *after)) * stream_cost),
         seconds=70,
         return_last_on_timeout=True,
     )
-    assert charged == pytest.approx(len((*during, *after)) * costs[0]), (charged, costs)
+    assert charged == pytest.approx(len((*during, *after)) * stream_cost), charged
 
 
 def test_client_disconnect_stops_the_proxy_reading_the_upstream(rig: Rig) -> None:
