@@ -2706,11 +2706,16 @@ async def _restore_team_on_roster_member(user_id: str, team_id: str) -> None:
     async with prisma_client.tx() as tx:
         await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
         roster: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
-        if roster is not None and any(member.user_id == user_id for member in roster):
-            await user_tx_db(tx).update_many(
-                where={"user_id": user_id, "NOT": {"teams": {"has": team_id}}},
-                data={"teams": {"push": [team_id]}},
-            )
+        if roster is None or all(member.user_id != user_id for member in roster):
+            return
+        restored: Final = await user_tx_db(tx).update_many(
+            where={"user_id": user_id, "NOT": {"teams": {"has": team_id}}},
+            data={"teams": {"push": [team_id]}},
+        )
+    if restored:
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
 
 async def _remove_user_from_team(user_id: str, team_id: str) -> None:
