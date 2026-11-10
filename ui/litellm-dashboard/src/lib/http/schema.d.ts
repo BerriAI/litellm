@@ -6078,10 +6078,10 @@ export interface paths {
          * @description Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
          *     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
          *     Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, returns
-         *     null and fetches after the response is sent, so a later call returns the release. It also returns null while the
-         *     changelog or GitHub can't be reached, so the dashboard upgrade notice simply doesn't render.
-         *     Responds 502 when the release notes were fetched but none of their entries could be counted, rather than reporting
-         *     zero changes.
+         *     null and fetches after the response is sent, so a later call returns the release. Responds 502 once that fetch has
+         *     failed because the changelog or GitHub couldn't be reached or answered with something unusable, so the dashboard
+         *     upgrade notice simply doesn't render. The three counts are all zero when the release notes list no change in a
+         *     format this proxy can count.
          *     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
@@ -63073,7 +63073,7 @@ export interface operations {
                     "application/json": components["schemas"]["LatestReleaseInfo"] | null;
                 };
             };
-            /** @description The newest release's notes list no changes in a format this proxy can count */
+            /** @description The changelog or GitHub could not be reached or answered with something unusable */
             502: {
                 headers: {
                     [name: string]: unknown;

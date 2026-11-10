@@ -52,18 +52,6 @@ class LatestReleaseUnavailable:
 
 
 @dataclass(frozen=True, slots=True)
-class LatestReleaseNotesUnreadable:
-    version: str
-
-    @property
-    def reason(self) -> str:
-        return f"Release notes for v{self.version} list no changes in a format this proxy can count"
-
-
-_ReleaseLookup: TypeAlias = LatestReleaseInfo | LatestReleaseUnavailable | LatestReleaseNotesUnreadable
-
-
-@dataclass(frozen=True, slots=True)
 class ChangelogEntry:
     version: tuple[int, int, int]
     url: str
@@ -149,17 +137,14 @@ def earlier_patch_tags(version: tuple[int, int, int]) -> tuple[str, ...]:
 
 def summarize_release_line(
     entry: ChangelogEntry, latest: _GitHubRelease, earlier: tuple[_GitHubRelease, ...]
-) -> LatestReleaseInfo | LatestReleaseNotesUnreadable:
+) -> LatestReleaseInfo:
     """A patch release's notes only list its backports, so count the whole minor line it belongs to."""
     counts: Final = sum(
         (Counter[_Bucket](count_release_bullets(release.body or "")) for release in (latest, *earlier)),
         Counter[_Bucket](),
     )
-    version: Final = latest.tag_name.removeprefix("v")
-    if counts.total() == 0:
-        return LatestReleaseNotesUnreadable(version=version)
     return LatestReleaseInfo(
-        version=version,
+        version=latest.tag_name.removeprefix("v"),
         new_features=counts.get("new_features", 0),
         bug_fixes=counts.get("bug_fixes", 0),
         other_updates=counts.get("other_updates", 0),
@@ -198,7 +183,7 @@ async def _fetch_changelog_entry(client: _AsyncGetClient) -> ChangelogEntry | La
     return LatestReleaseUnavailable(reason="Changelog feed lists no stable release") if entry is None else entry
 
 
-async def fetch_latest_release(client: _AsyncGetClient) -> _ReleaseLookup:
+async def fetch_latest_release(client: _AsyncGetClient) -> LatestReleaseInfo | LatestReleaseUnavailable:
     try:
         entry: Final = await _fetch_changelog_entry(client)
         if isinstance(entry, LatestReleaseUnavailable):
@@ -221,16 +206,14 @@ async def fetch_latest_release(client: _AsyncGetClient) -> _ReleaseLookup:
     )
 
 
-def _cached_release(cache: InMemoryCache) -> _ReleaseLookup | None:
+def _cached_release(cache: InMemoryCache) -> LatestReleaseInfo | LatestReleaseUnavailable | None:
     cached: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
-    if isinstance(cached, (LatestReleaseInfo, LatestReleaseUnavailable, LatestReleaseNotesUnreadable)):
-        return cached
-    return None
+    return cached if isinstance(cached, (LatestReleaseInfo, LatestReleaseUnavailable)) else None
 
 
 async def get_latest_release_info(
     client: _AsyncGetClient, cache: InMemoryCache, fetch_lock: asyncio.Lock
-) -> _ReleaseLookup:
+) -> LatestReleaseInfo | LatestReleaseUnavailable:
     cached: Final = _cached_release(cache)
     if cached is not None:
         return cached
@@ -250,7 +233,7 @@ async def get_latest_release_info(
 
 async def refresh_latest_release_info(client: _AsyncGetClient, cache: InMemoryCache, fetch_lock: asyncio.Lock) -> None:
     result: Final = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
-    if not isinstance(result, LatestReleaseInfo):
+    if isinstance(result, LatestReleaseUnavailable):
         verbose_proxy_logger.warning("LiteLLM: latest release info unavailable: %s", result.reason)
 
 
@@ -259,7 +242,9 @@ async def refresh_latest_release_info(client: _AsyncGetClient, cache: InMemoryCa
     tags=["UI Settings"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=LatestReleaseInfo | None,
-    responses={502: {"description": "The newest release's notes list no changes in a format this proxy can count"}},
+    responses={
+        502: {"description": "The changelog or GitHub could not be reached or answered with something unusable"}
+    },
 )
 async def latest_release_info(
     background_tasks: BackgroundTasks,
@@ -272,10 +257,10 @@ async def latest_release_info(
     Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
     Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, returns
-    null and fetches after the response is sent, so a later call returns the release. It also returns null while the
-    changelog or GitHub can't be reached, so the dashboard upgrade notice simply doesn't render.
-    Responds 502 when the release notes were fetched but none of their entries could be counted, rather than reporting
-    zero changes.
+    null and fetches after the response is sent, so a later call returns the release. Responds 502 once that fetch has
+    failed because the changelog or GitHub couldn't be reached or answered with something unusable, so the dashboard
+    upgrade notice simply doesn't render. The three counts are all zero when the release notes list no change in a
+    format this proxy can count.
     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
     """
     if not release_check_enabled:
@@ -283,8 +268,8 @@ async def latest_release_info(
     cached: Final = _cached_release(cache)
     if isinstance(cached, LatestReleaseInfo):
         return cached
-    if isinstance(cached, LatestReleaseNotesUnreadable):
-        raise HTTPException(status_code=502, detail=cached.reason)
-    if cached is None and not fetch_lock.locked():
+    if isinstance(cached, LatestReleaseUnavailable):
+        raise HTTPException(status_code=502, detail=f"Latest release info unavailable: {cached.reason}")
+    if not fetch_lock.locked():
         background_tasks.add_task(refresh_latest_release_info, client, cache, fetch_lock)
     return None

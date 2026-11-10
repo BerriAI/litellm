@@ -19,7 +19,6 @@ from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS,
     RELEASE_BY_TAG_URL,
     LatestReleaseInfo,
-    LatestReleaseNotesUnreadable,
     LatestReleaseUnavailable,
     _default_cache,
     _default_client,
@@ -385,7 +384,7 @@ def _minor_line(**overrides: httpx.Response | Exception) -> _ByUrl:
     )
 
 
-async def _info(client: _ByUrl) -> LatestReleaseInfo | LatestReleaseUnavailable | LatestReleaseNotesUnreadable:
+async def _info(client: _ByUrl) -> LatestReleaseInfo | LatestReleaseUnavailable:
     return await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
 
 
@@ -482,24 +481,27 @@ class TestLatestReleaseInfoEndpoint:
         assert len(still_fetching) == 1, "exactly one request should still be running the hanging fetch"
         assert client.urls == [CHANGELOG_FEED_URL]
 
-    def test_returns_null_when_the_changelog_is_unreachable(self, http_client):
-        _override_dependencies(
-            _ByUrl({CHANGELOG_FEED_URL: httpx.ConnectError("boom")}), _fresh_cache(), LitellmUserRoles.PROXY_ADMIN
-        )
-        assert http_client.get("/get/latest_release_info").json() is None
-        response = http_client.get("/get/latest_release_info")
-        assert response.status_code == 200
-        assert response.json() is None
-
-    def test_responds_502_instead_of_zero_counts_when_no_release_note_entry_is_countable(self, http_client):
-        uncountable: Final = _github_response(payload=_release("v1.102.0", "## Changes\n\n1. Reworked the router\n"))
-        client: Final = _minor_release(**{_tag_url("v1.102.0"): uncountable})
+    def test_responds_502_once_the_changelog_fetch_has_failed(self, http_client):
+        client: Final = _ByUrl({CHANGELOG_FEED_URL: httpx.ConnectError("boom")})
         _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
-        assert http_client.get("/get/latest_release_info").json() is None
-        responses: Final = [http_client.get("/get/latest_release_info") for _ in range(2)]
-        assert [response.status_code for response in responses] == [502, 502]
-        assert "v1.102.0" in responses[0].json()["detail"]
-        assert len(client.calls) == 2
+        first: Final = http_client.get("/get/latest_release_info")
+        assert (first.status_code, first.json()) == (200, None)
+        later: Final = [http_client.get("/get/latest_release_info") for _ in range(2)]
+        assert [response.status_code for response in later] == [502, 502]
+        assert "ConnectError" in later[0].json()["detail"]
+        assert len(client.calls) == 1
+
+    def test_release_with_no_countable_notes_is_still_announced_with_zero_counts(self, http_client):
+        uncountable: Final = _github_response(payload=_release("v1.102.0", "## Changes\n\n1. Reworked the router\n"))
+        _override_dependencies(
+            _minor_release(**{_tag_url("v1.102.0"): uncountable}), _fresh_cache(), LitellmUserRoles.PROXY_ADMIN
+        )
+        http_client.get("/get/latest_release_info")
+        response: Final = http_client.get("/get/latest_release_info")
+        assert (response.status_code, response.json()) == (
+            200,
+            {**EXPECTED_INFO, "new_features": 0, "bug_fixes": 0, "other_updates": 0},
+        )
 
     @pytest.mark.parametrize("name", ["LITELLM_DISABLE_LATEST_RELEASE_CHECK", "LITELLM_OFFLINE_MODE"])
     @pytest.mark.parametrize(
