@@ -375,3 +375,139 @@ async def test_bedrock_search_with_credentials_managed_registry(
 
     assert search_response["data"][0]["score"] == 0.9
     assert search_response["data"][0]["content"][0]["text"] == "Mock search result"
+
+
+def _image_search_body(media_type: str, extra_body: dict[str, object] | None) -> dict[str, object]:
+    config: Final = BedrockVectorStoreConfig()
+    mock_log: Final = MagicMock()
+    mock_log.model_call_details = {}
+    _, body = config.transform_search_vector_store_request(
+        vector_store_id="kb123",
+        query="",
+        vector_store_search_optional_params={
+            "max_num_results": 3,
+            "query_image": {"type": "base64", "media_type": media_type, "data": "aW1hZ2UtYnl0ZXM="},
+        },
+        api_base="https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases",
+        litellm_logging_obj=mock_log,
+        litellm_params={},
+        extra_body=extra_body,
+    )
+    return body
+
+
+@pytest.mark.parametrize(
+    ("media_type", "bedrock_format"),
+    [("image/jpeg", "jpeg"), ("image/png", "png"), ("image/gif", "gif"), ("image/webp", "webp")],
+)
+def test_transform_search_request_sends_query_image_as_an_image_retrieval_query(
+    media_type: str, bedrock_format: str
+) -> None:
+    body: Final = _image_search_body(media_type, extra_body=None)
+
+    assert body["retrievalQuery"] == {
+        "type": "IMAGE",
+        "image": {"format": bedrock_format, "inlineContent": "aW1hZ2UtYnl0ZXM="},
+    }
+    assert body["retrievalConfiguration"] == {"vectorSearchConfiguration": {"numberOfResults": 3}}
+
+
+@pytest.mark.parametrize("key", ["retrievalQuery", "retrieval_query"])
+@pytest.mark.parametrize("source", ["extra_body", "litellm_params"])
+def test_transform_search_request_sends_the_callers_retrieval_query_in_place_of_the_built_one(
+    key: str, source: str
+) -> None:
+    caller_query: Final = {"type": "IMAGE", "image": {"format": "png", "inlineContent": "Y2FsbGVy"}}
+    caller_fields: Final = {key: caller_query}
+
+    body: Final = _search_body(
+        extra_body=caller_fields if source == "extra_body" else None,
+        litellm_params=caller_fields if source == "litellm_params" else {},
+    )
+
+    assert body["retrievalQuery"] == caller_query
+
+
+def test_transform_search_request_prefers_the_callers_retrieval_query_over_query_image() -> None:
+    caller_query: Final = {"text": "from extra_body"}
+
+    body: Final = _image_search_body("image/jpeg", extra_body={"retrievalQuery": caller_query})
+
+    assert body["retrievalQuery"] == caller_query
+
+
+def _search_response(retrieval_results: list[dict[str, object]], query: str = "") -> dict[str, object]:
+    config: Final = BedrockVectorStoreConfig()
+    mock_log: Final = MagicMock()
+    mock_log.model_call_details = {"query": query}
+    return config.transform_search_vector_store_response(
+        response=httpx.Response(200, json={"retrievalResults": retrieval_results}),
+        litellm_logging_obj=mock_log,
+    )
+
+
+def test_transform_search_response_returns_image_hits_next_to_text_hits() -> None:
+    image_metadata: Final = {
+        "x-amz-bedrock-kb-source-uri": "s3://kb-images/shapes/red-circle.jpg",
+        "x-amz-bedrock-kb-source-file-mime-type": "image/jpeg",
+        "x-amz-bedrock-kb-source-file-modality": "IMAGE",
+    }
+    text_metadata: Final = {"x-amz-bedrock-kb-source-uri": "s3://kb-docs/shapes.txt"}
+
+    response: Final = _search_response(
+        [
+            {
+                "content": {"type": "IMAGE", "byteContent": "data:image/png;base64,/9j/4AAQSkZJRg=="},
+                "metadata": image_metadata,
+                "location": {"type": "S3", "s3Location": {"uri": "s3://kb-images/shapes/red-circle.jpg"}},
+                "score": 0.998,
+            },
+            {"content": {"type": "TEXT", "text": "a red circle"}, "metadata": text_metadata, "score": 0.5},
+            {"content": {"type": "ROW", "row": []}, "metadata": {}, "score": 0.4},
+            {"content": {"type": "AUDIO", "byteContent": "data:audio/mpeg;base64,SUQz"}, "metadata": {}, "score": 0.3},
+        ]
+    )
+
+    assert response["search_query"] == ""
+    assert response["data"] == [
+        {
+            "score": 0.998,
+            "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQSkZJRg=="},
+                }
+            ],
+            "file_id": "s3://kb-images/shapes/red-circle.jpg",
+            "filename": "red-circle.jpg",
+            "attributes": image_metadata,
+        },
+        {
+            "score": 0.5,
+            "content": [{"text": "a red circle", "type": "text"}],
+            "file_id": "s3://kb-docs/shapes.txt",
+            "filename": "shapes.txt",
+            "attributes": text_metadata,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("byte_content", "metadata", "media_type", "data"),
+    [
+        ("data:image/webp;base64,UklGRg==", {}, "image/webp", "UklGRg=="),
+        ("data:image/png;base64,iVBORw0K", {"x-amz-bedrock-kb-source-file-mime-type": ""}, "image/png", "iVBORw0K"),
+        ("/9j/4AAQ", {"x-amz-bedrock-kb-source-file-mime-type": "image/jpeg"}, "image/jpeg", "/9j/4AAQ"),
+        ("/9j/4AAQ", {}, "application/octet-stream", "/9j/4AAQ"),
+    ],
+)
+def test_transform_search_response_image_hit_media_type_falls_back_to_the_data_uri(
+    byte_content: str, metadata: dict[str, object], media_type: str, data: str
+) -> None:
+    response: Final = _search_response(
+        [{"content": {"type": "IMAGE", "byteContent": byte_content}, "metadata": metadata, "score": 0.9}]
+    )
+
+    assert response["data"][0]["content"] == [
+        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}}
+    ]

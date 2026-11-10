@@ -1417,6 +1417,10 @@ def test_raise_if_required_body_param_missing_names_each_missing_param(route_typ
         ("amoderation", {"model": "omni-moderation-latest", "input": ""}),
         ("asearch", {"model": "perplexity-search", "query": "litellm"}),
         (
+            "avector_store_search",
+            {"vector_store_id": "kb1", "query_image": {"type": "base64", "media_type": "image/png", "data": "iVBO"}},
+        ),
+        (
             "acreate_batch",
             {"input_file_id": "file-abc", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
         ),

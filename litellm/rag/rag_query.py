@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import Any, Final
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -40,6 +40,13 @@ class _RerankResultsView(TypedDict):
 
 class _MessageView(TypedDict):
     message: ReadOnly[object]
+
+
+def _text_documents(search_data: _SearchDataView) -> Iterator[tuple[_SearchResultView, str]]:
+    for result in search_data["results"]:
+        for content in result.get("content", []):
+            if content.get("type") == "text" and (content_text := content.get("text")):
+                yield result, content_text
 
 
 class RAGQuery:
@@ -126,24 +133,17 @@ class RAGQuery:
         search_response: Any,
     ) -> list[str | dict[str, object]]:
         """Extract text documents from vector store search response."""
-        documents: Final[list[str | dict[str, object]]] = []
         search_data: Final[_SearchDataView] = {"results": search_response.get("data", [])}
-        for result in search_data["results"]:
-            content_list = result.get("content", [])
-            for content in content_list:
-                if content.get("type") == "text" and content.get("text"):
-                    documents.append(content["text"])
-        return documents
+        return [text for _, text in _text_documents(search_data)]
 
     @staticmethod
     def get_top_chunks_from_rerank(search_response: Any, rerank_response: Any) -> list[_SearchResultView]:
         """Get the original search results corresponding to the top reranked results."""
-        top_chunks: Final[list[_SearchResultView]] = []
         search_data: Final[_SearchDataView] = {"results": search_response.get("data", [])}
-        original_results: Final = search_data["results"]
+        document_results: Final = tuple(result for result, _ in _text_documents(search_data))
         reranked: Final[_RerankResultsView] = {"results": rerank_response.get("results", [])}
-        for result in reranked["results"]:
-            index = result.get("index")
-            if index is not None and index < len(original_results):
-                top_chunks.append(original_results[index])
-        return top_chunks
+        return [
+            document_results[index]
+            for result in reranked["results"]
+            if (index := result.get("index")) is not None and index < len(document_results)
+        ]

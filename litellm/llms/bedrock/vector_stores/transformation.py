@@ -1,9 +1,13 @@
+import re
 from collections.abc import Mapping
 from copy import deepcopy
+from itertools import product
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -12,6 +16,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.integrations.rag.bedrock_knowledgebase import (
     BedrockKBContent,
+    BedrockKBImageFormat,
     BedrockKBResponse,
     BedrockKBRetrievalConfiguration,
     BedrockKBRetrievalQuery,
@@ -23,7 +28,9 @@ from litellm.types.vector_stores import (
     BaseVectorStoreAuthCredentials,
     VectorStoreIndexEndpoints,
     VectorStoreResultContent,
+    VectorStoreSearchImageMediaType,
     VectorStoreSearchOptionalRequestParams,
+    VectorStoreSearchQueryImage,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
 )
@@ -32,6 +39,60 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_BEDROCK_IMAGE_FORMATS: Final[Mapping[VectorStoreSearchImageMediaType, BedrockKBImageFormat]] = MappingProxyType(
+    {"image/jpeg": "jpeg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}
+)
+_BASE64_DATA_URI: Final = re.compile(r"data:(?P<media_type>[^;,]*)[^,]*;base64,(?P<data>.*)", re.DOTALL)
+_SOURCE_FILE_MIME_TYPE_KEY: Final = "x-amz-bedrock-kb-source-file-mime-type"
+_UNKNOWN_MEDIA_TYPE: Final = "application/octet-stream"
+
+
+class _QueryImageParams(TypedDict, total=False):
+    query_image: ReadOnly[VectorStoreSearchQueryImage | None]
+
+
+def _retrieval_query(query: str, params: _QueryImageParams) -> BedrockKBRetrievalQuery:
+    query_image: Final = params.get("query_image")
+    if query_image is None:
+        return BedrockKBRetrievalQuery(text=query)
+    return BedrockKBRetrievalQuery(
+        type="IMAGE",
+        image={"format": _BEDROCK_IMAGE_FORMATS[query_image["media_type"]], "inlineContent": query_image["data"]},
+    )
+
+
+def _image_content(byte_content: str, metadata: Mapping[str, object]) -> VectorStoreResultContent:
+    data_uri: Final = _BASE64_DATA_URI.fullmatch(byte_content)
+    declared_media_type: Final = data_uri.group("media_type") if data_uri is not None else ""
+    source_file_media_type: Final = metadata.get(_SOURCE_FILE_MIME_TYPE_KEY)
+    return VectorStoreResultContent(
+        type="image",
+        source={
+            "type": "base64",
+            "media_type": (
+                source_file_media_type
+                if isinstance(source_file_media_type, str) and source_file_media_type
+                else declared_media_type or _UNKNOWN_MEDIA_TYPE
+            ),
+            "data": data_uri.group("data") if data_uri is not None else byte_content,
+        },
+    )
+
+
+def _result_content(
+    content: BedrockKBContent | None, metadata: Mapping[str, object]
+) -> VectorStoreResultContent | None:
+    if content is None:
+        return None
+    text: Final = content.get("text")
+    if text is not None:
+        return VectorStoreResultContent(text=text, type="text")
+    byte_content: Final = content.get("byteContent")
+    if content.get("type") != "IMAGE" or not byte_content:
+        return None
+    return _image_content(byte_content, metadata)
 
 
 class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
@@ -59,7 +120,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         }
 
     def get_supported_openai_params(self, model: str) -> list[VECTOR_STORE_OPENAI_PARAMS]:
-        return ["filters", "max_num_results", "ranking_options"]
+        return ["filters", "max_num_results", "ranking_options", "query_image"]
 
     def _map_operator_to_aws(self, operator: str) -> str:
         """
@@ -214,8 +275,14 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = f"{api_base}/{encoded_vector_store_id}/retrieve"
 
+        caller_sources: Final = self._caller_sources(extra_body=extra_body, litellm_params=litellm_params)
+        caller_retrieval_query: Final = self._caller_value(caller_sources, ("retrievalQuery", "retrieval_query"))
         request_body: Final[dict[str, object]] = {
-            "retrievalQuery": BedrockKBRetrievalQuery(text=query),
+            "retrievalQuery": (
+                _retrieval_query(query, vector_store_search_optional_params)
+                if caller_retrieval_query is None
+                else caller_retrieval_query
+            ),
         }
 
         retrieval_config: dict[str, Any] = {}
@@ -244,7 +311,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             retrieval_config.setdefault("vectorSearchConfiguration", {})["filter"] = filters
         if retrieval_config:
             request_body["retrievalConfiguration"] = cast(BedrockKBRetrievalConfiguration, retrieval_config)
-        user_context: Final = self._user_context(extra_body=extra_body, litellm_params=litellm_params)
+        user_context: Final = self._user_context(caller_sources)
         if user_context is not None:
             request_body["userContext"] = user_context
 
@@ -252,19 +319,18 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         return url, request_body
 
     @staticmethod
-    def _user_context(
+    def _caller_sources(
         extra_body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
-    ) -> BedrockKBUserContext | None:
-        sources: Final = tuple(source for source in (extra_body, litellm_params) if isinstance(source, Mapping))
-        found: Final = next(
-            (
-                source[key]
-                for source in sources
-                for key in ("userContext", "user_context")
-                if source.get(key) is not None
-            ),
-            None,
-        )
+    ) -> tuple[Mapping[str, object], ...]:
+        return tuple(source for source in (extra_body, litellm_params) if isinstance(source, Mapping))
+
+    @staticmethod
+    def _caller_value(sources: tuple[Mapping[str, object], ...], keys: tuple[str, ...]) -> object:
+        return next((source[key] for source, key in product(sources, keys) if source.get(key) is not None), None)
+
+    @staticmethod
+    def _user_context(sources: tuple[Mapping[str, object], ...]) -> BedrockKBUserContext | None:
+        found: Final = BedrockVectorStoreConfig._caller_value(sources, ("userContext", "user_context"))
         return None if found is None else cast(BedrockKBUserContext, found)
 
     def sign_request(
@@ -334,13 +400,11 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
             response_data: Final = BedrockKBResponse(**response.json())
             results: Final[list[VectorStoreSearchResult]] = []
             for item in response_data.get("retrievalResults", []) or []:
-                content: BedrockKBContent | None = item.get("content")
-                text = content.get("text") if content else None
-                if text is None:
+                metadata = item.get("metadata", {}) or {}
+                result_content = _result_content(item.get("content"), metadata)
+                if result_content is None:
                     continue
 
-                # Extract metadata and use helper functions
-                metadata = item.get("metadata", {}) or {}
                 file_id = self._get_file_id_from_metadata(metadata)
                 filename = self._get_filename_from_metadata(metadata)
                 attributes = self._get_attributes_from_metadata(metadata)
@@ -348,7 +412,7 @@ class BedrockVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
                 results.append(
                     VectorStoreSearchResult(
                         score=item.get("score"),
-                        content=[VectorStoreResultContent(text=text, type="text")],
+                        content=[result_content],
                         file_id=file_id,
                         filename=filename,
                         attributes=attributes,
