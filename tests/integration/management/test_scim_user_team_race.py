@@ -26,6 +26,7 @@ SCIM_CORE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:User"
 SET_EMAIL_SQL: Final = 'UPDATE "LiteLLM_UserTable" SET user_email = %s WHERE user_id = %s'
 PROFILE_NAME: Final = "Race"
 USER_ALIAS_SQL: Final = 'SELECT user_alias FROM "LiteLLM_UserTable" WHERE user_id = %s'
+DROP_TEAM_SQL: Final = 'UPDATE "LiteLLM_UserTable" SET teams = array_remove(teams, %s) WHERE user_id = %s'
 APPEND_TEAM_SQL: Final = 'UPDATE "LiteLLM_UserTable" SET teams = array_append(teams, %s) WHERE user_id = %s'
 
 
@@ -97,3 +98,41 @@ def test_a_scim_user_write_keeps_a_team_a_group_push_added_after_the_write_read_
         assert response.status_code == status, response.text
         assert users_referencing(team) == frozenset({user})
         assert read_rows(USER_ALIAS_SQL, (user,)) == [{"user_alias": PROFILE_NAME}]
+
+
+def _put_with_group(candidate: Gateway, user: str, team: str) -> httpx.Response:
+    return candidate.request(
+        "PUT",
+        f"/scim/v2/Users/{user}",
+        {
+            "schemas": [SCIM_CORE_USER_SCHEMA],
+            "userName": user,
+            "emails": [{"value": f"{user}@example.com", "primary": True}],
+            "groups": [{"value": team}],
+            "active": True,
+        },
+    )
+
+
+def _patch_add_group(candidate: Gateway, user: str, team: str) -> httpx.Response:
+    return candidate.request(
+        "PATCH",
+        f"/scim/v2/Users/{user}",
+        {"schemas": [PATCH_OP_SCHEMA], "Operations": [{"op": "add", "path": "groups", "value": [{"value": team}]}]},
+    )
+
+
+@pytest.mark.parametrize("write", [_put_with_group, _patch_add_group], ids=["put", "patch"])
+def test_a_scim_user_write_naming_a_team_repairs_a_member_whose_teams_lost_it(
+    gateway: Gateway, write: Callable[[Gateway, str, str], httpx.Response]
+) -> None:
+    with gateway.scenario() as scenario:
+        (user,) = seed_users(scenario, 1)
+        team: Final = created_team(scenario, create_group(gateway, (user,)))
+        write_rows(DROP_TEAM_SQL, (team, user))
+        assert users_referencing(team) == frozenset()
+
+        response: Final = write(gateway, user, team)
+
+        assert response.status_code == 200, response.text
+        assert users_referencing(team) == frozenset({user})

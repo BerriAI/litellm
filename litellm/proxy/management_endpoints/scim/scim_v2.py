@@ -94,6 +94,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     team_tx_db,
     user_tx_db,
 )
+from litellm.proxy.management_helpers.utils import append_team_id_if_absent
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     PrismaClient,
     _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2698,7 +2699,7 @@ async def _add_user_to_team(user_id: str, team_id: str) -> None:
     except ProxyException as e:
         if e.type != ProxyErrorTypes.team_member_already_in_team:
             raise
-        verbose_proxy_logger.debug("User %s is already in team %s, skipping add", user_id, team_id)
+        await append_team_id_if_absent(await _get_prisma_client_or_raise_exception(), user_id, team_id)
 
 
 async def _remove_user_from_team(user_id: str, team_id: str) -> None:

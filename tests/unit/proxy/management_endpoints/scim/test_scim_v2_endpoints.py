@@ -1107,9 +1107,8 @@ async def test_handle_existing_user_by_email_roster_add_failure_blocks_teams_wri
 
 
 @pytest.mark.asyncio
-async def test_handle_existing_user_by_email_roster_add_already_member_is_noop(mocker):
-    """Being already in the team is benign even under the strict path: the upsert
-    succeeds and the deduped teams array is still persisted."""
+async def test_handle_existing_user_by_email_roster_add_already_member_repairs_user_teams(mocker):
+    """A user already on the roster whose teams list lacks the team gets it appended, not skipped"""
     existing_user = mocker.MagicMock()
     existing_user.user_id = "uid"
     existing_user.user_email = "member@example.com"
@@ -1122,6 +1121,11 @@ async def test_handle_existing_user_by_email_roster_add_already_member_is_noop(m
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
+    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    mocker.patch(  # test-quality-ok: the roster helpers resolve the proxy prisma client at module level
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
 
     mock_team_member_add = mocker.patch(
         "litellm.proxy.management_endpoints.scim.scim_v2.team_member_add",
@@ -1153,6 +1157,10 @@ async def test_handle_existing_user_by_email_roster_add_already_member_is_noop(m
     )
 
     mock_team_member_add.assert_awaited_once()
+    mock_prisma_client.db.litellm_usertable.update_many.assert_awaited_once_with(
+        where={"user_id": "uid", "NOT": {"teams": {"has": "team-x"}}},
+        data={"teams": {"push": ["team-x"]}},
+    )
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
 
