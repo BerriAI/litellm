@@ -449,7 +449,7 @@ class TestLatestReleaseInfoEndpoint:
     def test_first_request_returns_null_and_the_next_returns_the_fetched_release(self, http_client):
         _override_dependencies(_minor_release(), _fresh_cache(), LitellmUserRoles.INTERNAL_USER)
         first = http_client.get("/get/latest_release_info")
-        assert (first.status_code, first.json()) == (200, None)
+        assert (first.status_code, first.json()) == (202, None)
         second = http_client.get("/get/latest_release_info")
         assert (second.status_code, second.json()) == (200, EXPECTED_INFO)
 
@@ -485,7 +485,7 @@ class TestLatestReleaseInfoEndpoint:
         client: Final = _ByUrl({CHANGELOG_FEED_URL: httpx.ConnectError("boom")})
         _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
         first: Final = http_client.get("/get/latest_release_info")
-        assert (first.status_code, first.json()) == (200, None)
+        assert (first.status_code, first.json()) == (202, None)
         later: Final = [http_client.get("/get/latest_release_info") for _ in range(2)]
         assert [response.status_code for response in later] == [502, 502]
         assert later[0].json() == {"detail": "Latest release info unavailable"}
@@ -518,7 +518,8 @@ class TestLatestReleaseInfoEndpoint:
         monkeypatch.setenv(name, flag)
         client = _minor_release()
         _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
-        http_client.get("/get/latest_release_info")
+        first = http_client.get("/get/latest_release_info")
+        assert first.status_code == (200 if expected_body is None else 202)
         response = http_client.get("/get/latest_release_info")
         assert response.status_code == 200
         assert response.json() == expected_body

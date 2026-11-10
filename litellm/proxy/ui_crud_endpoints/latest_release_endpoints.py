@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
 from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -243,11 +243,13 @@ async def refresh_latest_release_info(client: _AsyncGetClient, cache: InMemoryCa
     dependencies=[Depends(user_api_key_auth)],
     response_model=LatestReleaseInfo | None,
     responses={
-        502: {"description": "The changelog or GitHub could not be reached or answered with something unusable"}
+        202: {"description": "The release is being fetched in the background, so ask again shortly", "model": None},
+        502: {"description": "The changelog or GitHub could not be reached or answered with something unusable"},
     },
 )
 async def latest_release_info(
     background_tasks: BackgroundTasks,
+    response: Response,
     client: Annotated[_AsyncGetClient, Depends(_default_client)],
     cache: Annotated[InMemoryCache, Depends(_default_cache)],
     fetch_lock: Annotated[asyncio.Lock, Depends(_default_fetch_lock)],
@@ -256,9 +258,9 @@ async def latest_release_info(
     """
     Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
-    Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, returns
-    null and fetches after the response is sent, so a later call returns the release. Responds 502 once that fetch has
-    failed because the changelog or GitHub couldn't be reached or answered with something unusable, so the dashboard
+    Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, responds
+    202 with null and fetches after the response is sent, so a later call returns the release. Responds 502 once that
+    fetch has failed because the changelog or GitHub couldn't be reached or answered with something unusable, so the dashboard
     upgrade notice simply doesn't render. The three counts are all zero when the release notes list no change in a
     format this proxy can count.
     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
@@ -272,4 +274,5 @@ async def latest_release_info(
         raise HTTPException(status_code=502, detail="Latest release info unavailable")
     if not fetch_lock.locked():
         background_tasks.add_task(refresh_latest_release_info, client, cache, fetch_lock)
+    response.status_code = status.HTTP_202_ACCEPTED
     return None

@@ -1,28 +1,39 @@
-import { $api } from "@/lib/http/api";
+import { useQuery } from "@tanstack/react-query";
+import { fetchClient } from "@/lib/http/api";
 import type { components } from "@/lib/http/schema";
+import { createQueryKeys } from "../common/queryKeysFactory";
 
 export type LatestReleaseInfo = components["schemas"]["LatestReleaseInfo"];
 
+export type LatestReleaseAnswer = { release: LatestReleaseInfo | null; pending: boolean };
+
 export const PENDING_RELEASE_POLL_MS = 5 * 1000;
-export const PENDING_RELEASE_ANSWERS_PER_BURST = 3;
 
-type ReleaseQueryState = { status: string; data: unknown; dataUpdateCount: number };
+export const latestReleaseKeys = createQueryKeys("latestRelease");
 
-export const pendingReleasePollMs = ({ status, data, dataUpdateCount }: ReleaseQueryState) =>
-  status === "success" && data === null && dataUpdateCount % PENDING_RELEASE_ANSWERS_PER_BURST !== 0
-    ? PENDING_RELEASE_POLL_MS
-    : false;
+export const pendingReleasePollMs = (state: { status: string; data?: LatestReleaseAnswer }) =>
+  state.status === "success" && state.data?.pending ? PENDING_RELEASE_POLL_MS : false;
 
-export const keepKnownRelease = (known: unknown, answer: unknown) =>
-  answer === null && known !== undefined ? known : answer;
+export const keepKnownRelease = (known: unknown, answer: unknown) => {
+  const previous = known as LatestReleaseAnswer | undefined;
+  const next = answer as LatestReleaseAnswer;
+  return next.pending && previous?.release ? { ...next, release: previous.release } : next;
+};
+
+const fetchLatestRelease = async (): Promise<LatestReleaseAnswer> => {
+  const { data, response } = await fetchClient.GET("/get/latest_release_info");
+  return { release: data ?? null, pending: response.status === 202 };
+};
 
 export const useLatestReleaseInfo = (accessToken: string | null | undefined) => {
-  const options = {
+  const { data, isError } = useQuery({
+    queryKey: latestReleaseKeys.all,
+    queryFn: fetchLatestRelease,
     enabled: Boolean(accessToken),
     staleTime: 60 * 60 * 1000,
     retry: false,
-    refetchInterval: (query: { state: ReleaseQueryState }) => pendingReleasePollMs(query.state),
+    refetchInterval: (query) => pendingReleasePollMs(query.state),
     structuralSharing: keepKnownRelease,
-  };
-  return $api.useQuery("get", "/get/latest_release_info", {}, options);
+  });
+  return { data: isError ? undefined : data?.release };
 };
