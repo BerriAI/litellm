@@ -519,6 +519,7 @@ def test_upstream_token_requests_carry_the_gateway_callback_and_server_credentia
         def expected_code_form(code: str, verifier: str) -> dict[str, str]:
             return {
                 "grant_type": "authorization_code",
+                "scope": "tools.call",
                 "code": code,
                 "redirect_uri": f"{_base(gateway)}/callback",
                 "code_verifier": verifier,
@@ -2327,3 +2328,68 @@ def test_managed_step_up_advertises_sdk_compatible_metadata_and_bound_permission
             if request.body and json.loads(request.body).get("method") == "tools/call"
         )
         assert len(attempts) == 1, "denied operation was retried"
+
+
+@pytest.mark.parametrize(
+    "configured,requested,expected",
+    [
+        (("tools.read", "tools.call"), "tools.read", "tools.read"),
+        (("tools.read", "tools.call"), None, "tools.read tools.call"),
+        ((), None, None),
+    ],
+)
+def test_authorization_code_exchange_forwards_requested_or_configured_scope(
+    gateway: Gateway, configured: tuple[str, ...], requested: str | None, expected: str | None
+) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "scope" + uuid.uuid4().hex[:10]
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "scope-client", "client_secret": "scope-secret", "scopes": list(configured)},
+        )
+        owner: Final = scenario.key(user_id=scenario.user(), object_permission={"mcp_servers": [identity]})
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        authorized: Final = httpx.get(
+            auth.issuer + "/authorize",
+            params={
+                "client_id": "scope-client",
+                "redirect_uri": f"{_base(gateway)}/callback",
+                "response_type": "code",
+                "state": "scope-state",
+                "code_challenge": pkce.challenge,
+                "code_challenge_method": "S256",
+                **({"scope": requested} if requested is not None else {}),
+            },
+            follow_redirects=False,
+        )
+        assert authorized.status_code == 302, authorized.text
+        code: Final = parse_qs(urlsplit(authorized.headers["location"]).query)["code"][0]
+        exchanged: Final = gateway.client.post(
+            f"/{alias}/token",
+            headers={"x-litellm-api-key": owner},
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": "scope-client",
+                "code_verifier": pkce.verifier,
+                "redirect_uri": CLIENT_REDIRECT,
+                **({"scope": requested} if requested is not None else {}),
+            },
+        )
+        assert exchanged.status_code == 200, exchanged.text
+        sent: Final = auth.token_requests()
+        assert len(sent) == 1, sent
+        assert sent[0].get("scope") == expected, sent
+        issued: Final = _response_object(exchanged)
+        assert auth.is_live(_issued_token(issued))
+        listing: Final = McpCaller(gateway, owner, "rest").list_tools(identity)
+        assert listing.ok, listing
+        assert "add" in listing.tools, listing
+        call: Final = call_tool(gateway, owner, identity, f"{alias}-add", ADD)
+        assert call.status_code == 200, call.text
+        assert _authorizations(peer)[-1] == f"Bearer {_issued_token(issued)}".encode()
