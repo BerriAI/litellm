@@ -2499,8 +2499,13 @@ def test_the_authenticated_key_identity_replaces_the_caller_version() -> None:
 
 
 def test_the_bare_key_hash_cannot_come_from_the_caller() -> None:
-    metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": "hashed"})
-    assert metadata == {"user_api_key": "hashed"}
+    """A digest already in the proxy's metadata is sent as it stands, since hashing it twice would
+    stop it matching the spend logs it lines up with."""
+    from litellm.types.proxy.auth.user_api_key_auth import hash_token
+
+    digest: Final = hash_token("sk-the-real-key")
+    metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": digest})
+    assert metadata == {"user_api_key": digest}
 
 
 def test_the_end_user_comes_from_the_proxy_not_the_caller() -> None:
@@ -2616,6 +2621,19 @@ def test_the_authenticated_key_object_is_left_behind() -> None:
         },
     )
     assert metadata == {"user_api_key_alias": "billing-app"}
+
+
+def test_a_key_field_that_is_not_already_hashed_is_hashed_before_it_leaves() -> None:
+    """Under custom_auth these hold the bearer token itself, which a guardrail vendor must not see."""
+    from litellm.types.proxy.auth.user_api_key_auth import hash_token
+
+    metadata: Final = _guardrail_request_metadata(
+        {}, {"user_api_key": "tok-not-an-sk-key", "user_api_key_hash": "tok-not-an-sk-key"}
+    )
+    assert metadata == {
+        "user_api_key": hash_token("tok-not-an-sk-key"),
+        "user_api_key_hash": hash_token("tok-not-an-sk-key"),
+    }
 
 
 def test_credential_headers_do_not_reach_the_guardrail() -> None:
