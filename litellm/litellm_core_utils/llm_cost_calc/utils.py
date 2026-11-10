@@ -2139,7 +2139,7 @@ def calculate_image_response_cost_from_usage(
         text_input_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens")
         image_input_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens")
         cached_details: Final[object] = (
-            input_tokens_details.get("cached_tokens_details")
+            cast(Mapping[object, object], input_tokens_details).get("cached_tokens_details")
             if isinstance(input_tokens_details, Mapping)
             else getattr(input_tokens_details, "cached_tokens_details", None)
         )
