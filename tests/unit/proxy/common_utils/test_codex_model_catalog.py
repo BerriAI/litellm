@@ -190,6 +190,7 @@ def test_a_model_codex_knows_keeps_its_own_reasoning_levels(levels):
     [
         ("0.153.0", "GPT-6.1 Terra", ["low", "max"]),
         ("0.166.0", "GPT-6.1 Terra", ["low", "max"]),
+        ("0.166.0-alpha.5.1", "GPT-6.1 Terra", ["low", "max"]),
         (None, "GPT-6.1 Terra", ["low", "max"]),
         ("0.152.9", "gpt-6.1-terra", ["low", "max"]),
         ("0.137.0", "gpt-6.1-terra", ["low"]),
@@ -795,6 +796,7 @@ _UNLIMITED_CODEX: Final = "a codex that reads any size gets every model"
         pytest.param("0.164.0", True, id=f"0.164.0, {_LIMITED_CODEX}"),
         pytest.param(None, True, id=f"no version, {_LIMITED_CODEX}"),
         pytest.param("not-a-version", True, id=f"unparseable version, {_LIMITED_CODEX}"),
+        pytest.param("9" * 5000 + ".0.0", True, id=f"absurdly long version, {_LIMITED_CODEX}"),
     ],
 )
 def test_model_list_body_is_cut_to_1_mib_only_for_a_codex_that_drops_a_larger_catalog(

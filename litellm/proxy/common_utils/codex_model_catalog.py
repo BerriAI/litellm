@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from functools import cache
@@ -35,7 +34,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
-from packaging.version import Version
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -50,6 +48,7 @@ from litellm.proxy.common_utils.codex_model_translation import (
     no_priced_deployment_lacks_tier,
     tier_price_keys,
 )
+from litellm.proxy.common_utils.codex_version import codex_version_at_least
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -60,8 +59,7 @@ if TYPE_CHECKING:
 CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
 CODEX_BUNDLED_MODELS_PATH: Final = Path(__file__).with_name("codex_bundled_models_0.166.0.json")
 CODEX_CATALOG_BYTE_LIMIT: Final = 1024 * 1024
-_FIRST_CODEX_LINE_WITHOUT_CATALOG_BYTE_LIMIT: Final = (0, 166)
-_CODEX_LINE: Final = re.compile(r"(\d+)\.(\d+)\.")
+_FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT: Final = "0.166.0-alpha.1"
 CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 
 _BODY_PREFIX: Final = '{"models":['
@@ -295,10 +293,7 @@ def _readable_by(stock_model: CodexStockModel, client_version: str | None) -> bo
     minimum: Final = stock_model.minimal_client_version
     if minimum is None or client_version is None:
         return True
-    try:
-        return Version(client_version) >= Version(minimum if isinstance(minimum, str) else ".".join(map(str, minimum)))
-    except ValueError:
-        return False
+    return codex_version_at_least(client_version, minimum if isinstance(minimum, str) else ".".join(map(str, minimum)))
 
 
 def _tier_fields(stock_model: CodexStockModel, tiers: tuple[CodexServiceTier, ...]) -> Mapping[str, object]:
@@ -501,13 +496,13 @@ class CodexCatalogBody:
 
 
 def codex_catalog_byte_limit(client_version: str | None) -> int | None:
-    """None, no limit, for Codex 0.166 and later, alphas included, which read a catalog of any size since
-    https://github.com/openai/codex/pull/56525. An older Codex, or one sending no version, drops a catalog over 1 MiB."""
-    line: Final = _CODEX_LINE.match(client_version or "")
-    reads_any_size: Final = (
-        line is not None and (int(line[1]), int(line[2])) >= _FIRST_CODEX_LINE_WITHOUT_CATALOG_BYTE_LIMIT
+    """None, no limit, for a Codex that reads a catalog of any size since https://github.com/openai/codex/pull/56525.
+    An older Codex, or one sending no version, drops a catalog over 1 MiB. 0.165.0 still has the limit."""
+    return (
+        None
+        if codex_version_at_least(client_version, _FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT)
+        else CODEX_CATALOG_BYTE_LIMIT
     )
-    return None if reads_any_size else CODEX_CATALOG_BYTE_LIMIT
 
 
 def codex_models_response_json(
