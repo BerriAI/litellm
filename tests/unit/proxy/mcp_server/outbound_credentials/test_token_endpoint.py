@@ -253,7 +253,9 @@ async def test_fetch_computes_the_hmac_client_assertion_with_hmac_digest_in_fips
         result: Final = await TokenEndpointClient().fetch(_ENDPOINT, _CLIENT_ID, {"grant_type": "g"}, _HMAC_AUTH)
 
     assert isinstance(result, Ok)
-    assert [call.args[0] for call in digest.call_args_list] == [_HMAC_AUTH.private_key.get_secret_value().encode()]
+    assert [(call.args[0], call.args[2]) for call in digest.call_args_list] == [
+        (_HMAC_AUTH.private_key.get_secret_value().encode(), "sha256")
+    ]
 
 
 @pytest.mark.asyncio
