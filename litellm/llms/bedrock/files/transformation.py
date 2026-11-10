@@ -1001,7 +1001,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         from litellm.types.utils import LlmProviders
 
-        messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
+        messages: Final = map_developer_role_to_system_role(
+            openai_request_body.get("messages", []), model=model, llm_provider="bedrock"
+        )
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
