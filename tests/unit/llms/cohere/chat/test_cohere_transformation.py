@@ -894,6 +894,8 @@ REASONING_MODEL: Final = _cohere_chat_model("supports_reasoning", True)
 NON_REASONING_MODEL: Final = _cohere_chat_model("supports_reasoning", False)
 TOOL_CHOICE_MODEL: Final = _cohere_chat_model("supports_tool_choice", True)
 NO_TOOL_CHOICE_MODEL: Final = _cohere_chat_model("supports_tool_choice", False)
+JSON_SCHEMA_MODEL: Final = _cohere_chat_model("supports_response_schema", True)
+NO_JSON_SCHEMA_MODEL: Final = _cohere_chat_model("supports_response_schema", False)
 CITY_SCHEMA: Final = {
     "type": "object",
     "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
@@ -930,10 +932,14 @@ def _cohere_v2_request_body(
         ("xhigh", {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET}),
         ("max", {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET}),
         ("default", None),
+        (
+            {"effort": "low", "summary": "auto"},
+            {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET},
+        ),
     ],
 )
 def test_cohere_v2_reasoning_effort_becomes_thinking(
-    respx_mock: respx.MockRouter, reasoning_effort: str, thinking: Mapping[str, object] | None
+    respx_mock: respx.MockRouter, reasoning_effort: object, thinking: Mapping[str, object] | None
 ) -> None:
     body: Final = _cohere_v2_request_body(respx_mock, f"v2/{REASONING_MODEL}", {"reasoning_effort": reasoning_effort})
 
@@ -943,26 +949,55 @@ def test_cohere_v2_reasoning_effort_becomes_thinking(
 @pytest.mark.usefixtures("_cohere_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
-    ("response_format", "cohere_response_format"),
+    ("token_limit", "token_budget"),
+    [
+        ({"max_tokens": 1000}, 1000),
+        ({"max_completion_tokens": 1000, "max_tokens": 64000}, 1000),
+        (
+            {"max_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET + 1},
+            DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+        ),
+    ],
+)
+def test_cohere_v2_thinking_budget_fits_within_max_tokens(
+    respx_mock: respx.MockRouter, token_limit: Mapping[str, int], token_budget: int
+) -> None:
+    body: Final = _cohere_v2_request_body(respx_mock, REASONING_MODEL, {"reasoning_effort": "high", **token_limit})
+
+    assert body["thinking"] == {"type": "enabled", "token_budget": token_budget}
+    assert body["thinking"]["token_budget"] <= body["max_tokens"]
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("model", "response_format", "cohere_response_format"),
     [
         (
+            JSON_SCHEMA_MODEL,
             {"type": "json_schema", "json_schema": {"name": "city", "strict": True, "schema": CITY_SCHEMA}},
             {"type": "json_object", "json_schema": CITY_SCHEMA},
         ),
-        ({"type": "json_schema", "json_schema": {"name": "city"}}, {"type": "json_object"}),
-        ({"type": "json_object"}, {"type": "json_object"}),
-        ({"type": "json_object", "json_schema": CITY_SCHEMA}, {"type": "json_object", "json_schema": CITY_SCHEMA}),
-        ({"type": "text"}, {"type": "text"}),
+        (JSON_SCHEMA_MODEL, {"type": "json_schema", "json_schema": {"name": "city"}}, {"type": "json_object"}),
+        (JSON_SCHEMA_MODEL, {"type": "json_object"}, {"type": "json_object"}),
+        (
+            JSON_SCHEMA_MODEL,
+            {"type": "json_object", "json_schema": CITY_SCHEMA},
+            {"type": "json_object", "json_schema": CITY_SCHEMA},
+        ),
+        (JSON_SCHEMA_MODEL, {"type": "text"}, None),
+        (NO_JSON_SCHEMA_MODEL, {"type": "text"}, None),
     ],
 )
 def test_cohere_v2_response_format_reaches_cohere(
     respx_mock: respx.MockRouter,
+    model: str,
     response_format: Mapping[str, object],
-    cohere_response_format: Mapping[str, object],
+    cohere_response_format: Mapping[str, object] | None,
 ) -> None:
-    body: Final = _cohere_v2_request_body(respx_mock, NON_REASONING_MODEL, {"response_format": response_format})
+    body: Final = _cohere_v2_request_body(respx_mock, model, {"response_format": response_format})
 
-    assert body["response_format"] == cohere_response_format
+    assert body.get("response_format") == cohere_response_format
 
 
 @pytest.mark.usefixtures("_cohere_httpx_transport")
@@ -1007,7 +1042,7 @@ def test_cohere_v2_response_format_beside_tools_or_documents_follows_drop_params
         **({"drop_params": True} if drop_via == "request" else {}),
     }
 
-    body: Final = _cohere_v2_request_body(respx_mock, NON_REASONING_MODEL, request_params)
+    body: Final = _cohere_v2_request_body(respx_mock, JSON_SCHEMA_MODEL, request_params)
 
     assert ("response_format" in body) is forwarded
     assert {key: body[key] for key in companion} == companion
@@ -1023,6 +1058,12 @@ UNSUPPORTED_COHERE_V2_PARAMS: Final = [
     pytest.param(NON_REASONING_MODEL, {"reasoning_effort": "low"}, id="non-reasoning-model"),
     pytest.param(REASONING_MODEL, {"reasoning_effort": "extreme"}, id="unknown-effort"),
     pytest.param(REASONING_MODEL, {"response_format": {"type": "grammar"}}, id="unknown-response-format"),
+    pytest.param(
+        NO_JSON_SCHEMA_MODEL,
+        {"response_format": {"type": "json_schema", "json_schema": {"name": "city", "schema": CITY_SCHEMA}}},
+        id="no-json-schema-model",
+    ),
+    pytest.param(NO_JSON_SCHEMA_MODEL, {"response_format": {"type": "json_object"}}, id="no-json-mode-model"),
 ]
 
 

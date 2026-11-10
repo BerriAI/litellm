@@ -79,15 +79,28 @@ def _tool_choice_params(tool_choice: object, model: str, drop_params: bool) -> M
     return MappingProxyType({"tool_choice": cohere_tool_choice})
 
 
-def _thinking_params(reasoning_effort: object, drop_params: bool) -> Mapping[str, object]:
-    match reasoning_effort:
+def _effort_level(reasoning_effort: object) -> object:
+    fields: Final = as_str_mapping(reasoning_effort)
+    return reasoning_effort if fields is None else fields.get("effort")
+
+
+def _token_budget(effort: str, max_tokens: object) -> int:
+    budget: Final = _COHERE_THINKING_BUDGET[effort]
+    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool):
+        return min(budget, max_tokens)
+    return budget
+
+
+def _thinking_params(reasoning_effort: object, max_tokens: object, drop_params: bool) -> Mapping[str, object]:
+    effort: Final = _effort_level(reasoning_effort)
+    match effort:
         case "default":
             return _NOTHING
         case "none":
             return MappingProxyType({"thinking": {"type": "disabled"}})
-        case str() if reasoning_effort in _COHERE_THINKING_BUDGET:
+        case str() if effort in _COHERE_THINKING_BUDGET:
             return MappingProxyType(
-                {"thinking": {"type": "enabled", "token_budget": _COHERE_THINKING_BUDGET[reasoning_effort]}}
+                {"thinking": {"type": "enabled", "token_budget": _token_budget(effort, max_tokens)}}
             )
         case _:
             return _drop_or_raise(f"Cohere does not support reasoning_effort={reasoning_effort!r}.", drop_params)
@@ -98,11 +111,19 @@ def _cohere_json_object(schema: object) -> Mapping[str, object]:
     return MappingProxyType({"response_format": {"type": "json_object", **schema_field}})
 
 
-def _response_format_params(response_format: object, drop_params: bool) -> Mapping[str, object]:
+def _supports_json_output(model: str) -> bool:
+    return litellm.supports_response_schema(model=_cohere_model_id(model), custom_llm_provider="cohere_chat")
+
+
+def _response_format_params(response_format: object, model: str, drop_params: bool) -> Mapping[str, object]:
     fields: Final = as_str_mapping(response_format) or _NOTHING
     match fields.get("type"):
         case "text":
-            return MappingProxyType({"response_format": {"type": "text"}})
+            return _NOTHING
+        case "json_object" | "json_schema" if not _supports_json_output(model):
+            return _drop_or_raise(
+                f"Cohere model {model} does not support response_format={response_format!r}.", drop_params
+            )
         case "json_object":
             return _cohere_json_object(fields.get("json_schema"))
         case "json_schema":
@@ -120,13 +141,14 @@ def _cohere_v2_native_params(
         if "tool_choice" in non_default_params
         else _NOTHING
     )
+    max_tokens: Final = non_default_params.get("max_completion_tokens", non_default_params.get("max_tokens"))
     thinking: Final = (
-        _thinking_params(non_default_params["reasoning_effort"], drop_params)
+        _thinking_params(non_default_params["reasoning_effort"], max_tokens, drop_params)
         if "reasoning_effort" in non_default_params
         else _NOTHING
     )
     response_format: Final = (
-        _response_format_params(non_default_params["response_format"], drop_params)
+        _response_format_params(non_default_params["response_format"], model, drop_params)
         if "response_format" in non_default_params
         else _NOTHING
     )
