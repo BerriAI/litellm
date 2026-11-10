@@ -1,4 +1,5 @@
 import base64
+import copy
 from collections.abc import Mapping
 from itertools import chain
 from typing import Final
@@ -621,6 +622,65 @@ async def test_claude_converse_count_sends_the_texts_converse_inference_sends(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "blank_content",
+    ([], None, "", "   ", [{"type": "text", "text": ""}]),
+    ids=("empty_list", "null", "empty_string", "spaces", "empty_text_block"),
+)
+@pytest.mark.parametrize(
+    "modify_params, continue_settings",
+    (
+        (False, {}),
+        (True, {}),
+        (None, {}),
+        (False, {"user_continue_message": {"role": "user", "content": "Go on."}}),
+    ),
+    ids=("no_continue_setting", "modify_params", "modify_params_null", "user_continue_message"),
+)
+async def test_claude_converse_count_sends_the_blank_last_user_turn_converse_inference_sends(
+    blank_content: JsonValue,
+    modify_params: bool | None,
+    continue_settings: dict[str, JsonValue],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
+    deployment_params: Final = {
+        **DEPLOYMENT["litellm_params"],
+        **continue_settings,
+        "model": "bedrock/us.anthropic.claude-haiku-5-5",
+    }
+    messages: Final = [
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "Four."},
+        {"role": "user", "content": blank_content},
+    ]
+    inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
+    await litellm.acompletion(
+        messages=copy.deepcopy(messages),
+        max_tokens=8,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **deployment_params,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-5-5",
+        messages=copy.deepcopy(messages),
+        contents=None,
+        deployment={"litellm_params": deployment_params},
+        request_model="claude-haiku-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert result.error is False
+    converse_sent: Final = _sent_texts(_JSON_BODY.validate_json(inference.requests[0].content))
+    assert converse_sent[:2] == (("user", "What is 2+2?"), ("assistant", "Four."))
+    assert len(converse_sent) == 3
+    assert _sent_texts(_counted_body(bedrock.requests[0])) == converse_sent
+
+
+@pytest.mark.asyncio
 async def test_claude_converse_count_under_modify_params_answers_for_a_text_block_without_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -658,6 +718,7 @@ async def _converse_sent_and_counted(
     tools: list[dict[str, JsonValue]],
     model: str = "us.anthropic.claude-haiku-5-5",
     response_format: dict[str, JsonValue] | None = None,
+    counted_model: str | None = None,
 ) -> tuple[tuple[tuple[JsonValue, str], ...], tuple[tuple[JsonValue, str], ...]]:
     credentials: Final = DEPLOYMENT["litellm_params"]
     deployment_model: Final = f"bedrock/{model}"
@@ -675,7 +736,7 @@ async def _converse_sent_and_counted(
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
 
     result: Final = await _counter(bedrock).count_tokens(
-        model_to_use=model,
+        model_to_use=counted_model or model,
         messages=messages,
         contents=None,
         deployment={"litellm_params": {**credentials, "model": deployment_model}},
@@ -876,6 +937,95 @@ async def test_claude_converse_count_keeps_tool_history_the_response_format_tool
     )
 
     assert counted == converse_sent
+
+
+@pytest.mark.asyncio
+async def test_claude_converse_count_decides_the_response_format_tool_by_the_deployment_model() -> None:
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {"name": "answer", "schema": {"type": "object", "properties": {"n": {"type": "integer"}}}},
+    }
+
+    converse_sent, counted = await _converse_sent_and_counted(
+        [_QUESTION, *_TOOL_ROUND, _FOLLOW_UP],
+        [],
+        model="us.anthropic.claude-opus-4-8",
+        response_format=response_format,
+        counted_model="anthropic.claude-opus-4-8",
+    )
+
+    assert counted == converse_sent
+
+
+_IMAGE_PART: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+
+
+def _system_blocks(body: Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
+    system: Final = body.get("system")
+    blocks: Final = system if isinstance(system, list) else []
+    return tuple(block.get("text") if isinstance(block, dict) else block for block in blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system_content",
+    (
+        [{"type": "text", "text": "Be brief."}, _IMAGE_PART],
+        [_IMAGE_PART, {"type": "text", "text": "Be brief."}],
+        [_IMAGE_PART],
+    ),
+    ids=("text_then_image", "image_then_text", "only_an_image"),
+)
+async def test_claude_converse_count_sends_only_the_system_text_converse_inference_sends(
+    system_content: JsonValue,
+) -> None:
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    deployment_model: Final = "bedrock/us.anthropic.claude-haiku-5-5"
+    messages: Final = [{"role": "system", "content": system_content}, _QUESTION]
+    inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
+    await litellm.acompletion(
+        model=deployment_model,
+        messages=copy.deepcopy(messages),
+        max_tokens=8,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-5-5",
+        messages=copy.deepcopy(messages),
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}},
+        request_model="claude-haiku-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert result.error is False
+    converse_body: Final = _JSON_BODY.validate_json(inference.requests[0].content)
+    assert _system_blocks(_counted_body(bedrock.requests[0])) == _system_blocks(converse_body)
+    assert _sent_texts(_counted_body(bedrock.requests[0])) == _sent_texts(converse_body)
+
+
+@pytest.mark.asyncio
+async def test_claude_converse_count_of_a_message_without_a_role_answers_bedrocks_400() -> None:
+    bedrock: Final = _Bedrock(
+        runtime=(400, {"message": "messages.0.role: Field required"}),
+        mantle=(400, {"type": "error", "error": {"type": "invalid_request_error", "message": "role"}}),
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-5-5",
+        messages=[{"content": "What is 2+2?"}],
+        contents=None,
+        deployment={"litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-haiku-5-5"}},
+        request_model="claude-haiku-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
 
 
 @pytest.mark.asyncio

@@ -1500,7 +1500,9 @@ async def test_a_stored_follow_up_whose_lone_user_item_had_no_content_replays_wh
 
 
 async def _replay_of_a_blank_follow_up(
-    stored_route: Mapping[str, str], blank_input: str | list[dict[str, object]]
+    stored_route: Mapping[str, str],
+    blank_input: str | list[dict[str, object]],
+    empty_user_turn_text: str = EMPTY_TEXT_PLACEHOLDER,
 ) -> list[tuple[object, object]]:
     first_turn: Final = _spend_log("chatcmpl-first", "session-blank-turn", "What is 2+2?", "Four.")
     follow_up: Final = {
@@ -1511,7 +1513,7 @@ async def _replay_of_a_blank_follow_up(
     result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
         "chatcmpl-follow-up",
         stored_turns=_stored_turns(first_turn, follow_up),
-        empty_user_turn_text=EMPTY_TEXT_PLACEHOLDER,
+        empty_user_turn_text=empty_user_turn_text,
     )
     return _replayed_turns(result)
 
@@ -1542,6 +1544,21 @@ async def test_a_stored_blank_user_turn_replays_as_sent_when_its_model_accepts_a
     replay: Final = await _replay_of_a_blank_follow_up(_ROUTE_THAT_ACCEPTS_A_PREFILL, [{"role": "user", "content": "   "}])
 
     assert replay == [("user", "What is 2+2?"), ("assistant", "Four."), ("user", "   "), ("assistant", "Eight.")]
+
+
+@pytest.mark.asyncio
+async def test_stored_blank_user_items_that_inference_continues_replay_one_turn_each() -> None:
+    replay: Final = await _replay_of_a_blank_follow_up(
+        _ROUTE_THAT_FILLS, [{"role": "user", "content": ""}, {"role": "user", "content": "  "}], empty_user_turn_text=""
+    )
+
+    assert replay == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", ""),
+        ("user", "  "),
+        ("assistant", "Eight."),
+    ]
 
 
 @pytest.mark.asyncio

@@ -2520,6 +2520,40 @@ def assistant_turns_as_converse_sends_them(
     )
 
 
+def _is_user_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "user"
+
+
+def _user_turn_as_converse_sends_it(
+    message: Mapping[str, object], user_continue_message: ChatCompletionUserMessage | None
+) -> Mapping[str, object]:
+    if not _is_user_turn(message) or not (is_empty_user_message(message) or carries_empty_text(message)):
+        return message
+    return get_user_message_block_or_continue_message(
+        cast(ChatCompletionUserMessage, copy.deepcopy(dict(message))),  # cast-ok: a user turn, checked above
+        user_continue_message,
+    )
+
+
+def user_turns_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]],
+    user_continue_message: ChatCompletionUserMessage | None,
+    rejects_assistant_prefill: bool,
+) -> tuple[Mapping[str, object], ...]:
+    tail_start: Final = len(messages) - sum(1 for _ in itertools.takewhile(_is_user_turn, reversed(messages)))
+    if (
+        rejects_assistant_prefill
+        and not continues_empty_user_turns(user_continue_message)
+        and 0 < tail_start < len(messages)
+        and messages[tail_start - 1].get("role") == "assistant"
+        and all(map(is_empty_user_message, messages[tail_start:]))
+    ):
+        return (*messages[:tail_start], {"role": "user", "content": EMPTY_TEXT_PLACEHOLDER})
+    if user_continue_message is None and litellm.modify_params is False:
+        return tuple(messages)
+    return tuple(_user_turn_as_converse_sends_it(message, user_continue_message) for message in messages)
+
+
 def _with_placeholder_text(block: object) -> object:
     fields: Final = _dict_block(block)
     if fields is None or not _is_empty_text_block(fields):

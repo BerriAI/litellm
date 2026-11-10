@@ -22,6 +22,7 @@ from litellm.llms.bedrock.common_utils import (
     BedrockError,
     bedrock_capability_model,
     get_bedrock_base_model,
+    strip_bedrock_routing_prefix,
 )
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler, BedrockCountTokensRequestError
 from litellm.llms.bedrock.count_tokens.mantle_handler import BedrockMantleCountTokensHandler
@@ -72,6 +73,18 @@ def _deployment_chat_config(litellm_params: Mapping[str, object]) -> BaseConfig 
         model=deployment_model, custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None
     )
     return litellm.ProviderConfigManager.get_provider_chat_config(model, LlmProviders(provider))
+
+
+def _inference_capability_model(litellm_params: Mapping[str, object], counted_model: str) -> str:
+    deployment_model: Final = litellm_params.get("model")
+    return bedrock_capability_model(
+        strip_bedrock_routing_prefix(deployment_model) if isinstance(deployment_model, str) else counted_model,
+        litellm_params.get("base_model"),
+    )
+
+
+def _has_role(message: Mapping[str, object]) -> bool:
+    return isinstance(message.get("role"), str)
 
 
 def _deployment_model_info(deployment: Mapping[str, object] | None) -> Mapping[str, object] | None:
@@ -213,7 +226,9 @@ class BedrockTokenCounter(BaseTokenCounter):
         chat_config: Final = _deployment_chat_config(litellm_params) if is_mantle_claude_model(resolved_model) else None
         converse_config: Final = (
             chat_config
-            if messages_format == "openai" and isinstance(chat_config, litellm.AmazonConverseConfig)
+            if messages_format == "openai"
+            and isinstance(chat_config, litellm.AmazonConverseConfig)
+            and all(map(_has_role, messages))
             else None
         )
         counted_input: Final = (
@@ -223,8 +238,9 @@ class BedrockTokenCounter(BaseTokenCounter):
                 messages,
                 tools,
                 chat_params,
-                bedrock_capability_model(counted_model, litellm_params.get("base_model")),
+                _inference_capability_model(litellm_params, counted_model),
                 _deployment_model_info(deployment),
+                litellm_params,
             )
         )
         translated: Final = (

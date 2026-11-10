@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     assistant_turns_as_converse_sends_them,
     make_valid_bedrock_tool_name,
+    user_turns_as_converse_sends_them,
 )
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     drop_lookaround_regex_patterns,
@@ -76,6 +77,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_chat_opts_into_native_structured_output,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
+    bedrock_converse_rejects_assistant_prefill,
     bedrock_model_is_unknown,
     bedrock_model_supports_regex_lookaround,
     bedrock_native_output_format,
@@ -191,6 +193,33 @@ class _ToolCallInContent(TypedDict):
 _TOOL_CALL_IN_CONTENT: Final = TypeAdapter(_ToolCallInContent)
 CLAUDE_ON_BEDROCK_INVOKE_REMEDY: Final = " This model runs tool search on Bedrock through `bedrock/invoke/<model>`."
 _DEPLOYMENT_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_USER_CONTINUE_MESSAGE: Final[TypeAdapter[ChatCompletionUserMessage | None]] = TypeAdapter(
+    ChatCompletionUserMessage | None
+)
+
+
+def _deployment_user_continue_message(litellm_params: Mapping[str, object]) -> ChatCompletionUserMessage | None:
+    try:
+        return _USER_CONTINUE_MESSAGE.validate_python(litellm_params.get("user_continue_message"))
+    except ValidationError:
+        return None
+
+
+def _is_nonempty_text_part(part: object) -> bool:
+    fields: Final = as_str_mapping(part)
+    return fields is not None and fields.get("type") == "text" and bool(fields.get("text"))
+
+
+def _system_text_converse_sends(message: AllMessageValues) -> AllMessageValues | None:
+    content: Final = message_field(message, "content")
+    if isinstance(content, str):
+        return message if content else None
+    text_parts: Final = [part for part in parts_of(content) if _is_nonempty_text_part(part)]
+    return (
+        cast(AllMessageValues, {**message, "content": text_parts})  # cast-ok: the same system message, text parts only
+        if text_parts
+        else None
+    )
 
 
 def _tools_the_model_accepts(
@@ -410,6 +439,7 @@ class AmazonConverseConfig(BaseConfig):
         chat_params: Mapping[str, object],
         model: str,
         model_info: Mapping[str, object] | None,
+        litellm_params: Mapping[str, object],
     ) -> tuple[Mapping[str, object], ...]:
         with_system_roles: Final = self.translate_developer_role_to_system_role(
             cast(Sequence[AllMessageValues], messages),  # cast-ok: the same chat messages inference transforms
@@ -420,17 +450,20 @@ class AmazonConverseConfig(BaseConfig):
         )
         leading_count: Final = self._leading_system_count(with_system_roles)
         system_placed: Final = (
-            *with_system_roles[:leading_count],
+            *filter(None, map(_system_text_converse_sends, with_system_roles[:leading_count])),
             *self._mid_conversation_system_as_user(with_system_roles[leading_count:]),
         )
-        if (
-            not litellm.bedrock_neutralize_orphaned_tool_blocks
+        tool_blocks_placed: Final = (
+            system_placed
+            if not litellm.bedrock_neutralize_orphaned_tool_blocks
             or tools
             or self._response_format_adds_tools(chat_params, model, model_info)
-        ):
-            return assistant_turns_as_converse_sends_them(system_placed)
-        return assistant_turns_as_converse_sends_them(
-            self._orphaned_tool_blocks_as_text(system_placed, guardrail_active=False)
+            else self._orphaned_tool_blocks_as_text(system_placed, guardrail_active=False)
+        )
+        return user_turns_as_converse_sends_them(
+            assistant_turns_as_converse_sends_them(tool_blocks_placed),
+            _deployment_user_continue_message(litellm_params),
+            bedrock_converse_rejects_assistant_prefill(model, self._deployment_base_model(litellm_params)),
         )
 
     @staticmethod

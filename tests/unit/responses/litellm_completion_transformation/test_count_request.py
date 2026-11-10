@@ -243,7 +243,17 @@ async def _a_stored_question_and_answer(previous_response_id: str) -> ChatComple
 
 
 @pytest.mark.asyncio
-async def test_claude_count_request_counts_the_empty_user_turn_a_follow_up_sends() -> None:
+@pytest.mark.parametrize(
+    "follow_up_input",
+    (
+        [{"role": "user", "content": None}],
+        [{"role": "user", "content": None}, {"type": "additional_tools", "tools": [_WEATHER_TOOL]}],
+    ),
+    ids=("empty_user_turn", "empty_user_turn_then_additional_tools"),
+)
+async def test_claude_count_request_counts_the_empty_user_turn_a_follow_up_sends(
+    follow_up_input: list[JsonValue],
+) -> None:
     request: Final = await chat_count_request(
         model="claude-opus-5-5",
         custom_llm_provider="anthropic",
@@ -251,7 +261,7 @@ async def test_claude_count_request_counts_the_empty_user_turn_a_follow_up_sends
         responses_request={
             "model": "claude-opus-5-5",
             "previous_response_id": "resp_stored",
-            "input": [{"role": "user", "content": None}],
+            "input": follow_up_input,
         },
         policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
         session_lookup=_a_stored_question_and_answer,

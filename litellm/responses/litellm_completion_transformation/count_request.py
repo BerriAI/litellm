@@ -196,15 +196,12 @@ async def chat_count_request(
     ):
         return None
     try:
+        hoisted_request: Final = with_additional_tools_hoisted(
+            {**responses_request, "model": model}, drop_params=policy.drop_params
+        )
         chat_body: Final = await _with_previous_turns(
             responses_batch_body_to_chat_body(
-                _with_compaction_as_summary_text(
-                    _with_emulated_file_search(
-                        with_additional_tools_hoisted(
-                            {**responses_request, "model": model}, drop_params=policy.drop_params
-                        )
-                    )
-                ),
+                _with_compaction_as_summary_text(_with_emulated_file_search(hoisted_request)),
                 custom_llm_provider,
                 policy.drop_params,
                 caller_input=_caller_input(responses_request),
@@ -212,7 +209,7 @@ async def chat_count_request(
             ),
             model,
             custom_llm_provider,
-            responses_request,
+            hoisted_request,
             policy,
             session_lookup,
             base_model,
