@@ -5222,28 +5222,39 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         relayed here with recovered partial usage settles the reservation at
         that usage instead of refunding it.
         """
-        await self._release_stashed_admission(
+        release_error: Final = await self._release_stashed_admission(
             request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
             user_api_key_dict.parent_otel_span,
         )
+        if release_error is not None:
+            verbose_proxy_logger.error(
+                "Error releasing TPM reservation on post-call failure: %s", release_error, exc_info=release_error
+            )
 
     @with_service_target("rate_limits")
     async def async_release_responses_websocket_admission(self, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Free the slot and the TPM reservation a Responses WebSocket took at admission, once it closes. Its turns
         log under their own call ids and charge their own usage, so the reservation is refunded in full."""
-        await self._release_stashed_admission(MappingProxyType({}), user_api_key_dict.parent_otel_span)
+        release_error: Final = await self._release_stashed_admission(
+            MappingProxyType({}), user_api_key_dict.parent_otel_span
+        )
+        if release_error is not None:
+            verbose_proxy_logger.error(
+                "Error releasing a closed Responses WebSocket's admission: %s", release_error, exc_info=release_error
+            )
 
     async def _release_stashed_admission(
         self, request_data: Mapping[str, object], parent_otel_span: Span | None
-    ) -> None:
+    ) -> Exception | None:
         try:
             stash: Final = get_request_stash()
             if stash is None:
-                return
+                return None
             await self._release_stashed_parallel_slot(stash, parent_otel_span)
             await self._settle_stashed_reservations(stash, request_data, parent_otel_span)
         except Exception as e:
-            verbose_proxy_logger.exception("Error releasing the request's rate limit admission: %s", e)
+            return e
+        return None
 
     async def _settle_stashed_reservations(
         self,

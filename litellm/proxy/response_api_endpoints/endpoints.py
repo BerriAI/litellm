@@ -2712,7 +2712,7 @@ async def _responses_websocket_session(
     try:
         failure_row: Final = await relay_and_bill_failure()
     finally:
-        await proxy_logging_obj.arelease_responses_websocket_admission(user_api_key_dict)
+        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
     if failure_row is not None:
         with contextlib.suppress(Exception):
             await asyncio.shield(failure_row)

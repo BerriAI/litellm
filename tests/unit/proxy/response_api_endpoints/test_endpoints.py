@@ -3564,7 +3564,7 @@ class TestResponsesWSFirstFrameModelAuth:
 
         proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.arelease_responses_websocket_admission = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
         user_api_key_dict = MagicMock()
 
         with (
@@ -3654,7 +3654,7 @@ class TestResponsesWSFirstFrameModelAuth:
         proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
         proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=pre_call_hook)
         proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=lambda **kwargs: row_written.set())
-        proxy_logging_obj.arelease_responses_websocket_admission = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
 
         with (
             patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
@@ -3683,7 +3683,7 @@ class TestResponsesWSFirstFrameModelAuth:
             await asyncio.wait_for(row_written.wait(), timeout=1)
 
         proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
-        proxy_logging_obj.arelease_responses_websocket_admission.assert_awaited_once()
+        proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
         booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
         assert booked["original_exception"] is (crash if ending == "crash" else refusal)
         assert booked["request_data"]["litellm_metadata"] == {
@@ -3749,7 +3749,7 @@ class TestResponsesWSFirstFrameModelAuth:
         async def release_over_the_network(user_api_key_dict):
             await asyncio.sleep(0.01)
 
-        proxy_logging_obj.arelease_responses_websocket_admission = AsyncMock(side_effect=release_over_the_network)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(side_effect=release_over_the_network)
 
         with (
             patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
@@ -3783,7 +3783,7 @@ class TestResponsesWSFirstFrameModelAuth:
             crash_close = call(code=1011, reason="Internal server error")
             crashed = relay_outcome == "crashes_despite_the_cancel"
             assert ws.close.await_args_list == ([limit_close, crash_close] if crashed else [limit_close])
-            proxy_logging_obj.arelease_responses_websocket_admission.assert_awaited_once()
+            proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
             assert not row_written.is_set()
             row_may_finish.set()
             await asyncio.wait_for(row_written.wait(), timeout=1)
@@ -3836,7 +3836,7 @@ class TestResponsesWSFirstFrameModelAuth:
             side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
         )
         proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
-        proxy_logging_obj.arelease_responses_websocket_admission = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
 
         with (
             patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
@@ -3861,7 +3861,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
             )
             await asyncio.wait_for(row_started.wait(), timeout=1)
-            proxy_logging_obj.arelease_responses_websocket_admission.assert_awaited_once()
+            proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
             finished_early, _ = await asyncio.wait({endpoint}, timeout=0.05)
             assert endpoint not in finished_early
             row_may_finish.set()
@@ -3913,7 +3913,7 @@ class TestResponsesWSFirstFrameModelAuth:
             }
         )
         proxy_logging_obj.post_call_failure_hook = AsyncMock()
-        proxy_logging_obj.arelease_responses_websocket_admission = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
 
         with (
             patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
@@ -3968,7 +3968,7 @@ class TestResponsesWSFirstFrameModelAuth:
         )
         proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-        proxy_logging_obj.arelease_responses_websocket_admission = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(return_value=None)
         user_api_key_dict = MagicMock()
 
         with (

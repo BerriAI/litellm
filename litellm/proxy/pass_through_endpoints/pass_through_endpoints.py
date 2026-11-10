@@ -3598,7 +3598,7 @@ async def websocket_passthrough_request(
         if _client_socket_is_open(websocket):
             await websocket.close(code=1011, reason="WebSocket passthrough error")
     finally:
-        await proxy_logging_obj.arelease_responses_websocket_admission(user_api_key_dict)
+        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
         if _client_socket_is_open(websocket):
             await websocket.close()
 

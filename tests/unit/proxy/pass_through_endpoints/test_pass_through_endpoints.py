@@ -7398,7 +7398,7 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
-        mock_proxy_logging.arelease_responses_websocket_admission = AsyncMock()
+        mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
         mock_worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: async_coroutine.close()
         )
@@ -7451,7 +7451,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(
     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
     mock_proxy_logging.post_call_success_hook = AsyncMock()
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
-    mock_proxy_logging.arelease_responses_websocket_admission = AsyncMock()
+    mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
     mock_worker = MagicMock()
     mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=lambda async_coroutine: async_coroutine.close())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
@@ -7518,7 +7518,7 @@ async def test_websocket_passthrough_never_forwards_caller_credentials_upstream(
     mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
     mock_proxy_logging.post_call_success_hook = AsyncMock()
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
-    mock_proxy_logging.arelease_responses_websocket_admission = AsyncMock()
+    mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
     mock_worker = MagicMock()
     mock_worker.ensure_initialized_and_enqueue = MagicMock(side_effect=lambda async_coroutine: async_coroutine.close())
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
@@ -7612,7 +7612,7 @@ def _patched_websocket_passthrough_environment(upstream_ws):
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
         mock_proxy_logging.post_call_failure_hook = AsyncMock()
-        mock_proxy_logging.arelease_responses_websocket_admission = AsyncMock()
+        mock_proxy_logging.arelease_responses_websocket_slot = AsyncMock()
         mock_worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: async_coroutine.close()
         )
@@ -8639,7 +8639,7 @@ async def test_websocket_passthrough_frees_one_legacy_parallel_slot_only_when_th
                 )
             )
         proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
-        proxy_logging.arelease_responses_websocket_admission = proxy_logging_obj.arelease_responses_websocket_admission
+        proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
         worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
         )
@@ -8718,7 +8718,7 @@ async def test_websocket_passthrough_gives_back_its_tpm_reservation_when_the_ses
         patch(SUCCESS_HANDLER, new_callable=AsyncMock, side_effect=log_row),
     ):
         proxy_logging.pre_call_hook = AsyncMock(side_effect=admit)
-        proxy_logging.arelease_responses_websocket_admission = proxy_logging_obj.arelease_responses_websocket_admission
+        proxy_logging.arelease_responses_websocket_slot = proxy_logging_obj.arelease_responses_websocket_slot
         worker.ensure_initialized_and_enqueue = MagicMock(
             side_effect=lambda async_coroutine: logged_rows.append(asyncio.create_task(async_coroutine))
         )

@@ -5914,7 +5914,7 @@ async def test_a_closed_responses_websocket_gives_back_its_slot_and_tpm_reservat
     assert 2 * reserved > 100
     assert handler._gauge_in_flight_from_cache_value(_local(handler, parallel_key)) == 1
 
-    await proxy_logging_obj.arelease_responses_websocket_admission(auth)
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
 
     assert int(_local(handler, tokens_key) or 0) == 0
     assert handler._gauge_in_flight_from_cache_value(_local(handler, parallel_key)) == 0
@@ -5936,7 +5936,7 @@ async def test_a_responses_websocket_admission_reservation_is_refunded_exactly_o
     assert int(_local(handler, tokens_key) or 0) > 0
 
     def close() -> Awaitable[None]:
-        return proxy_logging_obj.arelease_responses_websocket_admission(auth)
+        return proxy_logging_obj.arelease_responses_websocket_slot(auth)
 
     def failure_row() -> Awaitable[None]:
         return handler.async_post_call_failure_hook(
@@ -5977,7 +5977,7 @@ async def test_a_closed_responses_websocket_gives_back_its_project_token_reserva
     await _admit_responses_websocket(handler, cache, auth, "project-socket")
     assert int(_local(handler, project_keys[1]) or 0) > 0
 
-    await proxy_logging_obj.arelease_responses_websocket_admission(auth)
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
 
     assert [int(_local(handler, key) or 0) for key in project_keys] == [0, 0]
 
@@ -5991,6 +5991,11 @@ class _RefundFailingRateLimits(FakeRateLimits):
         if self.refunds_fail:
             raise ConnectionError("rate limit store unreachable")
         await super().increment_many(increments)
+
+    def set_local(self, entry: RateLimitEntry, value: LocalValue, ttl_seconds: float | None) -> None:
+        if self.refunds_fail and isinstance(entry, RateLimitCounter) and entry.kind == "tokens":
+            raise ConnectionError("rate limit store unreachable")
+        super().set_local(entry, value, ttl_seconds)
 
 
 @pytest.mark.asyncio
@@ -6009,7 +6014,30 @@ async def test_a_responses_websocket_close_whose_refund_fails_still_frees_its_sl
     await _admit_responses_websocket(handler, cache, auth, "socket")
     fakes.refunds_fail = True
 
-    await proxy_logging_obj.arelease_responses_websocket_admission(auth)
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
+
+    assert handler._gauge_in_flight_from_cache_value(_local(handler, RateLimitScope("api_key", api_key).gauge)) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_side_rejection_whose_refund_fails_still_frees_its_slot() -> None:
+    cache: Final = DualCache()
+    fakes: Final = _RefundFailingRateLimits()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), rate_limit_store=fakes.store()
+    )
+    api_key: Final = hash_token("sk-proxy-rejection-refund-fails")
+    auth: Final = UserAPIKeyAuth(
+        api_key=api_key, tpm_limit=1_000, max_parallel_requests=1, metadata={"default_estimated_output_tokens": 60}
+    )
+    await _admit_responses_websocket(handler, cache, auth, "socket")
+    fakes.refunds_fail = True
+
+    await handler.async_post_call_failure_hook(
+        request_data={"model": "gpt-4o-mini", "litellm_call_id": "socket"},
+        original_exception=Exception("guardrail rejected the request"),
+        user_api_key_dict=auth,
+    )
 
     assert handler._gauge_in_flight_from_cache_value(_local(handler, RateLimitScope("api_key", api_key).gauge)) == 0
 
@@ -6038,7 +6066,7 @@ async def test_a_responses_websocket_that_closes_in_a_later_minute_leaves_that_m
         increments=[{"tokens": 20}],
     )
 
-    await proxy_logging_obj.arelease_responses_websocket_admission(auth)
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
 
     assert int(_local(handler, _counter("api_key", api_key)) or 0) == 20
 
@@ -6055,7 +6083,7 @@ async def test_a_closed_responses_websocket_refunds_a_project_reservation_stashe
     stash.itpm_reserved_tokens = 100
     stash.itpm_reserved_scopes = frozenset({scope})
 
-    await proxy_logging_obj.arelease_responses_websocket_admission(
+    await proxy_logging_obj.arelease_responses_websocket_slot(
         UserAPIKeyAuth(api_key=hash_token("sk-responses-websocket-windowless"))
     )
 
