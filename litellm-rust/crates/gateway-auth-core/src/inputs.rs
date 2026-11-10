@@ -73,3 +73,21 @@ pub struct AuthorizeSettings {
     pub master_key_only_routes: BTreeSet<String>,
     pub proxy_max_budget: f64,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CheckFacts {
+    pub request: RequestFacts,
+    pub force_virtual_key_checks: bool,
+    pub sub_call: bool,
+    pub token_has_end_user: bool,
+    pub route_skips_budget_checks: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckSettings {
+    pub plan: PlanSettings,
+    pub auth_off_pass_through_routes: BTreeSet<String>,
+    pub no_auth_dev_mode: bool,
+    pub custom_auth_skips_checks: bool,
+    pub has_db: bool,
+}

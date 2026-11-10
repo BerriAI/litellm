@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import TypeAlias
 
 
@@ -58,3 +59,23 @@ class Deny:
 
 
 Outcome: TypeAlias = Allow | Deny
+
+
+class ExemptionReason(Enum):
+    PUBLIC_ROUTE = "public_route"
+    PASS_THROUGH_AUTH_OFF = "pass_through_auth_off"
+    NO_AUTH_DEV_MODE = "no_auth_dev_mode"
+    CUSTOM_AUTH = "custom_auth"
+
+
+@dataclass(frozen=True, slots=True)
+class Exempt:
+    reason: ExemptionReason
+
+
+@dataclass(frozen=True, slots=True)
+class Checked:
+    pass
+
+
+RequestCheck: TypeAlias = Exempt | Checked

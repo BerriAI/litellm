@@ -34,3 +34,17 @@ pub enum Outcome {
     Allow { budget_throttle_pct: Option<f64> },
     Deny(Denial),
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
+pub enum ExemptionReason {
+    PublicRoute,
+    PassThroughAuthOff,
+    NoAuthDevMode,
+    CustomAuth,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestCheck {
+    Exempt(ExemptionReason),
+    Checked,
+}

@@ -3,7 +3,7 @@ use std::{future::Future, time::SystemTime};
 use crate::{
     host::{
         AuthorizeHost, CustomAuthHost, JwtHost, KeyHost, ModelBudgetHost, OAuth2IntrospectionHost,
-        OAuth2ProxyHost, TeamMemberModelBudgetHost,
+        OAuth2ProxyHost, RequestCheckHost, TeamMemberModelBudgetHost,
     },
     identity::{
         Anonymous, AnonymousReason, AuthDenial, CustomAuthResult, Identity, KeyAuthentication,
@@ -11,10 +11,10 @@ use crate::{
         OAuth2ProxyIdentity, VirtualKey,
     },
     inputs::{
-        AuthorizeSettings, JwtSettings, KeySettings, OAuth2IntrospectionSettings,
-        OAuth2ProxySettings, PlanFacts, PlanSettings, RequestFacts,
+        AuthorizeSettings, CheckFacts, CheckSettings, JwtSettings, KeySettings,
+        OAuth2IntrospectionSettings, OAuth2ProxySettings, PlanFacts, PlanSettings, RequestFacts,
     },
-    outcome::{ModelBudgetResult, Outcome},
+    outcome::{ModelBudgetResult, Outcome, RequestCheck},
     validators::{CredentialPlan, KeyPlan, Plan},
 };
 
@@ -105,6 +105,12 @@ pub trait AuthorizeCore: Sync {
         facts: &RequestFacts,
         settings: &AuthorizeSettings,
     ) -> impl Future<Output = Result<Outcome, H::Error>> + Send;
+    fn check_request<H: RequestCheckHost>(
+        &self,
+        host: &H,
+        facts: &CheckFacts,
+        settings: &CheckSettings,
+    ) -> impl Future<Output = Result<RequestCheck, H::Error>> + Send;
 }
 
 pub trait AuthCore {

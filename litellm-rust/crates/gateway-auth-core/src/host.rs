@@ -2,8 +2,9 @@ use std::{error::Error, future::Future};
 
 use crate::{
     answers::{
-        FallbackTarget, Introspection, KeyFacts, ModelBudgetScope, OwnerFacts, PresentedKey,
-        SigningKey, TeamMember, TeamMemberBudget, TeamMemberModelBudgetScope,
+        EndUserScope, FallbackTarget, Introspection, KeyFacts, ModelBudgetScope, OwnerFacts,
+        PresentedKey, SigningKey, TeamMember, TeamMemberBudget, TeamMemberModelBudgetScope,
+        TokenRole,
     },
     identity::{CustomAuthResult, JwtIdentity},
     inputs::RequestFacts,
@@ -151,4 +152,49 @@ pub trait CustomAuthHost: Sync {
         &self,
         facts: &RequestFacts,
     ) -> impl Future<Output = Result<CustomAuthResult, Self::Error>> + Send;
+}
+
+pub trait RequestCheckHost: Sync {
+    type Error: Error + Send + Sync + 'static;
+
+    fn resolve_end_user(
+        &self,
+        resolve: bool,
+    ) -> impl Future<Output = Result<EndUserScope, Self::Error>> + Send;
+    fn load_check_objects(&self) -> impl Future<Output = Result<TokenRole, Self::Error>> + Send;
+    fn override_admin_user(&self, keep_budget_row: bool);
+    fn apply_project(&self);
+    fn apply_end_user_default_budget(&self)
+    -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn load_end_user_model_budget(
+        &self,
+        assign: bool,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn skips_budget_checks(&self) -> bool;
+    fn load_team_member_default_model_budget(
+        &self,
+        skip_budget_checks: bool,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn merge_request_tags(&self);
+    fn bind_admission_counters(&self);
+    fn run_common_checks(
+        &self,
+        skip_budget_checks: bool,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn check_team_model_budget(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn check_team_member_model_budget(
+        &self,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn check_end_user_model_budget(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn check_key_max_budget(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn committed_spend_tracked(&self) -> bool;
+    fn carry_committed_spend(
+        &self,
+        read_committed: bool,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn reserve_budget(
+        &self,
+        skip_budget_checks: bool,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn release_spend_counter_batch(&self);
 }

@@ -73,3 +73,21 @@ class AuthorizeSettings:
     has_db: bool
     master_key_only_routes: frozenset[str]
     proxy_max_budget: float
+
+
+@dataclass(frozen=True, slots=True)
+class CheckFacts:
+    request: RequestFacts
+    force_virtual_key_checks: bool
+    sub_call: bool
+    token_has_end_user: bool
+    route_skips_budget_checks: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CheckSettings:
+    plan: PlanSettings
+    auth_off_pass_through_routes: frozenset[str]
+    no_auth_dev_mode: bool
+    custom_auth_skips_checks: bool
+    has_db: bool

@@ -7,7 +7,7 @@ use crate::{
     },
     host::{
         AuthorizeHost, CustomAuthHost, JwtHost, KeyHost, ModelBudgetHost, OAuth2IntrospectionHost,
-        OAuth2ProxyHost, TeamMemberModelBudgetHost,
+        OAuth2ProxyHost, RequestCheckHost, TeamMemberModelBudgetHost,
     },
     identity::{
         Anonymous, AnonymousReason, AuthDenial, CustomAuthResult, Identity, KeyAuthentication,
@@ -15,10 +15,10 @@ use crate::{
         OAuth2ProxyIdentity, VirtualKey,
     },
     inputs::{
-        AuthorizeSettings, JwtSettings, KeySettings, OAuth2IntrospectionSettings,
-        OAuth2ProxySettings, PlanFacts, PlanSettings, RequestFacts,
+        AuthorizeSettings, CheckFacts, CheckSettings, JwtSettings, KeySettings,
+        OAuth2IntrospectionSettings, OAuth2ProxySettings, PlanFacts, PlanSettings, RequestFacts,
     },
-    outcome::{ModelBudgetResult, Outcome},
+    outcome::{ModelBudgetResult, Outcome, RequestCheck},
     validators::{CredentialPlan, KeyPlan, Plan},
 };
 
@@ -200,6 +200,15 @@ impl AuthorizeCore for Unported {
         _facts: &RequestFacts,
         _settings: &AuthorizeSettings,
     ) -> Result<Outcome, H::Error> {
+        unimplemented!("{RUNS_IN_PYTHON}")
+    }
+
+    async fn check_request<H: RequestCheckHost>(
+        &self,
+        _host: &H,
+        _facts: &CheckFacts,
+        _settings: &CheckSettings,
+    ) -> Result<RequestCheck, H::Error> {
         unimplemented!("{RUNS_IN_PYTHON}")
     }
 }

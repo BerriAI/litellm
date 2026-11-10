@@ -81,3 +81,15 @@ pub struct Introspection {
     pub role: Value,
     pub team_id: Value,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EndUserScope {
+    pub has_end_user: bool,
+    pub has_key_end_user_budget: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TokenRole {
+    pub is_proxy_admin: bool,
+    pub is_builtin_admin: bool,
+}

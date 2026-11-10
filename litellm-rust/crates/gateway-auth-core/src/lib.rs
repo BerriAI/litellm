@@ -8,8 +8,9 @@ mod outcome;
 mod validators;
 
 pub use answers::{
-    FallbackTarget, Introspection, KeyFacts, KeyModelBudgets, ModelBudgetScope, OwnerFacts,
-    PresentedKey, SigningKey, TeamMember, TeamMemberBudget, TeamMemberModelBudgetScope,
+    EndUserScope, FallbackTarget, Introspection, KeyFacts, KeyModelBudgets, ModelBudgetScope,
+    OwnerFacts, PresentedKey, SigningKey, TeamMember, TeamMemberBudget, TeamMemberModelBudgetScope,
+    TokenRole,
 };
 pub use facets::{
     AnonymousCore, AuthCore, AuthPlanner, AuthorizeCore, CustomAuthCore, JwtCore, KeyCore,
@@ -17,7 +18,7 @@ pub use facets::{
 };
 pub use host::{
     AuthorizeHost, CustomAuthHost, JwtHost, KeyHost, ModelBudgetHost, OAuth2IntrospectionHost,
-    OAuth2ProxyHost, TeamMemberModelBudgetHost,
+    OAuth2ProxyHost, RequestCheckHost, TeamMemberModelBudgetHost,
 };
 pub use identity::{
     Anonymous, AnonymousReason, AuthDenial, CustomAuthResult, CustomIdentity, Identity,
@@ -25,9 +26,13 @@ pub use identity::{
     OAuth2ProxyDenial, OAuth2ProxyIdentity, VirtualKey,
 };
 pub use inputs::{
-    AuthorizeSettings, JwtSettings, KeySettings, OAuth2IntrospectionSettings, OAuth2ProxySettings,
-    PlanFacts, PlanSettings, RequestFacts, RoutingOverride,
+    AuthorizeSettings, CheckFacts, CheckSettings, JwtSettings, KeySettings,
+    OAuth2IntrospectionSettings, OAuth2ProxySettings, PlanFacts, PlanSettings, RequestFacts,
+    RoutingOverride,
 };
 pub use native::{NativeCore, Unported};
-pub use outcome::{Denial, ModelBudgetExceeded, ModelBudgetResult, Outcome, WithinModelBudgets};
+pub use outcome::{
+    Denial, ExemptionReason, ModelBudgetExceeded, ModelBudgetResult, Outcome, RequestCheck,
+    WithinModelBudgets,
+};
 pub use validators::{CredentialPlan, KeyPlan, OAuth2Mode, Plan, PremiumFeature};

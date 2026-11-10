@@ -88,3 +88,15 @@ class Introspection:
     user_id: object
     role: object
     team_id: object
+
+
+@dataclass(frozen=True, slots=True)
+class EndUserScope:
+    has_end_user: bool
+    has_key_end_user_budget: bool
+
+
+@dataclass(frozen=True, slots=True)
+class TokenRole:
+    is_proxy_admin: bool
+    is_builtin_admin: bool

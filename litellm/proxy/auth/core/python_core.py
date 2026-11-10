@@ -5,6 +5,7 @@ from typing import Final
 
 from litellm.proxy.auth.core import oauth2 as oauth2_rules
 from litellm.proxy.auth.core import plan as plan_rules
+from litellm.proxy.auth.core import request_checks
 from litellm.proxy.auth.core.answers import AdminKey, KeyFacts, TeamMember
 from litellm.proxy.auth.core.core import (
     AnonymousCore,
@@ -24,6 +25,7 @@ from litellm.proxy.auth.core.host import (
     ModelBudgetHost,
     OAuth2IntrospectionHost,
     OAuth2ProxyHost,
+    RequestCheckHost,
     TeamMemberModelBudgetHost,
 )
 from litellm.proxy.auth.core.identity import (
@@ -53,6 +55,8 @@ from litellm.proxy.auth.core.identity import (
 )
 from litellm.proxy.auth.core.inputs import (
     AuthorizeSettings,
+    CheckFacts,
+    CheckSettings,
     KeySettings,
     OAuth2IntrospectionSettings,
     OAuth2ProxySettings,
@@ -74,6 +78,7 @@ from litellm.proxy.auth.core.outcome import (
     ModelBudgetExceeded,
     ModelBudgetResult,
     Outcome,
+    RequestCheck,
     TeamMemberBudgetExceeded,
     UserAuthDisabled,
     WithinModelBudgets,
@@ -183,6 +188,9 @@ class PythonAuthorizeCore(AuthorizeCore):
                 return Allow(budget_throttle_pct=None)
             case VirtualKey(key=key):
                 return await _authorize_virtual_key(host, key, facts, settings)
+
+    async def check_request(self, host: RequestCheckHost, facts: CheckFacts, settings: CheckSettings) -> RequestCheck:
+        return await request_checks.check_request(host, facts, settings)
 
 
 class PythonModelBudgetCore(ModelBudgetCore):

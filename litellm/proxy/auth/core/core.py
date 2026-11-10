@@ -9,6 +9,7 @@ from litellm.proxy.auth.core.host import (
     ModelBudgetHost,
     OAuth2IntrospectionHost,
     OAuth2ProxyHost,
+    RequestCheckHost,
     TeamMemberModelBudgetHost,
 )
 from litellm.proxy.auth.core.identity import (
@@ -28,6 +29,8 @@ from litellm.proxy.auth.core.identity import (
 )
 from litellm.proxy.auth.core.inputs import (
     AuthorizeSettings,
+    CheckFacts,
+    CheckSettings,
     JwtSettings,
     KeySettings,
     OAuth2IntrospectionSettings,
@@ -36,7 +39,7 @@ from litellm.proxy.auth.core.inputs import (
     PlanSettings,
     RequestFacts,
 )
-from litellm.proxy.auth.core.outcome import ModelBudgetResult, Outcome
+from litellm.proxy.auth.core.outcome import ModelBudgetResult, Outcome, RequestCheck
 from litellm.proxy.auth.core.validators import CredentialPlan, KeyPlan, Plan
 
 
@@ -94,6 +97,10 @@ class AuthorizeCore(Protocol):
     async def authorize(
         self, host: AuthorizeHost, identity: KeyIdentity, facts: RequestFacts, settings: AuthorizeSettings
     ) -> Outcome: ...
+
+    async def check_request(
+        self, host: RequestCheckHost, facts: CheckFacts, settings: CheckSettings
+    ) -> RequestCheck: ...
 
 
 class AuthCore(Protocol):
