@@ -7,7 +7,9 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # factory stub leaves params untyped
+)
 from litellm.llms.mistral.common_utils import MistralError
 from litellm.llms.mistral.count_tokens.transformation import (
     MistralCountTokensConfig,
@@ -59,7 +61,7 @@ class MistralCountTokensHandler(MistralCountTokensConfig):
             async_client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.MISTRAL)
             request_timeout: Final = timeout if timeout is not None else litellm.request_timeout
 
-            response: Final = await async_client.post(
+            response: Final = await async_client.post(  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.post stub leaves params/headers untyped
                 endpoint_url,
                 headers=headers,
                 json=dict(request_body),
