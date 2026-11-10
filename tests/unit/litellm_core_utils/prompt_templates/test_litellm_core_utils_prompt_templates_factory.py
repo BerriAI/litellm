@@ -17,6 +17,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
+    DEFAULT_USER_CONTINUE_MESSAGE,
     EMPTY_TEXT_PLACEHOLDER,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
@@ -850,7 +851,10 @@ async def test_bedrock_converse_keeps_an_empty_trailing_user_turn(
     assert result[-1]["content"] == [{"text": EMPTY_TEXT_PLACEHOLDER}]
 
 
-_ANSWERED_HISTORY: Final = ({"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"})
+_ANSWERED_HISTORY: Final[tuple[dict[str, object], ...]] = (
+    {"role": "user", "content": "hi"},
+    {"role": "assistant", "content": "hello"},
+)
 
 
 @pytest.mark.asyncio
@@ -959,6 +963,20 @@ async def test_bedrock_converse_prefers_a_user_continue_message_over_the_placeho
     )
 
     assert result[-1] == {"role": "user", "content": [{"text": "go on"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_lets_modify_params_continue_an_empty_trailing_user_turn(
+    use_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    result: Final = await _converse_messages(
+        [*_ANSWERED_HISTORY, {"role": "user", "content": "   "}], "us.anthropic.claude-opus-5-5", None, use_async
+    )
+
+    assert result[-1] == {"role": "user", "content": [{"text": DEFAULT_USER_CONTINUE_MESSAGE["content"]}]}
 
 
 @pytest.mark.asyncio

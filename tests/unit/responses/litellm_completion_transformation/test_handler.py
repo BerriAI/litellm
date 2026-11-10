@@ -281,6 +281,8 @@ def _stored_converse_turn(request_id: str, input_items: object, reply: str) -> M
         "request_id": request_id,
         "call_type": "aresponses",
         "session_id": "converse-session",
+        "model": "us.anthropic.claude-opus-5-5",
+        "custom_llm_provider": "bedrock",
         "proxy_server_request": {"input": input_items, "model": "bedrock/us.anthropic.claude-opus-5-5"},
         "response": {
             "id": request_id,

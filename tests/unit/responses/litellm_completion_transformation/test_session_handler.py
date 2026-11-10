@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -8,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
@@ -16,6 +18,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     _normalize_redacted_tool_call_arguments,
 )
+from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import Message
 
@@ -790,24 +793,45 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     assert json.loads(tool_message["content"]) == function_output
 
 
+_FILLED_REPLAY: Final = [
+    ("user", "What is 2+2?"),
+    ("assistant", "Four."),
+    ("user", EMPTY_TEXT_PLACEHOLDER),
+    ("assistant", "Eight."),
+]
+_DROPPED_REPLAY: Final = [("user", "What is 2+2?"), ("assistant", "Four."), ("assistant", "Eight.")]
+_ROUTE_THAT_FILLS: Final = {"model": "anthropic/claude-opus-5-5", "custom_llm_provider": "anthropic"}
+
+
+def _replayed_turns(session: ChatCompletionSession) -> list[tuple[object, object]]:
+    messages: Final[Sequence[object]] = session.get("messages", [])
+    return [(message_field(message, "role"), message_field(message, "content")) for message in messages]
+
+
 @pytest.mark.parametrize(
-    ("route_fills", "expected"),
+    ("stored_route", "expected"),
     (
+        (_ROUTE_THAT_FILLS, _FILLED_REPLAY),
         (
-            True,
-            [("user", "What is 2+2?"), ("assistant", "Four."), ("user", EMPTY_TEXT_PLACEHOLDER), ("assistant", "Eight.")],
+            {
+                "model": "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
+                "custom_llm_provider": "bedrock",
+                "metadata": json.dumps({"model_map_information": {"model_map_key": "us.anthropic.claude-opus-5-5"}}),
+            },
+            _FILLED_REPLAY,
         ),
-        (False, [("user", "What is 2+2?"), ("assistant", "Four."), ("assistant", "Eight.")]),
+        ({"model": "anthropic/claude-sonnet-4-5", "custom_llm_provider": "anthropic"}, _DROPPED_REPLAY),
     ),
-    ids=("route_fills_empty_user_turns", "route_drops_them"),
+    ids=("stored_model_refuses_a_prefill", "stored_arn_priced_as_a_model_that_refuses_it", "stored_model_accepts_it"),
 )
 @pytest.mark.asyncio
-async def test_a_stored_follow_up_whose_lone_user_item_had_no_content_replays_its_empty_user_turn(
-    route_fills: bool, expected: list[tuple[object, object]]
+async def test_a_stored_follow_up_whose_lone_user_item_had_no_content_replays_what_its_own_model_saw(
+    stored_route: Mapping[str, str], expected: list[tuple[object, object]]
 ) -> None:
     first_turn: Final = _spend_log("chatcmpl-first", "session-empty-turn", "What is 2+2?", "Four.")
     follow_up: Final = {
         **_spend_log("chatcmpl-follow-up", "session-empty-turn", "", "Eight."),
+        **stored_route,
         "proxy_server_request": {"input": [{"role": "user", "content": None}], "model": "claude-bridge"},
     }
 
@@ -819,7 +843,38 @@ async def test_a_stored_follow_up_whose_lone_user_item_had_no_content_replays_it
     ):
         result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             "chatcmpl-follow-up",
-            route_fills_empty_user_turns=lambda: route_fills,
+            replays_empty_user_turns=True,
         )
 
-    assert [(message.get("role"), message.get("content")) for message in result["messages"]] == expected
+    assert _replayed_turns(result) == expected
+
+
+@pytest.mark.asyncio
+async def test_a_failed_stored_turn_replays_no_empty_user_turn() -> None:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-unanswered", "What is 2+2?", "Four.")
+    failed_turn: Final = {
+        **_spend_log("chatcmpl-failed", "session-unanswered", "", ""),
+        **_ROUTE_THAT_FILLS,
+        "status": "failure",
+        "proxy_server_request": {"input": [{"role": "user", "content": None}], "model": "claude-bridge"},
+        "response": {},
+    }
+    follow_up: Final = _spend_log("chatcmpl-follow-up", "session-unanswered", "And 3+3?", "Six.")
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+        return_value=[first_turn, failed_turn, follow_up],
+    ):
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-follow-up",
+            replays_empty_user_turns=True,
+        )
+
+    assert _replayed_turns(result) == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", "And 3+3?"),
+        ("assistant", "Six."),
+    ]
