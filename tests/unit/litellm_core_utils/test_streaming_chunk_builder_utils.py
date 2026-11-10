@@ -31,6 +31,136 @@ from litellm.types.utils import (
 )
 
 
+@pytest.mark.parametrize(
+    ("reasoning_parts", "expected"),
+    [
+        (("plain ", None, "reasoning"), "plain reasoning"),
+        (([{"content": "", "signature": "private-signature"}],), ""),
+        (([],), ""),
+        (
+            ([{"thinking": "think"}, {"content": " content"}, {"text": " text"}],),
+            "think content text",
+        ),
+        (
+            ([{"thinking": "first", "content": "unused", "text": "unused"}, {"content": " second", "text": "unused"}],),
+            "first second",
+        ),
+        (([{"thinking": "", "content": "unused"}, {"content": "", "text": "unused"}],), ""),
+        (
+            ("before ", [{"thinking": "a"}, {"content": "b"}], None, [{"text": "c"}], " after"),
+            "before abc after",
+        ),
+        (
+            (
+                [
+                    {"thinking": None, "content": "fallback"},
+                    {"thinking": 42, "content": None, "text": " text"},
+                    {"signature": "private-signature"},
+                    {"content": {"text": "not-readable"}},
+                    "not-a-block",
+                    None,
+                    42,
+                ],
+            ),
+            "fallback text",
+        ),
+    ],
+    ids=[
+        "strings",
+        "signed-empty-block",
+        "empty-list",
+        "text-fields",
+        "field-priority",
+        "empty-string-priority",
+        "mixed-chunks",
+        "non-text-blocks",
+    ],
+)
+def test_stream_chunk_builder_combines_structured_reasoning(reasoning_parts: tuple[object, ...], expected: str) -> None:
+    chunks: Final = [
+        {
+            "id": "chatcmpl-reasoning",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-6.1-sol",
+            "choices": [{"index": 0, "delta": {"reasoning_content": part}, "finish_reason": None}],
+        }
+        for part in reasoning_parts
+    ] + [
+        {
+            "id": "chatcmpl-reasoning",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": "gpt-6.1-sol",
+            "choices": [{"index": 0, "delta": {"content": "done"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        }
+    ]
+
+    response: Final = stream_chunk_builder(chunks)
+
+    assert response is not None
+    assert response.choices[0].message.reasoning_content == expected
+    assert response.choices[0].message.content == "done"
+    assert response.choices[0].finish_reason == "stop"
+    assert response.usage.total_tokens == 5
+
+
+def test_stream_chunk_builder_keeps_tools_and_signed_thinking_with_structured_reasoning() -> None:
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-reasoning",
+            created=0,
+            model="gpt-6.1-sol",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        thinking_blocks=[{"type": "thinking", "thinking": "", "signature": "signed-thinking"}],
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                index=0,
+                                id="call_lookup",
+                                type="function",
+                                function=Function(name="lookup", arguments='{"q":'),
+                            )
+                        ],
+                    ).model_copy(update={"reasoning_content": [{"text": "before", "signature": "private-signature"}]}),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-reasoning",
+            created=0,
+            model="gpt-6.1-sol",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        reasoning_content=" after",
+                        tool_calls=[ChatCompletionDeltaToolCall(index=0, function=Function(arguments='"value"}'))],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ],
+        ),
+    ]
+
+    response: Final = stream_chunk_builder(chunks)
+
+    assert response is not None
+    message: Final = response.choices[0].message
+    assert message.reasoning_content == "before after"
+    assert message.content is None
+    assert message.thinking_blocks == [{"type": "thinking", "thinking": "", "signature": "signed-thinking"}]
+    assert message.tool_calls is not None
+    assert [tool.to_dict() for tool in message.tool_calls] == [
+        {"id": "call_lookup", "type": "function", "function": {"name": "lookup", "arguments": '{"q":"value"}'}}
+    ]
+    assert response.choices[0].finish_reason == "tool_calls"
+
+
 def test_get_combined_tool_content():
     chunks = [
         ModelResponseStream(
@@ -1166,7 +1296,6 @@ def test_the_rebuilt_response_keeps_the_upstream_cost_a_stamped_usage_chunk_save
     )
 
 
-
 def _perplexity_usage_chunk(cost: Mapping[str, float], finish_reason: str | None) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-pplx",
@@ -1206,6 +1335,7 @@ def test_a_provider_usage_key_named_like_the_dropped_cost_flag_keeps_the_stream_
 
     assert response is not None
     assert getattr(response.usage, "cost", None) == 0.00371
+
 
 def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
     """Regression for https://github.com/BerriAI/litellm/issues/32051
@@ -2757,7 +2887,9 @@ def test_stream_chunk_builder_carries_the_bedrock_guardrail_trace_and_records_it
     assert entry["guardrail_cost"] == pytest.approx(2 * 0.00015)
 
 
-def _vllm_chat_chunk(index: int, content: str, finish_reason: str | None = None, **fields: object) -> ModelResponseStream:
+def _vllm_chat_chunk(
+    index: int, content: str, finish_reason: str | None = None, **fields: object
+) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-1",
         created=1,
@@ -2811,14 +2943,13 @@ def test_stream_chunk_builder_keeps_null_vllm_fields_and_adds_none_for_other_pro
             _vllm_chat_chunk(0, "", "stop", stop_reason=None, token_ids=None),
         ]
     )
-    other_built: Final = stream_chunk_builder(
-        chunks=[_vllm_chat_chunk(0, "hi"), _vllm_chat_chunk(0, "", "stop")]
-    )
+    other_built: Final = stream_chunk_builder(chunks=[_vllm_chat_chunk(0, "hi"), _vllm_chat_chunk(0, "", "stop")])
 
     assert vllm_built is not None and other_built is not None
-    assert {
-        field: vllm_built.model_dump()["choices"][0][field] for field in ("stop_reason", "token_ids")
-    } == {"stop_reason": None, "token_ids": None}
+    assert {field: vllm_built.model_dump()["choices"][0][field] for field in ("stop_reason", "token_ids")} == {
+        "stop_reason": None,
+        "token_ids": None,
+    }
     assert {"stop_reason", "token_ids"}.isdisjoint(other_built.model_dump()["choices"][0])
 
 

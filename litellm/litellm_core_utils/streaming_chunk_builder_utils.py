@@ -841,8 +841,10 @@ class ChunkProcessor:
             return thinking_blocks
         return None
 
-    def get_combined_reasoning_content(self, chunks: Sequence["_ContentChunk"]) -> ChatCompletionAssistantContentValue:
-        return self.get_combined_content(chunks, delta_key="reasoning_content")
+    def get_combined_reasoning_content(self, chunks: Sequence[object]) -> str:
+        choices: Final = chain.from_iterable(object_items(_field_of(chunk, "choices")) for chunk in chunks)
+        parts: Final = (_field_of(_field_of(choice, "delta"), "reasoning_content") for choice in choices)
+        return "".join(map(_reasoning_content_text, parts))
 
     def get_combined_audio_content(self, chunks: Sequence["_AudioChunk"]) -> ChatCompletionAudioResponse:
         base64_data_list: Final[list[str]] = []
@@ -1508,6 +1510,15 @@ def _field_of(value: object, name: str) -> object:
     if isinstance(value, dict):
         return cast(Mapping[str, object], value).get(name)  # cast-ok: chunk dicts are untyped JSON
     return getattr(value, name, None)
+
+
+def _reasoning_content_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    return "".join(
+        next((text for key in ("thinking", "content", "text") if isinstance(text := _field_of(block, key), str)), "")
+        for block in object_items(value)
+    )
 
 
 def _first_choices(chunks: Iterable[object]) -> tuple[object, ...]:
