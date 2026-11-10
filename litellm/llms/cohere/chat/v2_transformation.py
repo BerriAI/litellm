@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     map_finish_reason,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.cohere import CohereV2ChatResponse
@@ -193,6 +194,10 @@ def _rejection(
             return None
 
 
+def _translated_to_thinking(param: str, value: object) -> bool:
+    return param == "reasoning_effort" and "reasoning_effort" not in _thinking_params(value, None)
+
+
 def _allowed_openai_params(litellm_params: Mapping[str, object]) -> frozenset[str]:
     allowed: Final = as_object_list(litellm_params.get("allowed_openai_params")) or ()
     return frozenset(param for param in allowed if isinstance(param, str))
@@ -217,7 +222,13 @@ def _params_cohere_takes(
             ),
             status_code=400,
         )
-    return {param: value for param, value in optional_params.items() if param not in rejected}
+    for param, reason in rejected.items():
+        warn_dropped_reasoning(param, optional_params[param], model_ids[0], reason, drop_params_gated=True)
+    return {
+        param: value
+        for param, value in optional_params.items()
+        if param not in rejected and not _translated_to_thinking(param, value)
+    }
 
 
 class CohereV2ChatConfig(OpenAIGPTConfig):

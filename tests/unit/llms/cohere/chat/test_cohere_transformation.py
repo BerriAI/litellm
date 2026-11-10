@@ -1,5 +1,6 @@
 import itertools
 import json
+import logging
 from collections.abc import Callable, Iterator, Mapping
 from typing import Final
 from unittest.mock import MagicMock
@@ -9,6 +10,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -1133,6 +1135,32 @@ def test_cohere_v2_unsupported_param_is_dropped_with_drop_params(
 @pytest.mark.usefixtures("_cohere_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
+    ("model", "params", "dropped"),
+    [
+        pytest.param(NO_TOOL_CHOICE_MODEL, {"tools": [WEATHER_TOOL], "tool_choice": "none"}, "tool_choice", id="tool"),
+        pytest.param(REASONING_MODEL, {"reasoning_effort": "extreme"}, "reasoning_effort", id="effort"),
+        pytest.param(NO_JSON_SCHEMA_MODEL, {"response_format": {"type": "json_object"}}, "response_format", id="json"),
+    ],
+)
+def test_cohere_v2_drop_params_warns_about_the_dropped_param(
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    model: str,
+    params: Mapping[str, object],
+    dropped: str,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        _cohere_v2_request_body(respx_mock, model, {**params, "drop_params": True})
+
+    assert any(
+        record.levelno == logging.WARNING and record.getMessage().startswith(f"Dropping {dropped}=")
+        for record in caplog.records
+    )
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
     ("model", "params", "allowed", "cohere_params"),
     [
         pytest.param(
@@ -1169,6 +1197,20 @@ def test_cohere_v2_unsupported_param_is_dropped_with_drop_params(
             "reasoning_effort",
             {"reasoning_effort": "extreme"},
             id="unknown-effort",
+        ),
+        pytest.param(
+            REASONING_MODEL,
+            {"reasoning_effort": "low"},
+            "reasoning_effort",
+            {"thinking": LOW_THINKING, "reasoning_effort": None},
+            id="effort-cohere-takes-as-thinking",
+        ),
+        pytest.param(
+            REASONING_MODEL,
+            {"reasoning_effort": "default"},
+            "reasoning_effort",
+            {"thinking": None, "reasoning_effort": None},
+            id="default-effort",
         ),
     ],
 )
