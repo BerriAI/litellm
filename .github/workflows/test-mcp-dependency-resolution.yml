@@ -10,7 +10,7 @@ on:
       - "uv.lock"
       - "uv.toml"
       - ".python-version"
-      - "rust-toolchain.toml"
+      - "litellm/rust/rust-toolchain.toml"
       - "litellm/rust/**"
       - "litellm/__init__.py"
       - "litellm/_version.py"

@@ -60,6 +60,10 @@ help:
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
 
 UV := uv
+export RUSTUP_TOOLCHAIN ?= $(shell sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' litellm/rust/rust-toolchain.toml)
+export CARGO_NET_RETRY ?= 5
+export CARGO_HTTP_MULTIPLEXING ?= false
+export SQLX_OFFLINE ?= true
 UV_RUN := $(UV) run --no-sync
 BASE_REF ?=
 export BASE_REF

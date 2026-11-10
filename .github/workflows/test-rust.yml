@@ -24,10 +24,10 @@ on:
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
       - "Makefile"
-      - ".cargo/**"
+      - "litellm/rust/.cargo/**"
       - "pyproject.toml"
       - "uv.lock"
-      - "rust-toolchain.toml"
+      - "litellm/rust/rust-toolchain.toml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -59,10 +59,10 @@ on:
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
       - "Makefile"
-      - ".cargo/**"
+      - "litellm/rust/.cargo/**"
       - "pyproject.toml"
       - "uv.lock"
-      - "rust-toolchain.toml"
+      - "litellm/rust/rust-toolchain.toml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -96,7 +96,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - run: rustup toolchain install --no-self-update
+      - name: Configure the Rust build environment
+        working-directory: .
+        run: bash .github/scripts/setup_rust_environment.sh
 
       - run: cargo fmt --all --check
 

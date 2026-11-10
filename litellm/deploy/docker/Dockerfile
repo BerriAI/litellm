@@ -68,6 +68,9 @@ RUN apk add --no-cache \
     libsndfile
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
+    CARGO_NET_RETRY=5 \
+    CARGO_HTTP_MULTIPLEXING=false \
+    SQLX_OFFLINE=true \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0 \
     PATH="/app/.venv/bin:${PATH}"

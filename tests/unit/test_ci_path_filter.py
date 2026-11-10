@@ -61,7 +61,7 @@ CI = [".github/workflows/test-unit.yml"]
         ("mcp-dependencies", DOCS + CLIENT, "skip"),
         ("windows-release", ["litellm/rust/crates/inference/src/lib.rs"], "run"),
         ("windows-release", ["litellm/rust_bridge/dispatch.py"], "run"),
-        ("windows-release", ["rust-toolchain.toml"], "run"),
+        ("windows-release", ["litellm/rust/rust-toolchain.toml"], "run"),
         ("windows-release", ["pyproject.toml"], "run"),
         ("windows-release", ["uv.lock"], "run"),
         ("windows-release", ["tests/windows_tests/check_windows_wheel_install.py"], "run"),

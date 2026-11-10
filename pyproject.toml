@@ -339,8 +339,8 @@ features = ["extension-module"]
 profile = "release"
 editable-profile = "dev"
 include = [
-    { path = "rust-toolchain.toml", format = "sdist" },
-    { path = ".cargo/config.toml", format = "sdist" },
+    { path = "litellm/rust/rust-toolchain.toml", format = "sdist" },
+    { path = "litellm/rust/.cargo/config.toml", format = "sdist" },
     "litellm/integrations/prometheus_helpers/grafana_dashboards/**",
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
@@ -392,8 +392,8 @@ exclude = [
 concurrent-builds = 1
 cache-keys = [
     { file = "pyproject.toml" },
-    { file = "rust-toolchain.toml" },
-    { file = ".cargo/config.toml" },
+    { file = "litellm/rust/rust-toolchain.toml" },
+    { file = "litellm/rust/.cargo/config.toml" },
     { file = "litellm/rust/Cargo.lock" },
     { file = "litellm/rust/Cargo.toml" },
     { file = "litellm/rust/crates/**/*" },
