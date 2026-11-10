@@ -4780,6 +4780,7 @@ ci = [
     { name = "pytest-retry" },
     { name = "tenacity" },
     { name = "traceloop-sdk" },
+    { name = "tzdata" },
 ]
 dev = [
     { name = "basedpyright" },
@@ -5001,6 +5002,7 @@ ci = [
     { name = "pytest-retry", specifier = "==1.7.0" },
     { name = "tenacity", specifier = "==8.5.0" },
     { name = "traceloop-sdk", specifier = "==0.34.0" },
+    { name = "tzdata", specifier = "==2026.2" },
 ]
 dev = [
     { name = "basedpyright", specifier = "==1.39.7" },
