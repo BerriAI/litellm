@@ -689,7 +689,7 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
 def _parse_env_flag(value: str | None) -> bool:
     """Strict opt-in parse for a boolean env var such as JSON_LOGS: only "true" (any case) enables it.
 
-    Matches the reader in litellm-proxy-extras/_logging.py. The previous
+    Matches the reader in litellm/proxy-extras/_logging.py. The previous
     bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
     as enabled.
     """

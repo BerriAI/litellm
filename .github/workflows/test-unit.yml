@@ -45,7 +45,7 @@ jobs:
         id: rust-bridge-key
         if: steps.changes.outputs.decision != 'skip'
         env:
-          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml', 'packaging/litellm-proxy/pyproject.toml') }}
+          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm/rust/Cargo.lock', 'litellm/rust/Cargo.toml', 'litellm/rust/crates/**', 'model_prices_and_context_window.json', 'pyproject.toml', 'litellm/packaging/litellm-proxy/pyproject.toml') }}
         run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
@@ -101,7 +101,7 @@ jobs:
       - name: Build the gateway wheel once for test shards
         if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
         timeout-minutes: 15
-        working-directory: packaging/litellm-proxy
+        working-directory: litellm/packaging/litellm-proxy
         env:
           RUSTC_WRAPPER: sccache
           SCCACHE_GHA_ENABLED: "true"
@@ -1121,7 +1121,7 @@ jobs:
             --timeout="${TEST_TIMEOUT_SECONDS}" \
             --rerun-except "from pytest-timeout" \
             --durations=20 \
-            --cov=./litellm --cov=./enterprise/litellm_enterprise \
+            --cov=./litellm --cov=./litellm/enterprise/litellm_enterprise \
             --cov-report=xml:coverage.xml \
             --cov-config=pyproject.toml
           status=$?

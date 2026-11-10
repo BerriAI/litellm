@@ -74,9 +74,9 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
 
 # Copy dependency metadata first for layer caching
 COPY pyproject.toml uv.lock ./
-COPY enterprise/pyproject.toml enterprise/
-COPY litellm-proxy-extras/pyproject.toml litellm-proxy-extras/
-COPY packaging/litellm-proxy/pyproject.toml packaging/litellm-proxy/
+COPY litellm/enterprise/pyproject.toml litellm/enterprise/
+COPY litellm/proxy-extras/pyproject.toml litellm/proxy-extras/
+COPY litellm/packaging/litellm-proxy/pyproject.toml litellm/packaging/litellm-proxy/
 
 # Install third-party dependencies (cached unless pyproject.toml/uv.lock change)
 RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
@@ -114,6 +114,8 @@ RUN uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no
     --python python3.13
 
 RUN uv pip install --python /app/.venv/bin/python --no-deps /wheels/litellm_proxy-*.whl
+
+RUN cp -r litellm/enterprise "$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/litellm/enterprise"
 
 RUN HOME=/opt/prisma XDG_CACHE_HOME=/opt/prisma/.cache PRISMA_BINARY_CACHE_DIR=/opt/prisma/binaries \
     npm_config_cache=/root/.npm \
@@ -182,9 +184,7 @@ COPY --from=builder /app/schema.prisma /app/schema.prisma
 COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
 # enterprise/ is imported by source path at runtime (proxy_cli puts the
 # working directory on sys.path; litellm/proxy/hooks resolves
-# enterprise.enterprise_hooks from it)
-COPY --from=builder /app/enterprise /app/enterprise
-COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
+# litellm.enterprise.enterprise_hooks from it)
 COPY --from=builder /app/gateway /app/gateway
 COPY --from=builder /app/backend /app/backend
 COPY --from=builder /app/migrations /app/migrations

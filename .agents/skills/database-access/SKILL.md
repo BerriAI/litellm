@@ -26,7 +26,7 @@ metadata:
 - Keep query execution inside the repository, with one implementation per repository and no backend switch or fallback
 - A repository is either all Prisma or all native, never a mix of both
 - Prisma is fine for the implementation, adding a query does not require a Rust port
-- Native Rust callers use `litellm-rust/crates/db` directly
+- Native Rust callers use `litellm/rust/crates/db` directly
 
 ## Framework wiring
 

@@ -11,7 +11,7 @@ from typing import Final
 ROOT: Final = Path(__file__).resolve().parents[1]
 SOURCES: Final = (
     "litellm",
-    "litellm-rust",
+    "litellm/rust",
     ".cargo",
     "rust-toolchain.toml",
     "model_prices_and_context_window.json",
@@ -19,7 +19,7 @@ SOURCES: Final = (
     "LICENSE",
 )
 
-IN_TREE_RUST_PATH: Final = "../../litellm-rust/"
+IN_TREE_RUST_PATH: Final = "../../rust/"
 
 
 class BuildOptions(argparse.Namespace):
@@ -56,7 +56,12 @@ def stage_core_distribution(source: Path, destination: Path, *, package: str = "
     )
 
     def ignored_sources(directory: str, names: list[str]) -> set[str]:
-        return {name for name in names if Path(directory) / name in ignored} | shutil.ignore_patterns(
+        workspace_sources: Final = (
+            {"enterprise", "proxy-extras", "packaging", "rust", "cli", "ui", "vscode-extension", "deploy"}
+            if Path(directory) == source / "litellm"
+            else set()
+        )
+        return workspace_sources | {name for name in names if Path(directory) / name in ignored} | shutil.ignore_patterns(
             "__pycache__", ".pytest_cache", ".ruff_cache", "target", ".git", "*.so", "*.pyd"
         )(directory, names)
 
@@ -70,10 +75,10 @@ def stage_core_distribution(source: Path, destination: Path, *, package: str = "
             )
         else:
             shutil.copy2(path, destination / name)
-    template: Final = (source / "packaging" / package / "pyproject.toml").read_text()
+    template: Final = (source / "litellm" / "packaging" / package / "pyproject.toml").read_text()
     if package == "litellm-proxy" and IN_TREE_RUST_PATH not in template:
         raise SystemExit(f"packaging/{package}/pyproject.toml no longer points at {IN_TREE_RUST_PATH}")
-    metadata: Final = template.replace(IN_TREE_RUST_PATH, "litellm-rust/")
+    metadata: Final = template.replace(IN_TREE_RUST_PATH, "litellm/rust/")
     (destination / "pyproject.toml").write_text(metadata)
     subprocess.run(["uv", "version", version, "--frozen"], cwd=destination, check=True)
 

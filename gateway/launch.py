@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Final
 
 from uvicorn.main import main as uvicorn_main
 
-from litellm_cli.main import without_gc_pauses
+from litellm.cli.main import without_gc_pauses
 
 if TYPE_CHECKING:
     from fastapi import FastAPI

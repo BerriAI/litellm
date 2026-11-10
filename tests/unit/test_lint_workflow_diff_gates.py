@@ -554,7 +554,7 @@ def _ui_api_types_relevant(tmp_path: Path, changed: str) -> bool:
         "litellm/tracing/generated/models.py",
         "litellm/router_strategy/complexity_router/config.py",
         "litellm/models/credentials.py",
-        "enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",
+        "litellm/enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",
         "pyproject.toml",
         "uv.lock",
         "litellm/ui/litellm-dashboard/scripts/gen-api-types.mjs",
@@ -569,8 +569,8 @@ def test_ui_api_types_check_runs_on_a_pull_request_touching_any_spec_input(tmp_p
 @pytest.mark.parametrize(
     "changed",
     (
-        "litellm-rust/crates/traces/src/lib.rs",
-        "litellm-proxy-extras/litellm_proxy_extras/utils.py",
+        "litellm/rust/crates/traces/src/lib.rs",
+        "litellm/proxy-extras/litellm_proxy_extras/utils.py",
         "tests/unit/test_router.py",
         "litellm/ui/litellm-dashboard/src/app/page.tsx",
         "docs/my-website/docs/proxy/config.md",

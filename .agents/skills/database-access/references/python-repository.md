@@ -81,11 +81,11 @@ Use this only when a port is explicitly requested. Repository extraction does no
 
 - Identify the repository's inputs, outputs, errors and transaction boundary
 - List repositories that share a transaction with it, they move together
-- Check `litellm-rust/crates/db` for an equivalent query and reuse it when its behavior matches
+- Check `litellm/rust/crates/db` for an equivalent query and reuse it when its behavior matches
 
 ### Steps
 
-1. Rust queries, following `litellm-rust/crates/db/AGENTS.md`
+1. Rust queries, following `litellm/rust/crates/db/AGENTS.md`
    - Static SQL in `queries/`, compile-checked with SQLx, typed inputs and row projections in `src/`
    - Dynamic filters and sort keys become closed Rust enums that select static SQL, every value is bound
    - Refresh SQLx query metadata after SQL changes

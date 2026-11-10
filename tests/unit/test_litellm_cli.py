@@ -9,7 +9,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm_cli.main import cli
+from litellm.cli.main import cli
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -77,7 +77,7 @@ print(json.dumps({{
 
 _FIRST_USE_FROM_THREADS: Final = """
 import json, sys, threading
-from litellm_cli.main import cli
+from litellm.cli.main import cli
 sys.argv = ["lite", "--help"]
 try:
     cli()
@@ -102,7 +102,7 @@ print(json.dumps({"seen": seen}))
 
 _STAR_IMPORT_AFTER_HELP: Final = """
 import json, sys
-from litellm_cli.main import cli
+from litellm.cli.main import cli
 sys.argv = ["lite", "--help"]
 try:
     cli()
@@ -192,7 +192,7 @@ litellm_proxy_cli = cli
 _RUN_LITE_AGAINST_SDK_AT: Final = """
 import sys
 sys.path.insert(0, sys.argv[1])
-from litellm_cli.main import cli
+from litellm.cli.main import cli
 cli()
 """
 
@@ -217,14 +217,14 @@ print(json.dumps({{"imported_sdk": imported_sdk, "exit": code, "help": output.ge
 _WORKER_LOGGERS_UNDER_A_DEFAULT_LOG_CONFIG: Final = """
 import json, logging, os
 os.environ["LITELLM_WORKER_LOG_CONFIG"] = json.dumps({{"version": 1, "root": {{"level": "INFO"}}}})
-from litellm_cli.main import proxy_worker_app
+from litellm.cli.main import proxy_worker_app
 proxy_worker_app()
 print(json.dumps({{name: logging.getLogger(name).disabled for name in {names!r}}}))
 """
 
 _COMMAND_MODULES_LOADED_BY: Final = """
 import json, sys
-from litellm_cli.main import cli
+from litellm.cli.main import cli
 sys.argv = ["lite", *sys.argv[1:]]
 try:
     cli()
@@ -251,7 +251,7 @@ def _run(source: str, argv: tuple[str, ...], home: Path) -> dict[str, object]:
 def cli_runs(tmp_path_factory: pytest.TempPathFactory) -> Mapping[str, dict[str, object]]:
     argv: Final = (json.dumps(_HELP_ARGV + _COMMAND_ARGV),)
     return {
-        "thin": _run(_RUN_EACH_ARGV.format(module="litellm_cli.main"), argv, tmp_path_factory.mktemp("thin")),
+        "thin": _run(_RUN_EACH_ARGV.format(module="litellm.cli.main"), argv, tmp_path_factory.mktemp("thin")),
         "full": _run(
             _RUN_EACH_ARGV.format(module="litellm.proxy.client.cli.main"), argv, tmp_path_factory.mktemp("full")
         ),
@@ -334,7 +334,7 @@ def sdk_used_after_full_cli(tmp_path_factory: pytest.TempPathFactory) -> dict[st
 def test_sdk_initializes_in_place_on_first_use_after_lite_imports(
     first_use: str, sdk_used_after_full_cli: dict[str, object], tmp_path: Path
 ):
-    thin: Final = _run(_USE_SDK_AFTER_HELP.format(module="litellm_cli.main", first_use=first_use), (), tmp_path)
+    thin: Final = _run(_USE_SDK_AFTER_HELP.format(module="litellm.cli.main", first_use=first_use), (), tmp_path)
 
     assert thin["before"] is False
     assert sdk_used_after_full_cli["before"] is True

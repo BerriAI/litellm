@@ -3,7 +3,7 @@
 """
 ``HostRegistry``: the Rust core's live ``model_list`` and the indexes ``registry()`` reads.
 
-router-core builds the deployments (``litellm-rust/crates/router-core/src/build.rs``): it walks
+router-core builds the deployments (``litellm/rust/crates/router-core/src/build.rs``): it walks
 the list, decides which values are ``os.environ/`` secret references, assigns the id of a
 deployment that declares none and adds one deployment per ``organization``. What needs live Python
 objects is a host step this registry answers, one deployment at a time (``_answer_build_step``):

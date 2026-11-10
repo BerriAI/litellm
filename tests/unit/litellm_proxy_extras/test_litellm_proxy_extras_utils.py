@@ -31,7 +31,7 @@ from litellm_proxy_extras.utils import (
 _MIGRATIONS_DIR = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
-        "../../../litellm-proxy-extras/litellm_proxy_extras/migrations",
+        "../../../litellm/proxy-extras/litellm_proxy_extras/migrations",
     )
 )
 

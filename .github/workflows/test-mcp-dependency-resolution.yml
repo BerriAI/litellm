@@ -11,7 +11,7 @@ on:
       - "uv.toml"
       - ".python-version"
       - "rust-toolchain.toml"
-      - "litellm-rust/**"
+      - "litellm/rust/**"
       - "litellm/__init__.py"
       - "litellm/_version.py"
       - "litellm/_lazy_imports_registry.py"

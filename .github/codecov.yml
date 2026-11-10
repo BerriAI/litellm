@@ -4,7 +4,7 @@ codecov:
     wait_for_ci: false # post as soon as expected uploads arrive, don't wait on CI
 
 ignore:
-  - "litellm-rust/**"
+  - "litellm/rust/**"
 
 # Uploads are flagged per workflow tier. carryforward makes
 # a re-upload of a flag replace its prior session instead of accumulating a
@@ -126,7 +126,7 @@ component_management:
         - "*/proxy/auth/**"
     - component_id: "Enterprise"
       paths:
-        - "enterprise/**"
+        - "litellm/enterprise/**"
     - component_id: "Batches"
       paths:
         - "*/proxy/batches_endpoints/**"

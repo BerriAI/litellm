@@ -1140,28 +1140,28 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
 
 ALIAS_CASES: Final = (
     (
-        "enterprise.enterprise_hooks.banned_keywords",
+        "litellm.enterprise.enterprise_hooks.banned_keywords",
         "",
         "_ENTERPRISE_BannedKeywords",
         "ENTERPRISE_BannedKeywords",
         False,
     ),
     (
-        "enterprise.enterprise_hooks.blocked_user_list",
+        "litellm.enterprise.enterprise_hooks.blocked_user_list",
         "",
         "_ENTERPRISE_BlockedUserList",
         "ENTERPRISE_BlockedUserList",
         False,
     ),
     (
-        "enterprise.enterprise_hooks.google_text_moderation",
+        "litellm.enterprise.enterprise_hooks.google_text_moderation",
         "",
         "_ENTERPRISE_GoogleTextModeration",
         "ENTERPRISE_GoogleTextModeration",
         False,
     ),
     (
-        "enterprise.enterprise_hooks.openai_moderation",
+        "litellm.enterprise.enterprise_hooks.openai_moderation",
         "",
         "_ENTERPRISE_OpenAI_Moderation",
         "ENTERPRISE_OpenAI_Moderation",

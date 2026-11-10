@@ -260,7 +260,7 @@ def _apply_config_logging_settings(litellm_settings: StartupOutputSettings | Non
     litellm.turn_on_json()
 
 
-WORKER_APP: Final = "litellm_cli.main:proxy_worker_app"
+WORKER_APP: Final = "litellm.cli.main:proxy_worker_app"
 WORKER_LOG_CONFIG_ENV: Final = "LITELLM_WORKER_LOG_CONFIG"
 _LOG_CONFIG: Final = TypeAdapter[str | Mapping[str, object]](str | Mapping[str, object])
 _LOG_CONFIG_FILE: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
