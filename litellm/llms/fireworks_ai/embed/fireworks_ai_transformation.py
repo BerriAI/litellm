@@ -3,6 +3,8 @@ This is OpenAI compatible - no transformation is applied
 
 """
 
+from typing import Final
+
 import litellm
 
 
@@ -17,13 +19,11 @@ class FireworksAIEmbeddingConfig:
             return ["dimensions"]
         return []
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict, model: str
-    ):
+    def map_openai_params(self, non_default_params: dict, optional_params: dict, model: str):
         """
         No transformation is applied - fireworks ai is openai compatible
         """
-        supported_openai_params = self.get_supported_openai_params(model)
+        supported_openai_params: Final = self.get_supported_openai_params(model)
         for param, value in non_default_params.items():
             if param in supported_openai_params:
                 optional_params[param] = value

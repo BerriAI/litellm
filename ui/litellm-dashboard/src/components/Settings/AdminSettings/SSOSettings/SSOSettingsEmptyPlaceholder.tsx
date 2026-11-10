@@ -1,30 +1,26 @@
-import { Empty, Typography, Button } from "antd";
+import { Shield } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
-const { Title, Paragraph } = Typography;
+import { Button } from "@/components/ui/button";
 
 interface SSOSettingsEmptyPlaceholderProps {
   onAdd: () => void;
 }
 
 export default function SSOSettingsEmptyPlaceholder({ onAdd }: SSOSettingsEmptyPlaceholderProps) {
+  const { t } = useTranslation();
   return (
-    <div className="bg-white p-12 rounded-lg border border-dashed border-gray-300 text-center w-full">
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description={
-          <div className="space-y-2">
-            <Title level={4}>No SSO Configuration Found</Title>
-            <Paragraph type="secondary" className="max-w-md mx-auto">
-              Configure Single Sign-On (SSO) to enable seamless authentication for your team members using your identity
-              provider.
-            </Paragraph>
-          </div>
-        }
-      >
-        <Button type="primary" size="large" onClick={onAdd} className="flex items-center gap-2 mx-auto mt-4">
-          Configure SSO
-        </Button>
-      </Empty>
+    <div className="flex w-full flex-col items-center rounded-lg border border-dashed border-border bg-card p-12 text-center">
+      <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-muted">
+        <Shield className="size-6 text-muted-foreground" />
+      </div>
+      <h4 className="text-base font-semibold text-foreground">{t("adminPanel.ssoSettings.emptyPlaceholder.title")}</h4>
+      <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+        {t("adminPanel.ssoSettings.emptyPlaceholder.description")}
+      </p>
+      <Button size="lg" onClick={onAdd} className="mt-4">
+        {t("adminPanel.ssoSettings.emptyPlaceholder.configure")}
+      </Button>
     </div>
   );
 }

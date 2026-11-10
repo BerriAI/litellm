@@ -4,17 +4,23 @@ Calls Serper's /search endpoint to search Google.
 Serper API Reference: https://serper.dev
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from collections.abc import Iterable, Mapping
+from typing import Final, TypedDict
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_VALUES: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _SerperSearchRequestRequired(TypedDict):
@@ -47,47 +53,46 @@ class SerperSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("SERPER_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("SERPER_API_KEY",),
+            base_env_var="SERPER_API_BASE",
+            default_api_base=self.SERPER_API_BASE,
+        )
         if not api_key:
-            raise ValueError(
-                "SERPER_API_KEY is not set. Set `SERPER_API_KEY` environment variable."
-            )
+            raise ValueError("SERPER_API_KEY is not set. Set `SERPER_API_KEY` environment variable.")
         headers["X-API-KEY"] = api_key
         headers["Content-Type"] = "application/json"
         return headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
         Get complete URL for Search endpoint.
         """
         api_base = api_base or get_secret_str("SERPER_API_BASE") or self.SERPER_API_BASE
-        api_base = api_base.rstrip("/")
-
-        if not api_base.endswith("/search"):
-            api_base = f"{api_base}/search"
-
-        return api_base
+        return ensure_api_route(api_base, "search")
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Serper API format.
 
@@ -104,7 +109,7 @@ class SerperSearchConfig(BaseSearchConfig):
         if isinstance(query, list):
             query = " ".join(query)
 
-        request_data: SerperSearchRequest = {
+        request_data: Final[SerperSearchRequest] = {
             "q": query,
         }
 
@@ -115,20 +120,17 @@ class SerperSearchConfig(BaseSearchConfig):
             request_data["gl"] = optional_params["country"].lower()
 
         if "search_domain_filter" in optional_params:
-            domains = optional_params["search_domain_filter"]
+            domains: Final = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
-                domain_clauses = " OR ".join(f"site:{d}" for d in domains)
+                domain_clauses: Final = " OR ".join(f"site:{d}" for d in domains)
                 request_data["q"] = f"({request_data['q']}) ({domain_clauses})"
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         return result_data
@@ -155,16 +157,19 @@ class SerperSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
-        results = []
-        for result in response_json.get("organic", []):
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("link", ""),
-                snippet=result.get("snippet", ""),
-                date=result.get("date"),
-                last_updated=None,
+        results: Final = []
+        for raw_result in _JSON_VALUES.validate_python(response_json.get("organic", [])):
+            result = _JSON_OBJECT.validate_python(raw_result)
+            search_result = SearchResult.model_validate(
+                {
+                    "title": result.get("title", ""),
+                    "url": result.get("link", ""),
+                    "snippet": result.get("snippet", ""),
+                    "date": result.get("date"),
+                    "last_updated": None,
+                }
             )
             results.append(search_result)
 

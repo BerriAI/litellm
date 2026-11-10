@@ -1,23 +1,38 @@
 import asyncio
 import json
+import re
 import time
 import traceback
-from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union, cast
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
+from types import MappingProxyType
+from typing import Final, Literal, cast
+
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _extract_reasoning_content,
+from litellm.constants import (
+    RESPONSE_FORMAT_TOOL_NAME,
+    STREAM_CHUNK_CHOICE_FIELDS,
+    STREAM_FINISH_CHOICE_FIELDS,
+    VLLM_CHOICE_FIELDS,
 )
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    extract_reasoning_content,
+)
+from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.databricks import DatabricksTool
 from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
     ChatCompletionThinkingBlock,
     ImageURLListItem,
     OpenAIModerationResponse,
 )
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
+    ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
     Choices,
@@ -27,9 +42,6 @@ from litellm.types.utils import (
     Function,
     HiddenParams,
     ImageResponse,
-)
-from litellm.types.utils import Logprobs as TextCompletionLogprobs
-from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
@@ -42,27 +54,52 @@ from litellm.types.utils import (
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
     Usage,
+    chat_completion_tool_call_from_dict,
 )
+from litellm.types.utils import Logprobs as TextCompletionLogprobs
 
 from .get_headers import get_response_headers
 
-_MESSAGE_FIELDS: frozenset = frozenset(Message.model_fields.keys())
-_CHOICES_FIELDS: frozenset = frozenset(Choices.model_fields.keys())
-_MODEL_RESPONSE_FIELDS: frozenset = frozenset(ModelResponse.model_fields.keys()) | {
-    "usage"
-}
+_MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
+_CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
+_MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+
+
+_ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_provider_specific_annotation(annotation: object) -> bool:
+    match annotation:
+        case {"type": "url_citation"}:
+            return False
+        case {"type": _}:
+            return True
+        case _:
+            return False
+
+
+def _annotation_entries(annotations: object) -> tuple[object, ...]:
+    return _ANNOTATION_ENTRIES.validate_python(annotations) if isinstance(annotations, list) else ()
+
+
+def partition_annotations(annotations: object) -> tuple[object, tuple[object, ...]]:
+    entries: Final = _annotation_entries(annotations)
+    others: Final = tuple(annotation for annotation in entries if _is_provider_specific_annotation(annotation))
+    if not others:
+        return annotations, ()
+    return [annotation for annotation in entries if not _is_provider_specific_annotation(annotation)] or None, others
 
 
 def _normalize_images_for_message(
-    images: Optional[List[dict]],
-) -> Optional[List[ImageURLListItem]]:
+    images: list[dict] | None,
+) -> list[ImageURLListItem] | None:
     """
     Ensure each image has an 'index' field, as required by ImageURLListItem.
     Some providers (e.g. OpenRouter) return images without index.
     """
     if not images:
-        return cast(Optional[List[ImageURLListItem]], images)
-    normalized: List[ImageURLListItem] = []
+        return cast(list[ImageURLListItem] | None, images)
+    normalized: Final[list[ImageURLListItem]] = []
     for i, img in enumerate(images):
         if isinstance(img, dict) and "index" not in img:
             normalized.append(cast(ImageURLListItem, {**img, "index": i}))
@@ -71,7 +108,7 @@ def _normalize_images_for_message(
     return normalized
 
 
-def _safe_convert_created_field(created_value) -> int:
+def safe_convert_created_field(created_value: object) -> int:
     """
     Safely convert a 'created' field value to an integer.
 
@@ -91,34 +128,176 @@ def _safe_convert_created_field(created_value) -> int:
     elif isinstance(created_value, float):
         return int(created_value)
     else:
-        # for strings, etc
         try:
-            return int(float(created_value))
+            return int(float(cast(float | str, created_value)))
         except (ValueError, TypeError):
-            # Fallback to current time if conversion fails
             return int(time.time())
 
 
+_safe_convert_created_field = safe_convert_created_field
+
+
 def convert_tool_call_to_json_mode(
-    tool_calls: List[ChatCompletionMessageToolCall],
+    tool_calls: list[ChatCompletionMessageToolCall],
     convert_tool_call_to_json_mode: bool,
-) -> Tuple[Optional[Message], Optional[str]]:
-    if _should_convert_tool_call_to_json_mode(
+) -> tuple[Message | None, str | None]:
+    if should_convert_tool_call_to_json_mode(
         tool_calls=tool_calls,
         convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
     ):
         # to support 'json_schema' logic on older models
-        json_mode_content_str: Optional[str] = tool_calls[0]["function"].get(
-            "arguments"
-        )
+        json_mode_content_str: Final[str | None] = tool_calls[0]["function"].get("arguments")
         if json_mode_content_str is not None:
-            message = litellm.Message(content=json_mode_content_str)
-            finish_reason = "stop"
+            message: Final = litellm.Message(content=json_mode_content_str)
+            finish_reason: Final = "stop"
             return message, finish_reason
     return None, None
 
 
-async def convert_to_streaming_response_async(response_object: Optional[dict] = None):
+# Whitespace-preserving word splitter used by the cache-hit replay generators.
+# Each match is any leading whitespace plus a non-whitespace run plus any
+# trailing whitespace, so concatenating the matches losslessly reconstructs
+# the original string (including content that starts with whitespace).
+_REPLAY_CONTENT_SLICE_RE: Final = re.compile(r"\s*\S+\s*", re.UNICODE)
+
+
+def _split_assembled_content_for_replay(content: str | None) -> list[str]:
+    """
+    Slice an assembled cached completion's ``content`` into word-shaped pieces
+    for cadence-preserving streaming replay. The split is lossless:
+    ``"".join(_split_assembled_content_for_replay(s)) == s`` for every
+    non-empty ``s``. Returns ``[]`` for ``None`` / empty / all-whitespace
+    content.
+    """
+    if not content or content.isspace():
+        # isspace() guard: on all-whitespace content the regex backtracks
+        # quadratically before returning no matches.
+        return []
+    return _REPLAY_CONTENT_SLICE_RE.findall(content)
+
+
+def _drop_choice_fields(choice: StreamingChoices, fields: Iterable[str]) -> None:
+    for field in fields:
+        if hasattr(choice, field):
+            delattr(choice, field)
+
+
+def _vllm_choice_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    cached_fields: Final = _choice_provider_specific_fields(choice)
+    return MappingProxyType(
+        {
+            field: choice[field] if field in choice else cached_fields[field]
+            for field in VLLM_CHOICE_FIELDS
+            if field in choice or field in cached_fields
+        }
+    )
+
+
+def _choice_provider_specific_fields(choice: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = choice.get("provider_specific_fields")
+    return _FIELD_MAP.validate_python(fields) if isinstance(fields, dict) else MappingProxyType({})
+
+
+_REPLAY_REASONING_FIELDS: Final = frozenset({"reasoning_content", "thinking_blocks", "reasoning_items"})
+_REPLAY_LEAD_FIELDS: Final = _REPLAY_REASONING_FIELDS | {"role", "provider_specific_fields"}
+_REPLAY_TOOL_FIELDS: Final = frozenset({"tool_calls", "function_call"})
+_REPLAY_TEXT_FIELDS: Final = frozenset({"content", "annotations"})
+
+
+def _fields_in(fields: Mapping[str, object], keys: frozenset[str]) -> dict[str, object]:
+    return {key: value for key, value in fields.items() if key in keys}
+
+
+def _replay_deltas(delta: Delta) -> tuple[Delta, ...]:
+    fields: Final[dict[str, object]] = delta.model_dump(exclude_none=True)
+    lead: Final = _fields_in(fields, _REPLAY_LEAD_FIELDS) if _REPLAY_REASONING_FIELDS.intersection(fields) else {}
+    pieces: Final = _split_assembled_content_for_replay(delta.content) or ([delta.content] if delta.content else [])
+    if not pieces and not lead:
+        return (delta,)
+    if not pieces:
+        held_back: Final = lead.keys() | {"content"}
+        rest: Final = {key: value for key, value in fields.items() if key not in held_back}
+        return (Delta.model_validate(lead),) + ((Delta.model_validate(rest),) if rest else ())
+    tools: Final = _fields_in(fields, _REPLAY_TOOL_FIELDS)
+    annotations: Final = _fields_in(fields, frozenset({"annotations"}))
+    moved: Final = lead.keys() | _REPLAY_TOOL_FIELDS | _REPLAY_TEXT_FIELDS
+    first_slice: Final = {key: value for key, value in fields.items() if key not in moved}
+    last_index: Final = len(pieces) - 1
+    return (
+        ((Delta.model_validate(lead),) if lead else ())
+        + tuple(
+            Delta.model_validate(
+                {
+                    **(first_slice if index == 0 else {}),
+                    "content": piece,
+                    **(annotations if index == last_index else {}),
+                }
+            )
+            for index, piece in enumerate(pieces)
+        )
+        + ((Delta.model_validate(tools),) if tools else ())
+    )
+
+
+def _replay_frame(
+    response: ModelResponseStream, delta: Delta, finish_reason: str | None, keeps_choice_metadata: bool
+) -> ModelResponseStream:
+    frame: Final = response.model_copy(deep=True)
+    choice: Final = frame.choices[0]
+    choice.delta = delta
+    choice.finish_reason = finish_reason
+    if not keeps_choice_metadata:
+        choice.logprobs = None
+        _drop_choice_fields(choice, ("enhancements", *STREAM_CHUNK_CHOICE_FIELDS))
+    if finish_reason is None:
+        _drop_choice_fields(choice, STREAM_FINISH_CHOICE_FIELDS)
+    return frame
+
+
+def _replay_frames(response: ModelResponseStream) -> Iterator[ModelResponseStream]:
+    if len(response.choices) != 1:
+        yield response
+        return
+    usage: Final = getattr(response, "usage", None)
+    if usage is not None:
+        delattr(response, "usage")
+    choice: Final = response.choices[0]
+    deltas: Final = _replay_deltas(choice.delta)
+    first_text: Final = next((index for index, delta in enumerate(deltas) if delta.content), 0)
+    for index, delta in enumerate(deltas):
+        yield _replay_frame(response, delta, finish_reason=None, keeps_choice_metadata=index == first_text)
+    finish_frame: Final = _replay_frame(
+        response, Delta(), finish_reason=choice.finish_reason, keeps_choice_metadata=False
+    )
+    if usage is not None:
+        setattr(finish_frame, "usage", usage)
+    yield finish_frame
+
+
+def _first_replay_delta(message: Mapping[str, object]) -> Delta:
+    return Delta.model_validate(
+        {
+            **message,
+            "provider_specific_fields": _cached_provider_specific_fields(
+                _CACHED_MESSAGE_PROVIDER_FIELDS.validate_python(message)
+            ),
+        }
+    )
+
+
+def _invalid_choices_message(response_object: Mapping[str, object]) -> str:
+    raw_keys: Final = list(response_object.keys())
+    if "choices" not in response_object:
+        return f"LiteLLM: provider returned a response with no 'choices'. Raw keys: {raw_keys}"
+    return (
+        f"LiteLLM: provider returned 'choices' that is not a list ({type(response_object['choices']).__name__}). "
+        f"Raw keys: {raw_keys}"
+    )
+
+
+async def convert_to_streaming_response_async(
+    response_object: dict | None = None,
+):
     """
     Asynchronously converts a response object to a streaming response.
 
@@ -137,22 +316,19 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     if response_object is None:
         raise Exception("Error in response object format")
 
-    model_response_object = ModelResponseStream()
+    model_response_object: Final = ModelResponseStream()
 
     if model_response_object is None:
         raise Exception("Error in response creating model response object")
 
-    choice_list: List[StreamingChoices] = []
+    choice_list: Final[list[StreamingChoices]] = []
 
-    if not response_object.get("choices"):
+    if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
         raise APIError(
             status_code=500,
-            message=(
-                "LiteLLM: provider returned a response with no 'choices'. "
-                f"Raw keys: {list(response_object.keys())}"
-            ),
+            message=_invalid_choices_message(response_object),
             llm_provider="",
             model="",
         )
@@ -170,12 +346,7 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
                     t["index"] = index
                 pydantic_tool_calls.append(ChatCompletionDeltaToolCall(**t))
             choice["message"]["tool_calls"] = pydantic_tool_calls
-        delta = Delta(
-            content=choice["message"].get("content", None),
-            role=choice["message"]["role"],
-            function_call=choice["message"].get("function_call", None),
-            tool_calls=choice["message"].get("tool_calls", None),
-        )
+        delta = _first_replay_delta(choice["message"])
         finish_reason = choice.get("finish_reason", None)
 
         if finish_reason is None:
@@ -184,7 +355,7 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
         logprobs = choice.get("logprobs", None)
 
         choice = StreamingChoices(
-            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs
+            finish_reason=finish_reason, index=idx, delta=delta, logprobs=logprobs, **_vllm_choice_fields(choice)
         )
         choice_list.append(choice)
 
@@ -194,20 +365,14 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
         setattr(
             model_response_object,
             "usage",
-            Usage(
-                completion_tokens=response_object["usage"].get("completion_tokens", 0),
-                prompt_tokens=response_object["usage"].get("prompt_tokens", 0),
-                total_tokens=response_object["usage"].get("total_tokens", 0),
-            ),
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
         )
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = _safe_convert_created_field(
-            response_object["created"]
-        )
+        model_response_object.created = safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
@@ -215,27 +380,27 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     if "model" in response_object:
         model_response_object.model = response_object["model"]
 
-    yield model_response_object
-    await asyncio.sleep(0)
+    for frame in _replay_frames(model_response_object):
+        yield frame
+        await asyncio.sleep(0)
 
 
-def convert_to_streaming_response(response_object: Optional[dict] = None):
+def convert_to_streaming_response(
+    response_object: dict | None = None,
+) -> Generator[ModelResponseStream, None, None]:
     # used for yielding Cache hits when stream == True
     if response_object is None:
         raise Exception("Error in response object format")
 
-    model_response_object = ModelResponseStream()
-    choice_list: List[StreamingChoices] = []
+    model_response_object: Final = ModelResponseStream()
+    choice_list: Final[list[StreamingChoices]] = []
 
-    if not response_object.get("choices"):
+    if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
 
         raise APIError(
             status_code=500,
-            message=(
-                "LiteLLM: provider returned a response with no 'choices'. "
-                f"Raw keys: {list(response_object.keys())}"
-            ),
+            message=_invalid_choices_message(response_object),
             llm_provider="",
             model="",
         )
@@ -254,39 +419,137 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
             delta=delta,
             logprobs=logprobs,
             enhancements=enhancements,
+            **_vllm_choice_fields(choice),
         )
 
         choice_list.append(choice)
     model_response_object.choices = choice_list
 
     if "usage" in response_object and response_object["usage"] is not None:
-        setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+        setattr(
+            model_response_object,
+            "usage",
+            _replayed_usage(_CACHED_USAGE_DETAILS.validate_python(response_object["usage"])),
+        )
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
 
     if "created" in response_object:
-        model_response_object.created = _safe_convert_created_field(
-            response_object["created"]
-        )
+        model_response_object.created = safe_convert_created_field(response_object["created"])
 
     if "system_fingerprint" in response_object:
         model_response_object.system_fingerprint = response_object["system_fingerprint"]
 
     if "model" in response_object:
         model_response_object.model = response_object["model"]
-    yield model_response_object
+
+    yield from _replay_frames(model_response_object)
 
 
 from collections import defaultdict
 
 
-def _handle_invalid_parallel_tool_calls(
-    tool_calls: List[ChatCompletionMessageToolCall],
-):
+@with_config(ConfigDict(extra="allow", strict=True))
+class _FakeToolUse(TypedDict):
+    parameters: ReadOnly[object]
+    recipient_name: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _ParallelToolUseArgs(TypedDict):
+    tool_uses: ReadOnly[Sequence[_FakeToolUse]]
+
+
+_PARALLEL_TOOL_USE_ARGS: Final = TypeAdapter(_ParallelToolUseArgs)
+_DECODED_TOOL_ARGUMENTS: Final = TypeAdapter(object)
+
+
+class _CachedMessageProviderFields(TypedDict, total=False):
+    provider_specific_fields: ReadOnly[object]
+
+
+class _CachedUsageDetails(TypedDict, total=False):
+    completion_tokens: ReadOnly[object]
+    prompt_tokens: ReadOnly[object]
+    total_tokens: ReadOnly[object]
+    completion_tokens_details: ReadOnly[object]
+    prompt_tokens_details: ReadOnly[object]
+    cache_read_input_tokens: ReadOnly[object]
+    cache_creation_input_tokens: ReadOnly[object]
+
+
+class _PromptCacheTokenCounts(TypedDict, total=False):
+    cache_read_input_tokens: ReadOnly[int]
+    cache_creation_input_tokens: ReadOnly[int]
+
+
+_CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
+_CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
+_FIELD_MAP: Final = TypeAdapter(dict[str, object])
+_COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
+_PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
+_PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
+_TOKEN_COUNT: Final = TypeAdapter(int)
+_PROMPT_CACHE_TOKEN_FIELDS: Final = ("cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _cached_provider_specific_fields(message: _CachedMessageProviderFields) -> Mapping[str, object] | None:
+    fields: Final = message.get("provider_specific_fields")
+    return _FIELD_MAP.validate_python(fields) if isinstance(fields, dict) else None
+
+
+def _cached_completion_tokens_details(usage: _CachedUsageDetails) -> CompletionTokensDetailsWrapper | None:
+    details: Final = usage.get("completion_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    try:
+        return _COMPLETION_TOKENS_DETAILS.validate_python(details)
+    except ValidationError:
+        return None
+
+
+def _cached_prompt_tokens_details(usage: _CachedUsageDetails) -> PromptTokensDetailsWrapper | None:
+    details: Final = usage.get("prompt_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    try:
+        return _PROMPT_TOKENS_DETAILS.validate_python(details)
+    except ValidationError:
+        return None
+
+
+def _cached_token_count(count: object) -> int | None:
+    try:
+        return _TOKEN_COUNT.validate_python(count)
+    except ValidationError:
+        return None
+
+
+def _cached_prompt_cache_token_counts(usage: _CachedUsageDetails) -> _PromptCacheTokenCounts:
+    return _PROMPT_CACHE_TOKEN_COUNTS.validate_python(
+        {
+            field: count
+            for field in _PROMPT_CACHE_TOKEN_FIELDS
+            if (count := _cached_token_count(usage.get(field))) is not None
+        }
+    )
+
+
+def _replayed_usage(usage: _CachedUsageDetails) -> Usage:
+    return Usage(
+        completion_tokens=_cached_token_count(usage.get("completion_tokens")) or 0,
+        prompt_tokens=_cached_token_count(usage.get("prompt_tokens")) or 0,
+        total_tokens=_cached_token_count(usage.get("total_tokens")) or 0,
+        completion_tokens_details=_cached_completion_tokens_details(usage),
+        prompt_tokens_details=_cached_prompt_tokens_details(usage),
+        **_cached_prompt_cache_token_counts(usage),
+    )
+
+
+def handle_invalid_parallel_tool_calls(
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall],
+) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None:
     """
     Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653
 
@@ -296,34 +559,31 @@ def _handle_invalid_parallel_tool_calls(
     if tool_calls is None:
         return
     try:
-        replacements: Dict[int, List[ChatCompletionMessageToolCall]] = defaultdict(list)
+        replacements: Final[dict[int, list[ChatCompletionMessageToolCall]]] = defaultdict(list)
         for i, tool_call in enumerate(tool_calls):
+            if isinstance(tool_call, ChatCompletionMessageCustomToolCall):
+                continue
             current_function = tool_call.function.name
-            function_args = json.loads(tool_call.function.arguments)
+            function_args = _DECODED_TOOL_ARGUMENTS.validate_python(json.loads(tool_call.function.arguments))
             if current_function == "multi_tool_use.parallel":
-                verbose_logger.debug(
-                    "OpenAI did a weird pseudo-multi-tool-use call, fixing call structure.."
-                )
-                for _fake_i, _fake_tool_use in enumerate(function_args["tool_uses"]):
+                verbose_logger.debug("OpenAI did a weird pseudo-multi-tool-use call, fixing call structure..")
+                for _fake_i, _fake_tool_use in enumerate(
+                    _PARALLEL_TOOL_USE_ARGS.validate_python(function_args)["tool_uses"]
+                ):
                     _function_args = _fake_tool_use["parameters"]
                     _current_function = _fake_tool_use["recipient_name"]
-                    if _current_function.startswith("functions."):
-                        _current_function = _current_function[len("functions.") :]
+                    _current_function = _current_function.removeprefix("functions.")
 
                     fixed_tc = ChatCompletionMessageToolCall(
                         id=f"{tool_call.id}_{_fake_i}",
                         type="function",
-                        function=Function(
-                            name=_current_function, arguments=json.dumps(_function_args)
-                        ),
+                        function=Function(name=_current_function, arguments=json.dumps(_function_args)),
                     )
                     replacements[i].append(fixed_tc)
 
         shift = 0
         for i, replacement in replacements.items():
-            tool_calls[:] = (
-                tool_calls[: i + shift] + replacement + tool_calls[i + shift + 1 :]
-            )
+            tool_calls[:] = tool_calls[: i + shift] + replacement + tool_calls[i + shift + 1 :]
             shift += len(replacement)
 
         return tool_calls
@@ -332,18 +592,21 @@ def _handle_invalid_parallel_tool_calls(
         return tool_calls
 
 
+_handle_invalid_parallel_tool_calls = handle_invalid_parallel_tool_calls
+
+
 class LiteLLMResponseObjectHandler:
     @staticmethod
     def convert_to_image_response(
         response_object: dict,
-        model_response_object: Optional[ImageResponse] = None,
-        hidden_params: Optional[dict] = None,
+        model_response_object: ImageResponse | None = None,
+        hidden_params: dict | None = None,
     ) -> ImageResponse:
         response_object.update({"hidden_params": hidden_params})
 
         # Handle gpt-image-1 usage field with None values
         if "usage" in response_object and response_object["usage"] is not None:
-            usage = response_object["usage"]
+            usage: Final = response_object["usage"]
             # Check if usage fields are None and provide defaults
             if usage.get("input_tokens") is None:
                 usage["input_tokens"] = 0
@@ -365,19 +628,15 @@ class LiteLLMResponseObjectHandler:
 
             # Convert dicts to wrapper objects so getattr() works in cost calculation
             if isinstance(usage.get("input_tokens_details"), dict):
-                usage["prompt_tokens_details"] = PromptTokensDetailsWrapper(
-                    **usage["input_tokens_details"]
-                )
+                usage["prompt_tokens_details"] = PromptTokensDetailsWrapper(**usage["input_tokens_details"])
             if isinstance(usage.get("output_tokens_details"), dict):
-                usage["completion_tokens_details"] = CompletionTokensDetailsWrapper(
-                    **usage["output_tokens_details"]
-                )
+                usage["completion_tokens_details"] = CompletionTokensDetailsWrapper(**usage["output_tokens_details"])
 
         if model_response_object is None:
             model_response_object = ImageResponse(**response_object)
             return model_response_object
         else:
-            model_response_dict = model_response_object.model_dump()
+            model_response_dict: Final = model_response_object.model_dump()
 
             model_response_dict.update(response_object)
             model_response_object = ImageResponse(**model_response_dict)
@@ -393,7 +652,7 @@ class LiteLLMResponseObjectHandler:
     def convert_chat_to_text_completion(
         response: ModelResponse,
         text_completion_response: TextCompletionResponse,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> TextCompletionResponse:
         """
         Converts a chat completion response to a text completion response format.
@@ -410,16 +669,18 @@ class LiteLLMResponseObjectHandler:
             chat_response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi"}])
             text_response = convert_chat_to_text_completion(chat_response)
         """
-        transformed_logprobs = LiteLLMResponseObjectHandler._convert_provider_response_logprobs_to_text_completion_logprobs(
-            response=response,
-            custom_llm_provider=custom_llm_provider,
+        transformed_logprobs: Final = (
+            LiteLLMResponseObjectHandler._convert_provider_response_logprobs_to_text_completion_logprobs(
+                response=response,
+                custom_llm_provider=custom_llm_provider,
+            )
         )
 
         text_completion_response["id"] = response.get("id", None)
         text_completion_response["object"] = "text_completion"
         text_completion_response["created"] = response.get("created", None)
         text_completion_response["model"] = response.get("model", None)
-        choices_list: List[TextChoices] = []
+        choices_list: Final[list[TextChoices]] = []
 
         # Convert each choice to TextChoices
         for choice in response["choices"]:
@@ -432,67 +693,60 @@ class LiteLLMResponseObjectHandler:
 
         text_completion_response["choices"] = choices_list
         text_completion_response["usage"] = response.get("usage", None)
-        text_completion_response._hidden_params = HiddenParams(
-            **response._hidden_params
-        )
+        response_hidden_params: Final = get_hidden_params(response) or {}
+        text_completion_response.hidden_params = HiddenParams.model_validate(response_hidden_params)
         return text_completion_response
 
     @staticmethod
     def _convert_provider_response_logprobs_to_text_completion_logprobs(
         response: ModelResponse,
-        custom_llm_provider: Optional[str] = None,
-    ) -> Optional[TextCompletionLogprobs]:
+        custom_llm_provider: str | None = None,
+    ) -> TextCompletionLogprobs | None:
         """
         Convert logprobs from provider to OpenAI.Completion() format
 
         Only supported for HF TGI models
         """
-        transformed_logprobs: Optional[TextCompletionLogprobs] = None
+        transformed_logprobs: Final[TextCompletionLogprobs | None] = None
 
         return transformed_logprobs
 
 
-def _should_convert_tool_call_to_json_mode(
-    tool_calls: Optional[
-        Union[List[ChatCompletionMessageToolCall], List[DatabricksTool]]
-    ] = None,
-    convert_tool_call_to_json_mode: Optional[bool] = None,
+def should_convert_tool_call_to_json_mode(
+    tool_calls: (
+        Sequence[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | Sequence[DatabricksTool] | None
+    ) = None,
+    convert_tool_call_to_json_mode: bool | None = None,
 ) -> bool:
     """
     Determine if tool calls should be converted to JSON mode
     """
-    if (
-        convert_tool_call_to_json_mode
-        and tool_calls is not None
-        and len(tool_calls) == 1
-        and tool_calls[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
-    ):
-        return True
+    if convert_tool_call_to_json_mode and tool_calls is not None and len(tool_calls) == 1:
+        function: Final = tool_calls[0].get("function")
+        return function is not None and function["name"] == RESPONSE_FORMAT_TOOL_NAME
     return False
 
 
-def convert_to_model_response_object(  # noqa: PLR0915
-    response_object: Optional[dict] = None,
-    model_response_object: Optional[
-        Union[
-            ModelResponse,
-            EmbeddingResponse,
-            ImageResponse,
-            TranscriptionResponse,
-            RerankResponse,
-        ]
-    ] = None,
+_should_convert_tool_call_to_json_mode = should_convert_tool_call_to_json_mode
+
+
+def convert_to_model_response_object(
+    response_object: dict | None = None,
+    model_response_object: ModelResponse
+    | EmbeddingResponse
+    | ImageResponse
+    | TranscriptionResponse
+    | RerankResponse
+    | None = None,
     response_type: Literal[
         "completion", "embedding", "image_generation", "audio_transcription", "rerank"
     ] = "completion",
     stream=False,
     start_time=None,
     end_time=None,
-    hidden_params: Optional[dict] = None,
-    _response_headers: Optional[dict] = None,
-    convert_tool_call_to_json_mode: Optional[
-        bool
-    ] = None,  # used for supporting 'json_schema' on older models
+    hidden_params: dict | None = None,
+    _response_headers: dict | None = None,
+    convert_tool_call_to_json_mode: bool | None = None,  # used for supporting 'json_schema' on older models
 ):
     additional_headers = get_response_headers(_response_headers)
 
@@ -501,7 +755,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
 
     # Preserve existing additional_headers if they contain important provider headers
     # For responses API, additional_headers may already be set with LLM provider headers
-    existing_additional_headers = hidden_params.get("additional_headers", {})
+    existing_additional_headers: Final = hidden_params.get("additional_headers", {})
     if existing_additional_headers and _response_headers is None:
         # Keep existing headers when _response_headers is None (responses API case)
         additional_headers = existing_additional_headers
@@ -515,18 +769,14 @@ def convert_to_model_response_object(  # noqa: PLR0915
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
     # Some OpenAI-compatible providers (e.g., Apertis) return empty error objects
     # even on success. Only raise if the error contains meaningful data.
-    if (
-        response_object is not None
-        and "error" in response_object
-        and response_object["error"] is not None
-    ):
-        error_obj = response_object["error"]
+    if response_object is not None and "error" in response_object and response_object["error"] is not None:
+        error_obj: Final = response_object["error"]
         has_meaningful_error = False
 
         if isinstance(error_obj, dict):
             # Check if error dict has non-empty message or non-null code
-            error_message = error_obj.get("message", "")
-            error_code = error_obj.get("code")
+            error_message: Final = error_obj.get("message", "")
+            error_code: Final = error_obj.get("code")
             has_meaningful_error = bool(error_message) or error_code is not None
         elif isinstance(error_obj, str):
             # String error is meaningful if non-empty
@@ -536,7 +786,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
             has_meaningful_error = True
 
         if has_meaningful_error:
-            error_args = {"status_code": 422, "message": "Error in response object"}
+            error_args: Final = {"status_code": 422, "message": "Error in response object"}
             if isinstance(error_obj, dict):
                 if "code" in error_obj:
                     error_args["status_code"] = error_obj["code"]
@@ -546,34 +796,28 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     else:
                         message_str = str(error_obj["message"])
                     error_args["message"] = message_str
-            raised_exception = Exception()
+            raised_exception: Final = Exception()
             setattr(raised_exception, "status_code", error_args["status_code"])
             setattr(raised_exception, "message", error_args["message"])
             raise raised_exception
 
     try:
         if response_type == "completion" and (
-            model_response_object is None
-            or isinstance(model_response_object, ModelResponse)
+            model_response_object is None or isinstance(model_response_object, ModelResponse)
         ):
             if response_object is None or model_response_object is None:
                 raise Exception("Error in response object format")
             if stream is True:
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
-            choice_list: List[Choices] = []
+            choice_list: Final[list[Choices]] = []
 
-            if not response_object.get("choices") or not isinstance(
-                response_object["choices"], Iterable
-            ):
+            if not isinstance(response_object.get("choices"), list):
                 from litellm.exceptions import APIError
 
                 raise APIError(
                     status_code=500,
-                    message=(
-                        "LiteLLM: provider returned a response with no 'choices'. "
-                        f"Raw keys: {list(response_object.keys())}"
-                    ),
+                    message=_invalid_choices_message(response_object),
                     llm_provider="",
                     model="",
                 )
@@ -584,87 +828,75 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 if tool_calls is not None:
                     _openai_tool_calls = []
                     for _tc in tool_calls:
-                        _openai_tc = ChatCompletionMessageToolCall(**_tc)
+                        _openai_tc = chat_completion_tool_call_from_dict(_tc)
                         _openai_tool_calls.append(_openai_tc)
-                    fixed_tool_calls = _handle_invalid_parallel_tool_calls(
-                        _openai_tool_calls
-                    )
+                    fixed_tool_calls = handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
                     if fixed_tool_calls is not None:
                         tool_calls = fixed_tool_calls
 
-                message: Optional[Message] = None
-                finish_reason: Optional[str] = None
-                if _should_convert_tool_call_to_json_mode(
+                message: Message | None = None
+                finish_reason: str | None = None
+                if tool_calls is not None and should_convert_tool_call_to_json_mode(
                     tool_calls=tool_calls,
                     convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
                 ):
                     # to support 'json_schema' logic on older models
-                    json_mode_content_str: Optional[str] = tool_calls[0][
-                        "function"
-                    ].get("arguments")
+                    json_mode_content_str: str | None = tool_calls[0]["function"].get("arguments")
                     if json_mode_content_str is not None:
                         message = litellm.Message(content=json_mode_content_str)
                         finish_reason = "stop"
                 if message is None:
                     # Preserve provider_specific_fields if already present
                     # in the response (e.g. from proxy passthrough)
-                    provider_specific_fields = dict(
-                        choice["message"].get("provider_specific_fields", None) or {}
-                    )
+                    provider_specific_fields = dict(choice["message"].get("provider_specific_fields", None) or {})
                     for f in choice["message"].keys() - _MESSAGE_FIELDS:
                         provider_specific_fields[f] = choice["message"][f]
+                    annotations, other_annotations = partition_annotations(choice["message"].get("annotations", None))
+                    if other_annotations:
+                        provider_specific_fields["annotations"] = list(other_annotations)
 
                     # Handle reasoning models that display `reasoning_content` within `content`
-                    reasoning_content, content = _extract_reasoning_content(
-                        choice["message"]
-                    )
+                    reasoning_content, content = extract_reasoning_content(choice["message"])
 
                     # Handle thinking models that display `thinking_blocks` within `content`
-                    thinking_blocks: Optional[
-                        List[
-                            Union[
-                                ChatCompletionThinkingBlock,
-                                ChatCompletionRedactedThinkingBlock,
-                            ]
-                        ]
-                    ] = None
+                    thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = (
+                        None
+                    )
                     if "thinking_blocks" in choice["message"]:
                         thinking_blocks = choice["message"]["thinking_blocks"]
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
                     message = Message(
                         content=content,
-                        role=choice["message"]["role"] or "assistant",
+                        role=choice["message"].get("role") or "assistant",
                         function_call=choice["message"].get("function_call", None),
                         tool_calls=tool_calls,
                         audio=choice["message"].get("audio", None),
                         provider_specific_fields=provider_specific_fields,
                         reasoning_content=reasoning_content,
                         thinking_blocks=thinking_blocks,
-                        annotations=choice["message"].get("annotations", None),
-                        images=_normalize_images_for_message(
-                            choice["message"].get("images", None)
+                        reasoning_items=choice["message"].get("reasoning_items", None),
+                        annotations=cast(  # cast-ok: provider annotation dicts pass through whole, keeping keys such as url_citation.content
+                            list[ChatCompletionAnnotation] | None, annotations
                         ),
+                        images=_normalize_images_for_message(choice["message"].get("images", None)),
                     )
                     finish_reason = choice.get("finish_reason", None)
+                if "refusal" in choice["message"]:
+                    message.refusal = choice["message"]["refusal"]
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
-                if (
-                    finish_reason == "stop"
-                    and message.tool_calls
-                    and len(message.tool_calls) > 0
-                ):
+                if finish_reason == "stop" and message.tool_calls and len(message.tool_calls) > 0:
                     finish_reason = "tool_calls"
 
                 ## PROVIDER SPECIFIC FIELDS ##
-                provider_specific_fields = {
-                    f: choice[f] for f in choice.keys() - _CHOICES_FIELDS
-                }
-
+                provider_specific_fields = {f: choice[f] for f in choice.keys() - _CHOICES_FIELDS}
                 logprobs = choice.get("logprobs", None)
+                provider_sent_logprobs = "logprobs" in choice
                 enhancements = choice.get("enhancements", None)
+
                 choice = Choices(
                     finish_reason=finish_reason,
                     index=idx,
@@ -672,54 +904,43 @@ def convert_to_model_response_object(  # noqa: PLR0915
                     logprobs=logprobs,
                     enhancements=enhancements,
                     provider_specific_fields=provider_specific_fields,
+                    **_vllm_choice_fields(choice),
                 )
+                if provider_sent_logprobs and logprobs is None:
+                    choice.logprobs = None
+
                 choice_list.append(choice)
-            model_response_object.choices = choice_list  # type: ignore
+            model_response_object.choices = choice_list
 
             if "usage" in response_object and response_object["usage"] is not None:
-                usage_object = litellm.Usage(**response_object["usage"])
+                usage_object: Final = litellm.Usage(**response_object["usage"])
                 setattr(model_response_object, "usage", usage_object)
             if "created" in response_object:
-                model_response_object.created = _safe_convert_created_field(
-                    response_object["created"]
-                )
+                model_response_object.created = safe_convert_created_field(response_object["created"])
 
             if "id" in response_object:
                 # Preserve the auto-generated id from ModelResponse.__init__
                 # when the provider returns a falsy id (None, "")
-                model_response_object.id = (
-                    response_object["id"] or model_response_object.id
-                )
+                model_response_object.id = response_object["id"] or model_response_object.id
 
             if "system_fingerprint" in response_object:
-                model_response_object.system_fingerprint = response_object[
-                    "system_fingerprint"
-                ]
+                model_response_object.system_fingerprint = response_object["system_fingerprint"]
 
             if "model" in response_object:
                 if model_response_object.model is None:
                     model_response_object.model = response_object["model"]
-                elif (
-                    "/" in model_response_object.model
-                    and response_object["model"] is not None
-                ):
-                    openai_compatible_provider = model_response_object.model.split("/")[
-                        0
-                    ]
-                    model_response_object.model = (
-                        openai_compatible_provider + "/" + response_object["model"]
-                    )
+                elif "/" in model_response_object.model and response_object["model"] is not None:
+                    openai_compatible_provider: Final = model_response_object.model.split("/")[0]
+                    model_response_object.model = openai_compatible_provider + "/" + response_object["model"]
 
             if start_time is not None and end_time is not None:
                 if isinstance(start_time, type(end_time)):
-                    model_response_object._response_ms = (  # type: ignore
-                        end_time - start_time
-                    ).total_seconds() * 1000
+                    model_response_object._response_ms = (end_time - start_time).total_seconds() * 1000
 
             if hidden_params is not None:
-                if model_response_object._hidden_params is None:
-                    model_response_object._hidden_params = {}
-                model_response_object._hidden_params.update(hidden_params)
+                if model_response_object.hidden_params is None:
+                    model_response_object.hidden_params = {}
+                model_response_object.hidden_params.update(hidden_params)
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
@@ -728,10 +949,11 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 if k not in _MODEL_RESPONSE_FIELDS:
                     setattr(model_response_object, k, v)
 
-            return model_response_object
+            ollama_ids: Final = OllamaResponseIdNormalizer()
+            ollama_ids.observe(model_response_object)
+            return ollama_ids.apply(model_response_object)
         elif response_type == "embedding" and (
-            model_response_object is None
-            or isinstance(model_response_object, EmbeddingResponse)
+            model_response_object is None or isinstance(model_response_object, EmbeddingResponse)
         ):
             if response_object is None:
                 raise Exception("Error in response object format")
@@ -748,25 +970,26 @@ def convert_to_model_response_object(  # noqa: PLR0915
             model_response_object.data = response_object["data"]
 
             if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+                embedding_usage: Final = model_response_object.usage or Usage()
+                embedding_usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)
+                embedding_usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)
+                embedding_usage.total_tokens = response_object["usage"].get("total_tokens", 0)
+                model_response_object.usage = embedding_usage
 
             if start_time is not None and end_time is not None:
-                model_response_object._response_ms = (  # type: ignore
+                model_response_object._response_ms = (
                     end_time - start_time
                 ).total_seconds() * 1000  # return response latency in ms like openai
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                model_response_object.hidden_params = hidden_params
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
 
             return model_response_object
         elif response_type == "image_generation" and (
-            model_response_object is None
-            or isinstance(model_response_object, ImageResponse)
+            model_response_object is None or isinstance(model_response_object, ImageResponse)
         ):
             if response_object is None:
                 raise Exception("Error in response object format")
@@ -778,8 +1001,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
             )
 
         elif response_type == "audio_transcription" and (
-            model_response_object is None
-            or isinstance(model_response_object, TranscriptionResponse)
+            model_response_object is None or isinstance(model_response_object, TranscriptionResponse)
         ):
             if response_object is None:
                 raise Exception("Error in response object format")
@@ -790,47 +1012,42 @@ def convert_to_model_response_object(  # noqa: PLR0915
             if "text" in response_object:
                 model_response_object.text = response_object["text"]
 
-            optional_keys = ["language", "task", "duration", "words", "segments"]
+            optional_keys: Final = ["language", "task", "duration", "words", "segments"]
             for key in optional_keys:  # not guaranteed to be in response
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
 
+            detected_languages: Final = TranscriptionResponse.detected_languages(response_object.get("languages"))
+            if detected_languages is not None:
+                model_response_object.languages = detected_languages
+
             if "usage" in response_object and response_object["usage"] is not None:
-                tr_usage_object: Optional[
-                    Union[
-                        TranscriptionUsageDurationObject, TranscriptionUsageTokensObject
-                    ]
-                ] = None
+                tr_usage_object: TranscriptionUsageDurationObject | TranscriptionUsageTokensObject | None = None
 
                 if response_object["usage"].get("type", None) == "duration":
-                    tr_usage_object = TranscriptionUsageDurationObject(
-                        **response_object["usage"]
-                    )
+                    tr_usage_object = TranscriptionUsageDurationObject(**response_object["usage"])
                 elif response_object["usage"].get("type", None) == "tokens":
-                    tr_usage_object = TranscriptionUsageTokensObject(
-                        **response_object["usage"]
-                    )
+                    tr_usage_object = TranscriptionUsageTokensObject(**response_object["usage"])
                 if tr_usage_object is not None:
                     setattr(model_response_object, "usage", tr_usage_object)
 
             if hidden_params is not None:
-                model_response_object._hidden_params = hidden_params
+                model_response_object.hidden_params = hidden_params
 
             # Store internally-calculated duration in _hidden_params for cost
             # tracking without exposing it in the response body. Must be set
             # after hidden_params assignment to avoid being overwritten.
             if "_audio_transcription_duration" in response_object:
-                model_response_object._hidden_params["audio_transcription_duration"] = (
-                    response_object["_audio_transcription_duration"]
-                )
+                model_response_object.hidden_params["audio_transcription_duration"] = response_object[
+                    "_audio_transcription_duration"
+                ]
 
             if _response_headers is not None:
                 model_response_object._response_headers = _response_headers
 
             return model_response_object
         elif response_type == "rerank" and (
-            model_response_object is None
-            or isinstance(model_response_object, RerankResponse)
+            model_response_object is None or isinstance(model_response_object, RerankResponse)
         ):
             if response_object is None:
                 raise Exception("Error in response object format")
@@ -855,15 +1072,18 @@ def convert_to_model_response_object(  # noqa: PLR0915
         if isinstance(e, APIError):
             raise
 
-        received_args = dict(
-            response_object=response_object,
-            model_response_object=model_response_object,
+        hide_reply: Final = response_type == "audio_transcription"
+        received_args: Final = dict(
+            response_object="<hidden>" if hide_reply else response_object,
+            model_response_object="<hidden>" if hide_reply else model_response_object,
             response_type=response_type,
             stream=stream,
             start_time=start_time,
             end_time=end_time,
             convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
         )
-        raise Exception(
-            f"Invalid response object {traceback.format_exc()}\n\nreceived_args={received_args}"
-        )
+        # The conversion's own traceback, without the errors being handled when it ran: a router
+        # retry runs inside the handler of the attempt before it, and that attempt's error text
+        # (a rate limit) would otherwise decide how this one is classified.
+        own_traceback: Final = "".join(traceback.format_exception(type(e), e, e.__traceback__, chain=False))
+        raise Exception(f"Invalid response object {own_traceback}\n\nreceived_args={received_args}")

@@ -28,6 +28,7 @@ export const createMultimodalMessage = async (
       {
         type: "input_image",
         image_url: `data:${mimeType};base64,${base64Data}`,
+        detail: "auto",
       },
     ],
   };

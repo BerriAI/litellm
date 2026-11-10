@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
 
 from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     A2A_USER_API_KEY_HASH_PARAM,
@@ -15,15 +15,14 @@ class LangFlowA2AConfig(BaseA2AProviderConfig):
     async def handle_non_streaming(
         self,
         request_id: str,
-        params: Dict[str, Any],
-        api_base: Optional[str] = None,
+        params: dict[str, object],
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, object]:
         litellm_params = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
-                "litellm_params is required for LangFlowA2AConfig "
-                "(must contain custom_llm_provider and model)"
+                "litellm_params is required for LangFlowA2AConfig (must contain custom_llm_provider and model)"
             )
         litellm_params = merge_a2a_session_into_litellm_params(
             litellm_params, params, litellm_params.get(A2A_USER_API_KEY_HASH_PARAM)
@@ -39,15 +38,14 @@ class LangFlowA2AConfig(BaseA2AProviderConfig):
     async def handle_streaming(
         self,
         request_id: str,
-        params: Dict[str, Any],
-        api_base: Optional[str] = None,
+        params: dict[str, object],
+        api_base: str | None = None,
         **kwargs,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, object]]:
         litellm_params = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
-                "litellm_params is required for LangFlowA2AConfig "
-                "(must contain custom_llm_provider and model)"
+                "litellm_params is required for LangFlowA2AConfig (must contain custom_llm_provider and model)"
             )
         litellm_params = merge_a2a_session_into_litellm_params(
             litellm_params, params, litellm_params.get(A2A_USER_API_KEY_HASH_PARAM)

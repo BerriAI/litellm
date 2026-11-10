@@ -3,11 +3,15 @@
 
 import json
 import os
+from collections.abc import Mapping
+from typing import Final, Protocol
 
 import httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
+from litellm.litellm_core_utils.internal_call_metadata import logged_event_key
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -15,23 +19,25 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
 def get_utc_datetime():
     import datetime as dt
     from datetime import datetime
 
     if hasattr(dt, "UTC"):
-        return datetime.now(dt.UTC)  # type: ignore
+        return datetime.now(dt.UTC)
     else:
-        return datetime.utcnow()  # type: ignore
+        return datetime.utcnow()
 
 
 class OpenMeterLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.validate_environment()
-        self.async_http_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.sync_http_handler = HTTPHandler()
 
     def validate_environment(self):
@@ -42,27 +48,27 @@ class OpenMeterLogger(CustomLogger):
 
         in the environment
         """
-        missing_keys = []
+        missing_keys: Final = []
         if os.getenv("OPENMETER_API_KEY", None) is None:
             missing_keys.append("OPENMETER_API_KEY")
 
         if len(missing_keys) > 0:
-            raise Exception("Missing keys={} in environment.".format(missing_keys))
+            raise Exception(f"Missing keys={missing_keys} in environment.")
 
-    def _common_logic(self, kwargs: dict, response_obj):
-        call_id = response_obj.get("id", kwargs.get("litellm_call_id"))
-        dt = get_utc_datetime().isoformat()
-        cost = kwargs.get("response_cost", None)
-        model = kwargs.get("model")
+    def _common_logic(self, kwargs: Mapping[str, object], response_obj):
+        call_id: Final = response_obj.get("id", kwargs.get("litellm_call_id"))
+        dt: Final = get_utc_datetime().isoformat()
+        cost: Final = kwargs.get("response_cost", None)
+        model: Final = kwargs.get("model")
         usage = {}
         if (
-            isinstance(response_obj, litellm.ModelResponse)
-            or isinstance(response_obj, litellm.EmbeddingResponse)
+            isinstance(response_obj, litellm.ModelResponse) or isinstance(response_obj, litellm.EmbeddingResponse)
         ) and hasattr(response_obj, "usage"):
+            response_usage: Final = require_attributes(response_obj["usage"], _SupportsGet, "get")
             usage = {
-                "prompt_tokens": response_obj["usage"].get("prompt_tokens", 0),
-                "completion_tokens": response_obj["usage"].get("completion_tokens", 0),
-                "total_tokens": response_obj["usage"].get("total_tokens"),
+                "prompt_tokens": response_usage.get("prompt_tokens", 0),
+                "completion_tokens": response_usage.get("completion_tokens", 0),
+                "total_tokens": response_usage.get("total_tokens"),
             }
 
         # OPENMETER_TRUST_REQUEST_USER (default "true"): when set to "false",
@@ -70,17 +76,15 @@ class OpenMeterLogger(CustomLogger):
         # resolved solely from the key-bound user_api_key_user_id. Proxies
         # serving multi-tenant traffic enable this to prevent clients from
         # forging attribution by setting `user` in the request body.
-        trust_request_user = (
-            os.getenv("OPENMETER_TRUST_REQUEST_USER", "true").lower() != "false"
-        )
+        trust_request_user: Final = os.getenv("OPENMETER_TRUST_REQUEST_USER", "true").lower() != "false"
         user_param = kwargs.get("user", None) if trust_request_user else None
 
         # If no user provided directly, try to get it from token user_id
         if user_param is None:
             # Check if user_id is available from the API key metadata
-            litellm_params = kwargs.get("litellm_params", {})
-            metadata = litellm_params.get("metadata", {})
-            user_api_key_user_id = metadata.get("user_api_key_user_id", None)
+            litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+            metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
+            user_api_key_user_id: Final = metadata.get("user_api_key_user_id", None)
 
             if user_api_key_user_id is not None:
                 user_param = user_api_key_user_id
@@ -88,12 +92,12 @@ class OpenMeterLogger(CustomLogger):
                 raise Exception("OpenMeter: user is required")
 
         # Ensure subject is always a string for OpenMeter API
-        subject = str(user_param)
+        subject: Final = str(user_param)
 
         return {
             "specversion": "1.0",
             "type": os.getenv("OPENMETER_EVENT_TYPE", "litellm_tokens"),
-            "id": call_id,
+            "id": logged_event_key(kwargs, call_id) if isinstance(call_id, str) else call_id,
             "time": dt,
             "subject": subject,
             "source": "litellm-proxy",
@@ -107,12 +111,12 @@ class OpenMeterLogger(CustomLogger):
         else:
             _url += "/api/v1/events"
 
-        api_key = os.getenv("OPENMETER_API_KEY")
+        api_key: Final = os.getenv("OPENMETER_API_KEY")
 
-        _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
-        _headers = {
+        _data: Final = self._common_logic(kwargs=kwargs, response_obj=response_obj)
+        _headers: Final = {
             "Content-Type": "application/cloudevents+json",
-            "Authorization": "Bearer {}".format(api_key),
+            "Authorization": f"Bearer {api_key}",
         }
 
         try:
@@ -133,12 +137,12 @@ class OpenMeterLogger(CustomLogger):
         else:
             _url += "/api/v1/events"
 
-        api_key = os.getenv("OPENMETER_API_KEY")
+        api_key: Final = os.getenv("OPENMETER_API_KEY")
 
-        _data = self._common_logic(kwargs=kwargs, response_obj=response_obj)
-        _headers = {
+        _data: Final = self._common_logic(kwargs=kwargs, response_obj=response_obj)
+        _headers: Final = {
             "Content-Type": "application/cloudevents+json",
-            "Authorization": "Bearer {}".format(api_key),
+            "Authorization": f"Bearer {api_key}",
         }
 
         try:

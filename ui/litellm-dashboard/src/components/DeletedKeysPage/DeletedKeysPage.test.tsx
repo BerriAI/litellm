@@ -1,8 +1,11 @@
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import DeletedKeysPage from "./DeletedKeysPage";
 import { useDeletedKeys, DeletedKeyResponse } from "@/app/(dashboard)/hooks/keys/useKeys";
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useDeletedKeys: vi.fn(),
@@ -11,11 +14,15 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
 const mockUseDeletedKeys = useDeletedKeys as MockedFunction<typeof useDeletedKeys>;
 
 const mockDeletedKey: DeletedKeyResponse = {
-  token: "sk-1234567890abcdef",
+  token: "sk-9876543210fedcba",
   token_id: "key-1",
+  key_type: "llm_api",
+  project_id: null,
+  last_active: null,
   key_name: "test-key",
   key_alias: "Test Key Alias",
   spend: 5.5,
+  total_spend: 5.5,
   max_budget: 100,
   expires: "2024-12-31T23:59:59Z",
   models: ["gpt-3.5-turbo"],
@@ -57,7 +64,7 @@ const mockDeletedKey: DeletedKeyResponse = {
   end_user_rpm_limit: 10,
   end_user_max_budget: 10,
   last_refreshed_at: Date.now(),
-  api_key: "sk-1234567890abcdef",
+  api_key: "sk-9876543210fedcba",
   user_role: "user",
   rpm_limit_per_model: {},
   tpm_limit_per_model: {},
@@ -78,9 +85,8 @@ beforeEach(() => {
       current_page: 1,
       total_pages: 1,
     },
-    isPending: false,
-    isFetching: false,
-  } as any);
+    isLoading: false,
+  } as unknown as ReturnType<typeof useDeletedKeys>);
 });
 
 it("should render DeletedKeysPage component", () => {
@@ -89,14 +95,41 @@ it("should render DeletedKeysPage component", () => {
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
-it("should handle loading state", () => {
+it("should show the enterprise notice for a non-premium user", () => {
+  renderWithProviders(<DeletedKeysPage />);
+
+  expect(screen.getByText("Coming soon to Enterprise")).toBeInTheDocument();
+  expect(
+    screen.getByText("Deleted key auditing is graduating from beta into our Enterprise audit & compliance suite."),
+  ).toBeInTheDocument();
+});
+
+it("should show skeleton rows while the initial load is pending", () => {
   mockUseDeletedKeys.mockReturnValue({
     data: undefined,
-    isPending: true,
-    isFetching: false,
-  } as any);
+    isLoading: true,
+  } as unknown as ReturnType<typeof useDeletedKeys>);
 
   renderWithProviders(<DeletedKeysPage />);
 
-  expect(screen.getByText("🚅 Loading keys...")).toBeInTheDocument();
+  expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
+});
+
+it("should request the next page from the hook when the pagination next button is clicked", async () => {
+  const user = userEvent.setup();
+  mockUseDeletedKeys.mockReturnValue({
+    data: {
+      keys: [mockDeletedKey],
+      total_count: 120,
+      current_page: 1,
+      total_pages: 3,
+    },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useDeletedKeys>);
+
+  renderWithProviders(<DeletedKeysPage />);
+
+  expect(mockUseDeletedKeys).toHaveBeenLastCalledWith(1, 50);
+  await user.click(screen.getByTestId("pagination-next"));
+  expect(mockUseDeletedKeys).toHaveBeenLastCalledWith(2, 50);
 });

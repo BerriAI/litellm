@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_DailyEndUserSpend\" (\n    id, end_user_id, date, api_key, model, custom_llm_provider,\n    mcp_namespaced_tool_name, endpoint, model_group, prompt_tokens,\n    completion_tokens, api_requests, successful_requests, failed_requests,\n    cache_read_input_tokens, cache_creation_input_tokens, total_response_time_ms,\n    timed_requests, spend, updated_at\n)\nSELECT gen_random_uuid()::text, r.entity_id, r.date, r.api_key, r.model,\n       r.custom_llm_provider, r.mcp_namespaced_tool_name, r.endpoint, r.model_group, r.prompt_tokens,\n       r.completion_tokens, r.api_requests, r.successful_requests,\n       r.failed_requests, r.cache_read, r.cache_creation, r.response_time,\n       r.timed_requests, r.spend, (NOW() AT TIME ZONE 'UTC')\nFROM UNNEST(\n    $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],\n    $6::text[], $7::text[], $8::int8[], $9::int8[], $10::int8[],\n    $11::int8[], $12::int8[], $13::int8[], $14::int8[], $15::int8[],\n    $16::int8[], $17::float8[], $18::text[]\n) AS r(\n    entity_id, date, api_key, model, custom_llm_provider, endpoint,\n    model_group, prompt_tokens, completion_tokens, api_requests,\n    successful_requests, failed_requests, cache_read, cache_creation,\n    response_time, timed_requests, spend, mcp_namespaced_tool_name\n)\nORDER BY r.date, r.entity_id, r.api_key, r.model, r.custom_llm_provider,\n         r.mcp_namespaced_tool_name, r.endpoint\nON CONFLICT (\n    end_user_id, date, api_key, model, custom_llm_provider,\n    mcp_namespaced_tool_name, endpoint\n) DO UPDATE SET\n    prompt_tokens = \"LiteLLM_DailyEndUserSpend\".prompt_tokens + EXCLUDED.prompt_tokens,\n    completion_tokens = \"LiteLLM_DailyEndUserSpend\".completion_tokens + EXCLUDED.completion_tokens,\n    api_requests = \"LiteLLM_DailyEndUserSpend\".api_requests + EXCLUDED.api_requests,\n    successful_requests = \"LiteLLM_DailyEndUserSpend\".successful_requests + EXCLUDED.successful_requests,\n    failed_requests = \"LiteLLM_DailyEndUserSpend\".failed_requests + EXCLUDED.failed_requests,\n    cache_read_input_tokens = \"LiteLLM_DailyEndUserSpend\".cache_read_input_tokens + EXCLUDED.cache_read_input_tokens,\n    cache_creation_input_tokens = \"LiteLLM_DailyEndUserSpend\".cache_creation_input_tokens + EXCLUDED.cache_creation_input_tokens,\n    total_response_time_ms = \"LiteLLM_DailyEndUserSpend\".total_response_time_ms + EXCLUDED.total_response_time_ms,\n    timed_requests = \"LiteLLM_DailyEndUserSpend\".timed_requests + EXCLUDED.timed_requests,\n    spend = \"LiteLLM_DailyEndUserSpend\".spend + EXCLUDED.spend,\n    updated_at = (NOW() AT TIME ZONE 'UTC')\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Int8Array",
+        "Float8Array",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f207ff0f5310dea0833361d55993bcab69ff6ad3555a3926537586f5d81d933d"
+}

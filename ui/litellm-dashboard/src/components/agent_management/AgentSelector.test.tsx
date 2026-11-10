@@ -8,35 +8,6 @@ vi.mock("../networking", () => ({
   getAgentsList: (...args: any[]) => mockGetAgentsList(...args),
 }));
 
-// Mock antd Select
-vi.mock("antd", () => {
-  const SelectComponent = ({ children, onChange, value, mode, placeholder, loading, disabled, ...props }: any) => (
-    <div data-testid="agent-select" data-loading={loading} data-disabled={disabled}>
-      <select
-        data-testid="select-input"
-        multiple={mode === "multiple"}
-        value={value || []}
-        onChange={(e) => {
-          const selected = Array.from(e.target.selectedOptions, (opt: any) => opt.value);
-          onChange?.(selected);
-        }}
-        disabled={disabled}
-      >
-        {children}
-      </select>
-      {loading && <span data-testid="loading-indicator">Loading</span>}
-    </div>
-  );
-
-  SelectComponent.Option = ({ children, value, ...props }: any) => (
-    <option value={value} {...props}>
-      {children}
-    </option>
-  );
-
-  return { Select: SelectComponent };
-});
-
 import AgentSelector from "./AgentSelector";
 
 describe("AgentSelector", () => {
@@ -57,7 +28,7 @@ describe("AgentSelector", () => {
 
   it("renders the selector", () => {
     render(<AgentSelector {...defaultProps} />);
-    expect(screen.getByTestId("agent-select")).toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
 
   it("fetches agents on mount with access token", async () => {
@@ -82,34 +53,38 @@ describe("AgentSelector", () => {
     );
 
     render(<AgentSelector {...defaultProps} />);
-    expect(screen.getByTestId("agent-select")).toHaveAttribute("data-loading", "true");
+    expect(screen.getByRole("combobox")).toHaveAttribute("placeholder", "Loading...");
 
     // Resolve to clean up
     resolve({ agents: [] });
     await waitFor(() => {
-      expect(screen.getByTestId("agent-select")).toHaveAttribute("data-loading", "false");
+      expect(screen.getByRole("combobox")).toHaveAttribute("placeholder", "Select agents");
     });
   });
 
   it("renders agent options after fetch", async () => {
+    const user = userEvent.setup();
     render(<AgentSelector {...defaultProps} />);
-    await waitFor(() => {
-      expect(screen.getByText("Agent One")).toBeInTheDocument();
-      expect(screen.getByText("Agent Two")).toBeInTheDocument();
-    });
+
+    await user.click(screen.getByRole("combobox"));
+
+    expect(await screen.findByRole("option", { name: /Agent One/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Agent Two/ })).toBeInTheDocument();
   });
 
   it("renders access group options with group prefix", async () => {
+    const user = userEvent.setup();
     render(<AgentSelector {...defaultProps} />);
-    await waitFor(() => {
-      expect(screen.getByText("group-a")).toBeInTheDocument();
-      expect(screen.getByText("group-b")).toBeInTheDocument();
-    });
+
+    await user.click(screen.getByRole("combobox"));
+
+    expect(await screen.findByRole("option", { name: /group-a/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /group-b/ })).toBeInTheDocument();
   });
 
   it("respects disabled prop", () => {
     render(<AgentSelector {...defaultProps} disabled />);
-    expect(screen.getByTestId("agent-select")).toHaveAttribute("data-disabled", "true");
+    expect(screen.getByRole("combobox")).toBeDisabled();
   });
 
   it("handles API error gracefully", async () => {
@@ -124,20 +99,20 @@ describe("AgentSelector", () => {
     consoleSpy.mockRestore();
   });
 
-  it("passes value as flattened selectedValues", async () => {
+  // An agent and an access group are stored under separate keys but share one control, so the
+  // chips are what prove both halves reached it.
+  it("shows both a selected agent and a selected access group", async () => {
     render(<AgentSelector {...defaultProps} value={{ agents: ["agent-1"], accessGroups: ["group-a"] }} />);
-    await waitFor(() => {
-      const select = screen.getByTestId("select-input");
-      // The value should contain agent-1 and group:group-a
-      expect(select).toBeInTheDocument();
-    });
+
+    expect(await screen.findByLabelText("Agent One")).toBeInTheDocument();
+    expect(screen.getByLabelText("group-a")).toBeInTheDocument();
   });
 
   it("handles null response from API", async () => {
     mockGetAgentsList.mockResolvedValue(null);
     render(<AgentSelector {...defaultProps} />);
     await waitFor(() => {
-      expect(screen.getByTestId("agent-select")).toHaveAttribute("data-loading", "false");
+      expect(screen.getByRole("combobox")).toHaveAttribute("placeholder", "Select agents");
     });
   });
 });

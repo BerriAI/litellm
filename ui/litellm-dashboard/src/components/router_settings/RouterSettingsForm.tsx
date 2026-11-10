@@ -1,5 +1,7 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import LatencyBasedConfiguration from "./LatencyBasedConfiguration";
+import { RouterSettingsSource, isOwnedByConfig } from "./ConfigOwned";
 import ReliabilityRetriesSection from "./ReliabilityRetriesSection";
 import RoutingStrategySelector from "./RoutingStrategySelector";
 import TagFilteringToggle from "./TagFilteringToggle";
@@ -16,6 +18,7 @@ interface RouterSettingsFormProps {
   routerFieldsMetadata: { [key: string]: any };
   availableRoutingStrategies: string[];
   routingStrategyDescriptions: { [key: string]: string };
+  routerSettingsSource?: RouterSettingsSource;
 }
 
 const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
@@ -24,7 +27,9 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
   routerFieldsMetadata,
   availableRoutingStrategies,
   routingStrategyDescriptions,
+  routerSettingsSource = {},
 }) => {
+  const { t } = useTranslation();
   const handleStrategyChange = (strategy: string) => {
     onChange({
       ...value,
@@ -44,8 +49,8 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
       {/* Routing Settings Section */}
       <div className="space-y-6">
         <div className="max-w-3xl">
-          <h3 className="text-sm font-medium text-gray-900">Routing Settings</h3>
-          <p className="text-xs text-gray-500 mt-1">Configure how requests are routed to deployments</p>
+          <h3 className="text-sm font-medium text-foreground">{t("routerSettingsForm.form.title")}</h3>
+          <p className="text-xs text-muted-foreground mt-1">{t("routerSettingsForm.form.description")}</p>
         </div>
 
         {/* Routing Strategy */}
@@ -56,6 +61,7 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
             routingStrategyDescriptions={routingStrategyDescriptions}
             routerFieldsMetadata={routerFieldsMetadata}
             onStrategyChange={handleStrategyChange}
+            ownedByConfig={isOwnedByConfig(routerSettingsSource, "routing_strategy")}
           />
         )}
 
@@ -64,19 +70,27 @@ const RouterSettingsForm: React.FC<RouterSettingsFormProps> = ({
           enabled={value.enableTagFiltering}
           routerFieldsMetadata={routerFieldsMetadata}
           onToggle={handleTagFilteringToggle}
+          ownedByConfig={isOwnedByConfig(routerSettingsSource, "enable_tag_filtering")}
         />
       </div>
 
       {/* Divider */}
-      <div className="border-t border-gray-200" />
+      <div className="border-t border-border" />
 
       {/* Strategy-Specific Args - Show immediately after strategy if latency-based */}
       {value.selectedStrategy === "latency-based-routing" && (
-        <LatencyBasedConfiguration routingStrategyArgs={value.routerSettings["routing_strategy_args"]} />
+        <LatencyBasedConfiguration
+          routingStrategyArgs={value.routerSettings["routing_strategy_args"]}
+          ownedByConfig={isOwnedByConfig(routerSettingsSource, "routing_strategy_args")}
+        />
       )}
 
       {/* Other Settings */}
-      <ReliabilityRetriesSection routerSettings={value.routerSettings} routerFieldsMetadata={routerFieldsMetadata} />
+      <ReliabilityRetriesSection
+        routerSettings={value.routerSettings}
+        routerFieldsMetadata={routerFieldsMetadata}
+        routerSettingsSource={routerSettingsSource}
+      />
     </div>
   );
 };

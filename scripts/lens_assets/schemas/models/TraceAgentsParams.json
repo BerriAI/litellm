@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Same access shape as `list_traces`: every team, the caller's own traces, or their teams' traces.",
+  "properties": {
+    "all_teams": {
+      "enum": [
+        0,
+        1
+      ],
+      "type": "integer"
+    },
+    "end_ms": {
+      "format": "int64",
+      "maximum": 9223372036854775807,
+      "minimum": -9223372036854775808,
+      "type": "integer"
+    },
+    "limit": {
+      "format": "uint32",
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "start_ms": {
+      "format": "int64",
+      "maximum": 9223372036854775807,
+      "minimum": -9223372036854775808,
+      "type": "integer"
+    },
+    "team_ids": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "user_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "all_teams",
+    "user_id",
+    "team_ids",
+    "start_ms",
+    "end_ms",
+    "limit"
+  ],
+  "title": "TraceAgentsParams",
+  "type": "object"
+}

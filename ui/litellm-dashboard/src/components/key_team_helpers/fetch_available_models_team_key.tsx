@@ -1,3 +1,4 @@
+import i18n from "@/i18n/i18n";
 import { modelAvailableCall } from "../networking";
 
 export const fetchAvailableModelsForTeamOrKey = async (
@@ -35,13 +36,19 @@ export const fetchAvailableModelsForTeamOrKey = async (
   }
 };
 
+export const excludeProxyWideSentinel = (models: string[]): string[] =>
+  models.filter((model) => model !== "all-proxy-models");
+
+export const hasAllModelsSentinel = (models: string[]): boolean =>
+  models.includes("all-proxy-models") || models.includes("all-team-models");
+
 export const getModelDisplayName = (model: string) => {
   if (model === "all-proxy-models") {
-    return "All Proxy Models";
+    return i18n.t("keyTeamHelpers.fetchAvailableModelsTeamKey.allProxyModels");
   }
   if (model.endsWith("/*")) {
     const provider = model.replace("/*", "");
-    return `All ${provider} models`;
+    return i18n.t("keyTeamHelpers.fetchAvailableModelsTeamKey.allProviderModels", { provider });
   }
   return model;
 };
@@ -49,8 +56,6 @@ export const getModelDisplayName = (model: string) => {
 export const unfurlWildcardModelsInList = (teamModels: string[], allModels: string[]): string[] => {
   const wildcardDisplayNames: string[] = [];
   const expandedModels: string[] = [];
-  console.log("teamModels", teamModels);
-  console.log("allModels", allModels);
 
   teamModels.forEach((teamModel) => {
     if (teamModel.endsWith("/*")) {

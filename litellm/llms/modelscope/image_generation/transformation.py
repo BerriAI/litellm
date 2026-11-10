@@ -1,0 +1,247 @@
+"""
+ModelScope Image Generation Config
+
+Handles transformation between OpenAI-compatible format and ModelScope API format.
+
+API Reference: https://modelscope.cn/docs/model-service/API-Inference/intro
+"""
+
+from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING, Final
+
+import httpx
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import override
+
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.image_generation.transformation import (
+    BaseImageGenerationConfig,
+)
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    OpenAIImageGenerationOptionalParams,
+)
+from litellm.types.utils import ImageObject, ImageResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+
+    LiteLLMLoggingObj = _LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = object
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+
+
+class ModelScopeImageGenerationConfig(BaseImageGenerationConfig):
+    """
+    Configuration for ModelScope image generation.
+
+    Supports text-to-image models like:
+    - Qwen/Qwen-Image-Edit
+    - And other ModelScope-hosted image generation models
+    """
+
+    DEFAULT_BASE_URL: str = "https://api-inference.modelscope.cn/v1"
+
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
+        """
+        Return list of OpenAI params supported by ModelScope.
+
+        ModelScope supports standard OpenAI image generation parameters.
+        """
+        return [
+            "n",  # Number of images to generate
+            "size",  # Size of the generated images
+            "response_format",  # url or b64_json
+            "user",  # User identifier
+        ]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        """
+        Map OpenAI parameters to ModelScope parameters.
+
+        ModelScope uses the same parameter names as OpenAI.
+        """
+        supported_params: Final = self.get_supported_openai_params(model)
+        if drop_params:
+            non_default_params = {k: v for k, v in non_default_params.items() if k in supported_params}
+        optional_params.update(non_default_params)
+        return optional_params
+
+    @override
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: bool | None = None,
+    ) -> str:
+        """
+        Get the complete URL for the ModelScope image generation API request.
+        """
+        base_url: Final = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
+
+        # Return the images endpoint
+        return join_api_base(base_url, "images/generations")
+
+    @override
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        """
+        Validate environment and set up headers for ModelScope.
+        """
+        final_api_key: Final[str | None] = api_key or get_secret_str("MODELSCOPE_API_KEY")
+
+        if not final_api_key:
+            raise ValueError(
+                "MODELSCOPE_API_KEY is not set. Please set it via environment variable or pass api_key parameter."
+            )
+
+        default_headers: Final = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {final_api_key}",
+        }
+
+        headers = {**headers, **default_headers}
+        return headers
+
+    def transform_image_generation_request(
+        self,
+        model: str,
+        prompt: str,
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform OpenAI-style request to ModelScope request format.
+
+        ModelScope uses the same format as OpenAI for image generation.
+        """
+        # Build the request body (same as OpenAI)
+        request_data: Final[dict] = {
+            "model": model,
+            "prompt": prompt,
+        }
+
+        # Add optional params
+        for key, value in optional_params.items():
+            if key.startswith("_"):
+                continue
+            request_data[key] = value
+
+        return request_data
+
+    @override
+    def transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: object,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ImageResponse:
+        """
+        Transform ModelScope response to OpenAI-compatible ImageResponse.
+
+        ModelScope returns the same format as OpenAI:
+        {"created": timestamp, "data": [{"url": "..."}]}
+        """
+        try:
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
+        except Exception as e:
+            raise self.get_error_class(
+                error_message=f"Error parsing ModelScope response: {e}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
+        # Check for errors in response
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        if "error" in response_object:
+            error: Final = _JSON_OBJECT.validate_python(response_object["error"])
+            error_msg: Final = error.get("message", str(error))
+            raise self.get_error_class(
+                error_message=f"ModelScope error: {error_msg}",
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
+        # Extract images from response
+        data_list: Final = _JSON_OBJECTS.validate_python(response_object.get("data", []))
+        if not model_response.data:
+            model_response.data = []
+
+        for item in data_list:
+            image_obj = ImageObject(
+                url=item.get("url"),
+                b64_json=item.get("b64_json"),
+                revised_prompt=item.get("revised_prompt"),
+            )
+            model_response.data.append(image_obj)
+
+        return model_response
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict | httpx.Headers,
+    ) -> BaseLLMException:
+        """Return the appropriate error class for ModelScope."""
+        from litellm.exceptions import (
+            AuthenticationError,
+            BadRequestError,
+            InternalServerError,
+        )
+
+        if status_code == 400:
+            return BadRequestError(
+                message=error_message,
+                model="",
+                llm_provider="modelscope",
+            )
+        elif status_code == 401:
+            return AuthenticationError(
+                message=error_message,
+                model="",
+                llm_provider="modelscope",
+            )
+        elif status_code >= 500:
+            return InternalServerError(
+                message=error_message,
+                model="",
+                llm_provider="modelscope",
+            )
+        else:
+            return BadRequestError(
+                message=error_message,
+                model="",
+                llm_provider="modelscope",
+            )
