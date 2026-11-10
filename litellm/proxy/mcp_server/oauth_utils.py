@@ -3,7 +3,7 @@
 
 import os
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from ipaddress import ip_address
 from types import MappingProxyType
@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
+from mcp.shared.auth import OAuthMetadata
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
@@ -131,11 +132,29 @@ def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, st
     return urlunparse(parsed._replace(query=urlencode(merged)))
 
 
-def grant_covers_scopes(granted: tuple[str, ...], requested: Iterable[str]) -> bool:
-    """Whether a stored grant holds every requested scope. A grant stored as one token also
-    counts its comma-separated parts, the form Slack and GitHub reply with."""
-    comma_parts: Final = frozenset(granted[0].split(",")) if len(granted) == 1 else frozenset[str]()
-    return all(scope in granted or scope in comma_parts for scope in requested)
+def grant_covers_scopes(
+    granted: tuple[str, ...], requested: tuple[str, ...], server_scopes: Callable[[], frozenset[str]]
+) -> bool:
+    """Whether a stored grant holds every requested scope. A grant stored as one comma-joined token, the form
+    Slack and GitHub reply with, counts as its parts only when every part is a requested or server scope."""
+    if all(scope in granted for scope in requested):
+        return True
+    if len(granted) != 1 or "," not in granted[0]:
+        return False
+    parts: Final = frozenset(granted[0].split(","))
+    known: Final = frozenset(requested) | server_scopes()
+    return parts <= known and all(scope in granted or scope in parts for scope in requested)
+
+
+def server_scope_names(server: "MCPServer | None") -> frozenset[str]:
+    if server is None:
+        return frozenset()
+    published: Final = (
+        OAuthMetadata.model_validate(server.authorization_server_metadata).scopes_supported
+        if server.authorization_server_metadata is not None
+        else None
+    )
+    return frozenset((*(server.scopes or ()), *(published or ())))
 
 
 def proxy_base_url_from_env() -> str | None:
