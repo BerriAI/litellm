@@ -3799,6 +3799,21 @@
               },
               "title": "Providers",
               "type": "object"
+            },
+            "teams": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/MetricWithMetadata"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Customer spend by the key's current team, or last team for deleted keys. Keys without a known team are grouped under Unassigned",
+              "title": "Teams"
             }
           },
           "title": "BreakdownMetrics",
@@ -27293,6 +27308,65 @@
           "title": "OutputToolSearchCall",
           "type": "object"
         },
+        "OutputToolSearchOutput": {
+          "additionalProperties": true,
+          "properties": {
+            "call_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Call Id"
+            },
+            "execution": {
+              "enum": [
+                "server",
+                "client"
+              ],
+              "title": "Execution",
+              "type": "string"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "in_progress",
+                "completed",
+                "incomplete"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "tools": {
+              "default": [],
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "title": "Tools",
+              "type": "array"
+            },
+            "type": {
+              "const": "tool_search_output",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "execution",
+            "status",
+            "type"
+          ],
+          "title": "OutputToolSearchOutput",
+          "type": "object"
+        },
         "PendingSafetyCheck": {
           "additionalProperties": true,
           "description": "A pending safety check for the computer call.",
@@ -29662,6 +29736,9 @@
                       },
                       {
                         "$ref": "#/components/schemas/OutputToolSearchCall"
+                      },
+                      {
+                        "$ref": "#/components/schemas/OutputToolSearchOutput"
                       },
                       {
                         "$ref": "#/components/schemas/ResponseCompactionItem"

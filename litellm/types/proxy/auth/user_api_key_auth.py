@@ -87,6 +87,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
     end_user_model_max_budget: _UntypedDict | None = None
+    end_user_model_tpm_limit: Mapping[str, int] | None = None
+    end_user_model_rpm_limit: Mapping[str, int] | None = None
 
     # Organization Params
     organization_alias: str | None = None
@@ -133,6 +135,17 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     """
 
     api_key: str | None = None
+    _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
+
+    @property
+    def access_group_rule_grants(self) -> frozenset[str]:
+        return self._access_group_rule_grants
+
+    def apply_access_group_rule_grants(self, grants: tuple[str, ...]) -> None:
+        if grants:
+            self._access_group_rule_grants = frozenset(grants)
+            self.access_group_ids = list(dict.fromkeys((*(self.access_group_ids or ()), *grants)))
+
     user_role: LitellmUserRoles | None = None
     allowed_model_region: AllowedModelRegion | None = None
     parent_otel_span: Span | None = None

@@ -87,25 +87,31 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        _tools = non_default_params.pop("tools", None)
+        params: Final = dict[str, object](non_default_params)
+        mapped_params: Final = {
+            key: value
+            for key, value in params.items()
+            if params.get("tools") != [] or key not in ("tools", "tool_choice", "parallel_tool_calls")
+        }
+        _tools = mapped_params.pop("tools", None)
         if _tools is not None:
-            _tools = remove_additional_properties(copy.deepcopy(_tools))  # pyright: ignore[reportUnknownArgumentType]  # tools arrive untyped through the bare-dict params
+            _tools = remove_additional_properties(copy.deepcopy(_tools))  # pyright: ignore[reportArgumentType]  # tools arrive untyped through the bare-dict params
             _tools = remove_strict_from_schema(_tools)
             if isinstance(_tools, list):
                 _tools = self._convert_custom_tools_to_function_tools(_tools)
         if _tools is not None:
-            non_default_params["tools"] = _tools
+            mapped_params["tools"] = _tools
 
-        thinking: Final = non_default_params.pop("thinking", None)
+        thinking: Final = mapped_params.pop("thinking", None)
         thinking_effort: Final = (
             None
-            if "reasoning_effort" in non_default_params
+            if "reasoning_effort" in mapped_params
             else reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
         )
         if thinking_effort is not None:
-            non_default_params["reasoning_effort"] = thinking_effort
+            mapped_params["reasoning_effort"] = thinking_effort
 
-        return super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        return super().map_openai_params(mapped_params, optional_params, model, drop_params)
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None

@@ -458,6 +458,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.legacy_empty_models_check import warn_about_legacy_empty_models
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
 from litellm.proxy.auth.login_throttle import (
     LoginThrottle,
@@ -1799,6 +1800,14 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     await asyncio.sleep(5)
 
         await resources.enter_async_context(database_runtime.background_task(_run_agent_grant_id_migration()))
+        await resources.enter_async_context(
+            database_runtime.background_task(
+                warn_about_legacy_empty_models(
+                    keys=VerificationTokenRepository(prisma_client),
+                    teams=TeamRepository(prisma_client),
+                )
+            )
+        )
 
     ## A coordination_redis block saved from the admin UI lives in the database,
     ## which is only reachable once the prisma client exists. Apply it here, before
@@ -3410,6 +3419,10 @@ SPEND_DB_FLOOR_MARKER_PREFIX: Final = "spend_db_floor:"
 
 def _fail_closed_budget_enforcement() -> bool:
     return general_settings.get("fail_closed_budget_enforcement") is True
+
+
+def fail_closed_budget_enforcement_enabled() -> bool:
+    return _fail_closed_budget_enforcement()
 
 
 def _raise_budget_unverifiable(counter_key: str) -> None:
@@ -5820,12 +5833,6 @@ def resolve_classifier_plugin(
     return resolved
 
 
-def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
-    from litellm.litellm_core_utils.get_model_cost_map import adopt_model_cost_map
-
-    return adopt_model_cost_map(new_model_cost_map)
-
-
 def _websearch_handler_params(stored: Mapping[str, object]) -> dict[str, object]:
     """
     Translate stored web search interception settings into handler kwargs.
@@ -7414,6 +7421,7 @@ class ProxyConfig:
                         "claude_code_marketplace_auth_required",
                         "vertex_ai_pass_through_drop_anthropic_betas",
                         "request_tag_mappings",
+                        "access_group_rules",
                     )
                     if name in typed_general_settings
                 }
@@ -9653,7 +9661,7 @@ class ProxyConfig:
                 )
                 return
 
-            models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
+            models_count = reload_result.model_count
             self.model_cost_map_loaded_at = current_time
             await record_reload_run(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME, current_time)
             # Adopted last, so neither a failed fetch nor a failed status write is recorded
@@ -11055,6 +11063,8 @@ async def async_data_generator(
         # ``get_response_string`` work per chunk on every deployment that
         # happened to ship a streaming-iterator override (the default).
         needs_per_chunk_hook: Final = proxy_logging_obj.needs_per_chunk_streaming_hook()
+        stream_logging_obj: Final[object] = request_data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # legacy request data is narrowed below
+        timing_sink: Final = stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
         is_raw_sse_stream: Final = bool(request_data.get("_litellm_raw_sse_stream"))
         strip_stream_usage: Final = bool(request_data.get("_litellm_strip_stream_usage"))
         raw_sse_buffer = ""
@@ -11090,6 +11100,7 @@ async def async_data_generator(
                 yield ": ping\n\n"
                 continue
             chunk = item
+            chunk_received_at = time.perf_counter()
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
                 chunk, _str_so_far = await _apply_streaming_chunk_hooks(
@@ -11175,6 +11186,7 @@ async def async_data_generator(
                 error_message = chunk
                 break
 
+            ProxyBaseLLMRequestProcessing.record_first_chunk_overhead(timing_sink, chunk_received_at)
             if not raw_passthrough:
                 try:
                     if error_state is not None:
@@ -22117,7 +22129,7 @@ async def reload_model_cost_map(
                 detail=f"Failed to reload model cost map: {reload_result.reason}. Current pricing data was kept.",
             )
 
-        models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
+        models_count = reload_result.model_count
         current_time = utc_now()
         proxy_config.model_cost_map_loaded_at = current_time
         provenance: Final = get_model_cost_map_provenance()

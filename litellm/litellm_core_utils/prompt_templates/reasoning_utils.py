@@ -282,14 +282,6 @@ def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
     )
 
 
-def _content_carries_encrypted_reasoning(content: object) -> bool:
-    return any(is_encrypted_reasoning_block(block) for block in _object_sequence(content))
-
-
-def messages_carry_encrypted_reasoning(messages: Sequence[object]) -> bool:
-    return any(_content_carries_encrypted_reasoning(content) for content in anthropic_content_lists(messages))
-
-
 def _strip_encrypted_reasoning_from_blocks(
     content: object,
     *,
