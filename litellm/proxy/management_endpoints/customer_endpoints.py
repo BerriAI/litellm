@@ -956,6 +956,7 @@ async def get_customer_daily_activity(
     page: int = 1,
     page_size: int = 10,
     exclude_end_user_ids: str | None = None,
+    team_ids: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -999,4 +1000,5 @@ async def get_customer_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+        team_ids=tuple(team_ids.split(",")) if team_ids else None,
     )

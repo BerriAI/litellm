@@ -17,6 +17,7 @@ import inspect
 import traceback
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -47,7 +48,10 @@ from litellm.router_strategy.auto_router.auto_router_model_naming import (
 from litellm.router_utils.cooldown_handlers import set_cooldown_deployments
 from litellm.router_utils.endpoint_eligibility import endpoint_selection
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import async_io_token_refund_failure
-from litellm.router_utils.router_callbacks.track_deployment_metrics import find_deployment_metadata
+from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+    count_before_callbacks,
+    find_deployment_metadata,
+)
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -441,27 +445,42 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
             model_group: Final = request_kwargs.get("model")
             if deployment_metadata is None or not isinstance(model_group, str):
                 return
-            deployment_id: Final = _metadata_model_id(deployment_metadata["model_info"])
-            if deployment_id is None:
-                return
-            total_tokens: Final = response_total_token_count(response)
-            deployment_name: Final = deployment_metadata.get("deployment")
-            deployment_metadata[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] = total_tokens
-            try:
-                await self._increment_deployment_usage(
-                    deployment_id=str(deployment_id),
-                    deployment_name=deployment_name if isinstance(deployment_name, str) else None,
-                    model_group=model_group,
-                    total_tokens=total_tokens,
-                    parent_otel_span=get_parent_otel_span_from_kwargs(dict(request_kwargs)),
-                )
-            except Exception:
-                _ = deployment_metadata.pop(ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY, None)
-                raise
+            _ = await self.increment_deployment_usage_before_callbacks(
+                deployment_metadata,
+                model_group,
+                response_total_token_count(response),
+                get_parent_otel_span_from_kwargs(dict(request_kwargs)),
+            )
         except Exception as e:  # noqa: BLE001  # as the Python core: usage accounting never fails a served call
             verbose_router_logger.debug(
                 "litellm.router.Router::increment_deployment_usage_for_response(): Exception occured - %s", e
             )
+
+    async def increment_deployment_usage_before_callbacks(
+        self,
+        deployment_metadata: dict[str, object],  # mutable-ok: the success callback reads the counted tokens off it
+        model_group: str,
+        total_tokens: int,
+        parent_otel_span: "Span | None",
+    ) -> bool:
+        deployment_id: Final = _metadata_model_id(deployment_metadata.get("model_info"))
+        if deployment_id is None:
+            return False
+        deployment_name: Final = deployment_metadata.get("deployment")
+        await count_before_callbacks(
+            deployment_metadata,
+            ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+            total_tokens,
+            partial(
+                self._increment_deployment_usage,
+                deployment_id=str(deployment_id),
+                deployment_name=deployment_name if isinstance(deployment_name, str) else None,
+                model_group=model_group,
+                total_tokens=total_tokens,
+                parent_otel_span=parent_otel_span,
+            ),
+        )
+        return True
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def _increment_deployment_usage(

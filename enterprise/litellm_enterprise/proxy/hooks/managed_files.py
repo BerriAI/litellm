@@ -78,6 +78,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
+    TeamProviderDeployment,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
     decode_model_from_file_id,
@@ -1426,6 +1427,43 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             user_api_key_dict=owner,
         )
 
+    async def register_provider_file(
+        self,
+        *,
+        provider_file_id: str,
+        content_type: str,
+        deployment: TeamProviderDeployment,
+        owner: UserAPIKeyAuth,
+        llm_router: Router | None,
+    ) -> str | None:
+        unified_file_id: Final = self.get_unified_output_file_id(
+            provider_file_id, deployment.deployment_id, deployment.public_model_name, file_type=content_type
+        )
+        provider_file_object, _ = await self._fetch_provider_file_object(
+            unified_file_id=unified_file_id,
+            provider_file_id=provider_file_id,
+            model_id=deployment.deployment_id,
+            model_name=None,
+            llm_router=llm_router,
+        )
+        if provider_file_object is None:
+            return None
+        try:
+            await self.store_unified_file_id(
+                file_id=unified_file_id,
+                file_object=provider_file_object,
+                litellm_parent_otel_span=None,
+                model_mappings={deployment.deployment_id: provider_file_id},
+                user_api_key_dict=owner,
+            )
+        except Exception as error:  # noqa: BLE001  # the upload succeeded, so the caller keeps the provider id
+            verbose_logger.warning(
+                f"Failed to register provider_file_id={sanitize_for_log(provider_file_id)} as a managed file: "
+                f"{type(error).__name__} {sanitize_for_log(error)}"
+            )
+            return None
+        return unified_file_id
+
     async def list_user_batches(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2253,10 +2291,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         unified_batch_id = SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format(model_id, batch_id)
         return base64.urlsafe_b64encode(unified_batch_id.encode()).decode().rstrip("=")
 
-    def get_unified_output_file_id(self, output_file_id: str, model_id: str, model_name: Optional[str]) -> str:
+    def get_unified_output_file_id(
+        self, output_file_id: str, model_id: str, model_name: Optional[str], file_type: str = "application/json"
+    ) -> str:
         deterministic_uuid: Final = uuid5(uuid5(NAMESPACE_URL, model_id), output_file_id)
         unified_output_file_id = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
-            "application/json",
+            file_type,
             str(deterministic_uuid),
             model_name or "",
             output_file_id,
