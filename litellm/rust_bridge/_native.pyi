@@ -1,3 +1,4 @@
+import re
 from asyncio import Future
 from collections.abc import Mapping, Sequence
 from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
@@ -203,6 +204,51 @@ class _RateLimitAtomicCounter(Protocol):
     def window_size(self) -> int: ...
 
 _RateLimitLocal = int | float | str | dict[str, float]
+
+_PolicyRow = tuple[
+    str | None,
+    Sequence[str],
+    Sequence[str],
+    Sequence[tuple[str, re.Pattern[str] | None]] | None,
+    Sequence[str] | None,
+]
+_AttachmentRow = tuple[str, bool, Sequence[str], Sequence[str], Sequence[str], Sequence[str], int | None, bool]
+_PolicyContext = tuple[str | None, str | None, str | None, Sequence[str]]
+
+@final
+class PolicyEngine:
+    def __new__(
+        cls,
+        policies: Sequence[tuple[str, _PolicyRow]],
+        versions: Sequence[tuple[str, str, _PolicyRow]],
+        attachments: Sequence[_AttachmentRow],
+    ) -> PolicyEngine: ...
+    def resolve(
+        self, context: _PolicyContext, names: Sequence[str], version_ids: Sequence[str]
+    ) -> PolicyResolution: ...
+    # (guardrails, inheritance chain); without a context every chain member counts.
+    def policy_guardrails(
+        self, name: str, context: _PolicyContext | None = None
+    ) -> tuple[list[str], list[str]]: ...
+    # ([(policy, matched_via)], [(policy, ancestor)] admitted through an ancestor).
+    def attached_policies(
+        self, context: _PolicyContext, only_applying: bool
+    ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]: ...
+
+@final
+class PolicyResolution:
+    @property
+    def applied_policies(self) -> list[str]: ...
+    @property
+    def policy_sources(self) -> list[tuple[str, str]]: ...
+    @property
+    def guardrails(self) -> list[str]: ...
+    @property
+    def pipelines(self) -> list[tuple[str, str | None]]: ...
+    @property
+    def pipeline_managed_guardrails(self) -> list[str]: ...
+    @property
+    def ancestor_admissions(self) -> list[tuple[str, str]]: ...
 
 @final
 class WindowCount:

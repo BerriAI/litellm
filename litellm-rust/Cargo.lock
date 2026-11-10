@@ -4372,6 +4372,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-policy-engine"
+version = "0.1.0"
+dependencies = [
+ "fancy-regex 0.19.2",
+ "rstest",
+]
+
+[[package]]
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
@@ -4402,6 +4410,7 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-policy-engine",
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-connect",

@@ -37,21 +37,15 @@ from litellm.proxy.policy_engine.attachment_registry import (
     AttachmentRegistry,
     get_attachment_registry,
 )
-from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
-from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 from litellm.proxy.policy_engine.policy_registry import (
     PolicyRegistry,
     get_policy_registry,
 )
-from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.proxy.policy_engine.policy_validator import PolicyValidator
 
 __all__ = [
     "AttachmentRegistry",
-    "ConditionEvaluator",
-    "PolicyMatcher",
     "PolicyRegistry",
-    "PolicyResolver",
     "PolicyValidator",
     "get_attachment_registry",
     "get_policy_registry",

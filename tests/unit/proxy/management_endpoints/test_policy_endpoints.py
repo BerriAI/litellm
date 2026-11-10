@@ -129,7 +129,7 @@ class TestApplyPoliciesEarlyReturn:
                 return_value=mock_registry,
             ),
             patch(
-                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                "litellm.rust_bridge.policy_engine.PolicyEngine.policy_guardrails",
                 return_value=ResolvedPolicy(
                     policy_name="p", guardrails=[], inheritance_chain=[]
                 ),
@@ -177,7 +177,7 @@ class TestApplyPoliciesWithGuardrails:
                 return_value=mock_registry,
             ),
             patch(
-                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                "litellm.rust_bridge.policy_engine.PolicyEngine.policy_guardrails",
                 return_value=ResolvedPolicy(
                     policy_name="p",
                     guardrails=["my_guardrail"],
@@ -236,7 +236,7 @@ class TestApplyPoliciesWithGuardrails:
                 return_value=mock_registry,
             ),
             patch(
-                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                "litellm.rust_bridge.policy_engine.PolicyEngine.policy_guardrails",
                 return_value=ResolvedPolicy(
                     policy_name="p",
                     guardrails=["guardrail_a", "guardrail_b"],
@@ -278,7 +278,7 @@ class TestApplyPoliciesWithGuardrails:
                 return_value=mock_registry,
             ),
             patch(
-                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                "litellm.rust_bridge.policy_engine.PolicyEngine.policy_guardrails",
                 return_value=ResolvedPolicy(
                     policy_name="p",
                     guardrails=["missing_guardrail"],
@@ -330,7 +330,7 @@ class TestApplyPoliciesWithGuardrails:
                 return_value=mock_registry,
             ),
             patch(
-                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                "litellm.rust_bridge.policy_engine.PolicyEngine.policy_guardrails",
                 return_value=ResolvedPolicy(
                     policy_name="p",
                     guardrails=["failing_guardrail"],
@@ -388,7 +388,7 @@ class TestApplyPoliciesWithGuardrails:
                 return_value=mock_registry,
             ),
             patch(
-                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                "litellm.rust_bridge.policy_engine.PolicyEngine.policy_guardrails",
                 return_value=ResolvedPolicy(
                     policy_name="p",
                     guardrails=["no_apply_guardrail"],
@@ -454,7 +454,7 @@ class TestApplyPoliciesWithGuardrails:
                 return_value=mock_registry,
             ),
             patch(
-                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                "litellm.rust_bridge.policy_engine.PolicyEngine.policy_guardrails",
                 return_value=ResolvedPolicy(
                     policy_name="p",
                     guardrails=["guardrail_a", "guardrail_b"],
@@ -524,7 +524,7 @@ class TestApplyPoliciesMultiplePolicies:
                 return_value=mock_registry,
             ),
             patch(
-                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                "litellm.rust_bridge.policy_engine.PolicyEngine.policy_guardrails",
                 side_effect=resolve_returns,
             ),
             patch(
@@ -618,7 +618,7 @@ class TestApplyPoliciesDirectGuardrailNames:
                 return_value=mock_registry,
             ),
             patch(
-                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                "litellm.rust_bridge.policy_engine.PolicyEngine.policy_guardrails",
                 return_value=ResolvedPolicy(
                     policy_name="p",
                     guardrails=["from_policy"],

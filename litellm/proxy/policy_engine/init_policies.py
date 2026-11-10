@@ -228,7 +228,7 @@ def get_policies_summary() -> dict[str, object]:
     Returns:
         Dictionary with policy information
     """
-    from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+    from litellm.rust_bridge.policy_engine import current_policy_engine
 
     policy_registry: Final = get_policy_registry()
     attachment_registry: Final = get_attachment_registry()
@@ -236,7 +236,8 @@ def get_policies_summary() -> dict[str, object]:
     if not policy_registry.is_initialized():
         return {"initialized": False, "policies": {}, "attachments": []}
 
-    resolved: Final = PolicyResolver.get_all_resolved_policies()
+    engine: Final = current_policy_engine()
+    resolved: Final = {name: engine.policy_guardrails(name) for name in policy_registry.current_policies()}
 
     return {
         "initialized": True,

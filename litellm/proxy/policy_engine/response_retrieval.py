@@ -1,6 +1,5 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
@@ -14,11 +13,9 @@ from litellm.proxy.common_utils.callback_utils import (
     add_policy_to_applied_policies_header,
 )
 from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
-from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
-from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.rust_bridge.policy_engine import current_policy_engine
 from litellm.types.proxy.policy_engine import PolicyMatchContext
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
@@ -85,23 +82,11 @@ def _retrieval_context(
 
 
 def _post_call_pipelines_for_context(context: PolicyMatchContext) -> tuple[PolicyPipelines, Mapping[str, str]]:
-    matches: Final = get_attachment_registry().get_attached_policies_with_reasons(
-        context, PolicyMatcher.policy_applies(context)
-    )
-    if not matches:
-        return (), MappingProxyType({})
-    applied_policy_names: Final = PolicyMatcher.get_policies_with_matching_conditions(
-        policy_names=[match["policy_name"] for match in matches],
-        context=context,
-    )
+    resolution: Final = current_policy_engine().resolve(context)
     post_call_pipelines: Final = tuple(
-        (policy_name, pipeline)
-        for policy_name, pipeline in PolicyResolver.resolve_pipelines_for_context(
-            context=context, policy_names=applied_policy_names
-        )
-        if pipeline.mode == "post_call"
+        (policy_name, pipeline) for policy_name, pipeline in resolution.pipelines if pipeline.mode == "post_call"
     )
-    return post_call_pipelines, MappingProxyType({match["policy_name"]: match["matched_via"] for match in matches})
+    return post_call_pipelines, resolution.policy_sources
 
 
 def attach_post_call_pipelines_to_retrieval(

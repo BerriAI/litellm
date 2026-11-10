@@ -45,7 +45,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code import (
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+from litellm.rust_bridge.policy_engine import current_policy_engine
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.policy_engine import (
     PolicyGuardrailsResponse,
@@ -156,14 +156,9 @@ async def apply_policies(
                 "apply_policies: policy engine not initialized, skipping policy-resolved guardrails"
             )
         else:
-            policies: Final = registry.get_all_policies()
+            engine: Final = current_policy_engine()
             for policy_name in policy_names:
-                resolved = PolicyResolver.resolve_policy_guardrails(
-                    policy_name=policy_name,
-                    policies=policies,
-                    context=None,
-                )
-                guardrail_name_set.update(resolved.guardrails)
+                guardrail_name_set.update(engine.policy_guardrails(policy_name).guardrails)
 
     if not guardrail_name_set:
         return {"inputs": inputs, "guardrail_errors": guardrail_errors}
@@ -528,7 +523,6 @@ async def get_policy_info(
     - Inheritance chain
     """
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-    from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 
     registry: Final = get_policy_registry()
 
@@ -545,7 +539,7 @@ async def get_policy_info(
             detail=f"Policy '{policy_name}' not found",
         )
 
-    resolved = PolicyResolver.resolve_policy_guardrails(policy_name=policy_name, policies=registry.get_all_policies())
+    resolved: Final = current_policy_engine().policy_guardrails(policy_name)
 
     return PolicyInfoResponse(
         policy_name=policy_name,
@@ -594,9 +588,8 @@ async def test_policy_matching(
     - matching_policies: List of policy names that match
     - resolved_guardrails: Final list of guardrails that would be applied
     """
-    from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-    from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 
     registry: Final = get_policy_registry()
 
@@ -608,13 +601,8 @@ async def test_policy_matching(
             message="Policy engine not initialized. No policies loaded.",
         )
 
-    policies: Final = registry.get_all_policies()
-
-    # Get matching policies
-    matching_policy_names: Final = PolicyMatcher.get_matching_policies(context=context)
-
-    # Resolve guardrails
-    resolved_guardrails: Final = PolicyResolver.resolve_guardrails_for_context(context=context, policies=policies)
+    matching_policy_names: Final = get_attachment_registry().get_attached_policies(context, only_applying=True)
+    resolved_guardrails: Final = list(current_policy_engine().resolve(context).guardrails)
 
     return PolicyTestResponse(
         context=context,

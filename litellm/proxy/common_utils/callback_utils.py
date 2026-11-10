@@ -639,7 +639,7 @@ def add_guardrail_scan_id(
         _metadata[GUARDRAIL_SCAN_METADATA_METADATA_KEY] = (*entries, entry)
 
 
-def add_policy_to_applied_policies_header(request_data: dict, policy_name: str | None):
+def add_policy_to_applied_policies_header(request_data: dict[str, object], policy_name: str | None) -> None:
     """
     Add a policy name to the applied_policies list in request metadata.
 
@@ -656,7 +656,7 @@ def add_policy_to_applied_policies_header(request_data: dict, policy_name: str |
         _metadata["applied_policies"] = [policy_name]
 
 
-def add_policy_sources_to_metadata(request_data: dict, policy_sources: dict[str, str]):
+def add_policy_sources_to_metadata(request_data: dict[str, object], policy_sources: Mapping[str, str]) -> None:
     """
     Store policy match reasons in metadata for x-litellm-policy-sources header.
 

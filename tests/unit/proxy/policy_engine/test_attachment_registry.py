@@ -5,7 +5,7 @@ Tests the main entry point: get_attached_policies()
 """
 
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import FrameType
 from typing import Final, Protocol
@@ -13,11 +13,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm.proxy.policy_engine.policy_registry as policy_registry_module
 from litellm.proxy.policy_engine.attachment_registry import (
     AttachmentRegistry,
     get_attachment_registry,
 )
-from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+from litellm.proxy.policy_engine.policy_registry import PolicyRegistry
 from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails, PolicyMatchContext
 
 
@@ -532,6 +533,13 @@ class TestMatchAttribution:
         assert "catch-all" in attached
 
 
+def _install_policies(monkeypatch: pytest.MonkeyPatch, policies: Mapping[str, Policy]) -> None:
+    registry: Final = PolicyRegistry()
+    for name, policy in policies.items():
+        registry.add_policy(name, policy)
+    monkeypatch.setattr(policy_registry_module, "get_policy_registry", lambda: registry)
+
+
 class TestDefaultAttachments:
     """`default: true` attachments apply only when no non-default attachment matches."""
 
@@ -598,37 +606,34 @@ class TestDefaultAttachments:
 
         assert results == [{"policy_name": "guardrail-y", "matched_via": "default:scope:*"}]
 
-    def test_inapplicable_opt_in_policy_does_not_suppress_default(self):
+    def test_inapplicable_opt_in_policy_does_not_suppress_default(self, monkeypatch: pytest.MonkeyPatch):
         context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
         policies = {
             "guardrail-y": Policy(guardrails=PolicyGuardrails(add=["y"])),
             "guardrail-x": Policy(guardrails=PolicyGuardrails(add=["x"]), condition=PolicyCondition(model="claude.*")),
         }
+        _install_policies(monkeypatch, policies)
 
-        results = self._registry().get_attached_policies_with_reasons(
-            context, PolicyMatcher.policy_applies(context, policies)
-        )
+        results = self._registry().get_attached_policies_with_reasons(context, only_applying=True)
 
         assert results == [{"policy_name": "guardrail-y", "matched_via": "default:scope:*"}]
 
-    def test_attachment_to_missing_policy_does_not_suppress_default(self):
+    def test_attachment_to_missing_policy_does_not_suppress_default(self, monkeypatch: pytest.MonkeyPatch):
         context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
         policies = {"guardrail-y": Policy(guardrails=PolicyGuardrails(add=["y"]))}
+        _install_policies(monkeypatch, policies)
 
-        assert self._registry().get_attached_policies(context, PolicyMatcher.policy_applies(context, policies)) == [
-            "guardrail-y"
-        ]
+        assert self._registry().get_attached_policies(context, only_applying=True) == ["guardrail-y"]
 
-    def test_applicable_opt_in_policy_still_wins_with_predicate(self):
+    def test_applicable_opt_in_policy_still_wins_with_predicate(self, monkeypatch: pytest.MonkeyPatch):
         context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
         policies = {
             "guardrail-y": Policy(guardrails=PolicyGuardrails(add=["y"])),
             "guardrail-x": Policy(guardrails=PolicyGuardrails(add=["x"]), condition=PolicyCondition(model="gpt.*")),
         }
+        _install_policies(monkeypatch, policies)
 
-        assert self._registry().get_attached_policies(context, PolicyMatcher.policy_applies(context, policies)) == [
-            "guardrail-x"
-        ]
+        assert self._registry().get_attached_policies(context, only_applying=True) == ["guardrail-x"]
 
     def test_default_defaults_to_false_when_omitted(self):
         registry = AttachmentRegistry()
