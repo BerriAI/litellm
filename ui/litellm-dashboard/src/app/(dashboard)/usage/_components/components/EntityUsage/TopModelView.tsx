@@ -1,9 +1,13 @@
 import { BarChart } from "@/components/shared/charts";
+import { DataTable } from "@/components/shared/DataTable";
 import { MoneyCell } from "@/components/shared/table_cells";
-import { Segmented } from "antd";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
+import type { ParseKeys } from "i18next";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { DataTable } from "@/components/view_logs/table";
+import { Segmented } from "../overview/Primitives";
+import { providerForModel } from "../overview/modelProvider";
 
 type TopModel = {
   key: string;
@@ -19,37 +23,67 @@ interface TopModelViewProps {
   setTopModelsLimit: (limit: number) => void;
 }
 
+const TOP_MODEL_LIMITS = [5, 10, 25, 50];
+
+type ViewMode = "chart" | "table";
+
+const LIMIT_OPTIONS = TOP_MODEL_LIMITS.map((limit) => ({ value: String(limit), label: String(limit) }));
+const VIEW_OPTIONS = [
+  { value: "table", labelKey: "usage.topModelView.viewOptions.table" },
+  { value: "chart", labelKey: "usage.topModelView.viewOptions.chart" },
+] as const satisfies readonly { value: ViewMode; labelKey: ParseKeys }[];
+
+const BAR_COLOR = "#2b3fd6";
+const QUIET_HEADER = { headerClassName: "font-normal" };
+
+function ModelName({ name }: { name: string | undefined }) {
+  if (!name) return <>-</>;
+  const provider = providerForModel(name);
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      {provider && (
+        <span className="inline-flex size-6 shrink-0 items-center justify-center rounded-md border bg-background">
+          <ProviderLogo provider={provider} className="size-3.5 rounded-[3px]" />
+        </span>
+      )}
+      <span className="truncate font-medium text-foreground">{name}</span>
+    </span>
+  );
+}
+
 export default function TopModelView({ topModels, topModelsLimit, setTopModelsLimit }: TopModelViewProps) {
-  const [modelViewMode, setModelViewMode] = useState<"chart" | "table">("table");
+  const { t } = useTranslation();
+  const [modelViewMode, setModelViewMode] = useState<ViewMode>("table");
 
   const columns = [
     {
-      header: "Model",
+      header: t("usage.topModelView.columns.model"),
       accessorKey: "key",
-      cell: (info: any) => info.getValue() || "-",
+      meta: QUIET_HEADER,
+      cell: (info: any) => <ModelName name={info.getValue()} />,
     },
     {
-      header: "Spend (USD)",
+      header: t("usage.topModelView.columns.spendUsd"),
       accessorKey: "spend",
-      meta: { numeric: true },
+      meta: { numeric: true, ...QUIET_HEADER },
       cell: (info: any) => <MoneyCell value={info.getValue()} decimals={2} />,
     },
     {
-      header: "Successful",
+      header: t("usage.topModelView.columns.successful"),
       accessorKey: "successful_requests",
-      meta: { numeric: true },
-      cell: (info: any) => <span className="text-green-600">{info.getValue()?.toLocaleString() || 0}</span>,
+      meta: { numeric: true, ...QUIET_HEADER },
+      cell: (info: any) => <span className="text-success">{info.getValue()?.toLocaleString() || 0}</span>,
     },
     {
-      header: "Failed",
+      header: t("usage.topModelView.columns.failed"),
       accessorKey: "failed_requests",
-      meta: { numeric: true },
-      cell: (info: any) => <span className="text-red-600">{info.getValue()?.toLocaleString() || 0}</span>,
+      meta: { numeric: true, ...QUIET_HEADER },
+      cell: (info: any) => <span className="text-destructive">{info.getValue()?.toLocaleString() || 0}</span>,
     },
     {
-      header: "Tokens",
+      header: t("usage.topModelView.columns.tokens"),
       accessorKey: "tokens",
-      meta: { numeric: true },
+      meta: { numeric: true, ...QUIET_HEADER },
       cell: (info: any) => info.getValue()?.toLocaleString() || 0,
     },
   ];
@@ -57,41 +91,29 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
 
   return (
     <>
-      <div className="mb-4 flex justify-between items-center">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <Segmented
-          options={[
-            { label: "5", value: 5 },
-            { label: "10", value: 10 },
-            { label: "25", value: 25 },
-            { label: "50", value: 50 },
-          ]}
-          value={topModelsLimit}
-          onChange={(value) => setTopModelsLimit(value as number)}
+          label={t("usage.topModelView.limitLabel")}
+          value={String(topModelsLimit)}
+          options={LIMIT_OPTIONS}
+          onChange={(limit) => setTopModelsLimit(Number(limit))}
         />
-        <div className="flex space-x-2">
-          <button
-            onClick={() => setModelViewMode("table")}
-            className={`px-3 py-1 text-sm rounded-md ${modelViewMode === "table" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
-          >
-            Table View
-          </button>
-          <button
-            onClick={() => setModelViewMode("chart")}
-            className={`px-3 py-1 text-sm rounded-md ${modelViewMode === "chart" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
-          >
-            Chart View
-          </button>
-        </div>
+        <Segmented
+          label={t("usage.topModelView.viewModeLabel")}
+          value={modelViewMode}
+          options={VIEW_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }))}
+          onChange={setModelViewMode}
+        />
       </div>
       {modelViewMode === "chart" ? (
         <div className="relative max-h-[600px] overflow-y-auto">
           <BarChart
-            className="mt-4 cursor-pointer hover:opacity-90"
+            className="cursor-pointer hover:opacity-90"
             style={{ height: Math.min(processedTopModels.length, topModelsLimit) * 52 }}
             data={processedTopModels}
             index="key"
             categories={["spend"]}
-            colors={["cyan"]}
+            colors={[BAR_COLOR]}
             valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
             layout="vertical"
             yAxisWidth={200}
@@ -100,9 +122,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
           />
         </div>
       ) : (
-        <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
-          <DataTable columns={columns} data={processedTopModels} isLoading={false} />
-        </div>
+        <DataTable columns={columns} data={processedTopModels} isLoading={false} maxBodyHeight={600} size="compact" />
       )}
     </>
   );

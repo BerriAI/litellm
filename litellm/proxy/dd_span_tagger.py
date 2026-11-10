@@ -1,5 +1,3 @@
-from typing import Optional
-
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.dd_tracing import set_active_span_tag
 from litellm.proxy._types import UserAPIKeyAuth
@@ -9,7 +7,7 @@ class DDSpanTagger:
     """Best-effort helpers for tagging the active Datadog APM span with LiteLLM request metadata."""
 
     @staticmethod
-    def tag_call_id(litellm_call_id: Optional[str]) -> None:
+    def tag_call_id(litellm_call_id: str | None) -> None:
         """
         Attach LiteLLM call id to the active Datadog APM span.
 
@@ -29,7 +27,7 @@ class DDSpanTagger:
     @staticmethod
     def tag_request(
         user_api_key_dict: UserAPIKeyAuth,
-        requested_model: Optional[str],
+        requested_model: str | None,
     ) -> None:
         """
         Attach key and model tags to the active Datadog APM span.
@@ -38,11 +36,15 @@ class DDSpanTagger:
         - ``litellm.key_alias``      — human-readable alias for the API key
         - ``litellm.key_hash``       — hashed API key (safe to log; never the raw secret)
         - ``litellm.requested_model``— model name as sent by the client
+        - ``litellm.user_email``     — email of the authenticated user
 
         Use cases:
         - Trace all requests from a specific user/key: filter by ``litellm.key_alias`` or
           ``litellm.key_hash``.
         - Trace all requests for a specific model: filter by ``litellm.requested_model``.
+        - Trace all requests from a specific person under JWT auth, where there is no key_alias:
+          filter by ``@litellm.user_email:"user@example.com"``. The value comes from the JWT claim
+          mapped by ``litellm_jwtauth.user_email_jwt_field``, or from the user row for virtual keys.
 
         Note: key_alias / key_hash are not available for unauthenticated (e.g. 401) requests.
         """
@@ -53,8 +55,10 @@ class DDSpanTagger:
                 set_active_span_tag("litellm.key_hash", str(user_api_key_dict.token))
             if requested_model:
                 set_active_span_tag("litellm.requested_model", str(requested_model))
+            if user_api_key_dict.user_email:
+                set_active_span_tag("litellm.user_email", str(user_api_key_dict.user_email))
         except Exception:
             verbose_proxy_logger.debug(
-                "Failed to tag active ddtrace span with key/model tags",
+                "Failed to tag active ddtrace span with key/model/user tags",
                 exc_info=True,
             )

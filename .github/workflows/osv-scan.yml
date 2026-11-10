@@ -4,9 +4,10 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
+      - "rc/**"
+      - "stable/**"
+      - "lts/**"
   schedule:
     - cron: "23 6 * * *"
   workflow_dispatch:
@@ -41,4 +42,5 @@ jobs:
           "$RUNNER_TEMP/osv-scanner" scan source \
             --config osv-scanner.toml \
             -L uv.lock \
-            -L ui/litellm-dashboard/package-lock.json
+            -L ui/litellm-dashboard/package-lock.json \
+            -L vscode-extension/package-lock.json

@@ -1,54 +1,53 @@
-import React, { useState } from "react";
-import { Button, Space } from "antd";
-import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { TextInput } from "@tremor/react";
+import React from "react";
+import { Minus, Plus } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import type { KeyValuePair } from "./key_value_input";
 
 interface QueryParamInputProps {
-  value?: Record<string, string>;
-  onChange?: (value: Record<string, string>) => void;
+  value?: readonly KeyValuePair[];
+  onChange?: (value: readonly KeyValuePair[]) => void;
 }
 
-const QueryParamInput: React.FC<QueryParamInputProps> = ({ value = {}, onChange }) => {
-  const [pairs, setPairs] = useState<[string, string][]>(Object.entries(value));
+const QueryParamInput: React.FC<QueryParamInputProps> = ({ value = [], onChange }) => {
+  const { t } = useTranslation();
+  const handleAdd = () => onChange?.([...value, ["", ""]]);
 
-  const handleAdd = () => {
-    setPairs([...pairs, ["", ""]]);
-  };
+  const handleRemove = (index: number) => onChange?.(value.filter((_, i) => i !== index));
 
-  const handleRemove = (index: number) => {
-    const newPairs = pairs.filter((_, i) => i !== index);
-    setPairs(newPairs);
-    onChange?.(Object.fromEntries(newPairs));
-  };
-
-  const handleChange = (index: number, key: string, val: string) => {
-    const newPairs = [...pairs];
-    newPairs[index] = [key, val];
-    setPairs(newPairs);
-    onChange?.(Object.fromEntries(newPairs));
-  };
+  const handleChange = (index: number, pair: KeyValuePair) =>
+    onChange?.(value.map((existing, i) => (i === index ? pair : existing)));
 
   return (
-    <div>
-      {pairs.map(([key, val], index) => (
-        <Space key={index} style={{ display: "flex", marginBottom: 8 }} align="center">
-          <TextInput
-            placeholder="Parameter Name (e.g., version)"
+    <div className="space-y-2">
+      {value.map(([key, val], index) => (
+        <div key={index} className="flex items-center gap-2">
+          <Input
+            placeholder={t("queryParamInput.parameterName")}
             value={key}
-            onChange={(e) => handleChange(index, e.target.value, val)}
+            onChange={(e) => handleChange(index, [e.target.value, val])}
           />
-          <TextInput
-            placeholder="Parameter Value (e.g., v1)"
+          <Input
+            placeholder={t("queryParamInput.parameterValue")}
             value={val}
-            onChange={(e) => handleChange(index, key, e.target.value)}
+            onChange={(e) => handleChange(index, [key, e.target.value])}
           />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
-            <MinusCircleOutlined onClick={() => handleRemove(index)} style={{ cursor: "pointer" }} />
-          </div>
-        </Space>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => handleRemove(index)}
+            aria-label={t("queryParamInput.removeParameter", { position: index + 1 })}
+          >
+            <Minus />
+          </Button>
+        </div>
       ))}
-      <Button type="dashed" onClick={handleAdd} icon={<PlusOutlined />}>
-        Add Query Parameter
+      <Button type="button" variant="outline" onClick={handleAdd}>
+        <Plus />
+        {t("queryParamInput.addParameter")}
       </Button>
     </div>
   );

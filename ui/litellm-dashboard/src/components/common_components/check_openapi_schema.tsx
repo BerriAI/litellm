@@ -1,10 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { Form, Input, InputNumber, Select } from "antd";
-import { TextInput } from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Tooltip } from "antd";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Info } from "lucide-react";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import type { UseFormSetValue } from "react-hook-form";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 import { getOpenAPISchema } from "../networking";
 import { formatLabel } from "@/utils/textUtils";
+import { MountedFormField, type MountedFormValues } from "./MountedFormField";
 
 interface SchemaProperty {
   type?: string;
@@ -25,13 +30,13 @@ interface OpenAPISchema {
 interface SchemaFormFieldsProps {
   schemaComponent: string;
   excludedFields?: string[];
-  form: any;
+  setValue: UseFormSetValue<MountedFormValues>;
   overrideLabels?: { [key: string]: string };
   overrideTooltips?: { [key: string]: string };
   customValidation?: {
-    [key: string]: (rule: any, value: any) => Promise<void>;
+    [key: string]: (rule: unknown, value: unknown) => Promise<void>;
   };
-  defaultValues?: { [key: string]: any };
+  defaultValues?: { [key: string]: unknown };
 }
 
 // Define which fields should be parsed as JSON
@@ -53,32 +58,43 @@ const validateJSON = (value: string): boolean => {
   }
 };
 
+const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
+
+const toSchemaNumber = (raw: string, isInteger: boolean): number | null => {
+  if (raw === "") return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return null;
+  return isInteger ? Math.trunc(parsed) : parsed;
+};
+
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 const getFieldHelp = (key: string, property: SchemaProperty, type: string): string => {
   // Default help text based on type
   const defaultHelp =
     {
-      string: "Text input",
-      number: "Numeric input",
-      integer: "Whole number input",
-      boolean: "True/False value",
-    }[type] || "Text input";
+      string: i18n.t("commonComponents.checkOpenapiSchema.typeHelp.string"),
+      number: i18n.t("commonComponents.checkOpenapiSchema.typeHelp.number"),
+      integer: i18n.t("commonComponents.checkOpenapiSchema.typeHelp.integer"),
+      boolean: i18n.t("commonComponents.checkOpenapiSchema.typeHelp.boolean"),
+    }[type] || i18n.t("commonComponents.checkOpenapiSchema.typeHelp.fallback");
 
   // Specific field help text
   const specificHelp: { [key: string]: string } = {
-    max_budget: "Enter maximum budget in USD (e.g., 100.50)",
-    budget_duration: "Select a time period for budget reset",
-    tpm_limit: "Enter maximum tokens per minute (whole number)",
-    rpm_limit: "Enter maximum requests per minute (whole number)",
-    duration: "Enter duration (e.g., 30s, 24h, 7d)",
-    metadata: 'Enter JSON object with key-value pairs\nExample: {"team": "research", "project": "nlp"}',
-    config: 'Enter configuration as JSON object\nExample: {"setting": "value"}',
-    permissions: "Enter comma-separated permission strings",
-    enforced_params: 'Enter parameters as JSON object\nExample: {"param": "value"}',
-    blocked: "Enter true/false or specific block conditions",
-    aliases: 'Enter aliases as JSON object\nExample: {"alias1": "value1", "alias2": "value2"}',
-    models: "Select one or more model names",
-    key_alias: "Enter a unique identifier for this key",
-    tags: "Enter comma-separated tag strings",
+    max_budget: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.maxBudget"),
+    budget_duration: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.budgetDuration"),
+    tpm_limit: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.tpmLimit"),
+    rpm_limit: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.rpmLimit"),
+    duration: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.duration"),
+    metadata: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.metadata"),
+    config: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.config"),
+    permissions: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.permissions"),
+    enforced_params: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.enforcedParams"),
+    blocked: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.blocked"),
+    aliases: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.aliases"),
+    models: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.models"),
+    key_alias: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.keyAlias"),
+    tags: i18n.t("commonComponents.checkOpenapiSchema.fieldHelp.tags"),
   };
 
   // Get specific help text or use default based on type
@@ -86,11 +102,11 @@ const getFieldHelp = (key: string, property: SchemaProperty, type: string): stri
 
   // Add format requirements for special cases
   if (isJSONField(key, property)) {
-    return `${helpText}\nMust be valid JSON format`;
+    return i18n.t("commonComponents.checkOpenapiSchema.jsonHelp", { helpText });
   }
 
   if (property.enum) {
-    return `Select from available options\nAllowed values: ${property.enum.join(", ")}`;
+    return i18n.t("commonComponents.checkOpenapiSchema.enumHelp", { values: property.enum.join(", ") });
   }
 
   return helpText;
@@ -99,12 +115,13 @@ const getFieldHelp = (key: string, property: SchemaProperty, type: string): stri
 const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
   schemaComponent,
   excludedFields = [],
-  form,
+  setValue,
   overrideLabels = {},
   overrideTooltips = {},
   customValidation = {},
   defaultValues = {},
 }) => {
+  const { t } = useTranslation();
   const [schemaProperties, setSchemaProperties] = useState<OpenAPISchema | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -120,22 +137,19 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
 
         setSchemaProperties(componentSchema);
 
-        const defaultFormValues: { [key: string]: any } = {};
         Object.keys(componentSchema.properties)
           .filter((key) => !excludedFields.includes(key) && defaultValues[key] !== undefined)
           .forEach((key) => {
-            defaultFormValues[key] = defaultValues[key];
+            setValue(key, defaultValues[key]);
           });
-
-        form.setFieldsValue(defaultFormValues);
       } catch (error) {
         console.error("Schema fetch error:", error);
-        setError(error instanceof Error ? error.message : "Failed to fetch schema");
+        setError(error instanceof Error ? error.message : t("commonComponents.checkOpenapiSchema.fetchFailed"));
       }
     };
 
     fetchOpenAPISchema();
-  }, [schemaComponent, form, excludedFields]);
+  }, [schemaComponent, setValue, excludedFields, t]);
 
   const getPropertyType = (property: SchemaProperty): string => {
     if (property.type) {
@@ -156,72 +170,113 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
     const label = overrideLabels[key] || property.title || formatLabel(key);
     const tooltip = overrideTooltips[key] || property.description;
 
-    const rules = [];
-    if (isRequired) {
-      rules.push({ required: true, message: `${label} is required` });
-    }
-    if (customValidation[key]) {
-      rules.push({ validator: customValidation[key] });
-    }
-    if (isJSONField(key, property)) {
-      rules.push({
-        validator: async (_: any, value: string) => {
-          if (value && !validateJSON(value)) {
-            throw new Error("Please enter valid JSON");
+    const validate = {
+      ...(isRequired && {
+        required: (value: unknown) =>
+          isBlank(value) ? t("commonComponents.checkOpenapiSchema.required", { label }) : true,
+      }),
+      ...(customValidation[key] && {
+        custom: async (value: unknown) => {
+          try {
+            await customValidation[key](null, value);
+            return true;
+          } catch (thrown) {
+            return messageOf(thrown);
           }
         },
-      });
-    }
+      }),
+      ...(isJSONField(key, property) && {
+        json: (value: unknown) =>
+          value && !validateJSON(value as string)
+            ? t("commonComponents.checkOpenapiSchema.invalidJson")
+            : (true as const),
+      }),
+    };
 
     const formLabel = tooltip ? (
       <span>
         {label}{" "}
-        <Tooltip title={tooltip}>
-          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
-        </Tooltip>
+        <SimpleTooltip content={tooltip}>
+          <Info className="ml-1 inline size-3.5 align-text-bottom" />
+        </SimpleTooltip>
       </span>
     ) : (
       label
     );
 
-    let inputComponent;
-    if (isJSONField(key, property)) {
-      inputComponent = <Input.TextArea rows={4} placeholder="Enter as JSON" className="font-mono" />;
-    } else if (property.enum) {
-      inputComponent = (
-        <Select>
-          {property.enum.map((value) => (
-            <Select.Option key={value} value={value}>
-              {value}
-            </Select.Option>
-          ))}
-        </Select>
-      );
-    } else if (type === "number" || type === "integer") {
-      inputComponent = <InputNumber style={{ width: "100%" }} precision={type === "integer" ? 0 : undefined} />;
-    } else if (key === "duration") {
-      inputComponent = <TextInput placeholder="eg: 30s, 30h, 30d" />;
-    } else {
-      inputComponent = <TextInput placeholder={tooltip || ""} />;
-    }
-
     return (
-      <Form.Item
+      <MountedFormField
         key={key}
         label={formLabel}
         name={key}
         className="mt-8"
-        rules={rules}
-        initialValue={defaultValues[key]}
-        help={<div className="text-xs text-gray-500">{getFieldHelp(key, property, type)}</div>}
+        required={isRequired}
+        rules={Object.keys(validate).length > 0 ? { validate } : undefined}
+        defaultValue={defaultValues[key]}
+        help={<div className="text-xs text-muted-foreground">{getFieldHelp(key, property, type)}</div>}
       >
-        {inputComponent}
-      </Form.Item>
+        {(control) => {
+          if (isJSONField(key, property)) {
+            return (
+              <Textarea
+                {...control}
+                value={control.value as string | undefined}
+                rows={4}
+                placeholder={t("commonComponents.checkOpenapiSchema.jsonPlaceholder")}
+                className="font-mono"
+              />
+            );
+          }
+          if (property.enum) {
+            return (
+              <Select value={(control.value as string | undefined) ?? null} onValueChange={control.onChange}>
+                <SelectTrigger
+                  id={control.id}
+                  onBlur={control.onBlur}
+                  aria-invalid={control["aria-invalid"]}
+                  className="w-full"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {property.enum.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            );
+          }
+          if (type === "number" || type === "integer") {
+            return (
+              <Input
+                {...control}
+                type="number"
+                step={type === "integer" ? 1 : "any"}
+                value={(control.value as number | undefined) ?? ""}
+                onChange={(event) => control.onChange(toSchemaNumber(event.target.value, type === "integer"))}
+                className="w-full"
+              />
+            );
+          }
+          if (key === "duration") {
+            return (
+              <Input
+                {...control}
+                value={(control.value as string | undefined) ?? ""}
+                placeholder={t("commonComponents.checkOpenapiSchema.durationPlaceholder")}
+              />
+            );
+          }
+          return <Input {...control} value={(control.value as string | undefined) ?? ""} placeholder={tooltip || ""} />;
+        }}
+      </MountedFormField>
     );
   };
 
   if (error) {
-    return <div className="text-red-500">Error: {error}</div>;
+    return <div className="text-destructive">{t("commonComponents.checkOpenapiSchema.error", { error })}</div>;
   }
 
   if (!schemaProperties?.properties) {

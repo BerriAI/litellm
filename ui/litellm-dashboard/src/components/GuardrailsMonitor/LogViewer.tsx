@@ -1,38 +1,55 @@
-import { CheckCircleOutlined, CloseOutlined, DownOutlined, WarningOutlined } from "@ant-design/icons";
+import { CircleCheck, ChevronDown, MinusCircle, TriangleAlert, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import type { ParseKeys } from "i18next";
 import moment from "moment";
-import { Button, Spin } from "antd";
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { uiSpendLogsCall } from "@/components/networking";
-import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
-import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
+import { LogDetailsDrawer } from "@/components/logs/detail";
+import type { LogEntry as ViewLogsLogEntry } from "@/components/logs/types";
 import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<
-  "blocked" | "passed" | "flagged",
-  { icon: React.ElementType; color: string; bg: string; border: string; label: string }
+  "blocked" | "passed" | "flagged" | "not_run",
+  { icon: React.ElementType; color: string; bg: string; border: string; labelKey: ParseKeys }
 > = {
+  not_run: {
+    icon: MinusCircle,
+    color: "text-muted-foreground",
+    bg: "bg-muted",
+    border: "border-border",
+    labelKey: "guardrailsMonitor.logViewer.actions.notRun",
+  },
   blocked: {
-    icon: CloseOutlined,
-    color: "text-red-600",
-    bg: "bg-red-50",
-    border: "border-red-200",
-    label: "Blocked",
+    icon: X,
+    color: "text-destructive",
+    bg: "bg-destructive/10",
+    border: "border-destructive/20",
+    labelKey: "guardrailsMonitor.logViewer.actions.blocked",
   },
   passed: {
-    icon: CheckCircleOutlined,
-    color: "text-green-600",
-    bg: "bg-green-50",
-    border: "border-green-200",
-    label: "Passed",
+    icon: CircleCheck,
+    color: "text-success",
+    bg: "bg-success/10",
+    border: "border-success/20",
+    labelKey: "guardrailsMonitor.logViewer.actions.passed",
   },
   flagged: {
-    icon: WarningOutlined,
-    color: "text-amber-600",
-    bg: "bg-amber-50",
-    border: "border-amber-200",
-    label: "Flagged",
+    icon: TriangleAlert,
+    color: "text-warning",
+    bg: "bg-warning/10",
+    border: "border-warning/20",
+    labelKey: "guardrailsMonitor.logViewer.actions.flagged",
   },
+};
+
+const FILTER_LABEL_KEYS: Record<"all" | "blocked" | "flagged" | "passed", ParseKeys> = {
+  all: "guardrailsMonitor.logViewer.filters.all",
+  blocked: "guardrailsMonitor.logViewer.filters.blocked",
+  flagged: "guardrailsMonitor.logViewer.filters.flagged",
+  passed: "guardrailsMonitor.logViewer.filters.passed",
 };
 
 interface LogViewerProps {
@@ -56,6 +73,7 @@ export function LogViewer({
   startDate = "",
   endDate = "",
 }: LogViewerProps) {
+  const { t } = useTranslation();
   const [sampleSize, setSampleSize] = useState(10);
   const [activeFilter, setActiveFilter] = useState<string>(filterAction);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
@@ -91,7 +109,8 @@ export function LogViewer({
     enabled: Boolean(accessToken && selectedRequestId && drawerOpen),
   });
 
-  const selectedLog: ViewLogsLogEntry | null = fullLogResponse?.data?.[0] ?? null;
+  const selectedLog: ViewLogsLogEntry | null =
+    fullLogResponse?.data?.find((log) => log.request_id === selectedRequestId) ?? fullLogResponse?.data?.[0] ?? null;
 
   const handleLogClick = (log: LogEntry) => {
     setSelectedRequestId(log.id);
@@ -104,19 +123,21 @@ export function LogViewer({
   };
 
   return (
-    <div className="bg-white border border-gray-200 rounded-lg">
-      <div className="p-4 border-b border-gray-200">
+    <div className="bg-card border border-border rounded-lg">
+      <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            <h3 className="text-base font-semibold text-gray-900">
-              {guardrailName ? `Logs — ${guardrailName}` : "Request Logs"}
+            <h3 className="text-base font-semibold text-foreground">
+              {guardrailName
+                ? t("guardrailsMonitor.logViewer.titleWithName", { name: guardrailName })
+                : t("guardrailsMonitor.logViewer.title")}
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
+            <p className="text-xs text-muted-foreground mt-0.5">
               {logsLoading
-                ? "Loading…"
+                ? t("guardrailsMonitor.logViewer.loading")
                 : logs.length > 0
-                  ? `Showing ${displayLogs.length} of ${total} entries`
-                  : "No logs for this period. Select a guardrail and date range."}
+                  ? t("guardrailsMonitor.logViewer.summary", { shown: displayLogs.length, total })
+                  : t("guardrailsMonitor.logViewer.empty")}
             </p>
           </div>
           {logs.length > 0 && (
@@ -125,22 +146,22 @@ export function LogViewer({
                 {filters.map((f) => (
                   <Button
                     key={f}
-                    type={activeFilter === f ? "primary" : "default"}
-                    size="small"
+                    variant={activeFilter === f ? "default" : "outline"}
+                    size="sm"
                     onClick={() => setActiveFilter(f)}
                   >
-                    {f.charAt(0).toUpperCase() + f.slice(1)}
+                    {t(FILTER_LABEL_KEYS[f])}
                   </Button>
                 ))}
               </div>
-              <div className="h-4 w-px bg-gray-200" />
+              <div className="h-4 w-px bg-border" />
               <div className="flex items-center gap-1">
-                <span className="text-xs text-gray-500 mr-1">Sample:</span>
+                <span className="text-xs text-muted-foreground mr-1">{t("guardrailsMonitor.logViewer.sample")}</span>
                 {sampleSizes.map((size) => (
                   <Button
                     key={size}
-                    type={sampleSize === size ? "primary" : "default"}
-                    size="small"
+                    variant={sampleSize === size ? "default" : "outline"}
+                    size="sm"
                     onClick={() => setSampleSize(size)}
                   >
                     {size}
@@ -154,14 +175,16 @@ export function LogViewer({
 
       {logsLoading && (
         <div className="flex items-center justify-center py-12">
-          <Spin />
+          <UiLoadingSpinner className="size-5" />
         </div>
       )}
       {!logsLoading && displayLogs.length === 0 && (
-        <div className="py-12 text-center text-sm text-gray-500">No logs to display. Adjust filters or date range.</div>
+        <div className="py-12 text-center text-sm text-muted-foreground">
+          {t("guardrailsMonitor.logViewer.noMatches")}
+        </div>
       )}
       {!logsLoading && displayLogs.length > 0 && (
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-border">
           {displayLogs.map((log) => {
             const config = actionConfig[log.action];
             const ActionIcon = config.icon;
@@ -170,7 +193,7 @@ export function LogViewer({
                 key={log.id}
                 type="button"
                 onClick={() => handleLogClick(log)}
-                className="w-full text-left px-4 py-3 hover:bg-gray-50 transition-colors flex items-start gap-3"
+                className="w-full text-left px-4 py-3 hover:bg-accent transition-colors flex items-start gap-3"
               >
                 <ActionIcon className={`w-4 h-4 mt-0.5 shrink-0 ${config.color}`} />
                 <div className="flex-1 min-w-0">
@@ -178,15 +201,17 @@ export function LogViewer({
                     <span
                       className={`inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-sm border ${config.bg} ${config.color} ${config.border}`}
                     >
-                      {config.label}
+                      {t(config.labelKey)}
                     </span>
-                    <span className="text-xs text-gray-400">{log.timestamp}</span>
-                    <span className="text-xs text-gray-400">·</span>
-                    {log.model && <span className="text-xs text-gray-500">{log.model}</span>}
+                    <span className="text-xs text-muted-foreground">{log.timestamp}</span>
+                    <span className="text-xs text-muted-foreground">·</span>
+                    {log.model && (
+                      <span className="min-w-0 text-xs break-words text-muted-foreground">{log.model}</span>
+                    )}
                   </div>
-                  <p className="text-sm text-gray-800 truncate">{log.input_snippet ?? log.input ?? "—"}</p>
+                  <p className="text-sm text-foreground truncate">{log.input_snippet ?? log.input ?? "—"}</p>
                 </div>
-                <DownOutlined className="w-4 h-4 text-gray-400 shrink-0 mt-1" />
+                <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0 mt-1" />
               </button>
             );
           })}

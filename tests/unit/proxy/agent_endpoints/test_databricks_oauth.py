@@ -1,0 +1,687 @@
+"""
+Unit tests for Databricks App OAuth M2M support for A2A agents.
+
+Covers config parsing (including os.environ/ resolution and validation),
+workspace token-URL construction, client_credentials token fetching, caching
+with expiry buffering, and the public ``resolve_databricks_app_auth_header``
+helper.
+"""
+
+import base64
+from typing import Final
+from unittest.mock import MagicMock, create_autospec, patch
+
+import httpx
+import pytest
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy.agent_endpoints.databricks_oauth import (
+    DatabricksAppOAuthConfig,
+    DatabricksAppOAuthTokenCache,
+    has_databricks_oauth,
+    parse_databricks_oauth_config,
+    resolve_databricks_app_auth_header,
+    resolve_databricks_backend_auth,
+    without_databricks_oauth_params,
+)
+
+
+def _expected_basic_auth(client_id: str, client_secret: str) -> str:
+    token = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    return f"Basic {token}"
+
+
+def _mock_http_handler(access_token="tok-abc", expires_in=3600, post_error=None):
+    """Return a mock that mirrors litellm's ``AsyncHTTPHandler`` contract.
+
+    Two properties of the real handler matter for these tests and were the
+    source of a runtime bug the original suite missed:
+
+    1. ``post`` does not accept an ``auth`` kwarg. ``create_autospec`` enforces
+       the real signature, so reintroducing HTTP Basic via ``auth=`` fails with
+       ``TypeError`` instead of silently passing.
+    2. ``post`` calls ``raise_for_status`` internally and raises
+       ``httpx.HTTPStatusError`` itself on non-2xx; callers never inspect the
+       returned response's status. Error-path tests therefore raise from
+       ``post`` rather than from ``response.raise_for_status``.
+    """
+    handler = create_autospec(AsyncHTTPHandler, instance=True)
+    if post_error is not None:
+        handler.post.side_effect = post_error
+    else:
+        response = MagicMock()
+        response.json = MagicMock(return_value={"access_token": access_token, "expires_in": expires_in})
+        handler.post.return_value = response
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# Config parsing
+# ---------------------------------------------------------------------------
+
+
+def test_parse_returns_none_without_block():
+    assert parse_databricks_oauth_config(None) is None
+    assert parse_databricks_oauth_config({}) is None
+    assert parse_databricks_oauth_config({"other": "value"}) is None
+
+
+def test_parse_builds_config_and_token_url():
+    config = parse_databricks_oauth_config(
+        {
+            "databricks_oauth": {
+                "client_id": "cid",
+                "client_secret": "secret",
+                "workspace_url": "https://dbc-abc.cloud.databricks.com",
+            }
+        }
+    )
+    assert config == DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="secret",
+        token_url="https://dbc-abc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+
+
+def test_parse_strips_serving_endpoints_and_trailing_slash():
+    config = parse_databricks_oauth_config(
+        {
+            "databricks_oauth": {
+                "client_id": "cid",
+                "client_secret": "secret",
+                "workspace_url": "https://dbc-abc.cloud.databricks.com/serving-endpoints/",
+            }
+        }
+    )
+    assert config is not None
+    assert config.token_url == "https://dbc-abc.cloud.databricks.com/oidc/v1/token"
+
+
+def test_parse_custom_scope():
+    config = parse_databricks_oauth_config(
+        {
+            "databricks_oauth": {
+                "client_id": "cid",
+                "client_secret": "secret",
+                "workspace_url": "https://dbc-abc.cloud.databricks.com",
+                "scope": "custom-scope",
+            }
+        }
+    )
+    assert config is not None
+    assert config.scope == "custom-scope"
+
+
+AGENT_KINDS: Final = pytest.mark.parametrize(
+    ("agent_params", "error"),
+    [({}, ValueError), ({"custom_llm_provider": "databricks_agent"}, litellm.BadRequestError)],
+    ids=["url-agent", "databricks-agent"],
+)
+
+
+@AGENT_KINDS
+@pytest.mark.parametrize("missing_field", ["client_id", "client_secret", "workspace_url"])
+def test_parse_raises_on_missing_field(missing_field, agent_params, error):
+    block = {
+        "client_id": "cid",
+        "client_secret": "secret",
+        "workspace_url": "https://dbc-abc.cloud.databricks.com",
+    }
+    block.pop(missing_field)
+    with pytest.raises(error, match=missing_field):
+        parse_databricks_oauth_config({**agent_params, "databricks_oauth": block})
+
+
+@AGENT_KINDS
+def test_parse_raises_on_non_mapping_block(agent_params, error):
+    with pytest.raises(error, match="mapping"):
+        parse_databricks_oauth_config({**agent_params, "databricks_oauth": "not-a-dict"})
+
+
+@pytest.mark.parametrize(
+    ("block", "error"),
+    [({}, "missing required field"), ("", "mapping")],
+)
+def test_parse_raises_on_an_empty_nested_block(block, error):
+    params = {"custom_llm_provider": "databricks_agent", "databricks_oauth": block}
+    assert has_databricks_oauth(params)
+    with pytest.raises(litellm.BadRequestError, match=error):
+        parse_databricks_oauth_config(params)
+
+
+@pytest.mark.parametrize("block", [{}, ""])
+@pytest.mark.asyncio
+async def test_an_empty_nested_block_on_a_url_agent_is_ignored_as_before(block):
+    auth: Final = await resolve_databricks_backend_auth({"databricks_oauth": block, "api_key": "hop-key"})
+    assert auth.header is None
+    assert auth.litellm_params == {"api_key": "hop-key"}
+
+
+def test_parse_resolves_os_environ_references(monkeypatch):
+    monkeypatch.setenv("MY_DBX_CLIENT_ID", "env-cid")
+    monkeypatch.setenv("MY_DBX_SECRET", "env-secret")
+    config = parse_databricks_oauth_config(
+        {
+            "databricks_oauth": {
+                "client_id": "os.environ/MY_DBX_CLIENT_ID",
+                "client_secret": "os.environ/MY_DBX_SECRET",
+                "workspace_url": "https://dbc-abc.cloud.databricks.com",
+            }
+        }
+    )
+    assert config is not None
+    assert config.client_id == "env-cid"
+    assert config.client_secret == "env-secret"
+
+
+# ---------------------------------------------------------------------------
+# Token fetching + caching
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_token_posts_client_credentials_with_basic_auth():
+    cache = DatabricksAppOAuthTokenCache()
+    config = DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+    client = _mock_http_handler(access_token="tok-1")
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        token = await cache.async_get_token(config)
+
+    assert token == "tok-1"
+    client.post.assert_awaited_once()
+    call = client.post.call_args
+    assert call.args[0] == config.token_url
+    assert call.kwargs["data"] == {
+        "grant_type": "client_credentials",
+        "scope": "all-apis",
+    }
+    # Databricks authenticates the client with HTTP Basic; it must be sent as a
+    # header because litellm's AsyncHTTPHandler.post has no ``auth`` parameter.
+    assert call.kwargs["headers"]["Authorization"] == _expected_basic_auth("cid", "secret")
+    assert "auth" not in call.kwargs
+
+
+@pytest.mark.asyncio
+async def test_token_is_cached_across_calls():
+    cache = DatabricksAppOAuthTokenCache()
+    config = DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+    client = _mock_http_handler(access_token="tok-cached")
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        first = await cache.async_get_token(config)
+        second = await cache.async_get_token(config)
+
+    assert first == second == "tok-cached"
+    client.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_distinct_clients_do_not_share_token():
+    cache = DatabricksAppOAuthTokenCache()
+    config_a = DatabricksAppOAuthConfig(
+        client_id="cid-a",
+        client_secret="secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+    config_b = DatabricksAppOAuthConfig(
+        client_id="cid-b",
+        client_secret="secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+
+    clients = [_mock_http_handler("tok-a"), _mock_http_handler("tok-b")]
+
+    def _next_client(*args, **kwargs):
+        return clients.pop(0)
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        side_effect=_next_client,
+    ):
+        token_a = await cache.async_get_token(config_a)
+        token_b = await cache.async_get_token(config_b)
+
+    assert token_a == "tok-a"
+    assert token_b == "tok-b"
+
+
+@pytest.mark.asyncio
+async def test_ttl_applies_expiry_buffer():
+    cache = DatabricksAppOAuthTokenCache()
+    config = DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+    client = _mock_http_handler(access_token="tok", expires_in=600)
+
+    captured = {}
+    real_set = cache.set_cache
+
+    def _spy_set(key, value, **kwargs):
+        captured["ttl"] = kwargs.get("ttl")
+        return real_set(key, value, **kwargs)
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+            return_value=client,
+        ),
+        patch.object(cache, "set_cache", side_effect=_spy_set),
+    ):
+        await cache.async_get_token(config)
+
+    assert captured["ttl"] == 600 - 60
+
+
+@pytest.mark.asyncio
+async def test_missing_access_token_raises():
+    cache = DatabricksAppOAuthTokenCache()
+    config = DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+    client = _mock_http_handler()
+    client.post.return_value.json.return_value = {"not_a_token": "x"}
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        with pytest.raises(ValueError, match="access_token"):
+            await cache.async_get_token(config)
+
+
+def _config():
+    return DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+
+
+@pytest.mark.asyncio
+async def test_http_status_error_raises_value_error():
+    cache = DatabricksAppOAuthTokenCache()
+    request = httpx.Request("POST", _config().token_url)
+    error_response = httpx.Response(status_code=401, request=request)
+    client = _mock_http_handler(
+        post_error=httpx.HTTPStatusError("unauthorized", request=request, response=error_response)
+    )
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        with pytest.raises(ValueError, match="status 401"):
+            await cache.async_get_token(_config())
+
+
+@pytest.mark.asyncio
+async def test_transport_error_raises_value_error():
+    cache = DatabricksAppOAuthTokenCache()
+    client = _mock_http_handler(post_error=httpx.ConnectError("boom"))
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        with pytest.raises(ValueError, match="token request failed"):
+            await cache.async_get_token(_config())
+
+
+@pytest.mark.asyncio
+async def test_non_object_json_body_raises():
+    cache = DatabricksAppOAuthTokenCache()
+    client = _mock_http_handler()
+    client.post.return_value.json.return_value = ["not", "an", "object"]
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        with pytest.raises(ValueError, match="non-object JSON"):
+            await cache.async_get_token(_config())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires_in", [None, "not-a-number"])
+async def test_invalid_expires_in_falls_back_to_default_ttl(expires_in):
+    cache = DatabricksAppOAuthTokenCache()
+    client = _mock_http_handler(expires_in=expires_in)
+
+    captured = {}
+    real_set = cache.set_cache
+
+    def _spy_set(key, value, **kwargs):
+        captured["ttl"] = kwargs.get("ttl")
+        return real_set(key, value, **kwargs)
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+            return_value=client,
+        ),
+        patch.object(cache, "set_cache", side_effect=_spy_set),
+    ):
+        await cache.async_get_token(_config())
+
+    # default TTL (3600) minus the 60s expiry buffer
+    assert captured["ttl"] == 3600 - 60
+
+
+@pytest.mark.asyncio
+async def test_short_lived_token_not_cached():
+    """A token whose lifetime is below the refresh buffer is never cached and
+    leaves no per-key lock behind."""
+    cache = DatabricksAppOAuthTokenCache()
+    config = _config()
+    client = _mock_http_handler(access_token="short", expires_in=30)
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        await cache.async_get_token(config)
+        await cache.async_get_token(config)
+
+    assert cache.get_cache(config.cache_key) is None
+    assert config.cache_key not in cache._locks
+    assert client.post.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rotated_secret_forces_new_token():
+    """Rotating client_secret changes the cache key so a fresh token is minted."""
+    cache = DatabricksAppOAuthTokenCache()
+    old = DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="old-secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+    rotated = DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="new-secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+    assert old.cache_key != rotated.cache_key
+
+    clients = [_mock_http_handler("old-token"), _mock_http_handler("new-token")]
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        side_effect=lambda *a, **k: clients.pop(0),
+    ):
+        assert await cache.async_get_token(old) == "old-token"
+        assert await cache.async_get_token(rotated) == "new-token"
+
+
+@pytest.mark.asyncio
+async def test_lock_pruned_when_token_evicted():
+    """The per-key lock is removed when its cached token is deleted/evicted."""
+    cache = DatabricksAppOAuthTokenCache()
+    config = _config()
+    client = _mock_http_handler("tok")
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        await cache.async_get_token(config)
+
+    assert config.cache_key in cache._locks
+
+    cache.delete_cache(config.cache_key)
+
+    assert config.cache_key not in cache._locks
+
+
+@pytest.mark.asyncio
+async def test_flush_cache_clears_locks():
+    """flush_cache drops the per-key locks alongside the cached tokens."""
+    cache = DatabricksAppOAuthTokenCache()
+    config = _config()
+    client = _mock_http_handler("tok")
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        await cache.async_get_token(config)
+
+    assert config.cache_key in cache._locks
+
+    cache.flush_cache()
+
+    assert cache._locks == {}
+    assert cache.get_cache(config.cache_key) is None
+
+
+# ---------------------------------------------------------------------------
+# Public helper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_none_when_not_configured():
+    assert await resolve_databricks_app_auth_header(None) is None
+    assert await resolve_databricks_app_auth_header({"foo": "bar"}) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_bearer_header():
+    from litellm.proxy.agent_endpoints.databricks_oauth import (
+        databricks_app_oauth_token_cache,
+    )
+
+    databricks_app_oauth_token_cache.flush_cache()
+
+    litellm_params = {
+        "databricks_oauth": {
+            "client_id": "resolve-cid",
+            "client_secret": "secret",
+            "workspace_url": "https://resolve.cloud.databricks.com",
+        }
+    }
+    client = _mock_http_handler(access_token="resolved-token")
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        header = await resolve_databricks_app_auth_header(litellm_params)
+
+    assert header == {"Authorization": "Bearer resolved-token"}
+
+
+def test_parse_builds_config_from_flat_databricks_agent_fields():
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "api_base": "https://adb-1.azuredatabricks.net/serving-endpoints",
+            "model": "my-agent",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+        }
+    )
+    assert config == DatabricksAppOAuthConfig(
+        client_id="sp-id",
+        client_secret="sp-secret",
+        token_url="https://adb-1.azuredatabricks.net/oidc/v1/token",
+        scope="all-apis",
+    )
+
+
+def test_parse_flat_fields_take_the_workspace_from_an_os_environ_api_base(monkeypatch):
+    monkeypatch.setenv("MY_DBX_HOST", "https://adb-3.azuredatabricks.net/serving-endpoints")
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "api_base": "os.environ/MY_DBX_HOST",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+        }
+    )
+    assert config is not None
+    assert config.token_url == "https://adb-3.azuredatabricks.net/oidc/v1/token"
+
+
+def test_parse_flat_fields_prefer_an_explicit_workspace_url_for_an_app():
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "api_base": "https://my-app-1.azure.databricksapps.com/responses",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+            "workspace_url": "https://adb-1.azuredatabricks.net",
+            "scope": "custom-scope",
+        }
+    )
+    assert config is not None
+    assert config.token_url == "https://adb-1.azuredatabricks.net/oidc/v1/token"
+    assert config.scope == "custom-scope"
+
+
+@pytest.mark.parametrize(
+    "app_base",
+    ["https://my-app-1.azure.databricksapps.com/responses", "https://my-app-1.azure.databricksapps.com"],
+)
+def test_parse_flat_fields_of_an_app_without_a_workspace_url_raise_instead_of_using_the_app_host(app_base):
+    with pytest.raises(litellm.BadRequestError, match="workspace_url") as info:
+        parse_databricks_oauth_config(
+            {
+                "custom_llm_provider": "databricks_agent",
+                "api_base": app_base,
+                "client_id": "sp-id",
+                "client_secret": "sp-secret",
+            }
+        )
+    assert info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "workspace_url",
+    ["https://my-app-1.azure.databricksapps.com", "https://my-app-1.azure.databricksapps.com/responses"],
+)
+def test_parse_rejects_an_app_url_typed_as_the_workspace_url(workspace_url):
+    with pytest.raises(litellm.BadRequestError, match="not a Databricks App URL") as info:
+        parse_databricks_oauth_config(
+            {
+                "custom_llm_provider": "databricks_agent",
+                "api_base": "https://my-app-1.azure.databricksapps.com/responses",
+                "client_id": "sp-id",
+                "client_secret": "sp-secret",
+                "workspace_url": workspace_url,
+            }
+        )
+    assert info.value.status_code == 400
+
+
+def test_parse_flat_fields_with_only_a_client_id_raise_on_the_missing_secret():
+    with pytest.raises(litellm.BadRequestError, match="client_secret"):
+        parse_databricks_oauth_config(
+            {
+                "custom_llm_provider": "databricks_agent",
+                "api_base": "https://adb-1.azuredatabricks.net",
+                "client_id": "sp",
+            }
+        )
+
+
+def test_parse_ignores_flat_client_fields_of_other_providers():
+    assert (
+        parse_databricks_oauth_config(
+            {
+                "custom_llm_provider": "azure_ai",
+                "client_id": "entra-id",
+                "client_secret": "entra-secret",
+                "tenant_id": "t",
+            }
+        )
+        is None
+    )
+    assert parse_databricks_oauth_config({"custom_llm_provider": "databricks_agent", "api_key": "pat"}) is None
+
+
+def test_parse_nested_block_wins_over_flat_fields():
+    config = parse_databricks_oauth_config(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "client_id": "flat-id",
+            "client_secret": "flat-secret",
+            "databricks_oauth": {
+                "client_id": "nested-id",
+                "client_secret": "nested-secret",
+                "workspace_url": "https://adb-2.azuredatabricks.net",
+            },
+        }
+    )
+    assert config is not None
+    assert (config.client_id, config.token_url) == ("nested-id", "https://adb-2.azuredatabricks.net/oidc/v1/token")
+
+
+def test_without_oauth_params_drops_every_consumed_key_of_a_databricks_agent():
+    forwarded = without_databricks_oauth_params(
+        {
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": "https://adb-1.azuredatabricks.net",
+            "client_id": "sp-id",
+            "client_secret": "sp-secret",
+            "workspace_url": "https://adb-1.azuredatabricks.net",
+            "scope": "all-apis",
+            "databricks_oauth": {"client_id": "nested-id", "client_secret": "nested-secret"},
+            "custom_inputs": {"tenant": "t-1"},
+        }
+    )
+    assert forwarded == {
+        "custom_llm_provider": "databricks_agent",
+        "model": "my-agent",
+        "api_base": "https://adb-1.azuredatabricks.net",
+        "custom_inputs": {"tenant": "t-1"},
+    }
+
+
+def test_without_oauth_params_keeps_other_providers_client_credentials():
+    forwarded = without_databricks_oauth_params(
+        {
+            "custom_llm_provider": "azure_ai",
+            "client_id": "entra-id",
+            "client_secret": "entra-secret",
+            "tenant_id": "t",
+            "databricks_oauth": {"client_id": "sp"},
+        }
+    )
+    assert forwarded == {
+        "custom_llm_provider": "azure_ai",
+        "client_id": "entra-id",
+        "client_secret": "entra-secret",
+        "tenant_id": "t",
+    }

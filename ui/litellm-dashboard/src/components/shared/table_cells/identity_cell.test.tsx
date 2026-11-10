@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import { IdentityCell } from "./identity_cell";
 
+const routerPush = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPush }) }));
+
 describe("IdentityCell", () => {
   it("renders the title", () => {
     render(<IdentityCell title="prod-gateway" />);
@@ -33,9 +36,30 @@ describe("IdentityCell", () => {
     const button = screen.getByRole("button");
     expect(button.querySelector(".lucide-chevron-right")).not.toBeNull();
     // The clickable area must read as clickable: a hover background and a pointer cursor.
-    expect(button.className).toContain("hover:bg-muted");
-    expect(button.className).toContain("cursor-pointer");
+    expect(button).toHaveClass("hover:bg-muted");
+    expect(button).toHaveClass("cursor-pointer");
     await user.click(button);
     expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders an anchor with the chevron affordance and routes through the client router when href is set", async () => {
+    const user = userEvent.setup();
+    render(<IdentityCell title="routing-qa-key-alpha" href="/api-keys?key=abc123" />);
+    const link = screen.getByRole("link", { name: /routing-qa-key-alpha/ });
+    expect(link).toHaveAttribute("href", "/api-keys?key=abc123");
+    expect(link.querySelector(".lucide-chevron-right")).not.toBeNull();
+    expect(link).toHaveClass("hover:bg-muted");
+    await user.click(link);
+    expect(routerPush).toHaveBeenCalledWith("/api-keys?key=abc123");
+  });
+
+  it("leaves modifier clicks to the browser so open-in-new-tab keeps working", async () => {
+    routerPush.mockClear();
+    const user = userEvent.setup();
+    render(<IdentityCell title="routing-qa-key-alpha" href="/api-keys?key=abc123" />);
+    await user.keyboard("{Meta>}");
+    await user.click(screen.getByRole("link", { name: /routing-qa-key-alpha/ }));
+    await user.keyboard("{/Meta}");
+    expect(routerPush).not.toHaveBeenCalled();
   });
 });
