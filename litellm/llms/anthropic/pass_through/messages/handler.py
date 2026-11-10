@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequenc
 from functools import partial
 from typing import Final, cast
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
@@ -56,6 +56,15 @@ __all__ = ("anthropic_messages", "anthropic_messages_handler")
 _RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_DROP_PATHS: Final = TypeAdapter(list[object])
+
+
+def additional_drop_paths(kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    try:
+        configured: Final = _DROP_PATHS.validate_python(kwargs.get("additional_drop_params"))
+    except ValidationError:
+        return ()
+    return tuple(path for path in configured if isinstance(path, str))
 
 
 def _bridges_to_responses_api(model: str, custom_llm_provider: str) -> bool:
@@ -679,6 +688,7 @@ def anthropic_messages_handler(
             model=model,
             drop_params=litellm_params.get("drop_params") is True,
             custom_llm_provider=custom_llm_provider,
+            additional_drop_params=additional_drop_paths(request_kwargs),
         )
     )
     resolved_api_base: Final = (
