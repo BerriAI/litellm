@@ -16,9 +16,11 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_with_function,
     allowed_tools_tool_choice_with_gateway_tools_as_functions,
     drops_unsupported_allowed_tools_tool_choice,
+    hosted_tool_choice_type,
     is_allowed_tools_tool_choice,
     chat_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
+    raise_if_hosted_tool_choice_unsupported,
     refuse_tool_calls_the_choice_excludes,
     tool_calls_the_choice_excludes,
     unenforced_allowed_tools_tool_choice,
@@ -589,3 +591,42 @@ def test_auto_mode_lifts_only_the_requirement_and_keeps_the_callers_layout_and_t
     tool_choice: object, expected: object
 ):
     assert allowed_tools_tool_choice_in_auto_mode(tool_choice) == expected
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        ({"type": "web_search"}, "web_search"),
+        ({"type": "mcp", "server_label": "docs"}, "mcp"),
+        ({"type": "function", "function": {"name": "get_time"}}, None),
+        ({"type": "allowed_tools"}, None),
+        ("required", None),
+        (None, None),
+    ],
+)
+def test_hosted_tool_choice_type(tool_choice: Mapping[str, object] | str | None, expected: str | None):
+    assert hosted_tool_choice_type(tool_choice) == expected
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure", "litellm_proxy"])
+def test_hosted_tool_choice_passes_where_the_responses_api_runs_the_tool(provider: str):
+    assert (
+        raise_if_hosted_tool_choice_unsupported({"type": "web_search"}, custom_llm_provider=provider, model="m") is None
+    )
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock", "gemini", "vertex_ai"])
+def test_hosted_tool_choice_is_a_400_where_the_provider_cannot_run_it(provider: str):
+    with pytest.raises(BadRequestError, match=r"tool_choice type 'file_search'.*only supported for") as exc:
+        raise_if_hosted_tool_choice_unsupported({"type": "file_search"}, custom_llm_provider=provider, model="m")
+    assert exc.value.status_code == 400
+    assert f"custom_llm_provider={provider}" in str(exc.value)
+
+
+def test_a_function_tool_choice_is_not_a_hosted_tool_anywhere():
+    assert (
+        raise_if_hosted_tool_choice_unsupported(
+            {"type": "function", "function": {"name": "get_time"}}, custom_llm_provider="anthropic", model="m"
+        )
+        is None
+    )
