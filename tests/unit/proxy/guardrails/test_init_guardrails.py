@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
@@ -6,7 +7,7 @@ import pytest
 
 
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
-from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
+from litellm.proxy.guardrails.guardrail_registry import CustomGuardrailPathError, InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import Mode, SupportedGuardrailIntegrations
 
@@ -428,6 +429,30 @@ def test_init_guardrails_v2_stops_boot_when_a_custom_code_guardrail_does_not_com
 
     with pytest.raises(CustomCodeCompilationError, match="apply_guardrail"):
         init_guardrails_v2(all_guardrails=all_guardrails)
+
+
+def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_an_instance(tmp_path: Path) -> None:
+    (tmp_path / "custom_callbacks.py").write_text(
+        "from litellm.integrations.custom_logger import CustomLogger\n\n\n"
+        "class MyCustomHandler(CustomLogger):\n"
+        "    pass\n\n\n"
+        "proxy_handler_instance = MyCustomHandler()\n"
+    )
+    all_guardrails: Final = [
+        {
+            "guardrail_name": "my-guard",
+            "litellm_params": {"guardrail": "custom_callbacks.proxy_handler_instance", "mode": "pre_call"},
+        },
+    ]
+
+    with pytest.raises(CustomGuardrailPathError) as exc_info:
+        init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=str(tmp_path / "config.yaml"))
+
+    message: Final = str(exc_info.value)
+    assert "'my-guard'" in message
+    assert "custom_callbacks.proxy_handler_instance" in message
+    assert "guardrail: custom_callbacks.MyCustomHandler" in message
+    assert "litellm_settings.callbacks" in message
 
 
 def test_init_guardrails_v2_accepts_during_call_advisory_mode():

@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, GUARDRAIL_ROTATION_ATTEMPTS
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -72,6 +73,11 @@ from .guardrail_initializers import (
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
+
+
+class CustomGuardrailPathError(Exception):
+    """Deliberately not a ValueError or TypeError: a config-file guardrail path that names an instance instead of a
+    class must stop startup instead of being skipped by init_guardrails_v2."""
 
 
 class _GuardrailRowLike(Protocol):
@@ -904,6 +910,14 @@ class InMemoryGuardrailHandler:
         _guardrail_class: Final[Callable[..., CustomGuardrail]] = get_instance_fn(
             guardrail_type, config_file_path=config_file_path
         )
+        if isinstance(_guardrail_class, CustomLogger):
+            class_name: Final = type(_guardrail_class).__name__
+            raise CustomGuardrailPathError(
+                f"Guardrail '{guardrail['guardrail_name']}' sets guardrail: {guardrail_type}, which is a {class_name} "
+                "instance, but the proxy builds each guardrail itself and needs the class. Point it at the class, "
+                f"e.g. `guardrail: {guardrail_type.rsplit('.', 1)[0]}.{class_name}`. Instances like this one belong "
+                "under litellm_settings.callbacks."
+            )
 
         mode: Final = litellm_params.mode
         if mode is None:
