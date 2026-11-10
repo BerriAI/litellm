@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
@@ -29,6 +30,11 @@ class _WebIQResponse(BaseModel):
 
 
 _DOMAINS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _extra_fields(model: BaseModel, reserved: Mapping[str, object]) -> MappingProxyType[str, object]:
+    extra: Final[Mapping[str, object]] = model.model_extra or {}
+    return MappingProxyType({key: value for key, value in extra.items() if key not in reserved})
 
 
 def _query_with_domains(query: str, domains: object) -> str:
@@ -129,29 +135,21 @@ class WebIQSearchConfig(BaseSearchConfig):
                 status_code=502,
                 headers=dict(raw_response.headers),
             ) from exc
-        return SearchResponse(
-            results=[
-                SearchResult(
-                    title=result.title,
-                    url=result.url,
-                    snippet=result.content,
-                    date=result.lastUpdatedAt or None,
-                    last_updated=result.lastUpdatedAt or None,
-                    **MappingProxyType(
+        return SearchResponse.model_validate(
+            {
+                **_extra_fields(parsed, SearchResponse.model_fields),
+                "results": [
+                    SearchResult.model_validate(
                         {
-                            key: value
-                            for key, value in (result.model_extra or MappingProxyType({})).items()
-                            if key not in SearchResult.model_fields
+                            **_extra_fields(result, SearchResult.model_fields),
+                            "title": result.title,
+                            "url": result.url,
+                            "snippet": result.content,
+                            "date": result.lastUpdatedAt or None,
+                            "last_updated": result.lastUpdatedAt or None,
                         }
-                    ),
-                )
-                for result in parsed.webResults
-            ],
-            **MappingProxyType(
-                {
-                    key: value
-                    for key, value in (parsed.model_extra or MappingProxyType({})).items()
-                    if key not in SearchResponse.model_fields
-                }
-            ),
+                    )
+                    for result in parsed.webResults
+                ],
+            }
         )

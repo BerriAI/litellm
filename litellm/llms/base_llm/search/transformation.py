@@ -296,7 +296,7 @@ class BaseSearchConfig:
         self,
         error_message: str,
         status_code: int,
-        headers: dict,
+        headers: dict[str, str],  # mutable-ok: callers pass a copy of the response headers
     ) -> Exception:
         """Get appropriate error class for the provider."""
         return BaseLLMException(
