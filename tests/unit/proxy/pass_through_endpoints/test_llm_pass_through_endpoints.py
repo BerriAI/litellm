@@ -28,7 +28,6 @@ from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
-from starlette.types import Message
 
 
 import litellm
@@ -109,66 +108,6 @@ def _assert_bedrock_processing_data_classification(data: dict[str, object], is_s
     assert isinstance(provider_body, dict)
     assert "is_streaming_request" not in provider_body
     assert "litellm_server_streaming_classification" not in provider_body
-
-
-CALLER_X_PASS_HEADER: Final = ("x-pass-x-amzn-bedrock-service-tier", "priority")
-
-
-def _request_with_caller_headers(path: str, body: Mapping[str, object]) -> Request:
-    async def receive() -> Message:
-        return {"type": "http.request", "body": json.dumps(dict(body)).encode(), "more_body": False}
-
-    return Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": path,
-            "query_string": b"",
-            "headers": tuple(
-                (name.encode(), value.encode())
-                for name, value in (
-                    ("content-type", "application/json"),
-                    CALLER_X_PASS_HEADER,
-                    ("authorization", "Bearer sk-proxy-virtual-key"),
-                    ("cookie", "proxy_session=secret"),
-                )
-            ),
-        },
-        receive,
-    )
-
-
-BEDROCK_INVOKE_BODY: Final = MappingProxyType({"messages": [{"role": "user", "content": "test"}]})
-
-
-async def _route_through_bedrock_router_model(request: Request) -> object:
-    return await handle_bedrock_passthrough_router_model(
-        model="test-model",
-        endpoint="model/test-model/invoke",
-        request=request,
-        request_body=dict(BEDROCK_INVOKE_BODY),
-        llm_router=Mock(),
-        user_api_key_dict=Mock(),
-        proxy_logging_obj=Mock(),
-        general_settings={},
-        proxy_config=None,
-        select_data_generator=None,
-        user_model=None,
-        user_temperature=None,
-        user_request_timeout=None,
-        user_max_tokens=None,
-        user_api_base=None,
-        version=None,
-    )
-
-
-async def _route_through_bedrock_direct_model(request: Request) -> object:
-    return await bedrock_llm_proxy_route(
-        endpoint="model/test-model/invoke",
-        request=request,
-        fastapi_response=Mock(),
-        user_api_key_dict=Mock(),
-    )
 
 
 class TestVertexPassthroughGetVertexBaseUrl:
@@ -1580,29 +1519,63 @@ class TestBedrockLLMProxyRoute:
         processing_data: Final = processor_constructor.call_args.kwargs["data"]
         _assert_bedrock_processing_data_classification(processing_data, is_streaming)
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "route_to_bedrock",
-        [_route_through_bedrock_router_model, _route_through_bedrock_direct_model],
-        ids=["router_model", "direct_model"],
-    )
-    async def test_bedrock_routes_hand_the_processor_only_the_caller_x_pass_headers(
-        self, route_to_bedrock: Callable[[Request], Awaitable[object]]
+    def test_direct_model_invoke_signs_the_caller_x_pass_header_and_sends_no_caller_credential(
+        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None
     ) -> None:
-        mock_processor: Final = Mock()
-        mock_processor.base_passthrough_process_llm_request = AsyncMock(return_value="success")
+        from litellm.proxy import proxy_server
 
-        with patch(
-            "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
-            return_value=mock_processor,
-        ) as processor_constructor:
-            result: Final = await route_to_bedrock(
-                _request_with_caller_headers("/bedrock/model/test-model/invoke", BEDROCK_INVOKE_BODY)
+        model: Final = "anthropic.claude-sonnet-5-5"
+        caller_bearer: Final = "sk-caller-virtual-key"
+        caller_cookie: Final = "proxy_session=caller-secret"
+        for ambient in (
+            *TestBedrockAgentRuntimePassthroughVirtualKeyLeak.AMBIENT_AWS_ENV,
+            "AWS_BEDROCK_RUNTIME_ENDPOINT",
+        ):
+            monkeypatch.delenv(ambient, raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+        monkeypatch.setitem(
+            proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key=caller_bearer)
+        )
+
+        with respx.mock(assert_all_called=True) as upstream:
+            invoke: Final = upstream.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/invoke").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "id": "msg_bedrock",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": [{"type": "text", "text": "ok"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 5, "output_tokens": 1},
+                    },
+                )
+            )
+            response: Final = TestClient(proxy_server.app).post(
+                f"/bedrock/model/{model}/invoke",
+                json={
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 16,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                headers={
+                    "x-pass-X-Amzn-Bedrock-Service-Tier": "priority",
+                    "Authorization": f"Bearer {caller_bearer}",
+                    "Cookie": caller_cookie,
+                },
             )
 
-        assert result == "success"
-        processing_data: Final = processor_constructor.call_args.kwargs["data"]
-        assert processing_data["request_headers"] == dict((CALLER_X_PASS_HEADER,))
+        assert response.status_code == 200, response.text
+        sent: Final = invoke.calls.last.request
+        signed_headers: Final = sent.headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
+        assert sent.headers["x-amzn-bedrock-service-tier"] == "priority"
+        assert "x-amzn-bedrock-service-tier" in signed_headers
+        assert [name for name in sent.headers if name.startswith("x-pass-") or name == "cookie"] == []
+        assert [value for value in sent.headers.values() if caller_bearer in value or caller_cookie in value] == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -2976,30 +2949,56 @@ class TestGigachatProxyRoute:
         mock_llm_router.allm_passthrough_route.assert_awaited_once()
         assert isinstance(result, Response)
 
-    @pytest.mark.asyncio
-    async def test_gigachat_router_route_forwards_no_caller_request_headers(self) -> None:
-        router: Final = MagicMock()
-        router.allm_passthrough_route = AsyncMock(return_value=httpx.Response(200, json={"response": "success"}))
+    def test_router_model_sends_gigachat_no_header_the_caller_sent_with_the_x_pass_prefix(
+        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None
+    ) -> None:
+        from litellm.proxy import proxy_server
 
-        with (
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
-                return_value=True,
+        monkeypatch.setenv("GIGACHAT_ACCESS_TOKEN", "gigachat-test-token")
+        monkeypatch.setattr(
+            proxy_server,
+            "llm_router",
+            litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "gigachat-router",
+                        "litellm_params": {
+                            "model": "gigachat/GigaChat-2-Max",
+                            "api_base": "https://gigachat-upstream.test/api/v1",
+                        },
+                    }
+                ]
             ),
-            patch("litellm.proxy.proxy_server.llm_router", router),
-        ):
-            result: Final = await gigachat_proxy_route(
-                endpoint="/chat/completions",
-                request=_request_with_caller_headers(
-                    "/gigachat/chat/completions", {"model": "router-model", "stream": False}
-                ),
-                fastapi_response=MagicMock(spec=Response),
-                user_api_key_dict=MagicMock(),
+        )
+        monkeypatch.setitem(
+            proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
+        )
+
+        with respx.mock(assert_all_called=True) as upstream:
+            completions: Final = upstream.post("https://gigachat-upstream.test/api/v1/chat/completions").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "choices": [
+                            {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}
+                        ],
+                        "created": 1767225600,
+                        "model": "GigaChat-2-Max",
+                        "object": "chat.completion",
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+                    },
+                )
+            )
+            response: Final = TestClient(proxy_server.app).post(
+                "/gigachat/chat/completions",
+                json={"model": "gigachat-router", "messages": [{"role": "user", "content": "hi"}]},
+                headers={"x-pass-X-Session-ID": "caller-session"},
             )
 
-        assert isinstance(result, Response)
-        routed_kwargs: Final = router.allm_passthrough_route.await_args.kwargs
-        assert "request_headers" not in routed_kwargs
+        assert response.status_code == 200, response.text
+        sent: Final = completions.calls.last.request
+        assert sent.headers["authorization"] == "Bearer gigachat-test-token"
+        assert [name for name in sent.headers if name.startswith("x-pass-") or name == "x-session-id"] == []
 
     @pytest.mark.asyncio
     async def test_gigachat_router_handler_keeps_cached_body_and_payload_metadata_pristine(self):
