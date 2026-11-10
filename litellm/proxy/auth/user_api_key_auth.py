@@ -98,7 +98,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     virtual_key_max_budget_check,
     virtual_key_soft_budget_check,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
 )
-from litellm.proxy.auth.auth_denial import denial_exception
+from litellm.proxy.auth.auth_denial import denial_exception, jwt_denial_exception
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.auth_object_prefetch import (
@@ -125,14 +125,23 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.budget_throttle import budget_throttle_percentage, should_throttle_budget_exceeded
 from litellm.proxy.auth.core.answers import (
     AdminKey,
+    AutoRegistration,
     EndUserScope,
     FallbackTarget,
+    JwtPolicy,
     KeyFacts,
+    KeyMapping,
     KeyModelBudgets,
+    MappedKey,
     ModelBudgetScope,
+    NoKeyMapping,
     NonAdminKey,
+    NotRegistered,
     OwnerFacts,
+    PendingAutoRegister,
     PresentedKey,
+    Registered,
+    RegistrationFailed,
     TeamMember,
     TeamMemberBudget,
     TeamMemberModelBudgetScope,
@@ -153,6 +162,9 @@ from litellm.proxy.auth.core.identity import (
     CachedAdminKey,
     CustomAuthResult,
     CustomIdentity,
+    JwtKey,
+    JwtProxyAdmin,
+    JwtUser,
     KeyAuthentication,
     KeyDenial,
     KeyIdentity,
@@ -167,6 +179,7 @@ from litellm.proxy.auth.core.inputs import (
     AuthorizeSettings,
     CheckFacts,
     CheckSettings,
+    JwtSettings,
     KeySettings,
     PlanFacts,
     PlanSettings,
@@ -2278,6 +2291,233 @@ async def _resolve_jwt_to_virtual_key(
     return None
 
 
+class _JwtHost:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        request: Request,
+        request_data: dict[str, object],  # mutable-ok: budget fallbacks rewrite the request model in place
+        route: str,
+        general_settings: dict,  # pyright: ignore[reportMissingTypeArgument]  # proxy global is an untyped dict
+        jwt_handler: JWTHandler,
+        llm_router: litellm.Router | None,
+        model_max_budget_limiter: _EveryModelBudgetLimiter,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        proxy_logging_obj: ProxyLogging,
+        parent_otel_span: Span | None,
+    ) -> None:
+        self.api_key: str = api_key
+        self._request: Final = request
+        self._request_data: Final = request_data
+        self._route: Final = route
+        self._general_settings: Final = general_settings
+        self._jwt_handler: Final = jwt_handler
+        self._llm_router: Final = llm_router
+        self._limiter: Final = model_max_budget_limiter
+        self._prisma_client: Final = prisma_client
+        self._user_api_key_cache: Final = user_api_key_cache
+        self._proxy_logging_obj: Final = proxy_logging_obj
+        self._parent_otel_span: Final = parent_otel_span
+        self._claims: dict | None = None  # pyright: ignore[reportMissingTypeArgument]  # JWT claims are untyped JSON
+        self._valid_token: UserAPIKeyAuth | None = None
+        self._pending: _PendingAutoRegister | None = None
+        self._result: JWTAuthBuilderResult | None = None
+
+    def token(self) -> UserAPIKeyAuth:
+        if self._valid_token is None:
+            raise RuntimeError("the auth core finished JWT auth before the host resolved a token")
+        return self._valid_token
+
+    def _policy_result(self) -> JWTAuthBuilderResult:
+        if self._result is None:
+            raise RuntimeError("the auth core used the JWT policy result before running the policy")
+        return self._result
+
+    async def decode_claims(self) -> None:
+        self._claims = await self._jwt_handler.auth_jwt(token=self.api_key)
+
+    async def is_managed_agent(self) -> bool:
+        from litellm.proxy.agent_endpoints.identity_store import resolve_managed_agent
+
+        return bool(
+            self._claims
+            and await resolve_managed_agent(self._claims, self._prisma_client, cache=self._user_api_key_cache)
+            is not None
+        )
+
+    async def resolve_mapping(self) -> KeyMapping:
+        decoded: Final = self._claims
+        if decoded is None:
+            raise RuntimeError("the auth core resolved a JWT key mapping before decoding the token")
+        resolved: Final = await _resolve_jwt_to_virtual_key(
+            jwt_claims=decoded,
+            jwt_handler=self._jwt_handler,
+            prisma_client=self._prisma_client,
+            user_api_key_cache=self._user_api_key_cache,
+            parent_otel_span=self._parent_otel_span,
+            proxy_logging_obj=self._proxy_logging_obj,
+        )
+        if isinstance(resolved, _PendingAutoRegister):
+            self._pending = resolved
+            return PendingAutoRegister()
+        if resolved is None:
+            return NoKeyMapping()
+        claims: Final = self._claims or {}
+        mapped_end_user_id: Final = (
+            self._jwt_handler.get_end_user_id(  # pyright: ignore[reportUnknownMemberType]  # untyped dict token
+                token=claims, default_value=None
+            )
+            or None
+        )
+        valid_token: Final = resolved.model_copy(update={"end_user_id": mapped_end_user_id})
+        valid_token.jwt_claims = self._claims
+        self._valid_token = valid_token
+        self.api_key = valid_token.token or ""
+        return MappedKey(
+            key_user_id=valid_token.user_id,
+            key_has_email=valid_token.user_email is not None,
+            claim_user_id=self._jwt_handler.get_user_id(token=claims, default_value=None),
+            claim_has_email=self._jwt_handler.get_user_email(token=claims, default_value=None) is not None,
+        )
+
+    async def backfill_mapped_user_email(self) -> None:
+        valid_token: Final = self.token()
+        if valid_token.user_id is None:
+            return
+        try:
+            mapped_user_obj: Final = await get_user_object(
+                user_id=valid_token.user_id,
+                prisma_client=self._prisma_client,
+                user_api_key_cache=self._user_api_key_cache,
+                user_id_upsert=False,
+                parent_otel_span=self._parent_otel_span,
+                proxy_logging_obj=self._proxy_logging_obj,
+                user_email=self._jwt_handler.get_user_email(token=self._claims or {}, default_value=None),
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug("JWT mapped-key user_email backfill skipped: %s", e)
+            return
+        if mapped_user_obj is not None:
+            valid_token.user_email = mapped_user_obj.user_email
+
+    async def run_jwt_policy(self) -> JwtPolicy:
+        with tracer.trace("litellm.proxy.auth.jwt_auth_builder"):
+            result: Final = await JWTAuthManager.auth_builder(
+                request_data=self._request_data,
+                general_settings=self._general_settings,
+                api_key=self.api_key,
+                jwt_handler=self._jwt_handler,
+                route=self._route,
+                prisma_client=self._prisma_client,
+                user_api_key_cache=self._user_api_key_cache,
+                proxy_logging_obj=self._proxy_logging_obj,
+                parent_otel_span=self._parent_otel_span,
+                request_headers=safe_get_request_headers(self._request),
+                request_method=RouteChecks.get_request_method(request=self._request),
+            )
+        self._result = result
+        self._claims = result.get("jwt_claims", None)
+        self._valid_token = JWTAuthManager.user_api_key_auth_from_result(result, self._parent_otel_span)
+        user_object: Final = result["user_object"]
+        return JwtPolicy(
+            is_proxy_admin=result["is_proxy_admin"],
+            user_id=result["user_id"],
+            owner_deactivated=user_object is not None
+            and isinstance(user_object.metadata, dict)
+            and user_object.metadata.get("scim_active") is False,
+        )
+
+    async def remember_proxy_admin(self) -> None:
+        if self._pending is None:
+            raise RuntimeError("the auth core remembered a proxy admin without a pending auto-registration")
+        await self._user_api_key_cache.async_set_cache(
+            key=self._pending.cache_key,
+            value=_JWT_PROXY_ADMIN_SENTINEL,
+            ttl=self._jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
+        )
+
+    async def auto_register(self) -> AutoRegistration:
+        pending: Final = self._pending
+        result: Final = self._policy_result()
+        if pending is None or self._prisma_client is None:
+            raise RuntimeError("the auth core auto-registered a JWT without a pending mapping or database")
+        auto_registered: Final = await _auto_register_jwt_mapping(
+            virtual_key_claim_field=pending.claim_field,
+            claim_value=pending.claim_value,
+            jwt_handler=self._jwt_handler,
+            prisma_client=self._prisma_client,
+            user_api_key_cache=self._user_api_key_cache,
+            parent_otel_span=self._parent_otel_span,
+            proxy_logging_obj=self._proxy_logging_obj,
+            cache_key=pending.cache_key,
+            jwt_issuer=pending.jwt_issuer,
+            team_id=result["team_id"],
+            user_id=result["user_id"],
+            org_id=result["org_id"],
+            end_user_id=result["end_user_id"],
+            agent_id=result.get("agent_id"),
+            behavior=pending.behavior,
+        )
+        if isinstance(auto_registered, _JWTKeyMappingFailure):
+            return RegistrationFailed(reason=auto_registered.value)
+        if auto_registered is None:
+            return NotRegistered()
+        user_object: Final = result["user_object"]
+        auto_registered.jwt_claims = self._claims
+        auto_registered.user_email = result["user_email"]
+        # The auto-registered token is built from the new key's columns, which carry no user budget. Carry over
+        # the already-loaded user row rather than re-reading it, or the budget check has nothing to enforce.
+        auto_registered.user_model_max_budget = user_object.model_max_budget if user_object is not None else None
+        self._valid_token = auto_registered
+        self.api_key = auto_registered.token or ""
+        return Registered(
+            links_existing_key=self._jwt_handler.litellm_jwtauth.auto_register_map_existing_key
+            or pending.behavior == UnregisteredJWTClientBehavior.LINK_ONLY
+        )
+
+    def skips_budget_checks(self) -> bool:
+        model: Final = _get_model_from_request_context(
+            request_data=self._request_data,
+            route=self._route,
+            request=self._request,
+            llm_router=self._llm_router,
+            team_id=self.token().team_id,
+        )
+        return request_skips_budget_checks(
+            route=self._route, model=model, llm_router=self._llm_router, request_body=self._request_data
+        )
+
+    async def load_project(self) -> None:
+        valid_token: Final = self.token()
+        if valid_token.project_id is None:
+            return
+        project: Final = await get_project_object(
+            project_id=valid_token.project_id,
+            prisma_client=self._prisma_client,
+            user_api_key_cache=self._user_api_key_cache,
+            proxy_logging_obj=self._proxy_logging_obj,
+        )
+        if project is not None:
+            valid_token.project_metadata = project.metadata
+            valid_token.project_alias = project.project_alias
+
+    async def check_user_model_budgets(self) -> None:
+        await _enforce_model_budgets(
+            _AUTH_CORE.model_budgets().check_user,
+            _ModelBudgetHost(
+                request=self._request,
+                request_data=self._request_data,
+                valid_token=self.token(),
+                route=self._route,
+                limiter=self._limiter,
+                llm_router=self._llm_router,
+                llm_model_list=_proxy_model_list(),
+            ),
+        )
+
+
 def _ensure_litellm_received_at_on_request_state(request: Request) -> datetime:
     """Idempotently stamp ``request.state.litellm_received_at`` with the moment
     litellm's own code started handling this request -- the first line of
@@ -3039,228 +3279,33 @@ async def user_api_key_auth_builder(
         if not isinstance(credential_plan, (KeyValidator, JwtValidator)):
             return await _authenticate_without_key(credential_plan, api_key=api_key, request=request)
         if isinstance(credential_plan, JwtValidator):
-            # Try JWT-to-Virtual-Key mapping first to avoid
-            # unnecessary DB queries in auth_builder
-            do_standard_jwt_auth = True
-            pending_auto_register: _PendingAutoRegister | None = None
-            if jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured():
-                # Decode JWT to get claims without running full auth_builder
-                jwt_claims: dict | None = await jwt_handler.auth_jwt(token=api_key)
-
-                from litellm.proxy.agent_endpoints.identity_store import resolve_managed_agent
-
-                if (
-                    jwt_claims
-                    and await resolve_managed_agent(jwt_claims, prisma_client, cache=user_api_key_cache) is not None
-                ):
-                    raise HTTPException(
-                        403, "Managed agents require direct JWT authentication without virtual-key mapping"
-                    )
-
-                resolve_result: Final = await _resolve_jwt_to_virtual_key(
-                    jwt_claims=jwt_claims,
-                    jwt_handler=jwt_handler,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
-                if isinstance(resolve_result, UserAPIKeyAuth):
-                    mapped_end_user_id: Final = (
-                        jwt_handler.get_end_user_id(  # pyright: ignore[reportUnknownMemberType]  # untyped dict token
-                            token=jwt_claims or {}, default_value=None
-                        )
-                        or None
-                    )
-                    valid_token = resolve_result.model_copy(update={"end_user_id": mapped_end_user_id})
-                    api_key = valid_token.token or ""
-                    valid_token.jwt_claims = jwt_claims
-                    do_standard_jwt_auth = False
-                    # Fall through to virtual key checks
-                    if valid_token.user_id is not None and valid_token.user_email is None:
-                        mapped_claims = jwt_claims or {}
-                        mapped_user_email = jwt_handler.get_user_email(token=mapped_claims, default_value=None)
-                        mapped_jwt_user_id: Final = jwt_handler.get_user_id(token=mapped_claims, default_value=None)
-                        if mapped_user_email is not None and mapped_jwt_user_id == valid_token.user_id:
-                            try:
-                                mapped_user_obj: Final = await get_user_object(
-                                    user_id=valid_token.user_id,
-                                    prisma_client=prisma_client,
-                                    user_api_key_cache=user_api_key_cache,
-                                    user_id_upsert=False,
-                                    parent_otel_span=parent_otel_span,
-                                    proxy_logging_obj=proxy_logging_obj,
-                                    user_email=mapped_user_email,
-                                )
-                            except Exception as e:
-                                verbose_proxy_logger.debug("JWT mapped-key user_email backfill skipped: %s", e)
-                            else:
-                                if mapped_user_obj is not None:
-                                    valid_token.user_email = mapped_user_obj.user_email
-                elif isinstance(resolve_result, _PendingAutoRegister):
-                    # Run full JWT policy (RBAC, scope, custom_validate,
-                    # email-domain) via auth_builder, then create the key
-                    # from the validated identity below.
-                    pending_auto_register = resolve_result
-                # else: None → FALLBACK_TEAM_MAPPING, falls through to
-                # standard JWT auth_builder below
-
-            if do_standard_jwt_auth:
-                with tracer.trace("litellm.proxy.auth.jwt_auth_builder"):
-                    result: Final = await JWTAuthManager.auth_builder(
-                        request_data=request_data,
-                        general_settings=general_settings,
-                        api_key=api_key,
-                        jwt_handler=jwt_handler,
-                        route=route,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        proxy_logging_obj=proxy_logging_obj,
-                        parent_otel_span=parent_otel_span,
-                        request_headers=safe_get_request_headers(request),
-                        request_method=RouteChecks.get_request_method(request=request),
-                    )
-
-                is_proxy_admin: Final = result["is_proxy_admin"]
-                team_id: Final = result["team_id"]
-                user_id: Final = result["user_id"]
-                user_email: Final = result["user_email"]
-                user_object: Final = result["user_object"]
-                end_user_id = result["end_user_id"]
-                org_id: Final = result["org_id"]
-                jwt_claims = result.get("jwt_claims", None)
-                agent_id: Final[str | None] = result.get("agent_id")
-
-                if (
-                    user_object is not None
-                    and isinstance(user_object.metadata, dict)
-                    and user_object.metadata.get("scim_active") is False
-                ):
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail=f"User={user_id} has been deactivated via SCIM. Keys owned by this user cannot be used.",
-                    )
-
-                if is_proxy_admin:
-                    # Proxy admins authenticate via auth_builder (full
-                    # access), not via a mapped virtual key. If
-                    # AUTO_REGISTER was pending, cache a sentinel so
-                    # future requests from this JWT identity skip the
-                    # DB mapping lookup in _resolve_jwt_to_virtual_key.
-                    # Without this, every proxy-admin request under
-                    # AUTO_REGISTER re-hits get_jwt_key_mapping_object.
-                    if pending_auto_register is not None:
-                        await user_api_key_cache.async_set_cache(
-                            key=pending_auto_register.cache_key,
-                            value=_JWT_PROXY_ADMIN_SENTINEL,
-                            ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
-                        )
-                    return JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
-
-                valid_token = JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
-
-                # AUTO_REGISTER deferred from _resolve_jwt_to_virtual_key.
-                # JWT policy (RBAC, scope, custom_validate, email-domain)
-                # has now been enforced by auth_builder above. Create the
-                # mapping + virtual key from the *validated* identity, then
-                # replace valid_token with the new key so downstream checks
-                # use the key-scoped path.
-                auto_registered: Final = (
-                    await _auto_register_jwt_mapping(
-                        virtual_key_claim_field=pending_auto_register.claim_field,
-                        claim_value=pending_auto_register.claim_value,
-                        jwt_handler=jwt_handler,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                        parent_otel_span=parent_otel_span,
-                        proxy_logging_obj=proxy_logging_obj,
-                        cache_key=pending_auto_register.cache_key,
-                        jwt_issuer=pending_auto_register.jwt_issuer,
-                        team_id=team_id,
-                        user_id=user_id,
-                        org_id=org_id,
-                        end_user_id=end_user_id,
-                        agent_id=agent_id,
-                        behavior=pending_auto_register.behavior,
-                    )
-                    if pending_auto_register is not None and prisma_client is not None
-                    else None
-                )
-                if isinstance(auto_registered, _JWTKeyMappingFailure):
-                    raise HTTPException(status_code=403, detail=auto_registered.value)
-                if auto_registered is not None:
-                    auto_registered.jwt_claims = jwt_claims
-                    auto_registered.user_email = user_email
-                    # The auto-registered token is built from the new key's
-                    # columns, which carry no user budget. Carry over the
-                    # already-loaded user row rather than re-reading it, or
-                    # the budget check below has nothing to enforce.
-                    auto_registered.user_model_max_budget = (
-                        user_object.model_max_budget if user_object is not None else None
-                    )
-                    valid_token = auto_registered
-                    api_key = valid_token.token or ""
-
-                falls_through_to_key_checks: Final = (
-                    auto_registered is not None
-                    and (
-                        jwt_handler.litellm_jwtauth.auto_register_map_existing_key
-                        or (
-                            pending_auto_register is not None
-                            and pending_auto_register.behavior == UnregisteredJWTClientBehavior.LINK_ONLY
-                        )
-                    )
-                    and master_key is not None
-                )
-                if not falls_through_to_key_checks:
-                    # Check if model has zero cost - if so, skip all budget checks
-                    model = _get_model_from_request_context(
-                        request_data=request_data,
-                        route=route,
-                        request=request,
-                        llm_router=llm_router,
-                        team_id=valid_token.team_id,
-                    )
-                    skip_budget_checks = request_skips_budget_checks(
-                        route=route, model=model, llm_router=llm_router, request_body=request_data
-                    )
-
-                    # Fetch project object for JWT path if project_id is set
-                    _jwt_project_obj = None
-                    if valid_token.project_id is not None:
-                        _jwt_project_obj = await get_project_object(
-                            project_id=valid_token.project_id,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                            proxy_logging_obj=proxy_logging_obj,
-                        )
-                        if _jwt_project_obj is not None:
-                            valid_token.project_metadata = _jwt_project_obj.metadata
-                            valid_token.project_alias = _jwt_project_obj.project_alias
-
-                    # JWT auth returns here rather than falling through to the
-                    # virtual-key checks below, so the user's per-model budget
-                    # has to be enforced on this path too. Without it the
-                    # post-call increment still charges the counter and nothing
-                    # ever reads it, which is worse than not tracking at all.
-                    # Guarded by the same flag the virtual-key path uses, or a
-                    # zero-cost model would be refused here and allowed there,
-                    # while the log above claims all budget checks were skipped.
-                    if not skip_budget_checks:
-                        await _enforce_model_budgets(
-                            _AUTH_CORE.model_budgets().check_user,
-                            _ModelBudgetHost(
-                                request=request,
-                                request_data=request_data,
-                                valid_token=cast(UserAPIKeyAuth, valid_token),
-                                route=route,
-                                limiter=model_max_budget_limiter,
-                                llm_router=llm_router,
-                                llm_model_list=_proxy_model_list(),
-                            ),
-                        )
-
-                    return cast(UserAPIKeyAuth, valid_token)
+            jwt_host: Final = _JwtHost(
+                api_key=api_key,
+                request=request,
+                request_data=request_data,
+                route=route,
+                general_settings=general_settings,
+                jwt_handler=jwt_handler,
+                llm_router=llm_router,
+                model_max_budget_limiter=model_max_budget_limiter,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                parent_otel_span=parent_otel_span,
+            )
+            jwt_settings: Final = JwtSettings(
+                virtual_key_mapping=jwt_handler.litellm_jwtauth.is_virtual_key_mapping_configured(),
+                has_db=prisma_client is not None,
+                master_key_set=master_key is not None,
+            )
+            match await _AUTH_CORE.jwt().authenticate(jwt_host, jwt_settings):
+                case JwtProxyAdmin() | JwtUser():
+                    return jwt_host.token()
+                case JwtKey():
+                    valid_token = jwt_host.token()
+                    api_key = jwt_host.api_key
+                case jwt_denial:
+                    raise jwt_denial_exception(jwt_denial)
         key_plan: Final = (
             credential_plan
             if isinstance(credential_plan, KeyValidator)

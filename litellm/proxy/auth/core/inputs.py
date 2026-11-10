@@ -48,8 +48,9 @@ class KeySettings:
 
 @dataclass(frozen=True, slots=True)
 class JwtSettings:
-    audience: str | None
-    leeway_seconds: int
+    virtual_key_mapping: bool
+    has_db: bool
+    master_key_set: bool
 
 
 @dataclass(frozen=True, slots=True)

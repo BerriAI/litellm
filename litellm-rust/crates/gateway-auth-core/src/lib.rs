@@ -8,9 +8,9 @@ mod outcome;
 mod validators;
 
 pub use answers::{
-    EndUserScope, FallbackTarget, Introspection, KeyFacts, KeyModelBudgets, ModelBudgetScope,
-    OwnerFacts, PresentedKey, SigningKey, TeamMember, TeamMemberBudget, TeamMemberModelBudgetScope,
-    TokenRole,
+    AutoRegistration, EndUserScope, FallbackTarget, Introspection, JwtPolicy, KeyFacts, KeyMapping,
+    KeyModelBudgets, ModelBudgetScope, OwnerFacts, PresentedKey, TeamMember, TeamMemberBudget,
+    TeamMemberModelBudgetScope, TokenRole,
 };
 pub use facets::{
     AnonymousCore, AuthCore, AuthPlanner, AuthorizeCore, CustomAuthCore, JwtCore, KeyCore,
@@ -22,8 +22,8 @@ pub use host::{
 };
 pub use identity::{
     Anonymous, AnonymousReason, AuthDenial, CustomAuthResult, CustomIdentity, Identity,
-    JwtIdentity, KeyAuthentication, KeyDenial, KeyIdentity, OAuth2Denial, OAuth2Identity,
-    OAuth2ProxyDenial, OAuth2ProxyIdentity, VirtualKey,
+    JwtAuthentication, JwtDenial, JwtIdentity, KeyAuthentication, KeyDenial, KeyIdentity,
+    OAuth2Denial, OAuth2Identity, OAuth2ProxyDenial, OAuth2ProxyIdentity, VirtualKey,
 };
 pub use inputs::{
     AuthorizeSettings, CheckFacts, CheckSettings, JwtSettings, KeySettings,

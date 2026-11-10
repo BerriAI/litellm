@@ -1736,48 +1736,6 @@ async def test_jwt_user_model_budget_is_enforced_before_the_jwt_path_returns(ove
         await _check_user_model_budgets(valid_token, model_max_budget_limiter, model=model)
 
 
-def test_jwt_path_enforces_the_user_model_budget_before_returning():
-    """
-    The JWT branch returns early, so the enforcement call has to sit before that
-    return rather than in the virtual-key block. Assert on the call graph, since
-    a helper-level test passes whether or not the JWT path ever calls it.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module._KeyHost))
-    )
-
-    def calls_before_each_return(node):
-        seen_check = []
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                fn = child.func
-                name = getattr(fn, "id", None) or getattr(fn, "attr", None)
-                if name == "_enforce_model_budgets":
-                    seen_check.append(child.lineno)
-        return seen_check
-
-    check_lines = calls_before_each_return(tree)
-    assert check_lines, "_user_api_key_auth_builder never enforces the user model budget"
-
-    jwt_returns = [
-        n.lineno
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Return) and isinstance(n.value, ast.Call) and getattr(n.value.func, "id", None) == "cast"
-    ]
-    assert jwt_returns, "expected the JWT branch's `return cast(UserAPIKeyAuth, valid_token)`"
-    assert any(check < jwt_return for check in check_lines for jwt_return in jwt_returns), (
-        "the user model-budget check must run before the JWT branch returns"
-    )
-
-
 def test_every_jwt_branch_carries_the_user_model_budget():
     """
     Each JWT branch that builds or replaces `valid_token` has to put the user's
@@ -1794,7 +1752,7 @@ def test_every_jwt_branch_carries_the_user_model_budget():
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
     tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        textwrap.dedent(inspect.getsource(auth_module._JwtHost))
         + "\n"
         + textwrap.dedent(inspect.getsource(auth_module._KeyHost))
     )
@@ -1913,56 +1871,6 @@ async def test_user_budget_lookup_returns_the_budget_when_the_row_reads():
     assert budget == stored
 
 
-def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
-    """
-    `skip_budget_checks` is computed per request for zero-cost models, and the
-    JWT branch logs "Skipping all budget checks" when it is set. Any enforcement
-    call that ignores it makes the same request behave differently depending on
-    whether the caller used a JWT or a virtual key, and makes that log a lie.
-
-    Structural rather than behavioural on purpose: the defect is a call site
-    sitting outside a guard, and driving the JWT path to a zero-cost model
-    would prove it for the request exercised rather than for every site. The
-    virtual-key path's exemption is decided by the auth core and covered in
-    tests/unit/proxy/auth/core/test_python_core.py.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
-
-    def guarded_by_skip(node: ast.AST, target: ast.AST) -> bool:
-        for parent in ast.walk(node):
-            if not isinstance(parent, ast.If):
-                continue
-            test = parent.test
-            is_skip_guard = (
-                isinstance(test, ast.UnaryOp)
-                and isinstance(test.op, ast.Not)
-                and isinstance(test.operand, ast.Name)
-                and test.operand.id == "skip_budget_checks"
-            )
-            if is_skip_guard and any(sub is target for sub in ast.walk(parent)):
-                return True
-        return False
-
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_enforce_model_budgets"
-    ]
-    assert len(calls) == 1, f"expected the JWT call site, found {len(calls)}"
-
-    unguarded = [c for c in calls if not guarded_by_skip(tree, c)]
-    assert not unguarded, (
-        f"{len(unguarded)} _enforce_model_budgets call(s) run even when "
-        "skip_budget_checks is set, so a zero-cost model is enforced on one auth path and not the other"
-    )
-
-
 def test_custom_auth_also_skips_budget_checks_for_zero_cost_models():
     """
     The custom-auth helper runs its own key, user and end-user per-model budget
@@ -2056,15 +1964,10 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
     """
     A JWT that maps to an existing virtual key resolves through the resolver
     store, which builds the token from the KEY row alone and therefore carries
-    no user-level per-model budget. That branch sets `do_standard_jwt_auth =
-    False` precisely so it falls through to the shared virtual-key checks, where
-    the user row is loaded and its budget copied onto the token.
-
-    Reviewed as a bypass three times, so the two halves it depends on are pinned
-    here: the branch must not return before the shared block, and the shared
-    block must copy the user row's budget onto the token. Structural on purpose,
-    because the claim is about control flow reaching a statement, and it has to
-    hold for branches added later rather than for one mocked request.
+    no user-level per-model budget. The auth core sends that branch on to the
+    shared virtual-key checks (pinned in tests/unit/proxy/auth/core/test_jwt.py),
+    where the user row is loaded and its budget copied onto the token. This
+    pins the copy.
     """
     import ast
     import inspect
@@ -2089,31 +1992,6 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
     assert copies_user_row, (
         "nothing copies the user row's model_max_budget onto the token, so a mapped-key "
         "JWT reaches enforcement carrying the key's columns only"
-    )
-
-    # Half two: the mapped-key branch does not return before reaching it.
-    disables_standard_auth = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "do_standard_jwt_auth" for t in node.targets)
-        and isinstance(node.value, ast.Constant)
-        and node.value.value is False
-    ]
-    assert len(disables_standard_auth) == 1, "expected exactly one mapped-key branch"
-    marker = disables_standard_auth[0]
-
-    enclosing = [
-        node for node in ast.walk(tree) if isinstance(node, ast.If) and any(sub is marker for sub in node.body)
-    ]
-    assert enclosing, "could not locate the mapped-key branch body"
-
-    returns_after = [
-        node for node in ast.walk(enclosing[0]) if isinstance(node, ast.Return) and node.lineno > marker.lineno
-    ]
-    assert not returns_after, (
-        "the mapped-key branch returns before the shared virtual-key checks, so the "
-        "user's per-model budget is never attached and never enforced"
     )
 
 

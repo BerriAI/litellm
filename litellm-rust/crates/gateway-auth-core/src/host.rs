@@ -2,11 +2,11 @@ use std::{error::Error, future::Future};
 
 use crate::{
     answers::{
-        EndUserScope, FallbackTarget, Introspection, KeyFacts, ModelBudgetScope, OwnerFacts,
-        PresentedKey, SigningKey, TeamMember, TeamMemberBudget, TeamMemberModelBudgetScope,
-        TokenRole,
+        AutoRegistration, EndUserScope, FallbackTarget, Introspection, JwtPolicy, KeyFacts,
+        KeyMapping, ModelBudgetScope, OwnerFacts, PresentedKey, TeamMember, TeamMemberBudget,
+        TeamMemberModelBudgetScope, TokenRole,
     },
-    identity::{CustomAuthResult, JwtIdentity},
+    identity::CustomAuthResult,
     inputs::RequestFacts,
     outcome::ModelBudgetExceeded,
 };
@@ -121,14 +121,16 @@ pub trait AuthorizeHost: Sync {
 pub trait JwtHost: Sync {
     type Error: Error + Send + Sync + 'static;
 
-    fn signing_keys(
-        &self,
-        issuer: &str,
-    ) -> impl Future<Output = Result<Vec<SigningKey>, Self::Error>> + Send;
-    fn mapped_key_hash(
-        &self,
-        identity: &JwtIdentity,
-    ) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send;
+    fn decode_claims(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn is_managed_agent(&self) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+    fn resolve_mapping(&self) -> impl Future<Output = Result<KeyMapping, Self::Error>> + Send;
+    fn backfill_mapped_user_email(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn run_jwt_policy(&self) -> impl Future<Output = Result<JwtPolicy, Self::Error>> + Send;
+    fn remember_proxy_admin(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn auto_register(&self) -> impl Future<Output = Result<AutoRegistration, Self::Error>> + Send;
+    fn skips_budget_checks(&self) -> bool;
+    fn load_project(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn check_user_model_budgets(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 pub trait OAuth2IntrospectionHost: Sync {

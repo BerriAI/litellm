@@ -17,14 +17,11 @@ pub struct Anonymous {
     pub reason: AnonymousReason,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JwtIdentity {
-    pub user_id: Option<String>,
-    pub team_id: Option<String>,
-    pub org_id: Option<String>,
-    pub end_user_id: Option<String>,
-    pub role: Option<String>,
-    pub scopes: Vec<String>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JwtIdentity {
+    ProxyAdmin,
+    User,
+    Key,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -121,6 +118,16 @@ pub enum OAuth2ProxyDenial {
 #[derive(Clone, Debug, PartialEq)]
 pub enum AuthDenial {
     Key(KeyDenial),
+    Jwt(JwtDenial),
     OAuth2(OAuth2Denial),
     OAuth2Proxy(OAuth2ProxyDenial),
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JwtDenial {
+    ManagedAgentNeedsDirectJwt,
+    OwnerDeactivated { user_id: Option<String> },
+    KeyMappingFailed { reason: String },
+}
+
+pub type JwtAuthentication = Result<JwtIdentity, JwtDenial>;

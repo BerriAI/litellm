@@ -1,20 +1,22 @@
 from typing import Protocol
 
 from litellm.proxy.auth.core.answers import (
+    AutoRegistration,
     EndUserScope,
     FallbackTarget,
     Introspection,
+    JwtPolicy,
     KeyFacts,
+    KeyMapping,
     ModelBudgetScope,
     OwnerFacts,
     PresentedKey,
-    SigningKey,
     TeamMember,
     TeamMemberBudget,
     TeamMemberModelBudgetScope,
     TokenRole,
 )
-from litellm.proxy.auth.core.identity import CustomAuthResult, JwtIdentity
+from litellm.proxy.auth.core.identity import CustomAuthResult
 from litellm.proxy.auth.core.inputs import RequestFacts
 from litellm.proxy.auth.core.outcome import ModelBudgetExceeded
 
@@ -86,9 +88,25 @@ class AuthorizeHost(Protocol):
 
 
 class JwtHost(Protocol):
-    async def signing_keys(self, issuer: str) -> tuple[SigningKey, ...]: ...
+    async def decode_claims(self) -> None: ...
 
-    async def mapped_key_hash(self, identity: JwtIdentity) -> str | None: ...
+    async def is_managed_agent(self) -> bool: ...
+
+    async def resolve_mapping(self) -> KeyMapping: ...
+
+    async def backfill_mapped_user_email(self) -> None: ...
+
+    async def run_jwt_policy(self) -> JwtPolicy: ...
+
+    async def remember_proxy_admin(self) -> None: ...
+
+    async def auto_register(self) -> AutoRegistration: ...
+
+    def skips_budget_checks(self) -> bool: ...
+
+    async def load_project(self) -> None: ...
+
+    async def check_user_model_budgets(self) -> None: ...
 
 
 class OAuth2IntrospectionHost(Protocol):

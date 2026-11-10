@@ -6,7 +6,7 @@ use crate::{
         OAuth2ProxyHost, RequestCheckHost, TeamMemberModelBudgetHost,
     },
     identity::{
-        Anonymous, AnonymousReason, AuthDenial, CustomAuthResult, Identity, KeyAuthentication,
+        Anonymous, AnonymousReason, CustomAuthResult, JwtAuthentication, KeyAuthentication,
         KeyDenial, KeyIdentity, OAuth2Denial, OAuth2Identity, OAuth2ProxyDenial,
         OAuth2ProxyIdentity, VirtualKey,
     },
@@ -69,10 +69,8 @@ pub trait JwtCore: Sync {
     fn authenticate<H: JwtHost>(
         &self,
         host: &H,
-        facts: &RequestFacts,
         settings: &JwtSettings,
-        now: SystemTime,
-    ) -> impl Future<Output = Result<Result<Identity, AuthDenial>, H::Error>> + Send;
+    ) -> impl Future<Output = Result<JwtAuthentication, H::Error>> + Send;
 }
 
 pub trait OAuth2Core: Sync {

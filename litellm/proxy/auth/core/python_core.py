@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
+from litellm.proxy.auth.core import jwt as jwt_rules
 from litellm.proxy.auth.core import oauth2 as oauth2_rules
 from litellm.proxy.auth.core import plan as plan_rules
 from litellm.proxy.auth.core import request_checks
@@ -21,6 +22,7 @@ from litellm.proxy.auth.core.core import (
 from litellm.proxy.auth.core.host import (
     AuthorizeHost,
     CustomAuthHost,
+    JwtHost,
     KeyHost,
     ModelBudgetHost,
     OAuth2IntrospectionHost,
@@ -34,6 +36,7 @@ from litellm.proxy.auth.core.identity import (
     CachedAdminKey,
     CustomAuthResult,
     ExpiredKey,
+    JwtAuthentication,
     KeyAuthentication,
     KeyBlocked,
     KeyDenial,
@@ -57,6 +60,7 @@ from litellm.proxy.auth.core.inputs import (
     AuthorizeSettings,
     CheckFacts,
     CheckSettings,
+    JwtSettings,
     KeySettings,
     OAuth2IntrospectionSettings,
     OAuth2ProxySettings,
@@ -108,7 +112,7 @@ class PythonCore(AuthCore):
         return PythonAnonymousCore()
 
     def jwt(self) -> JwtCore:
-        raise NotImplementedError
+        return PythonJwtCore()
 
     def oauth2(self) -> OAuth2Core:
         return PythonOAuth2Core()
@@ -137,6 +141,11 @@ class PythonAuthPlanner(AuthPlanner):
 class PythonAnonymousCore(AnonymousCore):
     def authenticate(self, reason: AnonymousReason) -> Anonymous:
         return Anonymous(reason)
+
+
+class PythonJwtCore(JwtCore):
+    async def authenticate(self, host: JwtHost, settings: JwtSettings) -> JwtAuthentication:
+        return await jwt_rules.authenticate(host, settings)
 
 
 class PythonOAuth2Core(OAuth2Core):

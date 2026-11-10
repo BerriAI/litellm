@@ -9,10 +9,14 @@ from litellm.proxy.auth.auth_checks import key_budget_exceeded_error
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.core.identity import (
     ExpiredKey,
+    JwtDenial,
+    JwtKeyMappingFailed,
+    JwtOwnerDeactivated,
     KeyBlocked,
     KeyDenial,
     KeyWithoutToken,
     MalformedKey,
+    ManagedAgentNeedsDirectJwt,
     MissingKey,
     NoDatabase,
     NotAVirtualKey,
@@ -147,3 +151,16 @@ def denial_exception(
             )
         case _:
             assert_never(denial)
+
+
+def jwt_denial_exception(denial: JwtDenial) -> HTTPException:
+    match denial:
+        case ManagedAgentNeedsDirectJwt():
+            return HTTPException(403, "Managed agents require direct JWT authentication without virtual-key mapping")
+        case JwtOwnerDeactivated(user_id=user_id):
+            return HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"User={user_id} has been deactivated via SCIM. Keys owned by this user cannot be used.",
+            )
+        case JwtKeyMappingFailed(reason=reason):
+            return HTTPException(status_code=403, detail=reason)

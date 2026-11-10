@@ -50,8 +50,9 @@ pub struct KeySettings {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JwtSettings {
-    pub audience: Option<String>,
-    pub leeway_seconds: u64,
+    pub virtual_key_mapping: bool,
+    pub has_db: bool,
+    pub master_key_set: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]

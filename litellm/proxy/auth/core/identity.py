@@ -45,13 +45,21 @@ KeyIdentity: TypeAlias = NoMasterKey | UserAuthRoute | MasterKey | CachedAdminKe
 
 
 @dataclass(frozen=True, slots=True)
-class JwtIdentity:
-    user_id: str | None
-    team_id: str | None
-    org_id: str | None
-    end_user_id: str | None
-    role: str | None
-    scopes: tuple[str, ...]
+class JwtProxyAdmin:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class JwtUser:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class JwtKey:
+    pass
+
+
+JwtIdentity: TypeAlias = JwtProxyAdmin | JwtUser | JwtKey
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,4 +196,24 @@ OAuth2ProxyDenial: TypeAlias = (
     TrustedProxyRangesMissing | UntrustedProxy | ProxyMappingsMissing | DisallowedProxyMappings
 )
 
-AuthDenial: TypeAlias = KeyDenial | OAuth2Denial | OAuth2ProxyDenial
+
+@dataclass(frozen=True, slots=True)
+class ManagedAgentNeedsDirectJwt:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class JwtOwnerDeactivated:
+    user_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class JwtKeyMappingFailed:
+    reason: str
+
+
+JwtDenial: TypeAlias = ManagedAgentNeedsDirectJwt | JwtOwnerDeactivated | JwtKeyMappingFailed
+
+JwtAuthentication: TypeAlias = JwtIdentity | JwtDenial
+
+AuthDenial: TypeAlias = KeyDenial | JwtDenial | OAuth2Denial | OAuth2ProxyDenial

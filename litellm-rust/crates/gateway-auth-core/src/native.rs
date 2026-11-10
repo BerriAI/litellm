@@ -10,7 +10,7 @@ use crate::{
         OAuth2ProxyHost, RequestCheckHost, TeamMemberModelBudgetHost,
     },
     identity::{
-        Anonymous, AnonymousReason, AuthDenial, CustomAuthResult, Identity, KeyAuthentication,
+        Anonymous, AnonymousReason, CustomAuthResult, JwtAuthentication, KeyAuthentication,
         KeyDenial, KeyIdentity, OAuth2Denial, OAuth2Identity, OAuth2ProxyDenial,
         OAuth2ProxyIdentity, VirtualKey,
     },
@@ -155,10 +155,8 @@ impl JwtCore for Unported {
     async fn authenticate<H: JwtHost>(
         &self,
         _host: &H,
-        _facts: &RequestFacts,
         _settings: &JwtSettings,
-        _now: SystemTime,
-    ) -> Result<Result<Identity, AuthDenial>, H::Error> {
+    ) -> Result<JwtAuthentication, H::Error> {
         unimplemented!("{RUNS_IN_PYTHON}")
     }
 }

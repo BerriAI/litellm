@@ -15,9 +15,8 @@ from litellm.proxy.auth.core.host import (
 from litellm.proxy.auth.core.identity import (
     Anonymous,
     AnonymousReason,
-    AuthDenial,
     CustomAuthResult,
-    Identity,
+    JwtAuthentication,
     KeyAuthentication,
     KeyDenial,
     KeyIdentity,
@@ -74,9 +73,7 @@ class AnonymousCore(Protocol):
 
 
 class JwtCore(Protocol):
-    async def authenticate(
-        self, host: JwtHost, facts: RequestFacts, settings: JwtSettings, now: datetime
-    ) -> Identity | AuthDenial: ...
+    async def authenticate(self, host: JwtHost, settings: JwtSettings) -> JwtAuthentication: ...
 
 
 class OAuth2Core(Protocol):

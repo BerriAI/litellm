@@ -76,13 +76,6 @@ class FallbackTarget:
 
 
 @dataclass(frozen=True, slots=True)
-class SigningKey:
-    key_id: str
-    algorithm: str
-    public_key_pem: str
-
-
-@dataclass(frozen=True, slots=True)
 class Introspection:
     active: bool
     user_id: object
@@ -100,3 +93,49 @@ class EndUserScope:
 class TokenRole:
     is_proxy_admin: bool
     is_builtin_admin: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MappedKey:
+    key_user_id: str | None
+    key_has_email: bool
+    claim_user_id: str | None
+    claim_has_email: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PendingAutoRegister:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class NoKeyMapping:
+    pass
+
+
+KeyMapping: TypeAlias = MappedKey | PendingAutoRegister | NoKeyMapping
+
+
+@dataclass(frozen=True, slots=True)
+class JwtPolicy:
+    is_proxy_admin: bool
+    user_id: str | None
+    owner_deactivated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Registered:
+    links_existing_key: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RegistrationFailed:
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class NotRegistered:
+    pass
+
+
+AutoRegistration: TypeAlias = Registered | RegistrationFailed | NotRegistered

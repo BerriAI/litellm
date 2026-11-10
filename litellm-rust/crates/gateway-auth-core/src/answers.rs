@@ -67,13 +67,6 @@ pub struct FallbackTarget {
     pub served_model: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SigningKey {
-    pub key_id: String,
-    pub algorithm: String,
-    pub public_key_pem: String,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Introspection {
     pub active: bool,
@@ -92,4 +85,30 @@ pub struct EndUserScope {
 pub struct TokenRole {
     pub is_proxy_admin: bool,
     pub is_builtin_admin: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeyMapping {
+    Mapped {
+        key_user_id: Option<String>,
+        key_has_email: bool,
+        claim_user_id: Option<String>,
+        claim_has_email: bool,
+    },
+    PendingAutoRegister,
+    None,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JwtPolicy {
+    pub is_proxy_admin: bool,
+    pub user_id: Option<String>,
+    pub owner_deactivated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AutoRegistration {
+    Registered { links_existing_key: bool },
+    Failed { reason: String },
+    NotRegistered,
 }
