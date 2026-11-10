@@ -118,9 +118,63 @@ def a2a_task_state(result: Mapping[str, object]) -> str | None:
     return state if isinstance(state, str) else None
 
 
+def _extract_text_from_a2a_result(result: Mapping[str, object], max_depth: int = 10) -> str:
+    """
+    Extract text from an A2A ``result`` object without applying task-state suppression.
+
+    Used for guardrail scanning so nonterminal status messages are still checked.
+    """
+    # A2A response can have different formats:
+    # 1. Direct message: {"result": {"kind": "message", "parts": [...]}}
+    # 2. Nested message: {"result": {"message": {"parts": [...]}}}
+    # 3. Task with artifacts: {"result": {"kind": "task", "artifacts": [{"parts": [...]}]}}
+    # 4. Task with status message: {"result": {"kind": "task", "status": {"message": {"parts": [...]}}}}
+    # 5. Streaming artifact-update: {"result": {"kind": "artifact-update", "artifact": {"parts": [...]}}}
+
+    if "parts" in result:
+        return extract_text_from_a2a_message(dict(result), depth=0, max_depth=max_depth)
+
+    message: Final = result.get("message")
+    if message and isinstance(message, dict):
+        return extract_text_from_a2a_message(message, depth=0, max_depth=max_depth)
+
+    artifact: Final = result.get("artifact")
+    if artifact and isinstance(artifact, dict):
+        return extract_text_from_a2a_message(artifact, depth=0, max_depth=max_depth)
+
+    status: Final = result.get("status", {})
+    if isinstance(status, dict):
+        status_message: Final = status.get("message")
+        if status_message and isinstance(status_message, dict):
+            return extract_text_from_a2a_message(status_message, depth=0, max_depth=max_depth)
+
+    artifacts: Final = result.get("artifacts", [])
+    if isinstance(artifacts, list) and artifacts:
+        first_artifact: Final = artifacts[0]
+        if isinstance(first_artifact, dict):
+            return extract_text_from_a2a_message(first_artifact, depth=0, max_depth=max_depth)
+
+    return ""
+
+
+def extract_text_from_a2a_response_for_guardrails(
+    response_dict: Mapping[str, object],
+    max_depth: int = 10,
+) -> str:
+    """Extract text for output guardrails (includes nonterminal task status messages)."""
+    result: Final = response_dict.get("result", {})
+    if not isinstance(result, dict):
+        return ""
+    return _extract_text_from_a2a_result(result, max_depth=max_depth)
+
+
 def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_depth: int = 10) -> str:
     """
     Extract text content from A2A response result.
+
+    Suppresses most text on nonterminal tasks so chat completions do not leak
+    in-progress agent output (use ``extract_text_from_a2a_response_for_guardrails``
+    when scanning for policy).
 
     Args:
         response_dict: A2A response dict with 'result' containing message
@@ -142,41 +196,7 @@ def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_dept
                 return extract_text_from_a2a_message(first_artifact, depth=0, max_depth=max_depth)
         return ""
 
-    # A2A response can have different formats:
-    # 1. Direct message: {"result": {"kind": "message", "parts": [...]}}
-    # 2. Nested message: {"result": {"message": {"parts": [...]}}}
-    # 3. Task with artifacts: {"result": {"kind": "task", "artifacts": [{"parts": [...]}]}}
-    # 4. Task with status message: {"result": {"kind": "task", "status": {"message": {"parts": [...]}}}}
-    # 5. Streaming artifact-update: {"result": {"kind": "artifact-update", "artifact": {"parts": [...]}}}
-
-    # Check if result itself has parts (direct message)
-    if "parts" in result:
-        return extract_text_from_a2a_message(result, depth=0, max_depth=max_depth)
-
-    # Check for nested message
-    message: Final = result.get("message")
-    if message:
-        return extract_text_from_a2a_message(message, depth=0, max_depth=max_depth)
-
-    # Check for streaming artifact-update (singular artifact)
-    artifact: Final = result.get("artifact")
-    if artifact and isinstance(artifact, dict):
-        return extract_text_from_a2a_message(artifact, depth=0, max_depth=max_depth)
-
-    # Check for task status message (common in Gemini A2A agents)
-    status: Final = result.get("status", {})
-    if isinstance(status, dict):
-        status_message: Final = status.get("message")
-        if status_message:
-            return extract_text_from_a2a_message(status_message, depth=0, max_depth=max_depth)
-
-    # Handle task result with artifacts (plural, array)
-    artifacts: Final = result.get("artifacts", [])
-    if artifacts and len(artifacts) > 0:
-        first_artifact: Final = artifacts[0]
-        return extract_text_from_a2a_message(first_artifact, depth=0, max_depth=max_depth)
-
-    return ""
+    return _extract_text_from_a2a_result(result, max_depth=max_depth)
 
 
 def _handle_a2a_poll_data(poll_data: Mapping[str, object], status_code: int) -> Mapping[str, object] | None:
