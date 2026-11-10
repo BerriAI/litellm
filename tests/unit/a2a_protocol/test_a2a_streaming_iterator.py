@@ -88,6 +88,48 @@ async def test_custom_logger_only_never_submits_sync_success_handler(monkeypatch
     assert recording_executor.submitted_for(logging_obj) == []
 
 
+@pytest.mark.asyncio
+async def test_stream_success_logging_runs_through_the_tracked_logging_task_helper(monkeypatch):
+    spawned_task_names: list[str] = []
+    real_spawn_logging_task = a2a_streaming_iterator_module.spawn_logging_task
+
+    def _spawn(loop, coroutine, *, task_name):
+        spawned_task_names.append(task_name)
+        return real_spawn_logging_task(loop, coroutine, task_name=task_name)
+
+    monkeypatch.setattr(a2a_streaming_iterator_module, "spawn_logging_task", _spawn)
+
+    logging_obj = LitellmLogging(
+        model="a2a/test-agent",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="a2a_send_message_streaming",
+        start_time=time.time(),
+        litellm_call_id="a2a-tracked-logging",
+        function_id="a2a-tracked-logging",
+    )
+
+    async def _empty_stream():
+        return
+        yield
+
+    iterator = A2AStreamingIterator(
+        stream=_empty_stream(),
+        request=SimpleNamespace(
+            params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": "hi"}]})
+        ),
+        logging_obj=logging_obj,
+        agent_name="test-agent",
+    )
+
+    existing_tasks = asyncio.all_tasks()
+    await iterator._handle_stream_complete()
+    spawned_tasks = asyncio.all_tasks() - existing_tasks
+    await asyncio.wait_for(asyncio.gather(*spawned_tasks, return_exceptions=True), timeout=5)
+
+    assert spawned_task_names == ["A2A stream success logging"]
+
+
 class _AgentChunk:
     def __init__(self, text: str):
         self._text = text

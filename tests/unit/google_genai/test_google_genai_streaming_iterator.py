@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
+from litellm.google_genai import streaming_iterator as google_genai_streaming_iterator_module
 from litellm.google_genai.streaming_iterator import (
     AsyncGoogleGenAIGenerateContentStreamingIterator,
     GoogleGenAIGenerateContentStreamingIterator,
@@ -225,6 +226,35 @@ def _gemini_event(text: str, finish_reason: str | None = None) -> str:
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_async_stream_logging_runs_through_the_tracked_logging_task_helper(monkeypatch):
+    spawned_task_names: list[str] = []
+    real_spawn_logging_task = google_genai_streaming_iterator_module.spawn_logging_task
+
+    def _spawn(loop, coroutine, *, task_name):
+        spawned_task_names.append(task_name)
+        return real_spawn_logging_task(loop, coroutine, task_name=task_name)
+
+    monkeypatch.setattr(google_genai_streaming_iterator_module, "spawn_logging_task", _spawn)
+
+    call_start: Final = datetime(2026, 10, 9, 12, 0, 0)
+    iterator: Final = AsyncGoogleGenAIGenerateContentStreamingIterator(
+        response=httpx.Response(200),
+        model="gemini-3.1-flash",
+        logging_obj=_logging_obj(call_start, _SuccessRecorder()),
+        generate_content_provider_config=MagicMock(),
+        litellm_metadata={},
+        custom_llm_provider="gemini",
+    )
+
+    existing_tasks = asyncio.all_tasks()
+    await iterator._handle_async_streaming_logging()
+    spawned_tasks = asyncio.all_tasks() - existing_tasks
+    await asyncio.wait_for(asyncio.gather(*spawned_tasks, return_exceptions=True), timeout=5)
+
+    assert spawned_task_names == ["Gemini passthrough stream logging"]
+
+
 async def test_async_stream_logs_its_first_chunk_time_measured_from_the_call_start():
     call_start: Final = datetime(2026, 10, 9, 12, 0, 0)
     recorder: Final = _SuccessRecorder()
