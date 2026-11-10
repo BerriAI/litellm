@@ -6,8 +6,8 @@ from typing import Final, Protocol
 import pytest
 
 from litellm.exceptions import APIError
+from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import bindings, configuration, runtime
 from litellm.rust_bridge._native import RustBridgeDeclined, RustUpstreamError
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
