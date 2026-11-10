@@ -1314,10 +1314,10 @@ def _apply_budget_limits_to_end_user_params(
         end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
 
     if budget_info.model_tpm_limit is not None:
-        end_user_params["end_user_model_tpm_limit"] = budget_info.model_tpm_limit
+        end_user_params["end_user_model_tpm_limit"] = budget_info.model_tpm_limit  # rebind-ok: in-place like siblings
 
     if budget_info.model_rpm_limit is not None:
-        end_user_params["end_user_model_rpm_limit"] = budget_info.model_rpm_limit
+        end_user_params["end_user_model_rpm_limit"] = budget_info.model_rpm_limit  # rebind-ok: in-place like siblings
 
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
@@ -1451,9 +1451,9 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
     if end_user_params.get("end_user_model_max_budget") is not None:
         valid_token.end_user_model_max_budget = end_user_params["end_user_model_max_budget"]
     if end_user_params.get("end_user_model_tpm_limit") is not None:
-        valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]
+        valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]  # rebind-ok: in-place
     if end_user_params.get("end_user_model_rpm_limit") is not None:
-        valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]
+        valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]  # rebind-ok: in-place
     return valid_token
 
 
@@ -4147,9 +4147,9 @@ async def _apply_key_end_user_default_budget_to_token(
     if not keep_token_limits or valid_token.end_user_model_max_budget is None:
         valid_token.end_user_model_max_budget = default_budget.model_max_budget
     if not keep_token_limits or valid_token.end_user_model_tpm_limit is None:
-        valid_token.end_user_model_tpm_limit = default_budget.model_tpm_limit
+        valid_token.end_user_model_tpm_limit = default_budget.model_tpm_limit  # rebind-ok: in-place like siblings
     if not keep_token_limits or valid_token.end_user_model_rpm_limit is None:
-        valid_token.end_user_model_rpm_limit = default_budget.model_rpm_limit
+        valid_token.end_user_model_rpm_limit = default_budget.model_rpm_limit  # rebind-ok: in-place like siblings
 
 
 async def _reserve_budget_after_common_checks(

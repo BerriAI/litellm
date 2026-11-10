@@ -676,7 +676,7 @@ async def new_project(
         return response
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.new_project(): Exception occured - {}".format(str(e))
+            f"litellm.proxy.management_endpoints.project_endpoints.new_project(): Exception occured - {e!s}"
         )
         raise handle_exception_on_proxy(e)
 
@@ -783,9 +783,9 @@ async def update_project(
             )
 
         # Fetch existing project
-        existing_project: (
-            prisma_models.LiteLLM_ProjectTable | None
-        ) = await _project_table(prisma_client).find_unique(where={"project_id": data.project_id})
+        existing_project: prisma_models.LiteLLM_ProjectTable | None = await _project_table(prisma_client).find_unique(
+            where={"project_id": data.project_id}
+        )
 
         if existing_project is None:
             raise ProxyException(
@@ -906,7 +906,7 @@ async def update_project(
                 },
             )
             # Remove budget fields from project update
-            for field in budget_updates.keys():
+            for field in budget_updates:
                 update_data.pop(field, None)
 
         if object_permission_payload is not None:
@@ -947,9 +947,7 @@ async def update_project(
         return updated_project
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.update_project(): Exception occured - {}".format(
-                str(e)
-            )
+            f"litellm.proxy.management_endpoints.project_endpoints.update_project(): Exception occured - {e!s}"
         )
         raise handle_exception_on_proxy(e)
 
@@ -1029,9 +1027,9 @@ async def delete_project(
                 )
 
             # Check if there are any keys associated with this project
-            associated_keys: Sequence[
-                prisma_models.LiteLLM_VerificationToken
-            ] = await _verification_token_table(prisma_client).find_many(where={"project_id": project_id})
+            associated_keys: Sequence[prisma_models.LiteLLM_VerificationToken] = await _verification_token_table(
+                prisma_client
+            ).find_many(where={"project_id": project_id})
 
             if len(associated_keys) > 0:
                 raise ProxyException(
@@ -1042,9 +1040,9 @@ async def delete_project(
                 )
 
             # Delete the project
-            deleted_project: (
-                prisma_models.LiteLLM_ProjectTable | None
-            ) = await _project_table(prisma_client).delete(where={"project_id": project_id})
+            deleted_project: prisma_models.LiteLLM_ProjectTable | None = await _project_table(prisma_client).delete(
+                where={"project_id": project_id}
+            )
 
             await delete_cached_project_object(
                 project_id=project_id,
@@ -1056,9 +1054,7 @@ async def delete_project(
         return deleted_projects
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.delete_project(): Exception occured - {}".format(
-                str(e)
-            )
+            f"litellm.proxy.management_endpoints.project_endpoints.delete_project(): Exception occured - {e!s}"
         )
         raise handle_exception_on_proxy(e)
 
@@ -1118,7 +1114,7 @@ async def project_info(
         return project
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.project_info(): Exception occured - {}".format(str(e))
+            f"litellm.proxy.management_endpoints.project_endpoints.project_info(): Exception occured - {e!s}"
         )
         raise handle_exception_on_proxy(e)
 
@@ -1152,9 +1148,7 @@ async def list_projects(
 
         # If proxy admin, get all projects
         if user_api_key_has_admin_view(user_api_key_dict):
-            projects: Sequence[
-                prisma_models.LiteLLM_ProjectTable
-            ] = await _project_table(prisma_client).find_many(
+            projects: Sequence[prisma_models.LiteLLM_ProjectTable] = await _project_table(prisma_client).find_many(
                 include={"litellm_budget_table": True, "object_permission": True}
             )
         else:
@@ -1171,8 +1165,6 @@ async def list_projects(
         return projects
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.management_endpoints.project_endpoints.list_projects(): Exception occured - {}".format(
-                str(e)
-            )
+            f"litellm.proxy.management_endpoints.project_endpoints.list_projects(): Exception occured - {e!s}"
         )
         raise handle_exception_on_proxy(e)

@@ -201,13 +201,13 @@ async def test_new_and_update_budget_persist_per_model_tpm_and_rpm_limits(client
         json={"budget_id": "budget_models", "model_tpm_limit": {"gpt-4o": 400000}, "model_rpm_limit": {"gpt-4o": 200}},
     )
     assert resp.status_code == 200, resp.text
-    created = mock_table.create.await_args.kwargs["data"]
+    created: Final = mock_table.create.await_args.kwargs["data"]
     assert json.loads(created["model_tpm_limit"]) == {"gpt-4o": 400000}, created
     assert json.loads(created["model_rpm_limit"]) == {"gpt-4o": 200}, created
 
     resp = client.post("/budget/update", json={"budget_id": "budget_models", "model_tpm_limit": {"gpt-4o": 0}})
     assert resp.status_code == 200, resp.text
-    updated = mock_table.update.await_args.kwargs["data"]
+    updated: Final = mock_table.update.await_args.kwargs["data"]
     assert json.loads(updated["model_tpm_limit"]) == {"gpt-4o": 0}, updated
     assert "model_rpm_limit" not in updated, updated
 
