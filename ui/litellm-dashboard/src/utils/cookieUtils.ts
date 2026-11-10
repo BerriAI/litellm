@@ -2,9 +2,31 @@
  * Utility functions for managing cookies
  */
 
+import { useSyncExternalStore } from "react";
+import { isJwtExpired } from "./jwtUtils";
 import { clearAllMcpTokens } from "./mcpTokenStore";
 
-export const LOGIN_TOKEN_CHANGED_EVENT = "litellm-login-token-changed";
+const authTokenListeners = new Set<() => void>();
+
+function notifyAuthToken() {
+  authTokenListeners.forEach((listener) => listener());
+}
+
+export function getAuthToken(): string | null {
+  const token = getCookie("token");
+  return token && !isJwtExpired(token) ? token : null;
+}
+
+export function subscribeAuthToken(listener: () => void): () => void {
+  authTokenListeners.add(listener);
+  return () => {
+    authTokenListeners.delete(listener);
+  };
+}
+
+export function useAuthToken(): string | null {
+  return useSyncExternalStore(subscribeAuthToken, getAuthToken, () => null);
+}
 
 /**
  * Returns the cookie path for the UI.
@@ -72,6 +94,7 @@ export function clearTokenCookies() {
   }
 
   clearAllMcpTokens();
+  notifyAuthToken();
 }
 
 /**
@@ -106,7 +129,7 @@ export function storeLoginToken(token: string) {
     // sessionStorage may be unavailable (e.g. private browsing quota exceeded)
   }
 
-  window.dispatchEvent(new Event(LOGIN_TOKEN_CHANGED_EVENT));
+  notifyAuthToken();
 }
 
 /**
