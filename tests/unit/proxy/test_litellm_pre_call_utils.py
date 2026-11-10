@@ -26,6 +26,7 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
 )
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -59,6 +60,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     get_dynamic_logging_metadata,
     get_metadata_variable_name,
     move_guardrails_to_metadata,
+    resolve_tenant_otel_destinations,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
@@ -2779,7 +2781,7 @@ def test_key_dynamic_logging_settings():
         team_metadata={},
     )
     result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_arize)
-    assert result == [{"callback_name": "arize", "callback_type": "success"}]
+    assert result == ({"callback_name": "arize", "callback_type": "success"},)
 
     # Test with langfuse logging
     key_with_langfuse = UserAPIKeyAuth(
@@ -2788,7 +2790,7 @@ def test_key_dynamic_logging_settings():
         team_metadata={},
     )
     result = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(key_with_langfuse)
-    assert result == [{"callback_name": "langfuse", "callback_type": "success"}]
+    assert result == ({"callback_name": "langfuse", "callback_type": "success"},)
 
     # Test with no logging metadata
     key_without_logging = UserAPIKeyAuth(api_key="test-key", metadata={}, team_metadata={})
@@ -2910,6 +2912,22 @@ def test_get_dynamic_logging_metadata_with_arize_team_logging():
     assert result.callback_vars is not None
     assert result.callback_vars["arize_api_key"] == "test_arize_api_key"
     assert result.callback_vars["arize_space_id"] == "test_arize_space_id"
+
+
+@pytest.mark.parametrize(
+    "logging_value",
+    [
+        pytest.param({"callback_name": "langsmith"}, id="object"),
+        pytest.param("langsmith", id="string"),
+        pytest.param(["langsmith"], id="list-with-string"),
+        pytest.param([None], id="list-with-null"),
+    ],
+)
+def test_non_object_team_logging_metadata_fails_as_a_server_error_not_a_bad_request(logging_value: object) -> None:
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="test-key", metadata={}, team_metadata={"logging": logging_value})
+
+    with pytest.raises(TypeError):
+        get_dynamic_logging_metadata(user_api_key_dict=user_api_key_dict, proxy_config=MagicMock())
 
 
 def test_add_team_callback_rejects_env_reference():
@@ -10263,6 +10281,48 @@ def test_arize_otlp_protocol_on_a_key_logging_entry_reaches_the_destination(monk
 
         assert [d.protocol for d in destinations] == ["otlp_http"]
         assert destinations[0].endpoint == "https://arize.internal.example/v1/traces"
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_a_key_referencing_a_credential_routes_to_that_credential_with_its_own_excluded_services(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "https://arize.internal.example/v1/traces")
+    monkeypatch.delenv("ARIZE_API_KEY", raising=False)
+    monkeypatch.delenv("ARIZE_SPACE_ID", raising=False)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="space-a",
+                credential_values={"arize_api_key": "k", "arize_space_id": "s"},
+                credential_info={},
+            )
+        ],
+    )
+    is_otel_v2_enabled.cache_clear()
+    try:
+        auth = UserAPIKeyAuth(
+            api_key="hashed-key",
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "litellm_credential_name": "space-a",
+                        "callback_vars": {"excluded_services": "redis,postgres"},
+                    }
+                ]
+            },
+            team_metadata={},
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [(d.headers, d.excluded_db_systems) for d in destinations] == [
+            ({"arize-space-id": "s", "api_key": "k"}, frozenset({"redis", "postgresql"}))
+        ]
     finally:
         is_otel_v2_enabled.cache_clear()
 
