@@ -2809,10 +2809,10 @@ class Logging(LiteLLMLoggingBaseClass):
         own_cost: Final = self.model_call_details.get("response_cost")
         if not (isinstance(partial_usage, Usage) and isinstance(partial_cost, float) and isinstance(own_usage, Usage)):
             return own_usage if isinstance(own_usage, Usage) else None
-        if not isinstance(own_cost, (int, float)):
-            return own_usage
         combined_usage: Final = BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[own_usage, partial_usage])
         self.model_call_details["combined_usage_object"] = combined_usage
+        if not isinstance(own_cost, (int, float)):
+            return combined_usage
         self.model_call_details.pop("failed_attempts_usage", None)
         self.model_call_details["response_cost"] = own_cost + partial_cost
         if self.cost_breakdown is not None:

@@ -3188,17 +3188,7 @@ def _cut_responses_sse(response_id: str, words: tuple[str, ...], failed_usage: M
     )
 
 
-async def _stream_responses_through_cut_legs(
-    respx_mock: respx.MockRouter, cut_groups: tuple[str, ...], failed_usage: Mapping[str, int] | None
-) -> LiteLLMLogging:
-    for group, words in (("primary", ("Once ", "upon ", "a ", "time ", "there")), ("middle", (" lived", " a"))):
-        respx_mock.post(f"https://{group}.example/v1/responses").mock(
-            return_value=httpx.Response(
-                200,
-                headers={"content-type": "text/event-stream"},
-                text=_cut_responses_sse(f"resp_{group}", words, failed_usage),
-            )
-        )
+def _mock_backup_responses(respx_mock: respx.MockRouter) -> None:
     respx_mock.post("https://backup.example/v1/responses").mock(
         return_value=httpx.Response(
             200,
@@ -3229,6 +3219,20 @@ async def _stream_responses_through_cut_legs(
             ),
         )
     )
+
+
+async def _stream_responses_through_cut_legs(
+    respx_mock: respx.MockRouter, cut_groups: tuple[str, ...], failed_usage: Mapping[str, int] | None
+) -> LiteLLMLogging:
+    for group, words in (("primary", ("Once ", "upon ", "a ", "time ", "there")), ("middle", (" lived", " a"))):
+        respx_mock.post(f"https://{group}.example/v1/responses").mock(
+            return_value=httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=_cut_responses_sse(f"resp_{group}", words, failed_usage),
+            )
+        )
+    _mock_backup_responses(respx_mock)
     router: Final = Router(
         model_list=[
             *(
@@ -3330,6 +3334,76 @@ async def test_responses_fallback_sharing_the_proxy_logging_object_bills_the_cut
         0,
         0,
         0.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_responses_fallback_from_a_chat_bridged_primary_bills_the_cut_partial_once(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SpendRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post(host="api.mistral.ai").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=_CutSSE("Once upon"))
+    )
+    _mock_backup_responses(respx_mock)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "mistral/mistral-large-latest",
+                    "api_key": "k1",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "k2",
+                    "api_base": "https://backup.example/v1",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    shared_logging, _ = litellm.utils.function_setup(
+        original_function="aresponses",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+    )
+
+    response: Final = await router.aresponses(
+        model="primary",
+        input="Tell me a story",
+        stream=True,
+        litellm_call_id="shared-call",
+        litellm_logging_obj=shared_logging,
+    )
+    _ = [event async for event in response]
+    await asyncio.wait_for(recorder.succeeded.wait(), timeout=10)
+
+    (cut_leg,) = recorder.failures
+    assert cut_leg["completion_tokens"] > 0
+    assert cut_leg["response_cost"] == pytest.approx(
+        cut_leg["prompt_tokens"] * 0.001 + cut_leg["completion_tokens"] * 0.002
+    )
+    (success,) = recorder.successes
+    assert (success["prompt_tokens"], success["completion_tokens"]) == (
+        1000 + cut_leg["prompt_tokens"],
+        700 + cut_leg["completion_tokens"],
+    )
+    assert success["response_cost"] == pytest.approx(cut_leg["response_cost"] + _backup_responses_cost())
+    assert success["cost_breakdown"]["additional_costs"]["mid_stream_partial_cost"] == pytest.approx(
+        cut_leg["response_cost"]
     )
 
 

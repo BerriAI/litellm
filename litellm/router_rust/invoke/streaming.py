@@ -763,13 +763,18 @@ def _price_cut_partial(cut_stream: CustomStreamWrapper, partial_response: object
     )
 
 
-def _billed_responses_cut_partial(cut_logging: object) -> "ContinuedPartial | None":
+def _billed_responses_cut_partial(cut_stream: "BaseResponsesAPIStreamingIterator") -> "ContinuedPartial | None":
     from litellm.cost_calculator import BaseTokenUsageProcessor
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+    from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+        LiteLLMCompletionStreamingIterator,
+    )
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuedPartial
 
-    if not isinstance(cut_logging, LiteLLMLogging):
-        return None
+    cut_logging: Final = (
+        cut_stream.litellm_logging_obj
+        if isinstance(cut_stream, LiteLLMCompletionStreamingIterator)
+        else cut_stream.logging_obj
+    )
     details: Final = cut_logging.model_call_details
     candidate_legs: Final = (
         (details.get("combined_usage_object"), details.get("response_cost")),
@@ -1819,9 +1824,7 @@ async def _responses_fallback_attempt(
     continued: Final = _responses_continuation_request(attempt, e, source_iterator)
     seam: Final = ResponsesContinuationSeam(e.generated_content if continued is not None else "")
     partial_usage: Final = _extract_partial_responses_usage(source_iterator)
-    cut_partial: Final = _billed_responses_cut_partial(
-        getattr(source_iterator, "logging_obj", getattr(source_iterator, "litellm_logging_obj", None))
-    )
+    cut_partial: Final = _billed_responses_cut_partial(source_iterator)
     trigger: Final = _fallback_trigger(
         e, (litellm_exceptions.ContentPolicyViolationError, litellm_exceptions.ContextWindowExceededError)
     )

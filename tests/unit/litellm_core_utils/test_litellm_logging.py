@@ -4957,7 +4957,7 @@ async def test_async_success_handler_logs_a_completed_stream_only_once():
 
 
 @pytest.mark.asyncio
-async def test_an_unpriced_continuation_logs_only_its_own_tokens_and_keeps_the_cut_partial_off_the_success_row():
+async def test_an_unpriced_continuation_logs_the_cut_partials_tokens_without_a_cost():
     recorder: Final = _SuccessCapturingLogger()
     start: Final = dt_object(2026, 1, 1)
     logging_obj: Final = Logging(
@@ -4993,9 +4993,8 @@ async def test_an_unpriced_continuation_logs_only_its_own_tokens_and_keeps_the_c
     )
 
     assert recorder.success_payload is not None
-    assert (recorder.success_payload["prompt_tokens"], recorder.success_payload["completion_tokens"]) == (5, 2)
+    assert (recorder.success_payload["prompt_tokens"], recorder.success_payload["completion_tokens"]) == (45, 9)
     assert not recorder.success_payload["response_cost"]
-    assert logging_obj.model_call_details["failed_attempts_usage"] == ((cut_usage, 0.001),)
 
 
 @pytest.mark.asyncio
