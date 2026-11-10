@@ -91,6 +91,9 @@ class ParallelAISearchConfig(BaseSearchConfig):
     def ui_friendly_name() -> str:
         return "Parallel AI"
 
+    def domain_filter_params(self) -> frozenset[str]:
+        return frozenset(("search_domain_filter", "include_domains", "exclude_domains"))
+
     def supports_rich_search_input(self) -> bool:
         # The v1 search API takes `objective` + multiple `search_queries`
         # natively; sending both is the documented best practice.
