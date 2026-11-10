@@ -5,9 +5,8 @@ Attachments define WHERE policies apply, separate from the policy definitions.
 This allows the same policy to be attached to multiple scopes.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -20,8 +19,6 @@ from litellm.types.proxy.policy_engine import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from prisma.models import LiteLLM_PolicyAttachmentTable
 
     from litellm.proxy.utils import PrismaClient
@@ -30,30 +27,6 @@ if TYPE_CHECKING:
 class PolicyAttachmentMatch(TypedDict):
     policy_name: str
     matched_via: str
-
-
-def _attachment_specificity(attachment: PolicyAttachment) -> tuple[int, int]:
-    if attachment.is_global():
-        return (0, 0)
-
-    dims: Final = tuple(
-        specificity
-        for values, specificity in (
-            (attachment.teams, 1),
-            (attachment.keys, 2),
-            (attachment.tags, 3),
-            (attachment.models, 4),
-        )
-        if values
-    )
-    return (max(dims, default=0), len(dims))
-
-
-def _attachment_sort_key(attachment: PolicyAttachment) -> tuple[int, int, int, int]:
-    specificity: Final = _attachment_specificity(attachment)
-    if attachment.priority is not None:
-        return (0, attachment.priority, *specificity)
-    return (1, 0, *specificity)
 
 
 class AttachmentRegistry:
@@ -88,19 +61,20 @@ class AttachmentRegistry:
             attachments_config: List of attachment dictionaries from YAML.
         """
         self._attachments = []
-
-        for attachment_data in attachments_config:
-            try:
-                attachment = self._parse_attachment(attachment_data)
-                self._attachments.append(attachment)
-                verbose_proxy_logger.debug("Loaded attachment for policy: %s", attachment.policy)
-            except Exception as e:
-                verbose_proxy_logger.error("Error loading attachment: %s", e)
-                raise ValueError(f"Invalid attachment: {e}") from e
+        self._attachments = [self._parse_config_attachment(attachment_data) for attachment_data in attachments_config]
 
         self._config_attachments = tuple(self._attachments)
         self._initialized = True
         verbose_proxy_logger.info("Loaded %s policy attachments", len(self._attachments))
+
+    def _parse_config_attachment(self, attachment_data: Mapping[str, object]) -> PolicyAttachment:
+        try:
+            attachment: Final = self._parse_attachment(attachment_data)
+        except Exception as e:
+            verbose_proxy_logger.error("Error loading attachment: %s", e)
+            raise ValueError(f"Invalid attachment: {e}") from e
+        verbose_proxy_logger.debug("Loaded attachment for policy: %s", attachment.policy)
+        return attachment
 
     def _parse_attachment(self, attachment_data: Mapping[str, object]) -> PolicyAttachment:
         """
@@ -125,90 +99,32 @@ class AttachmentRegistry:
             }
         )
 
-    def get_attached_policies(
-        self,
-        context: PolicyMatchContext,
-        policy_applies: Callable[[str], bool] | None = None,
-    ) -> list[str]:
+    def get_attached_policies(self, context: PolicyMatchContext, *, only_applying: bool = False) -> list[str]:
         """
         Get list of policy names attached to the given context.
 
         Args:
             context: The request context to match against
-            policy_applies: Optional predicate; attachments whose policy does not apply are ignored
+            only_applying: Ignore attachments whose policy does not apply to the context
 
         Returns:
             List of policy names that are attached to matching scopes
         """
-        return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context, policy_applies)]
+        return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context, only_applying=only_applying)]
 
     def get_attached_policies_with_reasons(
-        self,
-        context: PolicyMatchContext,
-        policy_applies: Callable[[str], bool] | None = None,
+        self, context: PolicyMatchContext, *, only_applying: bool = False
     ) -> list[PolicyAttachmentMatch]:
         """
         Get list of policy names and match reasons for the given context.
 
         Returns a list of dicts with 'policy_name' and 'matched_via' keys.
         The 'matched_via' describes which dimension caused the match.
-        Attachments whose policy fails `policy_applies` are dropped before defaults are considered.
+        With `only_applying`, attachments whose policy does not apply are dropped before defaults are considered.
         """
-        from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+        from litellm.rust_bridge.policy_engine import current_policy_engine
 
-        in_scope: Final = tuple(
-            attachment
-            for attachment in self._attachments
-            if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
-            and (policy_applies is None or policy_applies(attachment.policy))
-        )
-        non_default: Final = tuple(attachment for attachment in in_scope if not attachment.default)
-        matching_attachments: Final = sorted(
-            non_default or tuple(attachment for attachment in in_scope if attachment.default),
-            key=_attachment_sort_key,
-        )
-        broadest_attachment_by_policy: Final = MappingProxyType(
-            {attachment.policy: attachment for attachment in reversed(matching_attachments)}
-        )
-        unique_attachments: Final = tuple(
-            broadest_attachment_by_policy[policy_name]
-            for policy_name in dict.fromkeys(attachment.policy for attachment in matching_attachments)
-        )
-
-        return [
-            {
-                "policy_name": attachment.policy,
-                "matched_via": self._describe_match_reason(attachment, context),
-            }
-            for attachment in unique_attachments
-        ]
-
-    @staticmethod
-    def _describe_match_reason(attachment: PolicyAttachment, context: PolicyMatchContext) -> str:
-        """Describe why an attachment matched the context."""
-        reason: Final = AttachmentRegistry._describe_scope_match(attachment, context)
-        return f"default:{reason}" if attachment.default else reason
-
-    @staticmethod
-    def _describe_scope_match(attachment: PolicyAttachment, context: PolicyMatchContext) -> str:
-        from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
-
-        if attachment.is_global():
-            return "scope:*"
-
-        reasons: Final = []
-        if attachment.tags and context.tags:
-            matching_tags: Final = [t for t in context.tags if PolicyMatcher.matches_pattern(t, attachment.tags)]
-            if matching_tags:
-                reasons.append(f"tag:{matching_tags[0]}")
-        if attachment.teams and context.team_alias:
-            reasons.append(f"team:{context.team_alias}")
-        if attachment.keys and context.key_alias:
-            reasons.append(f"key:{context.key_alias}")
-        if attachment.models and context.model:
-            reasons.append(f"model:{context.model}")
-
-        return "+".join(reasons) if reasons else "scope:default"
+        return list(current_policy_engine(self._attachments).attached_policies(context, only_applying=only_applying))
 
     def is_policy_attached(self, policy_name: str, context: PolicyMatchContext) -> bool:
         """
@@ -223,6 +139,11 @@ class AttachmentRegistry:
         """
         attached: Final = self.get_attached_policies(context)
         return policy_name in attached
+
+    def current_attachments(self) -> Sequence[PolicyAttachment]:
+        """The live attachments container. Every change replaces it instead of mutating it, so callers may cache
+        anything derived from it for as long as it stays the same object"""
+        return self._attachments
 
     def get_all_attachments(self) -> list[PolicyAttachment]:
         """
@@ -278,7 +199,7 @@ class AttachmentRegistry:
         Args:
             attachment: PolicyAttachment object to add
         """
-        self._attachments.append(attachment)
+        self._attachments = [*self._attachments, attachment]
         self._initialized = True
         verbose_proxy_logger.debug("Added attachment for policy: %s", attachment.policy)
 

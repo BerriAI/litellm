@@ -518,18 +518,14 @@ class TestConfigPoliciesPreservedAcrossDbSync:
 
     @pytest.mark.asyncio
     async def test_config_policy_resolves_guardrails_after_sync(self):
-        from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+        from litellm.rust_bridge.policy_engine import build_policy_engine
 
         registry = PolicyRegistry()
         registry.load_policies({"config-policy": {"guardrails": {"add": ["tooling"]}}})
 
         await registry.sync_policies_from_db(_prisma_with_policy_rows([]))
 
-        resolved = PolicyResolver.resolve_policy_guardrails(
-            policy_name="config-policy",
-            policies=registry.get_all_policies(),
-            context=None,
-        )
+        resolved = build_policy_engine(registry.current_policies()).policy_guardrails("config-policy")
         assert resolved.guardrails == ["tooling"]
 
     @pytest.mark.asyncio
