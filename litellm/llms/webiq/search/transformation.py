@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse, SearchResult
 
 if TYPE_CHECKING:
@@ -130,9 +131,9 @@ class WebIQSearchConfig(BaseSearchConfig):
         try:
             parsed: Final = _WebIQResponse.model_validate_json(raw_response.content)
         except ValidationError as exc:
-            raise self.get_error_class(
-                error_message=f"Microsoft Web IQ returned an invalid search response: {exc}",
+            raise BaseLLMException(
                 status_code=502,
+                message=f"Microsoft Web IQ returned an invalid search response: {exc}",
                 headers=dict(raw_response.headers),
             ) from exc
         return SearchResponse.model_validate(
