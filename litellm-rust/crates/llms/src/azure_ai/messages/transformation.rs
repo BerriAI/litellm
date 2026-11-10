@@ -36,6 +36,12 @@ pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
     AzureAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
+    fn tool_custom_field(&self, model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
+        }
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,

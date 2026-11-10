@@ -66,8 +66,6 @@ class Feature(str, Enum):
     """Extra body fields that Python transforms and merges into the provider request."""
     PROVIDER_AFFINITY = "provider_affinity"
     """A provider affinity header that Python validates and populates from the session id."""
-    FOUNDRY_BETA_ROW = "foundry_beta_row"
-    """A Foundry api_base, where Python drops the anthropic-beta values Foundry rejects."""
     PRE_REQUEST_HOOK = "pre_request_hook"
     """A logger overriding async_pre_request_hook, which may rewrite the request."""
     WEBSEARCH_INTERCEPTION = "websearch_interception"
@@ -94,12 +92,8 @@ class Feature(str, Enum):
     """No static key, so Python mints a workload identity federation token."""
     CACHE_CONTROL_INJECTION = "cache_control_injection"
     """Prompt caching injection that Python applies to messages and system."""
-    STREAM_COST_INJECTION = "stream_cost_injection"
-    """litellm.include_cost_in_streaming_usage or the x-litellm-include-cost-in-streaming-usage header, where Python adds cost to streamed usage."""
     THINKING_SIGNATURE_RETRY = "thinking_signature_retry"
     """Replayed thinking blocks, which Python strips and retries once if Anthropic rejects their signature."""
-    TOOL_CUSTOM_FIELD = "tool_custom_field"
-    """Tools carrying a non-spec custom object, which Python drops or hoists for the provider."""
     STRICT_TOOLS_RETRY = "strict_tools_retry"
     """Strict tools under drop_params, which Python sends again without strict if Claude rejects their limits."""
     CLIENT_HEADERS = "client_headers"
@@ -172,9 +166,7 @@ CHAT_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {
     Feature.MODEL_ALIAS_MAP,
 }
 
-MESSAGES_PYTHON_FEATURES: Final = (COMMON_PYTHON_FEATURES - {Feature.TIMEOUT_VARIANTS}) | {
-    Feature.PROVIDER_AFFINITY,
-    Feature.FOUNDRY_BETA_ROW,
+MESSAGES_PYTHON_FEATURES: Final = (COMMON_PYTHON_FEATURES - {Feature.TIMEOUT_VARIANTS, Feature.LATEST_ALIAS}) | {
     Feature.SAFEGUARDS_CLASSIFIER,
     Feature.PRE_REQUEST_HOOK,
     Feature.WEBSEARCH_INTERCEPTION,
@@ -183,9 +175,7 @@ MESSAGES_PYTHON_FEATURES: Final = (COMMON_PYTHON_FEATURES - {Feature.TIMEOUT_VAR
     Feature.MODIFY_PARAMS,
     Feature.WORKLOAD_IDENTITY,
     Feature.CACHE_CONTROL_INJECTION,
-    Feature.STREAM_COST_INJECTION,
     Feature.THINKING_SIGNATURE_RETRY,
-    Feature.TOOL_CUSTOM_FIELD,
     Feature.STRICT_TOOLS_RETRY,
 }
 

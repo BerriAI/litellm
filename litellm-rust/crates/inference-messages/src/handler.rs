@@ -44,6 +44,7 @@ struct ProviderCall {
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
     stream: bool,
+    whole_sse_frames: bool,
 }
 
 impl ProviderCall {
@@ -153,19 +154,15 @@ async fn provider_call(
         &env_lookup,
     )?;
 
+    let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let body = config.request_body(
-        config.transform_anthropic_messages_request(trimmed, &transform_context)?,
+        tool_custom_field.apply(
+            config.transform_anthropic_messages_request(trimmed, &transform_context)?,
+            shaping.settings.drop_params,
+        ),
         &validated.headers,
         shaping.settings.drop_params,
     )?;
-    let environment = ValidatedEnvironment {
-        headers: config.request_headers(
-            with_python_default_headers(validated.headers, config.default_headers()),
-            &body,
-        ),
-        auth: validated.auth,
-    };
-
     let url = config.get_complete_url(
         api_base.as_deref(),
         &body.model,
@@ -173,6 +170,16 @@ async fn provider_call(
         body.params.stream == Some(true),
         &env_lookup,
     )?;
+    let environment = ValidatedEnvironment {
+        headers: config.headers_for_url(
+            config.request_headers(
+                with_python_default_headers(validated.headers, config.default_headers()),
+                &body,
+            ),
+            &url,
+        ),
+        auth: validated.auth,
+    };
 
     let request_context = RequestContext {
         model: body.model.clone(),
@@ -217,6 +224,7 @@ async fn provider_call(
         signer: authenticated.signer,
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         stream,
+        whole_sse_frames: shaping.settings.whole_sse_frames,
     })
 }
 
@@ -307,6 +315,7 @@ async fn call_provider(
         signer,
         timeout,
         stream,
+        whole_sse_frames,
     } = request;
     let provider_name = provider.as_str();
     log_request_body(provider_name, stream, &wire.body);
@@ -328,12 +337,13 @@ async fn call_provider(
     }
     let config = provider.config();
     if stream {
-        return Ok(streaming_response(
-            response,
-            config.stream_decoder(),
-            provider_name,
-            timeout,
-        ));
+        let streamed =
+            streaming_response(response, config.stream_decoder(), provider_name, timeout);
+        return Ok(if whole_sse_frames {
+            framed(streamed)
+        } else {
+            streamed
+        });
     }
     let head = ResponseHead {
         status: response.status().as_u16(),
@@ -467,6 +477,52 @@ fn streaming_response(
         head: super::route::MessagesStreamHead { headers },
         chunks,
     }
+}
+
+fn framed(response: MessagesCallResponse) -> MessagesCallResponse {
+    let MessagesCallResponse::Stream { head, chunks } = response else {
+        return response;
+    };
+    MessagesCallResponse::Stream {
+        head,
+        chunks: whole_sse_frames(chunks),
+    }
+}
+
+fn whole_sse_frames(
+    chunks: BoxStream<'static, Result<Bytes, Error>>,
+) -> BoxStream<'static, Result<Bytes, Error>> {
+    futures_util::stream::try_unfold(
+        (Some(chunks), Vec::new()),
+        |(chunks, mut pending)| async move {
+            let Some(mut chunks) = chunks else {
+                return Ok(None);
+            };
+            while let Some(chunk) = chunks.try_next().await? {
+                pending.extend_from_slice(&chunk);
+                let end = complete_frames_end(&pending);
+                if end > 0 {
+                    let rest = pending.split_off(end);
+                    return Ok(Some((Bytes::from(pending), (Some(chunks), rest))));
+                }
+            }
+            Ok((!pending.is_empty()).then(|| (Bytes::from(pending), (None, Vec::new()))))
+        },
+    )
+    .boxed()
+}
+
+fn complete_frames_end(pending: &[u8]) -> usize {
+    [b"\r\n\r\n".as_slice(), b"\n\n", b"\r\r"]
+        .iter()
+        .filter_map(|delimiter| {
+            pending
+                .windows(delimiter.len())
+                .rposition(|window| window == *delimiter)
+                .map(|at| at + delimiter.len())
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn decoded_chunks(
@@ -1091,5 +1147,49 @@ mod tests {
             None => assert!(chunk.unwrap_err().is_response()),
         }
         assert!(chunks.next().await.is_none());
+    }
+
+    #[rstest]
+    #[case::no_delimiter(b"data: a".as_slice(), 0)]
+    #[case::lf(b"data: a\n\ndata: b", 9)]
+    #[case::crlf(b"data: a\r\n\r\ndata: b", 11)]
+    #[case::cr(b"data: a\r\rdata: b", 9)]
+    #[case::last_of_several(b"data: a\n\ndata: b\n\ndata: c", 18)]
+    fn complete_frames_end_is_after_the_last_delimiter(#[case] pending: &[u8], #[case] end: usize) {
+        assert_eq!(complete_frames_end(pending), end);
+    }
+
+    #[rstest]
+    #[case::split_frame(
+        vec![&b"data: a\n"[..], b"\ndata: ", b"b\n\n"],
+        vec![&b"data: a\n\n"[..], b"data: b\n\n"]
+    )]
+    #[case::several_frames_in_one_chunk(
+        vec![&b"data: a\n\ndata: b\n\nda"[..], b"ta: c\n\n"],
+        vec![&b"data: a\n\ndata: b\n\n"[..], b"data: c\n\n"]
+    )]
+    #[case::unterminated_tail_is_flushed(
+        vec![&b"data: a\n\nda"[..], b"ta: b"],
+        vec![&b"data: a\n\n"[..], b"data: b"]
+    )]
+    #[tokio::test]
+    async fn whole_sse_frames_regroups_chunks_at_frame_boundaries(
+        #[case] chunks: Vec<&'static [u8]>,
+        #[case] expected: Vec<&'static [u8]>,
+    ) {
+        let upstream = futures_util::stream::iter(
+            chunks
+                .into_iter()
+                .map(|chunk| Ok::<_, Error>(Bytes::from_static(chunk))),
+        )
+        .boxed();
+        let framed: Vec<Bytes> = whole_sse_frames(upstream).try_collect().await.unwrap();
+        assert_eq!(
+            framed,
+            expected
+                .into_iter()
+                .map(Bytes::from_static)
+                .collect::<Vec<_>>()
+        );
     }
 }

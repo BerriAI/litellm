@@ -32,6 +32,12 @@ pub struct TencentAnthropicMessagesConfig;
 pub const TENCENT_MESSAGES_CONFIG: TencentAnthropicMessagesConfig = TencentAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for TencentAnthropicMessagesConfig {
+    fn tool_custom_field(&self, _model: &str) -> crate::base_llm::messages::tools::ToolCustomField {
+        crate::base_llm::messages::tools::ToolCustomField::Rewrite {
+            hoist_defer_loading: false,
+        }
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,

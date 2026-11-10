@@ -75,6 +75,11 @@ impl MessagesRoute {
         call: MessagesCall,
         context: CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<MessagesCallResponse, Error> {
+        if let Some(mock) = &call.shaping.settings.mock_response {
+            return Ok(MessagesCallResponse::Complete(MessagesBody::Unchecked(
+                mock.clone(),
+            )));
+        }
         litellm_inference::diagnostic::call(async {
             let provider = resolve_llm_provider(
                 &call.body.model,
