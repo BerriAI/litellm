@@ -2,11 +2,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { registerAuthHeaderNameGetter } from "@/lib/http/runtime";
 import { createGatewayClient } from "./gateway_client";
 
-vi.mock("@/components/networking", () => ({ getProxyBaseUrl: () => "https://management.example/root" }));
+vi.mock("@/components/networking", () => ({
+  getGatewayBaseUrl: () => "https://gateway.example/root",
+}));
 afterEach(() => registerAuthHeaderNameGetter(() => "Authorization"));
 
 it.each(["Authorization", "x-session-key"])(
-  "uses the gateway's %s header and retains root paths and caller headers",
+  "uses the gateway host and %s header while retaining root paths and caller headers",
   async (header) => {
     registerAuthHeaderNameGetter(() => header);
     const fetchImpl = vi.fn(
@@ -20,7 +22,7 @@ it.each(["Authorization", "x-session-key"])(
     });
     await client.models.list();
     const [url, init] = fetchImpl.mock.calls[0];
-    expect(url).toBe("https://management.example/root/models");
+    expect(url).toBe("https://gateway.example/root/models");
     const headers = new Headers(init?.headers);
     expect(headers.get(header)).toBe("Bearer session");
     expect(headers.get("x-litellm-tags")).toBe("playground");

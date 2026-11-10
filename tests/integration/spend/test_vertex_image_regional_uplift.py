@@ -3,7 +3,6 @@ import base64
 import json
 import os
 import re
-import signal
 import threading
 import time
 import uuid
@@ -28,6 +27,8 @@ from integration._support.process import owned_proxy_process
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _IMAGE_BACKEND: Final = "gemini-scripted-image"
 _CHAT_BACKEND: Final = "gemini-scripted-chat"
@@ -99,6 +100,7 @@ def _deployment(
     location: Mapping[str, JsonValue],
     multiplier: JsonValue = 1.1,
     backend: str = _IMAGE_BACKEND,
+    clientside_params: tuple[str, ...] = (),
 ) -> str:
     return scenario.model(
         model=f"vertex_ai/{backend}",
@@ -110,6 +112,7 @@ def _deployment(
         output_cost_per_token=4e-5,
         output_cost_per_image=0.05,
         **({} if multiplier is None else {"regional_endpoint_uplift_multiplier": multiplier}),
+        **({"configurable_clientside_auth_params": list(clientside_params)} if clientside_params else {}),
         **location,
     )
 
@@ -379,7 +382,13 @@ def test_request_body_location_overrides_the_deployment(
     gateway: Gateway, deployment_location: str, extra: Mapping[str, JsonValue], expected: float
 ) -> None:
     with wire_server(_scripted()) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire, location={"vertex_location": deployment_location})
+        model: Final = _deployment(
+            gateway,
+            scenario,
+            wire,
+            location={"vertex_location": deployment_location},
+            clientside_params=("vertex_location", "vertex_ai_location"),
+        )
         call_id, response = _generate(gateway, model, extra=extra)
         _assert_images(response, call_id, expected)
         _assert_one_upstream_image_call(wire)
@@ -625,27 +634,28 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_billing_the_uplift(ga
                 held_by: Final = {pid: _open_upstream_connections(pid, wire.url) for pid in workers}
                 assert sum(held_by.values()) == len(call_ids), held_by
                 victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                psutil.Process(victim_pid).send_signal(signal.SIGKILL)
-                release.set()
-                served: Final = await burst
-                succeeded: Final = tuple(item.call_id for item in served if item.status == 200)
-                _artifact(
-                    tmp_path,
-                    "worker-sigkill.json",
-                    {
-                        "held_by_killed_worker": held_by[victim_pid],
-                        "held_by_surviving_worker": held_by[survivor_pid],
-                        "served": len(served),
-                        "succeeded": len(succeeded),
-                        "transport_errors": len(call_ids) - len(served),
-                    },
-                )
-                assert len(succeeded) == held_by[survivor_pid], (
-                    held_by,
-                    [(item.status, item.text[:80]) for item in served],
-                )
-                follow_up_id, follow_up = _generate(owned.gateway, _CONFIG_MODEL)
-                _assert_images(follow_up, follow_up_id, _REGIONAL_TOKEN_COST)
+                with owned.replacing_worker(victim_pid) as kill:
+                    await asyncio.to_thread(kill)
+                    release.set()
+                    served: Final = await burst
+                    succeeded: Final = tuple(item.call_id for item in served if item.status == 200)
+                    _artifact(
+                        tmp_path,
+                        "worker-sigkill.json",
+                        {
+                            "held_by_killed_worker": held_by[victim_pid],
+                            "held_by_surviving_worker": held_by[survivor_pid],
+                            "served": len(served),
+                            "succeeded": len(succeeded),
+                            "transport_errors": len(call_ids) - len(served),
+                        },
+                    )
+                    assert len(succeeded) == held_by[survivor_pid], (
+                        held_by,
+                        [(item.status, item.text[:80]) for item in served],
+                    )
+                    follow_up_id, follow_up = _generate(owned.gateway, _CONFIG_MODEL)
+                    _assert_images(follow_up, follow_up_id, _REGIONAL_TOKEN_COST)
                 rows: Final = await asyncio.to_thread(_spend_rows, succeeded, seconds=120)
                 assert rows == {call_id: pytest.approx(_REGIONAL_TOKEN_COST) for call_id in succeeded}
                 await asyncio.to_thread(
@@ -670,7 +680,7 @@ async def test_proxy_restart_mid_burst_bills_each_landed_call_once(gateway: Gate
             )
             async with _gated_burst(base_url, gateway.key, call_ids, release) as burst:
                 await asyncio.to_thread(eventually, held.qsize, lambda size: size == len(call_ids), 120)
-                owned.process.terminate()
+                owned.begin_shutdown()
                 release.set()
                 served: Final = await burst
                 await asyncio.to_thread(owned.process.wait, 240)

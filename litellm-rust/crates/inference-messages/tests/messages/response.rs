@@ -2,8 +2,7 @@ use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
 };
-use litellm_http::transport::Error as TransportError;
-use litellm_inference_messages::{MessagesCallResponse, messages_body};
+use litellm_inference_messages::{MessagesBody, MessagesCallResponse, messages_body};
 use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
 };
@@ -48,6 +47,9 @@ async fn calls_defer_execution_until_polled(
 
     let MessagesCallResponse::Complete(response) = future.await.unwrap() else {
         panic!("expected a completed message");
+    };
+    let MessagesBody::Message(response) = response else {
+        panic!("expected a message");
     };
     assert_eq!(
         response.content,
@@ -166,17 +168,21 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(TransportError::Http { status, body }) = error else {
+    let Some((status, body)) = error.upstream_response() else {
         panic!("{error:?}");
     };
     assert_eq!(status, 400);
-    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), envelope);
+    assert_eq!(serde_json::from_str::<Value>(body).unwrap(), envelope);
 }
 
 #[rstest]
+#[case::ascii(format!("{}private-tail", "x".repeat(600)))]
+#[case::unicode(format!("{}private-tail", "é".repeat(600)))]
 #[tokio::test]
-async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall) {
-    let long = "x".repeat(600);
+async fn a_long_error_body_is_preserved_with_bounded_diagnostics(
+    call: MessagesCall,
+    #[case] long: String,
+) {
     let upstream = upstream([ResponseTemplate::new(500).set_body_string(long.clone())]).await;
 
     let error = run(MessagesCall {
@@ -187,13 +193,13 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
     .await
     .expect_err("upstream error propagates");
 
-    assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status: 500,
-            body: format!("{}... (truncated)", &long[..256])
-        })
-    );
+    assert_eq!(error.upstream_response(), Some((500, long.as_str())));
+    let diagnostic_body: String = long.chars().take(256).collect();
+    let report = litellm_error::Report::new(&error).to_string();
+    assert!(report.ends_with(&format!("{diagnostic_body}... (truncated)")));
+    assert_eq!(report.matches(&diagnostic_body).count(), 1, "{report}");
+    assert!(!report.contains("private-tail"), "{report}");
+    assert!(!format!("{error:?}").contains("private-tail"));
 }
 
 #[rstest]
@@ -216,23 +222,63 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
     .expect_err("upstream error propagates");
 
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        error.upstream_response(),
+        Some((status, "upstream said no"))
     );
 }
 
 #[rstest]
-#[case::not_json(ResponseTemplate::new(200).set_body_string("not json"))]
-#[case::not_a_message(json_response(json!({"unexpected": true})))]
 #[tokio::test]
-async fn an_unreadable_success_body_is_an_invalid_response(
+async fn an_unparseable_success_body_is_reported_as_the_upstream_answer(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(200).set_body_string("not json")]).await;
+
+    let error = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await
+    .expect_err("an unparseable body fails");
+
+    assert_eq!(error.upstream_response(), Some((200, "not json")));
+}
+
+#[rstest]
+#[case::error_object(
+    json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}),
+    json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"},
+        "stop_sequence": null}),
+)]
+#[case::message_missing_id(
+    json!({"type": "message", "content": [], "stop_sequence": "###"}),
+    json!({"type": "message", "content": [], "stop_sequence": "###"}),
+)]
+#[tokio::test]
+async fn a_success_body_that_is_not_a_message_passes_through(
     call: MessagesCall,
-    #[case] response: ResponseTemplate,
+    #[case] body: Value,
+    #[case] expected: Value,
 ) {
-    let upstream = upstream([response]).await;
+    let upstream = upstream([json_response(body)]).await;
+
+    let response = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await
+    .expect("any JSON object is returned");
+
+    let MessagesOutput::Complete(response) = response else {
+        panic!("expected a completed response");
+    };
+    assert_eq!(serde_json::to_value(response).unwrap(), expected);
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_unreadable_success_body_is_an_invalid_response(call: MessagesCall) {
+    let upstream = upstream([json_response(json!(["unexpected"]))]).await;
 
     let error = run(MessagesCall {
         api_key: Some("sk".into()),
@@ -242,7 +288,7 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .await
     .expect_err("an unreadable body fails");
 
-    assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
+    assert!(error.is_response(), "{error:?}");
 }
 
 #[rstest]
@@ -259,7 +305,23 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
     .await
     .expect_err("the call times out");
 
-    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(error.dispatched(), "{error:?}");
+    assert!(!error.is_request(), "{error:?}");
+    assert_eq!(error.upstream_response(), None);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_transport_error_does_not_echo_the_provider_url(call: MessagesCall) {
+    let error = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(format!("{UNREACHABLE_BASE}/tenant-token-1234")),
+        ..call
+    })
+    .await
+    .expect_err("nothing is listening");
+
+    assert!(!error.to_string().contains("tenant-token-1234"), "{error}");
 }
 
 #[rstest]
@@ -293,6 +355,9 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     let MessagesCallResponse::Complete(message) = response else {
         panic!("a non-streaming request returns a message");
     };
+    let MessagesBody::Message(message) = message else {
+        panic!("expected a message");
+    };
     assert_eq!(message.id, "msg_1");
     let sent = only_request(&upstream).await;
     assert_eq!(sent.header("x-api-key"), Some("sk-ant"));
@@ -305,8 +370,11 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
 fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
     let error = messages_body(object(raw)).expect_err("the body is rejected");
 
+    assert!(error.is_request(), "{error:?}");
     assert!(
-        matches!(&error, Error::InvalidRequest(message) if message.to_string().starts_with("invalid Anthropic messages request: ")),
+        litellm_error::Report::new(&error)
+            .to_string()
+            .contains("invalid Anthropic messages request"),
         "{error:?}"
     );
 }
@@ -382,6 +450,9 @@ async fn route_uses_injected_dependencies_and_optional_cache(
         else {
             panic!("expected a completed message");
         };
+        let MessagesBody::Message(response) = response else {
+            panic!("expected a message");
+        };
         assert_eq!(
             response.content,
             message_body()["content"].as_array().unwrap().as_slice()
@@ -453,6 +524,9 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
             route.execute(request, &(), override_options).await.unwrap()
         else {
             panic!("expected a completed message");
+        };
+        let MessagesBody::Message(response) = response else {
+            panic!("expected a message");
         };
         assert_eq!(response.id, expected["id"].as_str().unwrap());
     }

@@ -1,9 +1,11 @@
 # Type definitions for DynamoAI Guardrails API
 
 import enum
-from typing import Any, Literal, TypedDict
+from collections.abc import Mapping
+from typing import Literal, TypedDict
 
 from pydantic import Field
+from typing_extensions import ReadOnly
 
 from .base import GuardrailConfigModel
 
@@ -41,7 +43,7 @@ class PolicyApplicableTo(str, enum.Enum):
 class DynamoAIRequest(TypedDict, total=False):
     """Request structure for DynamoAI /moderation/analyze endpoint"""
 
-    messages: list[dict[str, Any]]
+    messages: ReadOnly[list[dict[str, object]]]
     textType: DynamoTextType | None
     policyIds: list[str]
     modelId: str | None
@@ -57,8 +59,8 @@ class PolicyInfo(TypedDict, total=False):
     description: str
     method: PolicyMethod
     action: Literal["BLOCK", "WARN", "REDACT", "SANITIZE", "NONE"]
-    methodParams: dict[str, Any]
-    decisionParams: dict[str, Any]
+    methodParams: ReadOnly[dict[str, object]]
+    decisionParams: ReadOnly[dict[str, object]]
     applicableTo: PolicyApplicableTo
     created_at: str
     creatorId: str
@@ -75,7 +77,7 @@ class AppliedPolicyDto(TypedDict, total=False):
     """Applied policy details from DynamoAI response"""
 
     policy: PolicyInfo
-    outputs: dict[str, Any] | None
+    outputs: ReadOnly[dict[str, object] | None]
     action: str | None
 
 
@@ -93,7 +95,7 @@ class DynamoAIProcessedResult(TypedDict):
     """Processed result from DynamoAI guardrail check"""
 
     violations_detected: list[str]
-    violation_details: dict[str, Any]
+    violation_details: Mapping[str, Mapping[str, object]]
 
 
 class DynamoAIGuardrailConfigModel(GuardrailConfigModel):

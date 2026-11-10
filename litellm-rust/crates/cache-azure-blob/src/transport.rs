@@ -24,6 +24,7 @@ impl HttpClient for ReqwestTransport {
             Body::SeekableStream(stream) => outgoing.body(reqwest::Body::wrap_stream(stream)),
         };
         let response = outgoing.send().await.map_err(|error| {
+            let error = litellm_http::Error::from(error);
             let kind = if error.is_connect() {
                 ErrorKind::Connection
             } else {
@@ -41,9 +42,9 @@ impl HttpClient for ReqwestTransport {
                 );
             }
         }
-        let body = response
-            .bytes_stream()
-            .map_err(|error| azure_core::Error::new(ErrorKind::Io, error));
+        let body = response.bytes_stream().map_err(|error| {
+            azure_core::Error::new(ErrorKind::Io, litellm_http::Error::from(error))
+        });
         Ok(AsyncRawResponse::new(status, headers, Box::pin(body)))
     }
 }

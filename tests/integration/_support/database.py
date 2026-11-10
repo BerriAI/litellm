@@ -27,8 +27,8 @@ def write_rows(query: LiteralString, parameters: tuple[str, ...], *, database_ur
 
 
 @contextmanager
-def scratch_database() -> Generator[str]:
-    name: Final = f"integration_{uuid.uuid4().hex}"
+def scratch_database(prefix: str = "integration") -> Generator[str]:
+    name: Final = f"{prefix}_{uuid.uuid4().hex}"
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
         try:

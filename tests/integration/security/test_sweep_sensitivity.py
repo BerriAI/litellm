@@ -19,15 +19,10 @@ from typing import Final
 
 import httpx
 import pytest
-from redis import Redis
 from integration._support.client import Gateway, eventually, string_value
+from integration._support.wire import Reply, Request, wire_server
 from integration.security._canary import DECODE_BUDGET_BYTES, MARKER, SLOTS, DecodeBudgetExceeded, canary, find_canary
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, chat_upstream, settle, team_caller
-from integration._support.wire import Reply, Request, wire_server
-from tests.integration._support.database import read_rows, write_rows
-from tests.integration._support.redis_process import owned_redis
-from tests.integration._support.tls import server_context, write_self_signed_cert
-from tests.integration._support.workers import worker_services
 from integration.security._sweeps import (
     ADMIN_ONLY_ALLOWANCES,
     ALLOWANCE_SLOT_FAMILIES,
@@ -43,6 +38,12 @@ from integration.security._sweeps import (
     sweep_routes,
     sweep_sink,
 )
+from redis import Redis
+
+from tests.integration._support.database import read_rows, write_rows
+from tests.integration._support.redis_process import owned_redis
+from tests.integration._support.tls import server_context, write_self_signed_cert
+from tests.integration._support.workers import worker_services
 
 
 @pytest.fixture(scope="module")
@@ -84,6 +85,8 @@ def test_rig_with_an_overridden_master_key_resolves_the_config_deployment(tmp_pa
         assert overridden.proxy.key == master_key
         assert overridden.model_id
         assert overridden.proxy.request("GET", "/model/info").status_code == 200
+        assert overridden.proxy.request("GET", "/public/litellm_blog_posts").status_code == 200
+        assert overridden.egress() == ()
 
 
 def _skills_upstream(request: Request) -> Reply:

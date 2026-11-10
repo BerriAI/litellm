@@ -1,3 +1,6 @@
+import type { TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
+
 const WORD_FORM_BUDGET_DURATIONS: Record<string, string> = {
   hourly: "1h",
   daily: "24h",
@@ -8,6 +11,9 @@ const WORD_FORM_BUDGET_DURATIONS: Record<string, string> = {
 // Normalize any legacy word-form budget duration to the canonical value the dropdown uses
 export const canonicalBudgetDuration = (duration: string | null | undefined): string | null =>
   duration ? WORD_FORM_BUDGET_DURATIONS[duration] ?? duration : null;
+
+export const keyOrganizationId = (key: { organization_id?: string | null; org_id?: string | null }): string | null =>
+  key.organization_id || key.org_id || null;
 
 // Determine the key_type display value from allowed_routes
 export const keyTypeFromRoutes = (allowedRoutes: string[] | null | undefined): string => {
@@ -29,9 +35,11 @@ export const parseAllowedRoutes = (value: unknown): string[] =>
 export const modelSentinelOptions = (
   keyTeamId: string | null | undefined,
   teamLoaded: boolean,
+  t: TFunction = i18n.t.bind(i18n),
 ): { value: string; label: string }[] => {
-  if (keyTeamId == null) return [{ value: "all-proxy-models", label: "All Proxy Models" }];
-  return teamLoaded ? [{ value: "all-team-models", label: "All Team Models" }] : [];
+  if (keyTeamId == null)
+    return [{ value: "all-proxy-models", label: t("keyDetail.keyEditFieldNormalizers.allProxyModels") }];
+  return teamLoaded ? [{ value: "all-team-models", label: t("keyDetail.keyEditFieldNormalizers.allTeamModels") }] : [];
 };
 
 export type MovedMetadataTags = {
@@ -74,5 +82,7 @@ export const currentValuePlaceholder = (
   emptyHint: string,
 ): string => {
   if (!premiumUser) return premiumHint;
-  return Array.isArray(current) && current.length > 0 ? `Current: ${current.join(", ")}` : emptyHint;
+  return Array.isArray(current) && current.length > 0
+    ? i18n.t("keyDetail.keyEditFieldNormalizers.currentValue", { values: current.join(", ") })
+    : emptyHint;
 };

@@ -20,9 +20,26 @@ describe("buildSearchToolPayload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: undefined,
+        input_cost_per_query: undefined,
       },
       search_tool_info: undefined,
     });
+  });
+
+  it("nests a custom cost per query under litellm_params so the proxy prices the tool with it", () => {
+    expect(JSON.stringify(buildSearchToolPayload({ ...minimal, input_cost_per_query: 0.05 }))).toBe(
+      '{"search_tool_name":"tool","litellm_params":{"search_provider":"perplexity","input_cost_per_query":0.05}}',
+    );
+  });
+
+  it("keeps a zero cost per query, since a free tool is a real price and not an unset one", () => {
+    expect(buildSearchToolPayload({ ...minimal, input_cost_per_query: 0 }).litellm_params.input_cost_per_query).toBe(0);
+  });
+
+  it("sends an explicit null when the cost per query is cleared, so an edit removes the old price", () => {
+    expect(JSON.stringify(buildSearchToolPayload({ ...minimal, input_cost_per_query: null }))).toBe(
+      '{"search_tool_name":"tool","litellm_params":{"search_provider":"perplexity","input_cost_per_query":null}}',
+    );
   });
 
   it("passes an api key through untouched", () => {

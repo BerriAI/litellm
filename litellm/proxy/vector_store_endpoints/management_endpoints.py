@@ -13,6 +13,7 @@ import json
 from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -88,6 +89,8 @@ _LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=fro
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) -> Any:
     """
@@ -115,7 +118,7 @@ def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) ->
         return None
     if isinstance(litellm_params, str):
         try:
-            parsed: Final[object] = json.loads(litellm_params)
+            parsed: Final = _DECODED_JSON.validate_python(json.loads(litellm_params))
         except (TypeError, ValueError):
             return REDACTED_BY_LITELM_STRING
         return json.dumps(_redact_sensitive_litellm_params(parsed, _depth + 1))
@@ -305,9 +308,7 @@ async def new_vector_store(
 
         # Extract and validate metadata
         metadata: Final = vector_store.get("vector_store_metadata")
-        validated_metadata: dict | None = None
-        if metadata is not None and isinstance(metadata, dict):
-            validated_metadata = metadata
+        validated_metadata: Final = metadata if isinstance(metadata, dict) else None
 
         new_vector_store: Final = await create_vector_store_in_db(
             vector_store_id=vector_store_id,
@@ -379,7 +380,6 @@ async def list_vector_stores(
     from litellm.proxy.proxy_server import prisma_client
 
     vector_store_map: Final[dict[str, LiteLLM_ManagedVectorStore]] = {}
-    db_vector_store_ids: Final[set] = set()
 
     try:
         # Get vector stores from database first (source of truth)
@@ -390,7 +390,7 @@ async def list_vector_stores(
             vector_store_id = vector_store.get("vector_store_id", None)
             if vector_store_id:
                 vector_store_map[vector_store_id] = vector_store
-                db_vector_store_ids.add(vector_store_id)
+        db_vector_store_ids: Final = frozenset(vector_store_map)
 
         # Process in-memory vector stores
         if litellm.vector_store_registry is not None:
@@ -644,8 +644,9 @@ async def update_vector_store(
         )
 
         # Handle metadata serialization
-        if update_data.get("vector_store_metadata") is not None:
-            update_data["vector_store_metadata"] = safe_dumps(update_data["vector_store_metadata"])
+        submitted_metadata: Final[object] = update_data.get("vector_store_metadata")
+        if submitted_metadata is not None:
+            update_data["vector_store_metadata"] = safe_dumps(submitted_metadata)
 
         # Handle litellm_params if provided. As with the create path, the
         # embedding-config auto-resolve previously persisted cleartext

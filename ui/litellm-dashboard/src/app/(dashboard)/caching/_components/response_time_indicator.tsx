@@ -1,10 +1,12 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 interface ResponseTimeIndicatorProps {
   responseTimeMs: number | null;
 }
 
 export const ResponseTimeIndicator: React.FC<ResponseTimeIndicatorProps> = ({ responseTimeMs }) => {
+  const { t } = useTranslation();
   if (responseTimeMs === null || responseTimeMs === undefined) return null;
 
   return (
@@ -18,7 +20,7 @@ export const ResponseTimeIndicator: React.FC<ResponseTimeIndicatorProps> = ({ re
           strokeLinejoin="round"
         />
       </svg>
-      <span>{responseTimeMs.toFixed(0)}ms</span>
+      <span>{t("caching.responseTime", { value: responseTimeMs.toFixed(0) })}</span>
     </div>
   );
 };

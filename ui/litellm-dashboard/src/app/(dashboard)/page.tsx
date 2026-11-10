@@ -2,7 +2,7 @@
 
 import HomePage from "@/app/(dashboard)/home/_components/HomePage";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import { proxyBaseUrl } from "@/components/networking";
+import { getRuntimeBackendBaseUrl, getUiPageUrl, proxyBaseUrl } from "@/components/networking";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   buildLoginUrlWithReturn,
@@ -32,7 +32,7 @@ function CreateKeyPageContent() {
       // Store the current URL so we can redirect back after login
       storeReturnUrl();
       // Build login URL with return URL parameter
-      const baseLoginUrl = getLoginUrl(proxyBaseUrl || "");
+      const baseLoginUrl = getUiPageUrl(getLoginUrl(proxyBaseUrl || ""));
       const dest = buildLoginUrlWithReturn(baseLoginUrl);
       // Replace instead of assigning to avoid back-button loops
       window.location.replace(dest);
@@ -59,10 +59,10 @@ function CreateKeyPageContent() {
     hasAttemptedReturnRedirectRef.current = true;
 
     // Check for a stored return URL
-    const returnUrl = consumeReturnUrl();
-    if (returnUrl && isValidReturnUrl(returnUrl)) {
+    const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
+    if (returnUrl && isValidReturnUrl(returnUrl, getRuntimeBackendBaseUrl())) {
       // Inline origin check: only redirect to same-origin URLs to prevent open redirect.
-      const safeUrl = new URL(returnUrl, window.location.origin);
+      const safeUrl = new URL(getUiPageUrl(returnUrl, true), window.location.origin);
       if (safeUrl.origin !== window.location.origin) {
         return;
       }

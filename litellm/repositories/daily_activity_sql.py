@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import count, islice
 from types import MappingProxyType
@@ -8,11 +8,19 @@ from typing import Final
 from typing_extensions import assert_never
 
 from litellm import constants
-from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.constants import PTU_SENTINEL_API_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
+from litellm.repositories.daily_activity_buckets import UNATTRIBUTED_API_KEY, UNKNOWN_MODEL_GROUP
+from litellm.repositories.key_metadata_sql import ACTIVE_TOKEN_DIGEST_SQL, DELETED_TOKEN_DIGEST_SQL
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable, ExportType
 
 _API_KEY_ROLLED_UP_BIT: Final = 32
-_MODEL_GROUP_EXPR: Final = "COALESCE(NULLIF(model_group, ''), model)"
+_MODEL_EXPR: Final = f"COALESCE(NULLIF(model, ''), '{UNKNOWN_MODEL_SPEND_LOG_MODEL}')"
+_MODEL_GROUP_EXPR: Final = f"COALESCE(NULLIF(model_group, ''), NULLIF(model, ''), '{UNKNOWN_MODEL_GROUP}')"
+
+_API_KEY_EXPR: Final = (
+    f"CASE WHEN api_key = '' THEN '{UNATTRIBUTED_API_KEY}' "
+    f"WHEN api_key = '{UNATTRIBUTED_API_KEY}' OR api_key LIKE 'raw:%' THEN 'raw:' || api_key ELSE api_key END"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +76,7 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     exclusion_index: Final = entity_index + int(has_entity_array)
     model_index: Final = exclusion_index + int(bool(scope.exclude_entity_ids))
     api_keys_index: Final = model_index + int(bool(scope.model))
+    team_index: Final = api_keys_index + int(bool(scope.api_keys))
     conditions: Final = (
         f"date >= ${start_index}",
         f"date <= ${start_index + 1}",
@@ -86,12 +95,24 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             if scope.exclude_entity_ids
             else ()
         ),
-        *((f"model = ${model_index}",) if scope.model else ()),
+        *(
+            (f"{_MODEL_EXPR if scope.model == UNKNOWN_MODEL_SPEND_LOG_MODEL else 'model'} = ${model_index}",)
+            if scope.model
+            else ()
+        ),
         *(
             ("FALSE",)
             if scope.api_keys == ()
             else (f"api_key = ANY(${api_keys_index}::text[])",)
             if scope.api_keys
+            else ()
+        ),
+        *(
+            (
+                f"api_key IN (SELECT api_key FROM ({_customer_key_teams_sql(scope)}) customer_keys "
+                f"WHERE team_id = ANY(${team_index}::text[]))",
+            )
+            if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None
             else ()
         ),
     )
@@ -102,8 +123,85 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
         *((list(scope.exclude_entity_ids),) if scope.exclude_entity_ids else ()),
         *((scope.model,) if scope.model else ()),
         *((list(scope.api_keys),) if scope.api_keys else ()),
+        *((list(scope.team_ids),) if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None else ()),
     )
     return " AND ".join(conditions), params
+
+
+def _customer_key_teams_sql(scope: DailyActivityScope) -> str:
+    table: Final = PRISMA_TO_PG_TABLE[scope.table]
+    where_clause, _ = build_where_clause(replace(scope, team_ids=None))
+    direct: Final = (
+        "SELECT current_key.token, current_key.team_id FROM ("
+        'SELECT token, team_id, 0 AS priority, NULL::timestamp AS deleted_at FROM "LiteLLM_VerificationToken" '
+        "UNION ALL "
+        'SELECT token, team_id, 1 AS priority, deleted_at FROM "LiteLLM_DeletedVerificationToken"'
+        ") current_key WHERE current_key.token = scoped_keys.api_key "
+        "ORDER BY priority, deleted_at DESC LIMIT 1"
+    )
+    active_digest: Final = ACTIVE_TOKEN_DIGEST_SQL.replace("$1", "ARRAY(SELECT api_key FROM missing)")
+    deleted_digest: Final = DELETED_TOKEN_DIGEST_SQL.replace("$1", "ARRAY(SELECT api_key FROM still_missing)")
+    return f'''WITH scoped_keys AS MATERIALIZED (
+            SELECT DISTINCT api_key FROM "{table}" WHERE {where_clause}
+        ), direct AS MATERIALIZED (
+            SELECT scoped_keys.api_key, current_key.token, current_key.team_id
+            FROM scoped_keys LEFT JOIN LATERAL ({direct}) current_key ON TRUE
+        ), missing AS MATERIALIZED (
+            SELECT api_key FROM direct WHERE token IS NULL AND api_key ~ '^[0-9a-f]{{64}}$'
+        ), active_recovered AS MATERIALIZED (
+            SELECT * FROM ({active_digest}) recovered WHERE EXISTS (SELECT 1 FROM missing)
+        ), still_missing AS MATERIALIZED (
+            SELECT api_key FROM missing WHERE NOT EXISTS (
+                SELECT 1 FROM active_recovered WHERE digest = missing.api_key
+            )
+        ), deleted_recovered AS MATERIALIZED (
+            SELECT * FROM ({deleted_digest}) recovered WHERE EXISTS (SELECT 1 FROM still_missing)
+        )
+        SELECT direct.api_key, COALESCE(NULLIF(
+            CASE WHEN direct.token IS NOT NULL THEN direct.team_id
+            ELSE COALESCE(active_recovered.team_id, deleted_recovered.team_id) END, ''), 'Unassigned') AS team_id
+        FROM direct LEFT JOIN active_recovered ON direct.api_key = active_recovered.digest
+        LEFT JOIN deleted_recovered ON direct.api_key = deleted_recovered.digest'''
+
+
+def build_customer_team_rollup_sql(scope: DailyActivityScope, *, row_ids: tuple[str, ...] | None = None) -> SqlQuery:
+    where_clause, params = build_where_clause(replace(scope, team_ids=None))
+    team_filter: Final = (
+        f" AND customer_keys.team_id = ANY(${len(params) + 1}::text[])" if scope.team_ids is not None else ""
+    )
+    rows_filter: Final = (
+        f" AND id = ANY(${len(params) + int(scope.team_ids is not None) + 1}::text[])" if row_ids is not None else ""
+    )
+    return SqlQuery(
+        sql=f'''WITH customer_keys AS MATERIALIZED ({_customer_key_teams_sql(scope)})
+            SELECT date, NULL::text AS api_key, customer_team_id AS team_id,
+            (SELECT team_alias FROM "LiteLLM_TeamTable" WHERE team_id = scoped.customer_team_id) AS team_alias,
+            {_rollup_metric_select(scope.table)}
+            FROM (SELECT daily.*, customer_keys.team_id AS customer_team_id
+                FROM "{PRISMA_TO_PG_TABLE[scope.table]}" daily JOIN customer_keys USING (api_key)
+                WHERE {where_clause}{team_filter}{rows_filter}) scoped
+            GROUP BY date, customer_team_id''',
+        params=(
+            *params,
+            *((list(scope.team_ids),) if scope.team_ids is not None else ()),
+            *((list(row_ids),) if row_ids is not None else ()),
+        ),
+    )
+
+
+def build_customer_daily_rows_sql(scope: DailyActivityScope, *, page: int, page_size: int) -> SqlQuery:
+    where_clause, params = build_where_clause(scope)
+    return SqlQuery(
+        sql=f'''WITH filtered AS MATERIALIZED (
+                SELECT * FROM "{PRISMA_TO_PG_TABLE[scope.table]}" WHERE {where_clause}
+            )
+            SELECT (SELECT COUNT(*) FROM filtered)::bigint AS total_count,
+                COALESCE((SELECT jsonb_agg(page_rows) FROM (
+                    SELECT * FROM filtered ORDER BY date DESC, id ASC
+                    OFFSET ${len(params) + 1} LIMIT ${len(params) + 2}
+                ) page_rows), '[]'::jsonb) AS rows''',
+        params=(*params, (page - 1) * page_size, page_size),
+    )
 
 
 def _ptu_flat_cost_select(table: DailyActivityTable, *, aggregate: bool = True) -> str:
@@ -125,6 +223,7 @@ def _rollup_metric_select(table: DailyActivityTable) -> str:
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
             SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
             SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
+            SUM(guardrail_spend)::float AS guardrail_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests,
@@ -143,7 +242,7 @@ def _top_api_keys_sql(pg_table: str, where_clause: str, *, sentinel_param: int, 
             FROM "{pg_table}"
             WHERE {where_clause} AND api_key <> ${sentinel_param}
             GROUP BY api_key
-            ORDER BY SUM(spend::numeric) DESC, api_key
+            ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
             LIMIT ${limit_param}
         """
 
@@ -162,13 +261,13 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         (SELECT
             date,
             NULL::text AS api_key,
-            model,
+            {_MODEL_EXPR} AS model,
             {_MODEL_GROUP_EXPR} AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
             (GROUPING(date) << 6) | {_API_KEY_ROLLED_UP_BIT}
-                | GROUPING(model, {_MODEL_GROUP_EXPR},
+                | GROUPING({_MODEL_EXPR}, {_MODEL_GROUP_EXPR},
                            custom_llm_provider, mcp_namespaced_tool_name,
                            endpoint) AS group_level,
             NULL::bigint AS distinct_api_keys,{metric_select}
@@ -176,7 +275,7 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date),
-            (date, model),
+            (date, {_MODEL_EXPR}),
             (date, {_MODEL_GROUP_EXPR}),
             (date, custom_llm_provider),
             (date, mcp_namespaced_tool_name),
@@ -190,12 +289,12 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         SELECT
             date,
             api_key,
-            model,
+            {_MODEL_EXPR} AS model,
             {_MODEL_GROUP_EXPR} AS model_group,
             custom_llm_provider,
             mcp_namespaced_tool_name,
             endpoint,
-            GROUPING(date, api_key, model, {_MODEL_GROUP_EXPR},
+            GROUPING(date, api_key, {_MODEL_EXPR}, {_MODEL_GROUP_EXPR},
                      custom_llm_provider, mcp_namespaced_tool_name,
                      endpoint) AS group_level,
             MAX(top_api_keys.distinct_api_keys) AS distinct_api_keys,{metric_select}
@@ -203,7 +302,7 @@ def build_aggregated_sql(scope: DailyActivityScope, *, api_key_limit: int) -> Sq
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
             (date, api_key),
-            (date, model, api_key),
+            (date, {_MODEL_EXPR}, api_key),
             (date, {_MODEL_GROUP_EXPR}, api_key),
             (date, custom_llm_provider, api_key),
             (date, mcp_namespaced_tool_name, api_key),
@@ -261,6 +360,25 @@ def build_entity_rollup_sql(scope: DailyActivityScope, *, api_key_limit: int) ->
     return SqlQuery(sql=sql, params=(*where_params, PTU_SENTINEL_API_KEY, api_key_limit))
 
 
+def build_guardrail_spend_sql(scope: DailyActivityScope) -> SqlQuery:
+    pg_table: Final = PRISMA_TO_PG_TABLE[scope.table]
+    where_clause, where_params = build_where_clause(scope)
+    sql: Final = f"""
+        SELECT g.date, g.guardrail_id, COALESCE(t.guardrail_name, g.guardrail_id) AS guardrail_name, g.api_key,
+               COALESCE(SUM(g.cost), 0)::float AS spend,
+               COALESCE(SUM(CASE WHEN g.cost IS NULL THEN g.units ELSE g.untracked_units END), 0)::bigint AS untracked_units
+        FROM "LiteLLM_DailyGuardrailUsageUnits" g
+        LEFT JOIN "LiteLLM_GuardrailsTable" t ON t.guardrail_id = g.guardrail_id
+        WHERE g.date >= $1 AND g.date <= $2
+          AND EXISTS (
+              SELECT 1 FROM "{pg_table}"
+              WHERE {where_clause} AND "{pg_table}".date = g.date AND "{pg_table}".api_key = g.api_key
+          )
+        GROUP BY g.date, g.guardrail_id, t.guardrail_name, g.api_key
+    """
+    return SqlQuery(sql=sql, params=where_params)
+
+
 def _key_spend_select() -> str:
     return """
             COALESCE(SUM(spend), 0)::float AS spend,
@@ -294,7 +412,7 @@ def build_key_page_sql(scope: DailyActivityScope, *, offset: int, limit: int) ->
         FROM (SELECT 1) AS one
         LEFT JOIN LATERAL (
             SELECT * FROM ranked
-            ORDER BY rank_spend DESC, api_key
+            ORDER BY rank_spend DESC, {_API_KEY_EXPR}
             LIMIT ${limit_param} OFFSET ${offset_param}
         ) AS page ON TRUE
     """
@@ -357,7 +475,7 @@ def build_key_search_sql(scope: DailyActivityScope, *, search: str, limit: int) 
         WHERE {where_clause}
           AND api_key <> ${sentinel_param}
           AND (
-            api_key ILIKE ${search_param} ESCAPE '\\'
+            {_API_KEY_EXPR} ILIKE ${search_param} ESCAPE '\\'
             OR api_key IN (
                 SELECT v.token FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = v.user_id
@@ -373,7 +491,7 @@ def build_key_search_sql(scope: DailyActivityScope, *, search: str, limit: int) 
             )
           )
         GROUP BY api_key
-        ORDER BY SUM(spend::numeric) DESC, api_key
+        ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
         LIMIT ${limit_param}
     """
     return SqlQuery(sql=sql, params=(*where_params, f"%{escaped}%", PTU_SENTINEL_API_KEY, limit))
@@ -387,15 +505,13 @@ def build_model_top_keys_sql(
     model_param: Final = len(where_params) + 1
     sentinel_param: Final = model_param + 1
     limit_param: Final = sentinel_param + 1
-    model_clause: Final = (
-        f"COALESCE(NULLIF(model_group, ''), model) = ${model_param}" if by_model_group else f"model = ${model_param}"
-    )
+    model_clause: Final = f"{_MODEL_GROUP_EXPR if by_model_group else _MODEL_EXPR} = ${model_param}"
     sql: Final = f"""
         SELECT api_key,{_key_spend_select()}
         FROM "{PRISMA_TO_PG_TABLE[scope.table]}"
         WHERE {where_clause} AND {model_clause} AND api_key <> ${sentinel_param}
         GROUP BY api_key
-        ORDER BY SUM(spend::numeric) DESC, api_key
+        ORDER BY SUM(spend::numeric) DESC, {_API_KEY_EXPR}
         LIMIT ${limit_param}
     """
     return SqlQuery(sql=sql, params=(*where_params, model_group, PTU_SENTINEL_API_KEY, limit))
@@ -412,7 +528,7 @@ def build_cache_leakage_keys_sql(scope: DailyActivityScope, *, limit: int) -> Sq
         WHERE {where_clause} AND api_key <> ${sentinel_param}
         GROUP BY api_key
         HAVING SUM(prompt_tokens) - SUM(cache_read_input_tokens) > 0
-        ORDER BY SUM(prompt_tokens) - SUM(cache_read_input_tokens) DESC, api_key
+        ORDER BY SUM(prompt_tokens) - SUM(cache_read_input_tokens) DESC, {_API_KEY_EXPR}
         LIMIT ${limit_param}
     """
     return SqlQuery(sql=sql, params=(*where_params, PTU_SENTINEL_API_KEY, limit))
@@ -464,7 +580,7 @@ def build_export_sql(
             {alias_expression} AS entity_alias,
             {output_key} AS api_key,
             {user_fields},
-            {"NULLIF(COALESCE(scoped.model, ''), '')" if export_type is ExportType.DAILY_WITH_MODELS else "NULL::text"} AS model,
+            {_MODEL_EXPR if export_type is ExportType.DAILY_WITH_MODELS else "NULL::text"} AS model,
             COALESCE(SUM(scoped.spend), 0)::float AS spend,
             {flat_cost} AS flat_cost,
             COALESCE(SUM(scoped.prompt_tokens), 0)::bigint AS prompt_tokens,
@@ -502,25 +618,26 @@ def _export_grouping(export_type: ExportType) -> tuple[str, str, str, tuple[str,
         )
     if export_type is ExportType.DAILY_WITH_KEYS:
         return (
-            "scoped.api_key",
-            "NULLIF(scoped.api_key, '')",
-            "MAX(COALESCE(vt.key_alias, dvt.key_alias)) AS key_alias, "
+            _API_KEY_EXPR,
+            _API_KEY_EXPR,
+            "MAX(CASE WHEN scoped.api_key = '' THEN 'Unattributed' "
+            "ELSE COALESCE(vt.key_alias, dvt.key_alias) END) AS key_alias, "
             "MAX(COALESCE(vt.user_id, dvt.user_id)) AS user_id, MAX(u.user_email) AS user_email",
             (
-                'LEFT JOIN "LiteLLM_VerificationToken" vt ON vt.token = scoped.api_key',
+                "LEFT JOIN \"LiteLLM_VerificationToken\" vt ON vt.token = scoped.api_key AND scoped.api_key <> ''",
                 """LEFT JOIN LATERAL (
                     SELECT key_alias, user_id
                     FROM "LiteLLM_DeletedVerificationToken"
                     WHERE token = scoped.api_key
                     ORDER BY deleted_at DESC
                     LIMIT 1
-                ) dvt ON vt.token IS NULL""",
+                ) dvt ON vt.token IS NULL AND scoped.api_key <> ''""",
                 'LEFT JOIN "LiteLLM_UserTable" u ON u.user_id = COALESCE(vt.user_id, dvt.user_id)',
             ),
         )
     if export_type is ExportType.DAILY_WITH_MODELS:
         return (
-            "COALESCE(scoped.model, '')",
+            _MODEL_EXPR,
             "NULL::text",
             "NULL::text AS key_alias, NULL::text AS user_id, NULL::text AS user_email",
             (),

@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 flate2.workspace = true
+litellm-error.workspace = true
 litellm-http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -17,8 +18,9 @@ thiserror.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+litellm-error.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
-testcontainers-modules = { version = "0.15.0", features = ["clickhouse"] }
+testcontainers-modules = { workspace = true, features = ["clickhouse"] }
 tokio.workspace = true
 wiremock.workspace = true

@@ -2,6 +2,7 @@
  * Helper utilities for Claude Code Marketplace
  */
 
+import i18n from "@/i18n/i18n";
 import type { Plugin, PluginSource } from "./types";
 
 export interface SkillSourcePreview {
@@ -103,7 +104,7 @@ const parseGitHubSource = (url: URL, subPath?: string): SkillSourcePreview | nul
   const repoUrl = `https://github.com/${repoFull}`;
   const repoPreview: SkillSourcePreview = {
     parsed: { source: "github", repo: repoFull },
-    label: `GitHub repo — ${repoFull}`,
+    label: i18n.t("claudeCodePlugins.sources.githubRepo", { repo: repoFull }),
     suggestedName: toKebabCase(repoBase),
   };
 
@@ -121,7 +122,7 @@ const parseGitHubSource = (url: URL, subPath?: string): SkillSourcePreview | nul
     }
     return {
       parsed: { source: "git-subdir", url: repoUrl, path },
-      label: `GitHub subdir — ${repoFull} @ ${path}`,
+      label: i18n.t("claudeCodePlugins.sources.githubSubdir", { repo: repoFull, path }),
       suggestedName: toKebabCase(lastSegment(path)),
     };
   }
@@ -137,7 +138,7 @@ const parseGitHubSource = (url: URL, subPath?: string): SkillSourcePreview | nul
     }
     return {
       parsed: { source: "git-subdir", url: repoUrl, path: normalized },
-      label: `GitHub subdir — ${repoFull} @ ${normalized}`,
+      label: i18n.t("claudeCodePlugins.sources.githubSubdir", { repo: repoFull, path: normalized }),
       suggestedName: toKebabCase(lastSegment(normalized)),
     };
   }
@@ -158,14 +159,14 @@ const buildGitSourcePreview = (
     }
     return {
       parsed: { source: "git-subdir", url: repoUrl, path: normalized },
-      label: `${kind} subdir — ${repoUrl} @ ${normalized}`,
+      label: i18n.t("claudeCodePlugins.sources.gitSubdir", { kind, url: repoUrl, path: normalized }),
       suggestedName: toKebabCase(lastSegment(normalized)),
     };
   }
 
   return {
     parsed: { source: "url", url: repoUrl },
-    label: `${kind} repo — ${repoUrl}`,
+    label: i18n.t("claudeCodePlugins.sources.gitRepo", { kind, url: repoUrl }),
     suggestedName: toKebabCase(repoName),
   };
 };
@@ -205,7 +206,7 @@ const parseSshSource = (raw: string, subPath?: string): SkillSourcePreview | nul
 
 const parseArchiveSource = (url: URL): SkillSourcePreview => ({
   parsed: { source: "archive", url: url.href },
-  label: `Zip archive — ${url.host}${url.pathname}`,
+  label: i18n.t("claudeCodePlugins.sources.zipArchive", { location: `${url.host}${url.pathname}` }),
   suggestedName: toKebabCase(lastSegment(url.pathname).replace(ZIP_ARCHIVE_REGEX, "")),
 });
 
@@ -240,7 +241,9 @@ export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourceP
  * bare `"url"` string, so the url/source pair is nested one level deeper. The key must be
  * "litellm" to match the name the proxy returns in marketplace.json.
  */
-export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
+export const MARKETPLACE_KEY_PLACEHOLDER = "<your-litellm-key>";
+
+export const buildMarketplaceSettingsSnippet = (proxyOrigin: string, requiresKey: boolean): string =>
   JSON.stringify(
     {
       extraKnownMarketplaces: {
@@ -248,6 +251,7 @@ export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
           source: {
             source: "url",
             url: `${proxyOrigin}/claude-code/marketplace.json`,
+            ...(requiresKey ? { headers: { Authorization: `Bearer ${MARKETPLACE_KEY_PLACEHOLDER}` } } : {}),
           },
         },
       },
@@ -279,7 +283,7 @@ export const validatePluginName = (name: string): boolean => {
  */
 export const getSourceDisplayText = (source: Plugin["source"]): string => {
   if (source.source === "github" && source.repo) {
-    return `GitHub: ${source.repo}`;
+    return i18n.t("claudeCodePlugins.sources.githubDisplay", { repo: source.repo });
   }
   if (source.source === "git-subdir" && source.url && source.path) {
     return `${source.url} @ ${source.path}`;
@@ -287,7 +291,7 @@ export const getSourceDisplayText = (source: Plugin["source"]): string => {
   if ((source.source === "url" || source.source === "archive") && source.url) {
     return source.url;
   }
-  return "Unknown source";
+  return i18n.t("claudeCodePlugins.sources.unknown");
 };
 
 /**
@@ -299,6 +303,29 @@ export const getSourceLink = (source: Plugin["source"]): string | null => {
   }
   const linksToUrl = source.source === "url" || source.source === "git-subdir" || source.source === "archive";
   return linksToUrl && source.url && BROWSABLE_URL_REGEX.test(source.url) ? source.url : null;
+};
+
+export const getManagedSkillArchivePath = (
+  name: string,
+  source: Plugin["source"],
+  proxyBaseUrl: string,
+  pageOrigin?: string,
+): string | null => {
+  if (source.source !== "archive" || !validatePluginName(name)) {
+    return null;
+  }
+  if (source.sha256 && !SHA256_REGEX.test(source.sha256)) {
+    return null;
+  }
+  const path = source.sha256
+    ? `/claude-code/plugins/${name}/archive/${source.sha256}.zip`
+    : `/skill-hub/skills/${name}/archive`;
+  try {
+    const expectedUrl = new URL(`${proxyBaseUrl.replace(/\/+$/, "")}${path}`, pageOrigin);
+    return /^https?:$/.test(expectedUrl.protocol) && source.url === expectedUrl.href ? path : null;
+  } catch {
+    return null;
+  }
 };
 
 /**

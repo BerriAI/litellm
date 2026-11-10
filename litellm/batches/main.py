@@ -22,7 +22,6 @@ from openai.types.batch import BatchRequestCounts
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -127,7 +126,7 @@ async def acreate_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    output_expires_after: dict[str, Any] | None = None,
+    output_expires_after: FileExpiresAfter | None = None,
     **kwargs,
 ) -> LiteLLMBatch:
     """
@@ -191,9 +190,9 @@ def create_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    output_expires_after: dict[str, Any] | None = None,
+    output_expires_after: FileExpiresAfter | None = None,
     **kwargs,
-) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Creates and executes a batch from an uploaded file of request
 
@@ -246,7 +245,7 @@ def create_batch(
             extra_body=extra_body,
         )
         if output_expires_after is not None:
-            _create_batch_request["output_expires_after"] = cast(FileExpiresAfter, output_expires_after)
+            _create_batch_request["output_expires_after"] = output_expires_after
         if model is not None:
             provider_config = ProviderConfigManager.get_provider_batches_config(
                 model=model,
@@ -309,6 +308,7 @@ def create_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 _is_async=_is_async,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "azure":
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -471,6 +471,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             organization=organization,
             timeout=timeout,
             max_retries=optional_params.max_retries,
+            litellm_params=litellm_params,
         )
     elif custom_llm_provider == "azure":
         api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -568,7 +569,7 @@ def retrieve_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Retrieves a batch.
 
@@ -583,7 +584,6 @@ def retrieve_batch(
             custom_llm_provider=custom_llm_provider,
             **kwargs,
         )
-        add_trusted_model_credentials_to_litellm_params(litellm_params, kwargs)
         if litellm_logging_obj is not None:
             litellm_logging_obj.update_from_kwargs(
                 kwargs=kwargs,
@@ -819,6 +819,7 @@ def list_batches(
                 organization=organization,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "azure":
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -941,7 +942,7 @@ def cancel_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
+) -> LiteLLMBatch | Coroutine[object, None, LiteLLMBatch]:
     """
     Cancels a batch.
 
@@ -1016,6 +1017,7 @@ def cancel_batch(
                 organization=organization,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params,
             )
         elif custom_llm_provider == "azure":
             api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")

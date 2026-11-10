@@ -20,6 +20,8 @@ from litellm.llms.meta.realtime.transformation import (
     session_created_event,
 )
 from litellm.types.llms.meta import MuseMode
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 from litellm.types.realtime import RealtimeResponseTransformInput
 
 EMPTY_TRANSFORM_INPUT: Final[RealtimeResponseTransformInput] = {
@@ -162,6 +164,22 @@ def test_language_normalization_uses_official_muse_names(source: str, expected: 
 def test_session_rejects_unsupported_audio_model_and_hints(session: dict[str, object], message: str):
     with pytest.raises(MuseProtocolError, match=message):
         parse_session_update(_event("session.update", session={"type": "transcription", **session}), MUSE_MODEL)
+
+
+def _handshake(turn_detection: str, drop_params: bool) -> tuple[str | bytes, ...]:
+    config = ProviderConfigManager.get_provider_realtime_config(MUSE_MODEL, LlmProviders.META, drop_params=drop_params)
+    assert config is not None
+    config.validate_environment({}, MUSE_MODEL, api_key="secret-token")
+    return tuple(config.transform_realtime_request(_ga_session_update(turn_detection=turn_detection), MUSE_MODEL))
+
+
+def test_semantic_vad_falls_back_to_server_vad_under_drop_params():
+    assert _handshake("semantic_vad", drop_params=True) == _handshake("server_vad", drop_params=False)
+
+
+def test_semantic_vad_without_drop_params_names_the_drop_params_fallback():
+    with pytest.raises(MuseProtocolError, match="Set drop_params to use server_vad instead"):
+        _handshake("semantic_vad", drop_params=False)
 
 
 def test_session_created_event_exposes_openai_transcription_shape():

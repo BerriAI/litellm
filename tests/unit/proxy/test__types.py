@@ -1,23 +1,37 @@
 import json
+from typing import Final
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from litellm.proxy._types import (
     ROLES_WITHIN_ORG,
+    BudgetNewRequest,
     ChangePasswordRequest,
     GenerateKeyRequest,
+    GenerateKeyResponse,
     KeyRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
     LiteLLM_TeamMembership,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
+    NewCustomerRequest,
     NewMCPServerRequest,
+    NewTeamRequest,
     NewUserRequest,
+    NewUserResponse,
     OrganizationMemberUpdateRequest,
+    RegenerateKeyRequest,
     ResetSpendRequest,
+    UpdateCustomerRequest,
     UpdateKeyRequest,
     UpdateMCPServerRequest,
+    UpdateTeamRequest,
     UpdateUserRequest,
+    UpdateUserRequestNoUserIDorEmail,
     UserAPIKeyAuth,
 )
 
@@ -32,32 +46,39 @@ SERVER_ONLY_MARKERS = (
     "billing_agent_policy",
     "mcp_admitted_user_subject",
     "mcp_source_team_rpm_limits",
-    "mcp_session_resource_server_id",
+    "mcp_session_resource_server_ids",
     "via_virtual_key",
 )
 
 
+def _server_only_marker_value(marker: str, value: str) -> str | tuple[str, ...]:
+    return (value,) if marker == "mcp_session_resource_server_ids" else value
+
+
 @pytest.mark.parametrize("marker", SERVER_ONLY_MARKERS)
 def test_a_caller_cannot_forge_a_server_only_marker_through_the_constructor(marker):
-    auth = UserAPIKeyAuth(**{marker: "forged-by-caller"})
+    marker_value: Final = _server_only_marker_value(marker, "forged-by-caller")
+    auth = UserAPIKeyAuth(**{marker: marker_value})
 
-    assert getattr(auth, marker) != "forged-by-caller"
+    assert getattr(auth, marker) != marker_value
 
 
 @pytest.mark.parametrize("marker", SERVER_ONLY_MARKERS)
 def test_a_caller_cannot_forge_a_server_only_marker_through_model_validate(marker):
-    auth = UserAPIKeyAuth.model_validate({marker: "forged-by-caller"})
+    marker_value: Final = _server_only_marker_value(marker, "forged-by-caller")
+    auth = UserAPIKeyAuth.model_validate({marker: marker_value})
 
-    assert getattr(auth, marker) != "forged-by-caller"
+    assert getattr(auth, marker) != marker_value
 
 
 @pytest.mark.parametrize("marker", SERVER_ONLY_MARKERS)
 def test_the_server_sets_a_marker_by_assignment_after_construction(marker):
     auth = UserAPIKeyAuth()
+    marker_value: Final = _server_only_marker_value(marker, "set-by-the-server")
 
-    setattr(auth, marker, "set-by-the-server")
+    setattr(auth, marker, marker_value)
 
-    assert getattr(auth, marker) == "set-by-the-server"
+    assert getattr(auth, marker) == marker_value
 
 
 def test_a_virtual_key_is_hashed_out_of_the_auth_object():
@@ -205,6 +226,75 @@ def test_a_max_budget_that_was_actually_sent_is_kept(sent):
     assert GenerateKeyRequest(max_budget=sent).max_budget == sent
 
 
+RATE_LIMIT_REQUESTS: Final = (
+    (GenerateKeyRequest, {}),
+    (RegenerateKeyRequest, {}),
+    (UpdateKeyRequest, {"key": "sk-test"}),
+    (NewUserRequest, {}),
+    (UpdateUserRequestNoUserIDorEmail, {}),
+    (UpdateUserRequest, {"user_id": "user-test"}),
+    (NewTeamRequest, {}),
+    (UpdateTeamRequest, {"team_id": "team-test"}),
+    (BudgetNewRequest, {}),
+    (NewCustomerRequest, {"user_id": "customer-test"}),
+)
+
+
+@pytest.mark.parametrize(("request_model", "identifiers"), RATE_LIMIT_REQUESTS)
+@pytest.mark.parametrize("field", ("rpm_limit", "tpm_limit"))
+@pytest.mark.parametrize("value", (-1, -100))
+def test_management_requests_reject_negative_rate_limits(
+    request_model: type[BaseModel], identifiers: dict[str, str], field: str, value: int
+) -> None:
+    with pytest.raises(ValidationError) as error:
+        request_model.model_validate({**identifiers, field: value})
+    assert error.value.errors()[0]["loc"] == (field,)
+
+
+@pytest.mark.parametrize(("request_model", "identifiers"), RATE_LIMIT_REQUESTS)
+@pytest.mark.parametrize("value", (None, 0, 100))
+def test_management_requests_preserve_explicit_rate_limits(
+    request_model: type[BaseModel], identifiers: dict[str, str], value: int | None
+) -> None:
+    limits: Final = {"rpm_limit": value, "tpm_limit": value}
+    request: Final = request_model.model_validate({**identifiers, **limits})
+    assert request.model_dump(include={"rpm_limit", "tpm_limit"}, exclude_unset=True) == limits
+
+
+@pytest.mark.parametrize(("request_model", "identifiers"), RATE_LIMIT_REQUESTS)
+def test_management_requests_leave_omitted_rate_limits_unset(
+    request_model: type[BaseModel], identifiers: dict[str, str]
+) -> None:
+    request: Final = request_model.model_validate({**identifiers})
+    assert request.model_dump(include={"rpm_limit", "tpm_limit"}) == {"rpm_limit": None, "tpm_limit": None}
+    assert request.model_dump(include={"rpm_limit", "tpm_limit"}, exclude_unset=True) == {}
+
+
+@pytest.mark.parametrize(("response_model", "identifiers"), (
+    (GenerateKeyResponse, {"key": "sk-test"}),
+    (NewUserResponse, {"key": "sk-test"}),
+    (LiteLLM_TeamTable, {"team_id": "team-test"}),
+    (LiteLLM_UserTable, {"user_id": "user-test"}),
+    (LiteLLM_BudgetTable, {"budget_id": "budget-test"}),
+))
+def test_existing_negative_rate_limits_remain_readable(
+    response_model: type[BaseModel], identifiers: dict[str, str]
+) -> None:
+    limits: Final = {"rpm_limit": -1, "tpm_limit": -100}
+    response: Final = response_model.model_validate({**identifiers, **limits})
+    assert response.model_dump(include={"rpm_limit", "tpm_limit"}) == limits
+
+
+def test_existing_customer_negative_rate_limits_remain_readable() -> None:
+    customer: Final = LiteLLM_EndUserTable.model_validate({
+        "user_id": "customer-test", "blocked": False,
+        "litellm_budget_table": {"rpm_limit": -1, "tpm_limit": -100},
+    })
+    assert customer.litellm_budget_table is not None
+    assert customer.litellm_budget_table.rpm_limit == -1
+    assert customer.litellm_budget_table.tpm_limit == -100
+
+
 USER_IDENTIFIER_CASES = (
     ({"user_id": "user-1"}, True),
     ({"user_email": "user@example.com"}, True),
@@ -249,15 +339,39 @@ def test_an_audit_log_does_not_store_the_key_it_recorded_a_change_to(field):
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
 def test_an_audit_log_keeps_the_non_secret_fields_it_recorded(field):
-    sent = {"key": SECRET, "max_budget": 50, "models": ["gpt-4o"]}
+    sent = {"key": SECRET, "token": "88dc28d0f030c55ed4ab", "max_budget": 50, "models": ["gpt-4o"]}
 
     log = _audit_log(**{field: json.dumps(sent)})
 
     assert json.loads(getattr(log, field)) == {
         "key": SECRET_MASKED,
+        "token": "88dc28d0f030c55ed4ab",
         "max_budget": 50,
         "models": ["gpt-4o"],
     }
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_null_values_as_null(field):
+    sent = {
+        "key": SECRET,
+        "key_alias": None,
+        "metadata": {"ignored_until": None},
+        "tags": ["prod", None, {"owner": None}],
+    }
+
+    log = _audit_log(**{field: json.dumps(sent)})
+
+    assert json.loads(getattr(log, field)) == {**sent, "key": SECRET_MASKED}
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_a_list_of_changes_as_json_text_with_keys_masked(field):
+    sent = [{"id": "no_redis", "key": SECRET}, {"id": "detailed_debug"}]
+
+    log = _audit_log(**{field: json.dumps(sent)})
+
+    assert json.loads(getattr(log, field)) == [{"id": "no_redis", "key": SECRET_MASKED}, {"id": "detailed_debug"}]
 
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
@@ -407,6 +521,39 @@ def test_mcp_metadata_rejects_unavailable_upstream_protocol(revision):
             model.model_validate(payload)
 
 
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", ["true", "false", 1, 0, None])
+def test_mcp_metadata_rejects_a_non_boolean_skip_tool_output_validation(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: object
+) -> None:
+    payload: Final = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"skip_tool_output_validation": value},
+    }
+
+    with pytest.raises(ValidationError):
+        request_model.model_validate(payload)
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [True, False])
+def test_mcp_metadata_accepts_a_boolean_skip_tool_output_validation(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: bool
+) -> None:
+    parsed: Final = request_model.model_validate(
+        {
+            "server_id": "test",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"skip_tool_output_validation": value},
+        }
+    )
+
+    assert parsed.mcp_info == {"skip_tool_output_validation": value}
+
+
 MCP_SERVER_REQUESTS = (NewMCPServerRequest, UpdateMCPServerRequest)
 STDIO_SERVER_FIELDS = {"server_id": "stdio-1", "transport": "stdio", "command": "python", "args": ["server.py"]}
 
@@ -488,3 +635,52 @@ def test_batch_file_caps_accept_only_positive_limits(setting):
         with pytest.raises(ValidationError):
             ConfigGeneralSettings.model_validate({setting: invalid})
     assert getattr(ConfigGeneralSettings.model_validate({setting: 3}), setting) == 3
+
+
+@pytest.mark.parametrize(
+    ("request_type", "body", "message"),
+    [
+        pytest.param(
+            UpdateCustomerRequest,
+            {"user_id": "acme", "tpm_limit": 5, "quota": {"opus": 1}},
+            "Unknown fields: quota, tpm_limit. tpm_limit: these live on the customer's budget object, "
+            "update it with /budget/update.",
+            id="update_with_a_budget_field_and_a_made_up_one",
+        ),
+        pytest.param(
+            UpdateCustomerRequest,
+            {"user_id": "acme", "alias": "Acme", "quota": 1},
+            "Unknown fields: quota.",
+            id="update_with_a_made_up_field_has_no_budget_hint",
+        ),
+        pytest.param(
+            NewCustomerRequest,
+            {"user_id": "acme", "tpm_limti": 5},
+            "Unknown fields: tpm_limti.",
+            id="create_with_a_misspelled_budget_field",
+        ),
+    ],
+)
+def test_a_customer_request_with_unknown_fields_is_refused_naming_them(
+    request_type: type[BaseModel], body: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError) as exc:
+        request_type.model_validate(body)
+    assert [error["msg"] for error in exc.value.errors()] == [f"Value error, {message}"]
+
+
+@pytest.mark.parametrize(
+    ("request_type", "body"),
+    [
+        pytest.param(UpdateCustomerRequest, {"user_id": "acme", "alias": "Acme", "blocked": True}, id="update"),
+        pytest.param(
+            NewCustomerRequest,
+            {"user_id": "acme", "tpm_limit": 5, "model_tpm_limit": {"opus": 60}},
+            id="create_with_inline_budget_fields",
+        ),
+    ],
+)
+def test_a_customer_request_with_only_known_fields_is_accepted(
+    request_type: type[BaseModel], body: dict[str, object]
+) -> None:
+    assert request_type.model_validate(body).model_dump(exclude_unset=True) == body

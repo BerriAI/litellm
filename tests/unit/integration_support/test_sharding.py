@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +16,21 @@ from tests.integration.conftest import COLLECTED, IntegrationReportPlugin, _shar
 from tests.integration.conftest import INVENTORY as WORKER_INVENTORY
 
 INVENTORY: Final = ("test_owned.py::test_first", "test_owned.py::test_skipped", "test_owned.py::test_last")
+INTEGRATION_PACKAGE: Final = Path(__file__).resolve().parents[2] / "integration"
+HEALTHY: Final = "tests/integration/providers/test_healthy.py"
+BROKEN: Final = "tests/integration/providers/test_broken.py"
+RENAMED: Final = "tests/integration/providers/test_renamed.py"
+CLASS_ERROR: Final = "tests/integration/providers/test_class_error.py"
+MODULES: Final = MappingProxyType(
+    {
+        HEALTHY: "def test_one():\n    pass\n\n\ndef test_two():\n    pass\n",
+        BROKEN: "from tests.integration._support.process import _removed_helper\n\n\ndef test_never():\n    pass\n",
+        CLASS_ERROR: (
+            "import pytest\n\n\nclass TestBroken:\n"
+            "    @pytest.mark.parametrize('unused', [1])\n    def test_case(self):\n        pass\n"
+        ),
+    }
+)
 
 
 def _execution(
@@ -111,3 +129,88 @@ def test_worker_results_retain_the_full_inventory_and_reject_disagreement() -> N
     incomplete: Final = WorkerResult(MappingProxyType({"integration_inventory": INVENTORY[:1]}))
     with pytest.raises(pytest.UsageError, match="inventories disagree"):
         plugin.pytest_testnodedown(incomplete, None)
+
+
+XDIST: Final = ("-n", "2", "--dist=loadgroup")
+SERIAL: Final = ("-p", "no:xdist")
+
+
+def _run_shard(
+    root: Path, selected: tuple[str, ...], distribution: tuple[str, ...] = XDIST
+) -> subprocess.CompletedProcess[str]:
+    package: Final = root / "tests" / "integration"
+    (package / "providers").mkdir(parents=True)
+    (root / "pytest.ini").write_text("[pytest]\n")
+    (root / "tests" / "__init__.py").write_text("")
+    for name in ("__init__.py", "conftest.py", "run.py", "_support"):
+        (package / name).symlink_to(INTEGRATION_PACKAGE / name)
+    for file in selected:
+        if file in MODULES:
+            (root / file).write_text(MODULES[file])
+    (root / "shard.txt").write_text("".join(f"{file}\n" for file in selected))
+    return subprocess.run(
+        (
+            sys.executable,
+            "-P",
+            "-m",
+            "pytest",
+            "tests/integration/providers",
+            "-p",
+            "no:cacheprovider",
+            *distribution,
+            "--integration-shard-count=2",
+            "--integration-shard-index=0",
+            "--integration-shard-files",
+            "shard.txt",
+        ),
+        cwd=root,
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(root),
+            "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"))),
+        },
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("distribution", "exit_code", "outcome"),
+    (
+        (XDIST, pytest.ExitCode.TESTS_FAILED, "2 passed, 1 error"),
+        (SERIAL, pytest.ExitCode.INTERRUPTED, "Interrupted: 1 error during collection"),
+    ),
+    ids=("xdist", "serial"),
+)
+def test_a_broken_import_in_a_shard_is_a_collection_error_not_a_worker_crash(
+    tmp_path: Path, distribution: tuple[str, ...], exit_code: pytest.ExitCode, outcome: str
+) -> None:
+    result: Final = _run_shard(tmp_path, (HEALTHY, BROKEN), distribution)
+    assert result.returncode == exit_code, result.stdout + result.stderr
+    assert outcome in result.stdout
+    assert result.stdout.count(f"ERROR collecting {BROKEN}") == 1
+    assert "cannot import name '_removed_helper'" in result.stdout
+    assert "INTERNALERROR" not in result.stdout + result.stderr
+
+
+def test_a_shard_file_that_collects_no_tests_still_fails_as_a_collection_error(tmp_path: Path) -> None:
+    result: Final = _run_shard(tmp_path, (HEALTHY, RENAMED))
+    assert result.returncode == pytest.ExitCode.TESTS_FAILED, result.stdout + result.stderr
+    assert result.stdout.count(f"ERROR collecting {RENAMED}") == 1
+    assert "2 passed" in result.stdout
+    assert "INTERNALERROR" not in result.stdout + result.stderr
+
+
+def test_a_class_level_collection_error_is_not_also_reported_as_a_file_without_tests(tmp_path: Path) -> None:
+    result: Final = _run_shard(tmp_path, (HEALTHY, CLASS_ERROR), SERIAL)
+    assert result.returncode == pytest.ExitCode.INTERRUPTED, result.stdout + result.stderr
+    assert f"ERROR {CLASS_ERROR}::TestBroken" in result.stdout
+    assert "which has no tests" not in result.stdout
+
+
+def test_a_healthy_shard_runs_every_selected_test(tmp_path: Path) -> None:
+    result: Final = _run_shard(tmp_path, (HEALTHY,))
+    assert result.returncode == pytest.ExitCode.OK, result.stdout + result.stderr
+    assert "2 passed" in result.stdout

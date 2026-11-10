@@ -10,7 +10,7 @@ import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 import { CHAT_MODEL_A, masterKey } from "../../helpers/traffic";
-import { keySourceSelect, modelSelect, onlyVisible, openPlayground } from "../../helpers/playground";
+import { onlyVisible, openPlayground, searchModels, enterVirtualKey } from "../../helpers/playground";
 
 /**
  * Every identifier a roster is addressable by. Which of user_id / user_email is populated depends on
@@ -228,21 +228,14 @@ test.describe("Team Admin", () => {
             .toBe(true);
 
           await openPlayground(page);
-          await keySourceSelect(page).click();
-          await onlyVisible(page.getByRole("option", { name: "Virtual Key" })).click({ timeout: 15_000 });
+          await enterVirtualKey(page, teamKey);
 
-          const keyInput = onlyVisible(page.getByPlaceholder("Enter custom Virtual Key"));
-          await expect(keyInput).toBeVisible({ timeout: 10_000 });
-          await keyInput.fill(teamKey);
-
-          const select = modelSelect(page);
-          await select.click();
-          await select.fill(teamModelName);
+          await searchModels(page, teamModelName);
           await expect(onlyVisible(page.getByRole("option", { name: teamModelName }))).toBeVisible({
             timeout: 15_000,
           });
 
-          await select.fill(CHAT_MODEL_A);
+          await onlyVisible(page.getByPlaceholder("Search models")).fill(CHAT_MODEL_A);
           await expect(onlyVisible(page.getByRole("option", { name: CHAT_MODEL_A }))).toBeVisible({
             timeout: 15_000,
           });

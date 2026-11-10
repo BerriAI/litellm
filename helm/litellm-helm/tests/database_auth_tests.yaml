@@ -1,0 +1,288 @@
+suite: test existing database token auth
+templates:
+  - deployment.yaml
+  - migrations-job.yaml
+  - configmap-litellm.yaml
+tests:
+  - it: should keep password auth from the secret when no token auth is set
+    template: deployment.yaml
+    set:
+      db.useExisting: true
+      db.deployStandalone: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: postgres
+                key: username
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: postgres
+                key: password
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+            value: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_POSTGRESQL_AUTH
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PORT
+          any: true
+
+  - it: should render RDS IAM auth without a password secret on the proxy and the collector sidecar
+    template: deployment.yaml
+    set:
+      db.useExisting: true
+      db.deployStandalone: false
+      db.useIAMAuth: true
+      db.username: litellm_iam
+      db.endpoint: writer.cluster-abc.us-west-1.rds.amazonaws.com
+      db.port: 5433
+      collector.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            value: litellm_iam
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST
+            value: writer.cluster-abc.us-west-1.rds.amazonaws.com
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PORT
+            value: "5433"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_NAME
+            value: litellm
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_POSTGRESQL_AUTH
+          any: true
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+
+  - it: should give the migrations job the same token auth env as the proxy
+    template: migrations-job.yaml
+    set:
+      migrationJob.enabled: true
+      db.useExisting: true
+      db.deployStandalone: false
+      db.useIAMAuth: true
+      db.username: litellm_iam
+      db.endpoint: writer.cluster-abc.us-west-1.rds.amazonaws.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            value: litellm_iam
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST
+            value: writer.cluster-abc.us-west-1.rds.amazonaws.com
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PORT
+            value: "5432"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+          any: true
+
+  - it: should carry db.schema as DATABASE_SCHEMA under token auth and omit it when empty
+    template: deployment.yaml
+    set:
+      db.useExisting: true
+      db.deployStandalone: false
+      db.useIAMAuth: true
+      db.username: litellm_iam
+      db.schema: tenant1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SCHEMA
+            value: tenant1
+
+  - it: should leave the schema to db.url under password auth even when db.schema is set
+    template: deployment.yaml
+    set:
+      db.useExisting: true
+      db.deployStandalone: false
+      db.schema: tenant1
+      db.url: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)?schema=tenant1
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SCHEMA
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+            value: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)?schema=tenant1
+
+  - it: should not emit DATABASE_SCHEMA when db.schema is empty
+    template: deployment.yaml
+    set:
+      db.useExisting: true
+      db.deployStandalone: false
+      db.useIAMAuth: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SCHEMA
+          any: true
+
+  - it: should read the user from the secret when db.username is empty under token auth
+    template: deployment.yaml
+    set:
+      db.useExisting: true
+      db.deployStandalone: false
+      db.useIAMAuth: true
+      db.secret.name: rds-identity
+      db.secret.usernameKey: user
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: rds-identity
+                key: user
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+
+  - it: should render Entra auth with AZURE_POSTGRESQL_AUTH and no password
+    template: deployment.yaml
+    set:
+      db.useExisting: true
+      db.deployStandalone: false
+      db.useAzureEntraAuth: true
+      db.username: litellm@example.onmicrosoft.com
+      db.endpoint: litellm.postgres.database.azure.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AZURE_POSTGRESQL_AUTH
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_USERNAME
+            value: litellm@example.onmicrosoft.com
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: IAM_TOKEN_DB_AUTH
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_PASSWORD
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+          any: true
+
+  - it: should fail when both token sources are enabled
+    template: deployment.yaml
+    set:
+      migrationJob.enabled: false
+      db.useExisting: true
+      db.deployStandalone: false
+      db.useIAMAuth: true
+      db.useAzureEntraAuth: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "db.useIAMAuth and db.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source"
+
+  - it: should fail when token auth is set while the bundled postgres is still deployed
+    template: deployment.yaml
+    set:
+      migrationJob.enabled: false
+      db.useExisting: true
+      db.useIAMAuth: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "need db.useExisting: true and db.deployStandalone: false"
+
+  - it: should fail when token auth is set without useExisting
+    template: migrations-job.yaml
+    set:
+      migrationJob.enabled: true
+      db.deployStandalone: false
+      db.useAzureEntraAuth: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "need db.useExisting: true and db.deployStandalone: false"

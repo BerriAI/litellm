@@ -9,14 +9,14 @@ from litellm.proxy._types import (
     MCPTransport,
     NewMCPServerRequest,
 )
-from litellm.proxy._experimental.mcp_server.db import McpIdentifierConflict
-from litellm.proxy._experimental.mcp_server.utils import validate_mcp_server_name
 from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     _redact_mcp_credentials,
     does_mcp_server_exist,
     raise_mcp_identifier_conflict,
     validate_and_normalize_mcp_server_payload,
 )
+from litellm.proxy.mcp_server.db import McpIdentifierConflict
+from litellm.proxy.mcp_server.utils import validate_mcp_server_name
 
 
 def test_does_mcp_server_exist() -> None:

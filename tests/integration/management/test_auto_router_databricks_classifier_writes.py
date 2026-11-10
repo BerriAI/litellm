@@ -3,6 +3,7 @@ import json
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
@@ -62,6 +63,21 @@ _ROWS_QUERY: Final = (
     "SELECT request_id, status, metadata->>'internal_call_origin' AS origin "
     'FROM "LiteLLM_SpendLogs" WHERE model_group = %s'
 )
+
+
+def _number(value: JsonValue) -> float:
+    assert isinstance(value, (int, float)) and not isinstance(value, bool), value
+    return float(value)
+
+
+def _endpoint_cost() -> float:
+    prices: Final = object_value(
+        json.loads(Path("model_prices_and_context_window.json").read_text())[f"databricks/{_ENDPOINT}"]
+    )
+    usage: Final = object_value(_ENDPOINT_ANSWER["usage"])
+    return _number(usage["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
+        usage["output_tokens"]
+    ) * _number(prices["output_cost_per_token"])
 
 
 def _classifier(request: Request) -> Reply:
@@ -153,11 +169,11 @@ def _request_rows(rows: Sequence[dict[str, JsonValue]]) -> tuple[dict[str, JsonV
     return tuple(row for row in rows if row["origin"] != "autorouter_classifier")
 
 
-def _rows(router: str, *, requests: int) -> tuple[dict[str, JsonValue], ...]:
+def _rows(router: str, *, want: frozenset[str]) -> tuple[dict[str, JsonValue], ...]:
     return tuple(
         eventually(
             lambda: read_rows(_ROWS_QUERY, (router,)),
-            lambda found: len(_request_rows(found)) >= requests,
+            lambda found: want <= frozenset(string_value(row["request_id"]) for row in _request_rows(found)),
             seconds=70,
         )
     )
@@ -221,11 +237,14 @@ def test_validate_names_each_databricks_classifier_misconfiguration(gateway: Gat
 
 @pytest.mark.parametrize(
     ("model", "target", "cost"),
-    [(_MODEL, _ROUTE, {}), (_ENDPOINT, f"/{_ENDPOINT}/invocations", {"classifier_cost": 0.0})],
+    [
+        (_MODEL, _ROUTE, {}),
+        (_ENDPOINT, f"/{_ENDPOINT}/invocations", {"classifier_cost": pytest.approx(_endpoint_cost())}),
+    ],
     ids=["ai_decide", "serving_endpoint"],
 )
 def test_test_routing_classifies_through_databricks_without_calling_the_tier_it_picked(
-    gateway: Gateway, model: str, target: str, cost: dict[str, JsonValue]
+    gateway: Gateway, model: str, target: str, cost: dict[str, object]
 ) -> None:
     prompt: Final = f"design a distributed cache {uuid.uuid4().hex}"
     with (
@@ -259,6 +278,8 @@ def test_test_routing_classifies_through_databricks_without_calling_the_tier_it_
                 ],
                 "classifier_model": f"databricks/{model}",
                 **cost,
+                "classifier_input_truncated": False,
+                "classifier_input_budget_status": "unknown_limits",
                 "classifier_probabilities": {"SIMPLE": 0.03, "MEDIUM": 0.06, "COMPLEX": 0.91},
                 "classifier_confidence": 0.91,
                 "conversation_continuing": False,
@@ -395,7 +416,7 @@ async def test_moving_the_workspace_under_a_burst_moves_the_classifier_and_logs_
             *tuple(convergence_calls.get_nowait() for _ in range(convergence_calls.qsize())),
         )
         assert len(set(identities)) == len(identities), identities
-        rows: Final = _rows(name, requests=len(identities))
+        rows: Final = _rows(name, want=frozenset(identities))
         request_rows: Final = _request_rows(rows)
         assert sorted(string_value(row["request_id"]) for row in request_rows) == sorted(identities), request_rows
         assert all(row["status"] == "success" for row in rows), rows

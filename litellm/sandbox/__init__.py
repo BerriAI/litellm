@@ -7,7 +7,10 @@ They resolve lazily so `import litellm` does not pull in litellm.harness.
 import importlib
 from typing import Final
 
+from pydantic import TypeAdapter
+
 _HARNESS_SANDBOX_MODULE: Final = "litellm.harness.sandbox"
+_HARNESS_EXPORT: Final = TypeAdapter(object)
 _HARNESS_EXPORTS: Final = frozenset(
     {
         "local",
@@ -23,5 +26,5 @@ _HARNESS_EXPORTS: Final = frozenset(
 
 def __getattr__(name: str) -> object:
     if name in _HARNESS_EXPORTS:
-        return getattr(importlib.import_module(_HARNESS_SANDBOX_MODULE), name)
+        return _HARNESS_EXPORT.validate_python(getattr(importlib.import_module(_HARNESS_SANDBOX_MODULE), name))
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

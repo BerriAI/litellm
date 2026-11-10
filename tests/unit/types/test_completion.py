@@ -179,6 +179,7 @@ def _build_dispatch_context() -> CompletionDispatchContext:
         model="gpt-4o",
         model_response=None,  # type: ignore[arg-type]
         optional_params={},
+        optional_params_for_model_info=lambda model_info: {},
         organization=None,
         provider_config=None,
         request_params={},
@@ -187,6 +188,7 @@ def _build_dispatch_context() -> CompletionDispatchContext:
         temperature=None,
         text_completion=False,
         timeout=None,
+        timeout_for_optional_params=lambda optional_params: 600.0,
         top_p=None,
     )
 

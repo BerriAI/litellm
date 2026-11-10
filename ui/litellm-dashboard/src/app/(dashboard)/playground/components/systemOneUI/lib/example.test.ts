@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import i18n from "@/i18n/i18n";
 import {
   DECISION_PRESETS,
   emptyPayload,
@@ -10,7 +11,7 @@ import {
 import { validateOpenAIDecisionsPayload, validateSystemOnePayload } from "./validatePayload";
 
 describe("decision presets", () => {
-  it.each(DECISION_PRESETS.map((preset) => [preset.label, preset] as const))(
+  it.each(DECISION_PRESETS.map((preset) => [i18n.t(preset.label), preset] as const))(
     "%s is a valid request on both endpoints",
     (_label, preset) => {
       expect(
@@ -54,7 +55,10 @@ describe("decision presets", () => {
 
   it("omits the model from payloads when none is known", () => {
     expect(JSON.parse(presetPayload(DECISION_PRESETS[1], "/v1/systemone"))).not.toHaveProperty("model");
-    expect(JSON.parse(emptyPayload("/v1/decisions"))).toEqual({ input: "", questions: [] });
+    expect(JSON.parse(emptyPayload("/v1/decisions"))).toEqual({
+      input: "",
+      questions: [{ type: "predicate", name: "", instructions: "" }],
+    });
     expect(validateSystemOnePayload(emptyPayload("/v1/systemone"), "/v1/systemone").isValid).toBe(false);
   });
 });

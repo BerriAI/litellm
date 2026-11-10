@@ -7,12 +7,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity, allowlisted_metadata
+from litellm.integrations.otel.model.metadata import (
+    RequestContext,
+    RequestIdentity,
+    allowlisted_metadata,
+    exported_request_metadata,
+)
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
@@ -31,6 +38,7 @@ from litellm.integrations.otel.model.utils import (
     as_str_tuple,
 )
 from litellm.integrations.otel.routing import RoutingAttributeValue, routing_decision_attributes
+from litellm.types.llms.anthropic import claude_hosted_web_tool_call
 
 # ``RequestIdentity`` and the request-metadata translation now live in
 # :mod:`metadata`; re-exported here so existing ``model.payloads`` imports keep
@@ -417,6 +425,7 @@ class LLMCallSpanData:
     response_cost: float | None
     server: ServerInfo | None
     identity: RequestIdentity
+    request_metadata: Mapping[str, str] = field(default_factory=lambda: _EMPTY_METADATA)
     is_streaming: bool | None = None
     cost: LLMCost = field(default_factory=LLMCost)
     tools: tuple[ToolDefinition, ...] = ()
@@ -429,6 +438,7 @@ class LLMCallSpanData:
     choices_out: tuple[Mapping[str, object], ...] = ()
     system_fingerprint: str | None = None
     time_to_first_chunk_seconds: float | None = None
+    completion_start_seconds: float | None = None
     # The requested output modality, set only on the routes that pin one (image
     # generation, speech, transcription, OCR), and the litellm route itself, which
     # keeps routes the convention folds into one operation distinguishable.
@@ -441,6 +451,8 @@ class LLMCallSpanData:
     embedding_output: EmbeddingOutput | None = None
     promoted_metadata: Mapping[str, str] = field(default_factory=lambda: _EMPTY_METADATA)
     routing_attributes: Mapping[str, RoutingAttributeValue] = field(default_factory=lambda: MappingProxyType({}))
+    cache_hit: bool | None = None
+    saved_cache_cost: float | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -448,20 +460,24 @@ class LLMCallSpanData:
         payload: StandardLoggingPayload,
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
+        completion_start_seconds: float | None = None,
         request_route: str | None = None,
         request_purpose: str | None = None,
         trace: TraceControls | None = None,
         session_id: str | None = None,
         *,
         metadata_keys: tuple[str, ...] = (),
+        operation: GenAIOperation | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
+        cache_hit: Final = as_bool(payload.get("cache_hit")) is True  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
         # The single parse of the request's metadata — the request-vs-provider
         # model split, the response model, api base, and identity all come from
         # here rather than being re-derived from the raw payload dicts.
         context: Final = RequestContext.from_standard_logging_payload(payload)
         metadata: Final = payload.get("metadata")
         decision: Final = metadata["routing_decision"] if metadata and "routing_decision" in metadata else None
+        promoted_metadata: Final = allowlisted_metadata(context.identity.metadata, metadata_keys)
         # Normalize ``response`` to a dict once so the content/id reads below are a
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response: Final = payload.get("response")
@@ -474,12 +490,13 @@ class LLMCallSpanData:
         # no prompt/response text.
         finish_reasons: Final = _finish_reasons(choices_out)
         call_type: Final = as_str(payload.get("call_type"))
-        operation: Final = resolve_operation(call_type)
+        resolved_operation: Final = operation or resolve_operation(call_type)
         embedding_output: Final = (
-            EmbeddingOutput.from_response(response) if operation is GenAIOperation.EMBEDDINGS else None
+            EmbeddingOutput.from_response(response) if resolved_operation is GenAIOperation.EMBEDDINGS else None
         )
+        cost_lookup_failed: Final = payload.get("response_cost_failure_debug_info") is not None and not cache_hit
         return cls(
-            operation=operation,
+            operation=resolved_operation,
             provider=resolve_provider(as_str(payload.get("custom_llm_provider"))),
             request_model=context.request_model,
             response_model=context.response_model,
@@ -488,17 +505,25 @@ class LLMCallSpanData:
             usage=LLMUsage.from_standard_logging_payload(payload),
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
-            response_cost=as_float(payload.get("response_cost")),
+            response_cost=None if cost_lookup_failed else as_float(payload.get("response_cost")),
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
-            server=ServerInfo.from_api_base(context.api_base),
+            server=None if cache_hit else ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
-            promoted_metadata=allowlisted_metadata(context.identity.metadata, metadata_keys),
+            request_metadata=exported_request_metadata(
+                {
+                    "user_api_key_team_id": context.identity.team_id,
+                    "user_api_key_team_alias": context.identity.team_alias,
+                    **promoted_metadata,
+                }
+            ),
+            promoted_metadata=promoted_metadata,
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
             messages_in=_dicts(payload.get("messages")) if capture_content else (),
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
+            completion_start_seconds=completion_start_seconds,
             output_type=resolve_output_type(call_type),
             call_type=call_type or None,
             request_route=request_route or context.identity.request_route,
@@ -507,6 +532,8 @@ class LLMCallSpanData:
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
             routing_attributes=routing_decision_attributes(decision),
+            cache_hit=cache_hit,
+            saved_cache_cost=as_float(payload.get("saved_cache_cost")) if cache_hit else None,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
         )
 
 
@@ -707,6 +734,15 @@ def _json_or_none(value: object) -> str | None:
         return None
 
 
+class _EnumValue(Protocol):
+    @property
+    def value(self) -> object: ...
+
+
+def _enum_value(item: _EnumValue) -> object:
+    return item.value
+
+
 def _guardrail_mode_str(value: object) -> str | None:
     """Normalize ``guardrail_mode`` to a stable string.
 
@@ -723,12 +759,12 @@ def _guardrail_mode_str(value: object) -> str | None:
         for item in value:
             if item is None:
                 continue
-            part = as_str(item.value) if isinstance(item, Enum) else as_str(item)
+            part = as_str(_enum_value(item)) if isinstance(item, Enum) else as_str(item)
             if part:
                 parts.append(part)
         return ",".join(parts) or None
     if isinstance(value, Enum):
-        return as_str(value.value)
+        return as_str(_enum_value(value))
     return as_str(value)
 
 
@@ -776,6 +812,7 @@ class _Choice(TypedDict):
 
 
 _RESPONSES_TOOL_CALL_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+_WEB_SEARCH_CALL: Final = TypeAdapter(ResponseFunctionWebSearch)
 
 
 def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
@@ -783,8 +820,12 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
     items: Final = _dicts(response.get("output"))
     messages: Final = tuple(item for item in items if item.get("type") == "message")
     parts: Final = tuple(part for item in messages for part in _dicts(item.get("content")))
-    tool_calls: Final = tuple(
+    client_tool_calls: Final = tuple(
         _responses_tool_call(item) for item in items if item.get("type") in _RESPONSES_TOOL_CALL_TYPES
+    )
+    tool_calls: Final = (
+        *(call for item in items if (call := _claude_web_search_tool_call(item)) is not None),
+        *client_tool_calls,
     )
     if not messages and not tool_calls:
         return ()
@@ -794,7 +835,10 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
         "refusal": _responses_parts_text(parts, "refusal", "refusal"),
         "tool_calls": tool_calls or None,
     }
-    choice: Final[_Choice] = {"message": message, "finish_reason": _responses_finish_reason(response, bool(tool_calls))}
+    choice: Final[_Choice] = {
+        "message": message,
+        "finish_reason": _responses_finish_reason(response, bool(client_tool_calls)),
+    }
     return (choice,)
 
 
@@ -946,6 +990,20 @@ def _responses_tool_call(item: Mapping[str, object]) -> _ToolCall:
         "function": function,
     }
     return tool_call
+
+
+def _claude_web_search_tool_call(item: Mapping[str, object]) -> _ToolCall | None:
+    if item.get("type") != "web_search_call":
+        return None
+    try:
+        search: Final = _WEB_SEARCH_CALL.validate_python(item)
+    except ValidationError:
+        return None
+    claude_call: Final = claude_hosted_web_tool_call(search)
+    if claude_call is None:
+        return None
+    tool_id, name, arguments = claude_call
+    return {"id": tool_id, "type": "function", "function": {"name": name, "arguments": arguments}}
 
 
 def _responses_finish_reason(response: Mapping[str, object], has_tool_calls: bool) -> str | None:

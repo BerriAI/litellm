@@ -5,11 +5,10 @@ use futures_util::future::{AbortHandle, Abortable};
 use litellm_host::call::HostedCompletion;
 use litellm_host::machine::{HostFailure, Machine, MachineStep};
 use litellm_host::protocol::Protocol;
-use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use tokio::sync::Mutex;
 
-use crate::missing_state;
+use crate::Error;
 use crate::runtime::{poll_async_value, run_async_value, run_sync_value};
 
 type NativeResult<M> = Result<
@@ -65,7 +64,7 @@ where
         py: Python<'_>,
         interruption: Option<HostFailure<<M::Protocol as Protocol>::Error>>,
     ) -> PyResult<NativePoll<NativeResult<M>>> {
-        let state = Arc::clone(self.state.as_ref().ok_or_else(missing_state)?);
+        let state = Arc::clone(self.state.as_ref().ok_or(Error::MissingState)?);
         let future = async move {
             let mut state = state.lock().await;
             let result = match interruption {
@@ -90,7 +89,7 @@ where
                 run_async_value(py, async move {
                     Abortable::new(future, registration)
                         .await
-                        .map_err(|_| PyRuntimeError::new_err("native execution closed"))?
+                        .map_err(|_| Error::NativeExecutionClosed)?
                 })?
                 .unbind(),
             ))
@@ -103,12 +102,12 @@ where
     pub(super) fn take_result(&self) -> PyResult<NativeResult<M>> {
         self.state
             .as_ref()
-            .ok_or_else(missing_state)?
+            .ok_or(Error::MissingState)?
             .try_lock()
-            .map_err(|_| missing_state())?
+            .map_err(|_| Error::MissingState)?
             .result
             .take()
-            .ok_or_else(missing_state)
+            .ok_or_else(|| Error::MissingState.into())
             .map(|result| {
                 result.map(|step| match step {
                     MachineStep::Suspended(op) => MachineStep::Suspended(op),

@@ -10,6 +10,7 @@ from integration._support.anthropic_sse import (
     delta_text,
     dropping_reply,
     event_types,
+    message_stream,
     parse_sse,
     stream_reply,
     user_prompt,
@@ -17,10 +18,12 @@ from integration._support.anthropic_sse import (
 from integration._support.client import eventually, object_value
 from integration._support.openai_wire import answering_model_discovery, chat_stream, posted_targets
 from integration._support.wire import Reply, Request, Wire, wire_server
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 _BACKEND: Final = "gpt-4o-mini"
 _PROVIDER_KEY: Final = "integration-provider-key"
@@ -47,7 +50,7 @@ class _CallbackProbe(CustomLogger):
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         with self._lock:
-            self._successes.append(kwargs.get("litellm_call_id"))
+            self._successes.append((kwargs.get("litellm_call_id"), kwargs.get("standard_logging_object")))
 
     def failures(self) -> tuple[object, ...]:
         with self._lock:
@@ -74,14 +77,15 @@ def _upstream(marker: str) -> Callable[[Request], Reply]:
     return answering_model_discovery(respond)
 
 
-async def _stream(wire: Wire, prompt: str) -> tuple[SseEvent, ...]:
+async def _stream(wire: Wire, prompt: str, model: str = f"hosted_vllm/{_BACKEND}") -> tuple[SseEvent, ...]:
     response: Final = await litellm.anthropic.messages.acreate(
-        model=f"hosted_vllm/{_BACKEND}",
-        api_base=wire.url + "/v1",
+        model=model,
+        api_base=wire.url if model.startswith("anthropic/") else wire.url + "/v1",
         api_key=_PROVIDER_KEY,
         max_tokens=16,
         stream=True,
         messages=[{"role": "user", "content": prompt}],
+        litellm_call_id=prompt,
     )
     assert isinstance(response, AsyncIterable), response
     frames: Final = [frame async for frame in response]
@@ -111,3 +115,44 @@ async def test_sdk_bridged_stream_failing_after_content_reports_the_provider_err
     assert len(failures) == 1, failures
     assert isinstance(failures[0], Exception), failures
     assert not isinstance(failures[0], MidStreamFallbackError), failures
+    assert len(probe.successes()) == 1, probe.successes()
+
+
+async def test_sdk_native_messages_stream_delivers_one_success_callback_with_usage() -> None:
+    probe: Final = _CallbackProbe()
+    litellm.callbacks.append(probe)
+    prompt: Final = uuid.uuid4().hex
+    model: Final = "claude-sonnet-5-5"
+
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", "/v1/messages")
+        assert request.headers["x-api-key"] == _PROVIDER_KEY
+        assert json.loads(request.body) == {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": True,
+            "max_tokens": 16,
+        }
+        return stream_reply(message_stream("msg_success", model, _TEXT))
+
+    with wire_server(respond) as wire:
+        events: Final = await _stream(wire, prompt, f"anthropic/{model}")
+        assert delta_text(events) == _TEXT
+        assert event_types(events) == (
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        )
+        await _settled(probe.successes)
+        await GLOBAL_LOGGING_WORKER.flush()
+        successes: Final = probe.successes()
+        assert len(successes) == 1, successes
+        success: Final = TypeAdapter(tuple[object, object]).validate_python(successes[0])
+        assert success[0] == prompt
+        logging: Final = TypeAdapter(dict[str, object]).validate_python(success[1])
+        assert (logging["prompt_tokens"], logging["completion_tokens"], logging["total_tokens"]) == (5, 3, 8)
+        assert probe.failures() == ()
+        assert posted_targets(wire) == ("/v1/messages",)

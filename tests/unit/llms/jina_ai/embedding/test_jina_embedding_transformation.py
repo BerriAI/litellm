@@ -141,6 +141,44 @@ class TestJinaAIEmbeddingTransform:
         assert result == expected_result
 
 
+@pytest.mark.respx(assert_all_called=True)
+def test_jina_ai_embedding_forwards_task_and_dimensions_and_parses_values(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.jina.ai/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "jina-embeddings-v3",
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+            },
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="jina_ai/jina-embeddings-v3",
+        input=["a"],
+        task="separation",
+        dimensions=1024,
+        api_key="jina-test-key",
+        api_base="https://api.jina.ai/v1",
+        num_retries=0,
+        max_retries=0,
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert request_body == {
+        "model": "jina-embeddings-v3",
+        "input": ["a"],
+        "task": "separation",
+        "dimensions": 1024,
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert response.usage.prompt_tokens == 3
+
+
 def _transform(raw_response: httpx.Response) -> EmbeddingResponse:
     return JinaAIEmbeddingConfig().transform_embedding_response(
         model="jina-embeddings-v3",
@@ -234,3 +272,20 @@ def test_jina_ai_img_embeddings_transforms_mixed_text_and_image_inputs(
         "input": expected_payload_input,
     }
     assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/jina/v1",
+        "https://gateway.example.com/jina/v1/",
+        "https://gateway.example.com/jina/v1/embeddings/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        JinaAIEmbeddingConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="jina-embeddings-v3", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/jina/v1/embeddings"
+    )

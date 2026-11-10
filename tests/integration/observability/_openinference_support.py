@@ -5,7 +5,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import chain
 from pathlib import Path
 from typing import Final
@@ -204,7 +204,6 @@ def _chat_caller_message(message: dict[str, JsonValue]) -> dict[str, JsonValue]:
     return {
         **{key: value for key, value in message.items() if key != "tool_calls"},
         **({"tool_calls": [_chat_caller_tool_call(call) for call in tool_calls]} if tool_calls else {}),
-        "provider_specific_fields": {"refusal": None},
     }
 
 
@@ -313,7 +312,7 @@ def _chat_caller_stream_usage_event(event: dict[str, JsonValue], model: str) -> 
         "object": event["object"],
         "created": 1,
         "model": model,
-        "choices": [{"index": 0, "delta": {}}],
+        "choices": [],
         "usage": {**_json_object_value(event["usage"]), "cost": 4.05e-6},
     }
 
@@ -387,13 +386,14 @@ def _responses_caller_body(body: dict[str, JsonValue], model: str) -> dict[str, 
     }
 
 
-def _responses_stream_caller_body(body: dict[str, JsonValue]) -> dict[str, JsonValue]:
+def _responses_stream_caller_body(body: dict[str, JsonValue], model: str) -> dict[str, JsonValue]:
     response_id: Final = body.get("id")
     assert isinstance(response_id, str), body
     usage: Final = _json_object_value(body["usage"]) if body.get("status") == "completed" else {}
     return {
         **body,
         "id": "<response-id>",
+        "model": model,
         **({"usage": {**usage, "cost": 4.05e-06}} if usage else {}),
     }
 
@@ -414,7 +414,7 @@ def _responses_caller_stream(reply: Reply, model: str) -> tuple[dict[str, JsonVa
             **event,
             "model": model,
             **(
-                {"response": _responses_stream_caller_body(_json_object_value(event["response"]))}
+                {"response": _responses_stream_caller_body(_json_object_value(event["response"]), model)}
                 if "response" in event
                 else {}
             ),
@@ -672,10 +672,12 @@ def _write_config(
     callback_settings: Mapping[str, JsonValue] | None = None,
     litellm_settings: Mapping[str, JsonValue] | None = None,
     general_settings: Mapping[str, JsonValue] | None = None,
+    extra_config: Mapping[str, JsonValue] | None = None,
 ) -> Path:
     loaded: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config: Final = {
         **loaded,
+        **(extra_config or {}),
         "litellm_settings": {
             **loaded["litellm_settings"],
             "callbacks": list(callbacks),
@@ -752,6 +754,7 @@ def _rig(
     callback_settings: Mapping[str, JsonValue] | None = None,
     litellm_settings: Mapping[str, JsonValue] | None = None,
     general_settings: Mapping[str, JsonValue] | None = None,
+    extra_config: Mapping[str, JsonValue] | None = None,
     environment: Mapping[str, str] | None = None,
     remove_environment: tuple[str, ...] = (),
     disabled_environment: tuple[str, ...] = (),
@@ -782,6 +785,7 @@ def _rig(
             callback_settings=resolved_settings,
             litellm_settings=litellm_settings,
             general_settings=general_settings,
+            extra_config=extra_config,
         )
         preset_environment: Final = {
             **({"PHOENIX_COLLECTOR_ENDPOINT": destination.url + "/v1/traces"} if "arize_phoenix" in callbacks else {}),
@@ -855,11 +859,7 @@ def _rig(
                 if fresh_client_connections
                 else owned.gateway.client
             )
-            proxy: Final = Gateway(
-                client=proxy_client,
-                key=owned.gateway.key,
-                upstream_url=owned.gateway.upstream_url,
-            )
+            proxy: Final = replace(owned.gateway, client=proxy_client)
             scenario: Final = resources.enter_context(proxy.scenario())
             model: Final = scenario.model(
                 model=model_name,

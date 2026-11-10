@@ -106,6 +106,27 @@ describe("EditMembership submit payload", () => {
     });
   });
 
+  it("shows Never resets and submits a null duration for a member without a reset period", async () => {
+    renderEdit(teamMemberConfig, { user_id: "u1", user_email: "a@b.com", role: "user" });
+
+    expect(screen.getByRole("combobox", { name: "Budget Reset Period" })).toHaveTextContent("Never resets");
+
+    save();
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    const expectedPayload = {
+      user_email: "a@b.com",
+      user_id: "u1",
+      role: "user",
+      max_budget_in_team: null,
+      budget_duration: null,
+      tpm_limit: null,
+      rpm_limit: null,
+      allowed_models: [],
+    };
+    expect(submitted()).toStrictEqual(expectedPayload);
+  });
+
   it("seeds the per-model budget editor from the member's stored budget and submits the edited cap", async () => {
     const modelBudgetConfig = {
       ...teamMemberConfig,

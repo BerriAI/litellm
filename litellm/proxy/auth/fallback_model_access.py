@@ -4,8 +4,8 @@ Authorize router fallback targets against the caller's key, team and project mod
 `_enforce_key_and_fallback_model_access` only sees fallbacks the client sends in the request body.
 Fallbacks configured on the router (`router_settings.fallbacks` and friends) are chosen after auth,
 inside the router, so this predicate is injected into the router to re-run the same model access
-checks for each fallback target before it is attempted. Opt-in via
-`general_settings.enforce_fallback_model_access: true`. Fallbacks of a search request always run the
+checks for each fallback target before it is attempted. Enabled by default. Opt out via
+`general_settings.enforce_fallback_model_access: false`. Fallbacks of a search request always run the
 key, team and user search tool grants instead, the same check /search runs on the requested tool.
 """
 
@@ -18,7 +18,7 @@ from pydantic import ValidationError
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model, can_token_call_search_tool
-from litellm.router import Router
+from litellm.router_api import RegistryReader, RoutingContext
 from litellm.search import asearch
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -28,10 +28,10 @@ class _RequestMetadata(LiteLLMBaseModel):
 
 
 class _FallbackAccessSettings(LiteLLMBaseModel):
-    enforce_fallback_model_access: bool = False
+    enforce_fallback_model_access: bool = True
 
 
-async def is_model_authorized_for_token(*, model: str, valid_token: UserAPIKeyAuth, llm_router: Router) -> bool:
+async def is_model_authorized_for_token(*, model: str, valid_token: UserAPIKeyAuth, llm_router: RegistryReader) -> bool:
     try:
         await can_key_call_resolved_model(
             model=model,
@@ -98,7 +98,7 @@ class RouterFallbackAccessCheck:
 
     is_enforced: Callable[[], bool]
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: Router) -> bool:
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: RoutingContext) -> bool:
         valid_token: Final = _user_api_key_auth_from_request(request_kwargs)
         if valid_token is None:
             return True
@@ -106,7 +106,7 @@ class RouterFallbackAccessCheck:
             return await is_search_tool_authorized_for_token(search_tool_name=model, valid_token=valid_token)
         if not self.is_enforced():
             return True
-        return await is_model_authorized_for_token(model=model, valid_token=valid_token, llm_router=llm_router)
+        return await is_model_authorized_for_token(model=model, valid_token=valid_token, llm_router=ctx)
 
 
 router_fallback_access_check: Final = RouterFallbackAccessCheck(is_enforced=_enforced_by_general_settings)

@@ -44,7 +44,7 @@ export const readForm = (raw: string): FormPayload | undefined => {
   return formPayloadInInputOrder.safeParse(json.value).data;
 };
 
-export const freeName = (taken: readonly string[], prefix: string): string =>
+export const freeName = (taken: readonly string[], prefix: "option" | "question"): string =>
   Array.from({ length: taken.length + 1 }, (_, index) => `${prefix}_${index + 1}`).find(
     (name) => !taken.includes(name),
   ) ?? `${prefix}_${taken.length + 1}`;
@@ -64,7 +64,7 @@ export const removeAt = <T>(items: readonly T[], index: number): T[] =>
 export const blankQuestion = (): ChoiceQuestion => ({
   type: "choice",
   instructions: "",
-  criteria: { option_1: "", option_2: "" },
+  criteria: {},
 });
 
 export const retype = (question: FormQuestion, type: QuestionType): FormQuestion => {

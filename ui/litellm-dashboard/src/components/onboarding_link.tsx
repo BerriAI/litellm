@@ -1,9 +1,11 @@
 import React, { useId, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Copy } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
 import { copyToClipboard } from "@/utils/dataUtils";
+import { getUiPageUrl } from "@/components/networking";
 
 export interface InvitationLink {
   id: string;
@@ -59,15 +61,18 @@ export default function OnboardingModal({
   invitationLinkData,
   modalType = "invitation",
 }: OnboardingProps) {
+  const { t } = useTranslation();
   const linkFieldId = useId();
   const copyButtonRef = useRef<HTMLButtonElement>(null);
   const isInvitation = modalType === "invitation";
-  const invitationUrl = buildOnboardingUrl({
-    baseUrl,
-    invitationId: invitationLinkData?.id,
-    hasUserSetupSso: invitationLinkData?.has_user_setup_sso ?? false,
-    resetPassword: !isInvitation,
-  });
+  const invitationUrl = getUiPageUrl(
+    buildOnboardingUrl({
+      baseUrl,
+      invitationId: invitationLinkData?.id,
+      hasUserSetupSso: invitationLinkData?.has_user_setup_sso ?? false,
+      resetPassword: !isInvitation,
+    }),
+  );
 
   return (
     <Dialog
@@ -76,32 +81,32 @@ export default function OnboardingModal({
     >
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl" initialFocus={copyButtonRef}>
         <DialogHeader>
-          <DialogTitle>{isInvitation ? "Invitation Link" : "Reset Password Link"}</DialogTitle>
+          <DialogTitle>
+            {isInvitation ? t("onboardingLink.invitationTitle") : t("onboardingLink.resetTitle")}
+          </DialogTitle>
           <DialogDescription>
-            {isInvitation
-              ? "Copy and send the generated link to onboard this user to the proxy."
-              : "Copy and send the generated link to the user to reset their password."}
+            {isInvitation ? t("onboardingLink.invitationDescription") : t("onboardingLink.resetDescription")}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <p className="text-xs text-muted-foreground">User ID</p>
+            <p className="text-xs text-muted-foreground">{t("onboardingLink.userId")}</p>
             <p className="font-mono text-sm break-all">{invitationLinkData?.user_id}</p>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label htmlFor={linkFieldId} className="text-xs font-normal text-muted-foreground">
-              {isInvitation ? "Invitation link" : "Reset password link"}
+              {isInvitation ? t("onboardingLink.invitationLinkLabel") : t("onboardingLink.resetLinkLabel")}
             </Label>
             <InputGroup>
               <InputGroupInput id={linkFieldId} readOnly value={invitationUrl} className="font-mono text-xs" />
               <InputGroupAddon align="inline-end">
                 <InputGroupButton
                   ref={copyButtonRef}
-                  aria-label={isInvitation ? "Copy invitation link" : "Copy password reset link"}
+                  aria-label={isInvitation ? t("onboardingLink.copyInvitationAria") : t("onboardingLink.copyResetAria")}
                   onClick={() => copyToClipboard(invitationUrl)}
                 >
                   <Copy />
-                  Copy
+                  {t("onboardingLink.copy")}
                 </InputGroupButton>
               </InputGroupAddon>
             </InputGroup>

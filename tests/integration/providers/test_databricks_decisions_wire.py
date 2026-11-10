@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 import uuid
@@ -10,9 +11,12 @@ import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.timing import assert_within_factor_of_control
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue
+
+pytestmark: Final = pytest.mark.shares_worker_state
 
 _MODEL: Final = "ai_decide"
 _ROUTE: Final = "/api/2.0/ai-functions/ai-decide"
@@ -45,7 +49,7 @@ _AI_DECIDE_BODY: Final[dict[str, JsonValue]] = {"response": {"answers": _ANSWERS
 _SYSTEM_ONE_BODY: Final[dict[str, JsonValue]] = {
     "model": None,
     "answers": _ANSWERS,
-    "usage": {"input_tokens": 0, "output_tokens": 0},
+    "usage": None,
     "metadata": _METADATA,
 }
 _MODEL_RULE: Final = (
@@ -64,7 +68,12 @@ _NON_BARE_NAMES: Final[tuple[tuple[str, str], ...]] = (
 )
 _DATABRICKS_ERRORS: Final[tuple[tuple[str, str, int, dict[str, JsonValue]], ...]] = (
     (_MODEL, _ROUTE, 400, {"error_code": "BAD_REQUEST", "message": "Invalid input: questions must not be empty"}),
-    (_MODEL, _ROUTE, 403, {"error_code": "PERMISSION_DENIED", "message": "ai_decide is not enabled for this workspace"}),
+    (
+        _MODEL,
+        _ROUTE,
+        403,
+        {"error_code": "PERMISSION_DENIED", "message": "ai_decide is not enabled for this workspace"},
+    ),
     (
         _ENDPOINT,
         f"/{_ENDPOINT}/invocations",
@@ -86,6 +95,15 @@ def _number(value: JsonValue) -> float:
     return float(value)
 
 
+def _endpoint_spend() -> float:
+    prices: Final = object_value(
+        json.loads(Path("model_prices_and_context_window.json").read_text())[f"databricks/{_ENDPOINT}"]
+    )
+    return _number(_USAGE["input_tokens"]) * _number(prices["input_cost_per_token"]) + _number(
+        _USAGE["output_tokens"]
+    ) * _number(prices["output_cost_per_token"])
+
+
 def _register(scenario: Scenario, body: dict[str, JsonValue], *, status: int = 200) -> ScenarioHandle:
     handle: Final = register_scenario(
         f"databricks-{uuid.uuid4().hex[:12]}", JsonResponse(content_type="application/json", body=body, status=status)
@@ -103,6 +121,11 @@ def _observed(gateway: Gateway) -> tuple[dict[str, JsonValue], ...]:
         return tuple(map(object_value, upstream.get("/__observations").json()["requests"]))
 
 
+def _reset_observations(gateway: Gateway) -> None:
+    with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+        upstream.delete("/__observations").raise_for_status()
+
+
 def _calls_to(requests: Sequence[dict[str, JsonValue]], handle: ScenarioHandle) -> list[dict[str, JsonValue]]:
     return [request for request in requests if string_value(request["path"]).startswith(f"/{handle.scenario_id}/")]
 
@@ -111,10 +134,28 @@ def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, 
     return _calls_to(_observed(gateway), handle)
 
 
-def _timed_decide(gateway: Gateway, model: str) -> tuple[httpx.Response, float]:
-    started: Final = time.perf_counter()
-    response: Final = _decide(gateway, model)
-    return response, time.perf_counter() - started
+def _timed_decide_under_liveliness_probes(
+    gateway: Gateway, model: str
+) -> tuple[httpx.Response, float, tuple[tuple[int, float], ...]]:
+    liveliness: Final[list[tuple[int, float]]] = []
+    stop: Final = threading.Event()
+
+    def poll() -> None:
+        while not stop.is_set():
+            started: Final = time.perf_counter()
+            probe: Final = gateway.client.get("/health/liveliness")
+            liveliness.append((probe.status_code, time.perf_counter() - started))
+
+    poller: Final = threading.Thread(target=poll)
+    poller.start()
+    try:
+        started: Final = time.perf_counter()
+        response: Final = _decide(gateway, model)
+        elapsed: Final = time.perf_counter() - started
+    finally:
+        stop.set()
+        poller.join()
+    return response, elapsed, tuple(liveliness)
 
 
 def _spend_row(call_id: str) -> dict[str, JsonValue]:
@@ -274,9 +315,14 @@ def test_an_openai_format_request_at_v1_decisions_reaches_the_serving_endpoint_a
             row["model_group"],
             row["api_base"],
             _number(row["spend"]),
-        ) == ("success", "adecisions", "databricks", deployment, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
-            row
-        )
+        ) == (
+            "success",
+            "adecisions",
+            "databricks",
+            deployment,
+            f"{handle.api_base()}/{_ENDPOINT}/invocations",
+            pytest.approx(_endpoint_spend(), rel=1e-9),
+        ), row
 
 
 def test_an_openai_format_request_at_v1_decisions_reaches_the_ai_decide_route_without_a_model_field(
@@ -355,6 +401,7 @@ def test_a_noul_probability_reaches_the_caller_as_the_system_one_noul_answer(gat
 
 
 def test_a_wildcard_deployment_sends_each_request_to_the_named_endpoint_and_bills_each_once(gateway: Gateway) -> None:
+    expected_spend: Final = _endpoint_spend()
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _ANSWER_BODY)
         prefix: Final = _wildcard_deployment(scenario, api_base=handle.api_base(), api_key=_API_KEY)
@@ -382,9 +429,14 @@ def test_a_wildcard_deployment_sends_each_request_to_the_named_endpoint_and_bill
                 row["model_group"],
                 row["api_base"],
                 _number(row["spend"]),
-            ) == ("success", "asystemone", "databricks", model, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
-                row
-            )
+            ) == (
+                "success",
+                "asystemone",
+                "databricks",
+                model,
+                f"{handle.api_base()}/{_ENDPOINT}/invocations",
+                pytest.approx(expected_spend, rel=1e-9),
+            ), row
 
 
 def test_a_wildcard_deployment_sends_each_ai_decide_request_to_the_route_and_logs_each_once(gateway: Gateway) -> None:
@@ -524,6 +576,7 @@ def test_the_environment_key_and_base_serve_a_deployment_a_classifier_and_a_team
                 _spend_row(decided[1].headers["x-litellm-call-id"])["api_base"]
                 == f"{handle.api_base()}/environment-workspace{_ROUTE}"
             )
+            _reset_observations(candidate)
 
             router: Final = _router(scenario, _environment_classifier())
             routed: Final = _chat(candidate, router)
@@ -535,6 +588,7 @@ def test_the_environment_key_and_base_serve_a_deployment_a_classifier_and_a_team
                 authorization=f"Bearer {_ENV_KEY}",
                 prompt_marker="design a distributed cache",
             )
+            _reset_observations(candidate)
 
             team: Final = scenario.team(team_member_permissions=["/auto_router/manage"])
             member: Final = scenario.member(team)
@@ -602,6 +656,7 @@ def test_the_environment_token_serves_a_deployment_and_a_classifier_when_no_envi
             (decision_call,) = _upstream_calls(candidate, handle)
             assert (decision_call["path"], decision_call["authorization"]) == (environment_path, f"Bearer {_ENV_TOKEN}")
             assert _spend_row(decided.headers["x-litellm-call-id"])["status"] == "success"
+            _reset_observations(candidate)
             router: Final = _router(scenario, _environment_classifier())
             routed: Final = _chat(candidate, router)
             _assert_classified_by_the_complex_tier(routed, router)
@@ -623,23 +678,12 @@ def test_a_megabyte_model_name_is_refused_in_linear_time_while_liveliness_stays_
             "/v1/systemone", json={"model": model, "state": _STATE, "questions": _QUESTIONS}
         )
         assert anonymous.status_code == 401, anonymous.text[:300]
-        tenth_response, tenth_elapsed = _timed_decide(gateway, f"{prefix}/{_TENTH_MEGABYTE_NAME}")
-        liveliness: Final[list[tuple[int, float]]] = []
-        stop: Final = threading.Event()
-
-        def poll() -> None:
-            while not stop.is_set():
-                started: Final = time.perf_counter()
-                probe: Final = gateway.client.get("/health/liveliness")
-                liveliness.append((probe.status_code, time.perf_counter() - started))
-
-        poller: Final = threading.Thread(target=poll)
-        poller.start()
-        response, elapsed = _timed_decide(gateway, model)
-        stop.set()
-        poller.join()
+        tenth_response, tenth_elapsed, _ = _timed_decide_under_liveliness_probes(
+            gateway, f"{prefix}/{_TENTH_MEGABYTE_NAME}"
+        )
+        response, elapsed, liveliness = _timed_decide_under_liveliness_probes(gateway, model)
         assert tenth_response.status_code == 400, tenth_response.text[:300]
-        assert elapsed < 25 * tenth_elapsed, (elapsed, tenth_elapsed)
+        assert_within_factor_of_control(elapsed, control=tenth_elapsed, factor=25)
         assert liveliness and all(status == 200 for status, _ in liveliness), liveliness
         assert max(seconds for _, seconds in liveliness) < max(1.0, elapsed / 2), (elapsed, liveliness)
         assert response.status_code == 400, response.text[:300]

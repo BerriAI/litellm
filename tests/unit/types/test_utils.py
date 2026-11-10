@@ -1,6 +1,18 @@
 import pytest
 
-from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VALUES, CaptureMessageContent, captures_span_content
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import validate_excluded_services_value
+from litellm.types.utils import (
+    CAPTURE_MESSAGE_CONTENT_VALUES,
+    CallTypes,
+    CaptureMessageContent,
+    captures_span_content,
+)
+
+
+@pytest.mark.parametrize("value", ["", "  ", "auth", "none,redis", "redis,", ",postgres"])
+def test_invalid_excluded_services_values_are_rejected(value: str) -> None:
+    with pytest.raises(ValueError, match=r"Invalid excluded_services.*none"):
+        validate_excluded_services_value(value)
 
 
 @pytest.mark.parametrize(
@@ -38,3 +50,8 @@ def test_capture_message_content_constructor_accepts_any_string() -> None:
 )
 def test_captures_span_content(mode: str | None, captures: bool) -> None:
     assert captures_span_content(mode) is captures
+
+
+@pytest.mark.parametrize("call_type", ["compact_responses", "acompact_responses"])
+def test_responses_compact_call_types_round_trip_their_public_names(call_type: str) -> None:
+    assert CallTypes(call_type).value == call_type

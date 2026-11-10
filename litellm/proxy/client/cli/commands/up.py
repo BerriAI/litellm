@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.cli_token_utils import is_cli_token_fresh
 from litellm.litellm_core_utils.private_json import ensure_private_dir
 
 from .agents import AgentRunError, resolve_api_key, verify_proxy_key
-from .auth import CliContextObj, context_secret_vault, get_stored_api_key, load_token, login
+from .auth import CliContextObj, cli_context_obj, context_secret_vault, get_stored_api_key, load_token, login
 from .claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
@@ -30,6 +30,7 @@ from .claude_settings import (
     merge_claude_settings,
     write_claude_settings,
 )
+from .config import pkce_default
 
 
 class UpError(ClaudeSettingsError):
@@ -125,13 +126,13 @@ def _stored_login_is_pkce(vault: SecretVault) -> bool:
 
 
 def ensure_fresh_login(ctx: click.Context) -> None:
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"].rstrip("/")
     vault: Final = context_secret_vault(ctx)
     if _usable_login(_key_resolved_on_the_way_in(ctx_obj, base_url, vault), vault):
         return
 
-    pkce: Final = _stored_login_is_pkce(vault)
+    pkce: Final = _stored_login_is_pkce(vault) or pkce_default()
     login_command: Final = "lite login --pkce" if pkce else "lite login"
     if not sys.stdin.isatty():
         raise UpError(f"No fresh LiteLLM login found for this proxy. Run `{login_command}` first.")
@@ -166,7 +167,7 @@ def up(ctx: click.Context) -> None:
     is already running (this does not start one for you). Cursor is not
     supported: it has no equivalent file-based config to patch.
     """
-    ctx_obj: Final[CliContextObj] = ctx.obj
+    ctx_obj: Final = cli_context_obj(ctx)
     base_url: Final = ctx_obj["base_url"]
 
     try:

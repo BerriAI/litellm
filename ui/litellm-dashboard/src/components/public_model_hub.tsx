@@ -3,8 +3,10 @@ import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { SortingState } from "@tanstack/react-table";
 import { Copy, Inbox, Info } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   Combobox,
   ComboboxChip,
@@ -30,6 +32,7 @@ import Navbar from "./navbar";
 import {
   agentHubPublicModelsCall,
   skillHubPublicCall,
+  getGlobalLitellmHeaderName,
   getProxyBaseUrl,
   getPublicModelHubInfo,
   getUiConfig,
@@ -49,12 +52,37 @@ import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "@/components/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import { displayMode, isDecisionMode } from "@/lib/decisionModels";
+import { modelUsageExample } from "@/components/AIHub/modelUsageExample";
 import { filterBySearchTerm, rankBySearchRelevance } from "@/utils/searchUtils";
+import { ModelCustomMetadata } from "@/components/AIHub/ModelCustomMetadata";
+import { DeploymentPricingBreakdown } from "@/components/molecules/models/DeploymentPricingBreakdown";
+import ModelHubProviders, { formatModelModeLabel } from "@/components/AIHub/ModelHubProviders";
 
 interface PublicModelHubProps {
   accessToken?: string | null;
   isEmbedded?: boolean; // When true, hides navbar and adjusts layout for embedding in dashboard
+  variant?: "dashboard" | "chat";
 }
+
+const usageExample = (model: ModelGroupInfo): string =>
+  isDecisionMode(model.mode)
+    ? modelUsageExample(model.mode, getProxyBaseUrl(), model.model_group, getGlobalLitellmHeaderName())
+    : generateCodeSnippet({
+        apiKeySource: "custom",
+        accessToken: null,
+        apiKey: "your_api_key",
+        inputMessage: "Hello, how are you?",
+        chatHistory: [{ role: "user", content: "Hello, how are you?", isImage: false } as MessageType],
+        selectedTags: [],
+        selectedVectorStores: [],
+        selectedGuardrails: [],
+        selectedPolicies: [],
+        selectedMCPServers: [],
+        endpointType: getEndpointType(model.mode || "chat"),
+        selectedModel: model.model_group,
+        selectedSdk: "openai",
+      });
 
 function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
   return (
@@ -68,7 +96,12 @@ function PublicHubEmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false }) => {
+const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded = false, variant = "dashboard" }) => {
+  const { t } = useTranslation();
+  const isChat = variant === "chat";
+  const portalClassName = isChat ? "chat-theme" : undefined;
+  const dashboardRootClassName = isEmbedded ? "w-full" : "min-h-screen bg-card";
+  const dashboardContentClassName = isEmbedded ? "w-full p-6" : "w-full px-8 py-12";
   const anchor = useComboboxAnchor();
   const [proxyConfigured, setProxyConfigured] = useState<boolean>(false);
   const [agentHubData, setAgentHubData] = useState<AgentCard[] | null>(null);
@@ -103,6 +136,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         // Continue anyway - might work with default proxyBaseUrl
       }
       setProxyConfigured(true);
+      if (isChat) return;
 
       const fetchAgentData = async () => {
         try {
@@ -156,7 +190,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
     };
 
     initializeAndFetch();
-  }, []);
+  }, [isChat]);
 
   const getUniqueAgentSkills = (data: AgentCard[]) => {
     const skills = new Set<string>();
@@ -244,7 +278,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    toast.success("Copied to clipboard!");
+    toast.success(t("aiHub.publicModelHub.copiedToClipboard"));
   };
 
   const formatCapabilityName = (key: string) => {
@@ -267,19 +301,32 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
   const models = usePublicModelHubList(proxyConfigured);
   const modelFacets = usePublicModelHubFacets(proxyConfigured);
-  const modeOptions = useMemo(() => modelFacets.modes.map((mode) => ({ label: mode, value: mode })), [modelFacets]);
+  const modeOptions = useMemo(
+    () =>
+      [...new Set(modelFacets.modes.flatMap((mode) => displayMode(mode) ?? []))].map((mode) => ({
+        label: isChat ? formatModelModeLabel(mode) : mode,
+        value: mode,
+      })),
+    [modelFacets, isChat],
+  );
   const featureOptions = useMemo(
     () => modelFacets.features.map((feature) => ({ label: featureLabel(feature), value: feature })),
     [modelFacets],
   );
-  const serviceStatus = models.error ? "Service unavailable" : "I'm alive! ✓";
+  const serviceStatus = models.error
+    ? t("aiHub.publicModelHub.serviceUnavailable")
+    : t("aiHub.publicModelHub.serviceAlive");
   const [agentSorting, setAgentSorting] = useState<SortingState>([{ id: "name", desc: false }]);
   const [mcpSorting, setMcpSorting] = useState<SortingState>([{ id: "server_name", desc: false }]);
 
-  const modelColumns = useMemo(() => getPublicModelHubColumns({ onModelClick: showModal }), [showModal]);
+  const modelColumns = useMemo(
+    () => getPublicModelHubColumns({ onModelClick: showModal, showProviderLogos: isChat }),
+    [showModal, isChat],
+  );
   const agentColumns = useMemo(() => getPublicAgentHubColumns({ onAgentClick: showAgentModal }), [showAgentModal]);
   const mcpColumns = useMemo(() => getPublicMCPHubColumns({ onServerClick: showMcpModal }), [showMcpModal]);
 
+  const showUsefulLinks = !isChat && Object.keys(usefulLinks).length > 0;
   const hasAgents = Array.isArray(agentHubData) && agentHubData.length > 0;
   const hasMcpServers = Array.isArray(mcpHubData) && mcpHubData.length > 0;
 
@@ -301,43 +348,40 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   return (
     <ThemeProvider accessToken={accessToken}>
       <TooltipProvider>
-        <div className={isEmbedded ? "w-full" : "min-h-screen bg-card"}>
+        <div className={isChat ? "chat-model-hub-catalog w-full" : dashboardRootClassName}>
           {/* Navigation - only show when not embedded */}
-          {!isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
+          {!isChat && !isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
 
-          <div className={isEmbedded ? "w-full p-6" : "w-full px-8 py-12"}>
+          <div className={isChat ? "chat-model-hub-content w-full" : dashboardContentClassName}>
             {/* Embedded Explainer - only shown when embedded in dashboard */}
-            {isEmbedded && (
+            {!isChat && isEmbedded && (
               <div className="mb-6 p-4 bg-info/10 border border-info/20 rounded-lg">
-                <p className="text-sm text-foreground">
-                  These are models, agents, and MCP servers your proxy admin has indicated are available in your
-                  company.
-                </p>
+                <p className="text-sm text-foreground">{t("aiHub.publicModelHub.embeddedExplainer")}</p>
               </div>
             )}
 
             {/* About Section - only shown when not embedded */}
-            {!isEmbedded && (
+            {!isChat && !isEmbedded && (
               <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
-                <h2 className="text-2xl font-semibold mb-6 text-foreground">About</h2>
+                <h2 className="text-2xl font-semibold mb-6 text-foreground">{t("aiHub.publicModelHub.about.title")}</h2>
                 <p className="text-foreground mb-6 text-base leading-relaxed">
-                  {customDocsDescription
-                    ? customDocsDescription
-                    : "Proxy Server to call 100+ LLMs in the OpenAI format."}
+                  {customDocsDescription ? customDocsDescription : t("aiHub.publicModelHub.about.defaultDescription")}
                 </p>
                 <div className="flex items-center space-x-3 text-sm text-muted-foreground">
                   <span className="flex items-center">
                     <span className="w-4 h-4 mr-2">🔧</span>
-                    Built with litellm: v{litellmVersion}
+                    {t("aiHub.publicModelHub.about.builtWith", { version: litellmVersion })}
                   </span>
                 </div>
               </Card>
             )}
 
             {/* Useful Links - only shown when not embedded */}
-            {usefulLinks && Object.keys(usefulLinks).length > 0 && (
+            {showUsefulLinks && (
               <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
-                <h2 className="text-2xl font-semibold mb-6 text-foreground">Useful Links</h2>
+                <h2 className="text-2xl font-semibold mb-6 text-foreground">
+                  {t("aiHub.publicModelHub.usefulLinks.title")}
+                </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {Object.entries(usefulLinks || {})
                     .map(([title, value]) => {
@@ -362,178 +406,268 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             )}
 
             {/* Health and Endpoint Status - only shown when not embedded */}
-            {!isEmbedded && (
+            {!isChat && !isEmbedded && (
               <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
-                <h2 className="text-2xl font-semibold mb-6 text-foreground">Health and Endpoint Status</h2>
+                <h2 className="text-2xl font-semibold mb-6 text-foreground">
+                  {t("aiHub.publicModelHub.health.title")}
+                </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <p className="text-success font-medium text-sm">Service status: {serviceStatus}</p>
+                  <p className="text-success font-medium text-sm">
+                    {t("aiHub.publicModelHub.health.serviceStatus", { status: serviceStatus })}
+                  </p>
                 </div>
               </Card>
             )}
 
             {/* Tabs for Models and Agents */}
-            <Card className="p-8 bg-card border border-border rounded-lg shadow-xs">
-              <Tabs value={activeTab} onValueChange={setActiveTab} className="public-hub-tabs">
-                <TabsList>
-                  <TabsTrigger value="models">Model Hub</TabsTrigger>
-                  {hasAgents && <TabsTrigger value="agents">Agent Hub</TabsTrigger>}
-                  {hasMcpServers && <TabsTrigger value="mcp">MCP Hub</TabsTrigger>}
-                  <TabsTrigger value="skills">Skill Hub</TabsTrigger>
-                </TabsList>
+            <Card
+              className={
+                isChat
+                  ? "chat-model-hub-card border-0 bg-transparent p-0 shadow-none"
+                  : "p-8 bg-card border border-border rounded-lg shadow-xs"
+              }
+            >
+              <Tabs value={isChat ? "models" : activeTab} onValueChange={setActiveTab} className="public-hub-tabs">
+                {!isChat && (
+                  <TabsList>
+                    <TabsTrigger value="models">{t("aiHub.publicModelHub.tabs.models")}</TabsTrigger>
+                    {hasAgents && <TabsTrigger value="agents">{t("aiHub.publicModelHub.tabs.agents")}</TabsTrigger>}
+                    {hasMcpServers && <TabsTrigger value="mcp">{t("aiHub.publicModelHub.tabs.mcp")}</TabsTrigger>}
+                    <TabsTrigger value="skills">{t("aiHub.publicModelHub.tabs.skills")}</TabsTrigger>
+                  </TabsList>
+                )}
 
                 {/* Models Tab */}
-                <TabsContent value="models">
-                  <div className="flex justify-between items-center mb-8">
-                    <h2 className="text-2xl font-semibold text-foreground">Available Models</h2>
-                  </div>
+                <TabsContent value="models" className="model-hub-models">
+                  {!isChat && (
+                    <div className="model-hub-heading flex justify-between items-center mb-8">
+                      <h2 className="text-2xl font-semibold text-foreground">
+                        {t("aiHub.publicModelHub.models.title")}
+                      </h2>
+                    </div>
+                  )}
+
+                  {isChat && (
+                    <div className="chat-model-section-heading">
+                      <h2>{t("aiHub.publicModelHub.models.chatTitle")}</h2>
+                      <span
+                        className="chat-model-section-count"
+                        aria-label={t("aiHub.publicModelHub.models.chatCount", { rowCount: models.rowCount })}
+                      >
+                        {models.rowCount.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
 
                   {/* Filters */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
-                    <div>
-                      <div className="flex items-center space-x-2 mb-3">
-                        <p className="text-sm font-medium text-foreground">Search Models:</p>
-                        <Tooltip>
-                          <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                          <TooltipContent side="top">
-                            Finds every published model whose name contains what you type, across all pages. Try
-                            &apos;grok&apos;, &apos;claude&apos;, &apos;gpt-4&apos;, or &apos;sonnet&apos;
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
+                  <div
+                    className={
+                      isChat
+                        ? "chat-model-hub-filters chat-model-filter-bar"
+                        : "chat-model-hub-filters grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border"
+                    }
+                  >
+                    <div className={isChat ? "chat-model-filter-search" : undefined}>
+                      {!isChat && (
+                        <div className="flex items-center space-x-2 mb-3">
+                          <p className="text-sm font-medium text-foreground">
+                            {t("aiHub.publicModelHub.models.searchLabel")}
+                          </p>
+                          <Tooltip>
+                            <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
+                            <TooltipContent side="top" className={portalClassName}>
+                              {t("aiHub.publicModelHub.models.searchTooltip")}
+                            </TooltipContent>
+                          </Tooltip>
+                        </div>
+                      )}
                       <div className="relative">
                         <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
-                        <input
-                          type="text"
-                          placeholder="Search model names..."
-                          aria-label="Search model names"
-                          value={models.searchValue}
-                          onChange={(e) => models.onSearchChange(e.target.value)}
-                          className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
-                        />
+                        {isChat ? (
+                          <Input
+                            type="text"
+                            placeholder={t("aiHub.publicModelHub.models.chatSearchPlaceholder")}
+                            aria-label={t("aiHub.publicModelHub.models.chatSearchAriaLabel")}
+                            value={models.searchValue}
+                            onChange={(e) => models.onSearchChange(e.target.value)}
+                            className="pl-9"
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            placeholder={t("aiHub.publicModelHub.models.searchPlaceholder")}
+                            aria-label={t("aiHub.publicModelHub.models.searchAriaLabel")}
+                            value={models.searchValue}
+                            onChange={(e) => models.onSearchChange(e.target.value)}
+                            className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
+                          />
+                        )}
                       </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium mb-3 text-foreground">Provider:</p>
-                      <Combobox
-                        multiple
-                        items={modelFacets.providers}
-                        value={models.providerValues}
-                        onValueChange={models.onProvidersChange}
-                      >
-                        <ComboboxChips render={<div ref={anchor} />} className="min-h-8 w-full py-1 text-sm">
-                          <ComboboxValue>
-                            {(values: string[]) =>
-                              values.map((provider) => (
-                                <ComboboxChip key={provider} aria-label={provider}>
-                                  {provider}
-                                </ComboboxChip>
-                              ))
-                            }
-                          </ComboboxValue>
-                          <ComboboxChipsInput
-                            placeholder="Select providers"
-                            aria-label="Select providers"
-                            className="min-w-24"
-                          />
-                        </ComboboxChips>
-                        <ComboboxContent anchor={anchor}>
-                          <ComboboxEmpty>No providers found</ComboboxEmpty>
-                          <ComboboxList>
-                            {(provider: string) => {
-                              const { logo } = getProviderLogoAndName(provider);
-                              return (
-                                <ComboboxItem key={provider} value={provider}>
-                                  <span className="flex min-w-0 items-center space-x-2">
-                                    {logo && (
-                                      <img
-                                        src={logo}
-                                        alt={provider}
-                                        className="w-5 h-5 shrink-0 object-contain"
-                                        onError={(e) => {
-                                          (e.target as HTMLImageElement).style.display = "none";
-                                        }}
-                                      />
-                                    )}
-                                    <span className="capitalize break-words">{provider}</span>
-                                  </span>
-                                </ComboboxItem>
-                              );
-                            }}
-                          </ComboboxList>
-                        </ComboboxContent>
-                      </Combobox>
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium mb-3 text-foreground">Mode:</p>
+                    {isChat && (
+                      <ModelHubProviders
+                        providers={modelFacets.providers}
+                        selectedProviders={models.providerValues}
+                        onSelect={(provider) => models.onProvidersChange(provider ? [provider] : [])}
+                        loading={models.isLoading && modelFacets.providers.length === 0}
+                      />
+                    )}
+                    {!isChat && (
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium mb-3 text-foreground">
+                          {t("aiHub.publicModelHub.models.providerLabel")}
+                        </p>
+                        <Combobox
+                          multiple
+                          items={modelFacets.providers}
+                          value={models.providerValues}
+                          onValueChange={models.onProvidersChange}
+                        >
+                          <ComboboxChips render={<div ref={anchor} />} className="min-h-8 w-full py-1 text-sm">
+                            <ComboboxValue>
+                              {(values: string[]) =>
+                                values.map((provider) => (
+                                  <ComboboxChip key={provider} aria-label={provider}>
+                                    {provider}
+                                  </ComboboxChip>
+                                ))
+                              }
+                            </ComboboxValue>
+                            <ComboboxChipsInput
+                              placeholder={t("aiHub.publicModelHub.models.providersPlaceholder")}
+                              aria-label={t("aiHub.publicModelHub.models.providersAriaLabel")}
+                              className="min-w-24"
+                            />
+                          </ComboboxChips>
+                          <ComboboxContent anchor={anchor} className={portalClassName}>
+                            <ComboboxEmpty>{t("aiHub.publicModelHub.models.noProvidersFound")}</ComboboxEmpty>
+                            <ComboboxList>
+                              {(provider: string) => {
+                                const { logo } = getProviderLogoAndName(provider);
+                                return (
+                                  <ComboboxItem key={provider} value={provider}>
+                                    <span className="flex min-w-0 items-center space-x-2">
+                                      {logo && (
+                                        <img
+                                          src={logo}
+                                          alt={provider}
+                                          className="w-5 h-5 shrink-0 object-contain"
+                                          onError={(e) => {
+                                            (e.target as HTMLImageElement).style.display = "none";
+                                          }}
+                                        />
+                                      )}
+                                      <span className="capitalize break-words">{provider}</span>
+                                    </span>
+                                  </ComboboxItem>
+                                );
+                              }}
+                            </ComboboxList>
+                          </ComboboxContent>
+                        </Combobox>
+                      </div>
+                    )}
+                    <div className={isChat ? "chat-model-filter-select min-w-0" : "min-w-0"}>
+                      {!isChat && (
+                        <p className="text-sm font-medium mb-3 text-foreground">
+                          {t("aiHub.publicModelHub.models.modeLabel")}
+                        </p>
+                      )}
                       <MultiSelect
                         options={modeOptions}
+                        contentClassName={portalClassName}
                         value={models.modeValues}
                         onValueChange={models.onModesChange}
-                        placeholder="Select modes"
+                        placeholder={
+                          isChat
+                            ? t("aiHub.publicModelHub.models.chatModePlaceholder")
+                            : t("aiHub.publicModelHub.models.modePlaceholder")
+                        }
                         className="w-full"
                       />
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium mb-3 text-foreground">Features:</p>
+                    <div className={isChat ? "chat-model-filter-select min-w-0" : "min-w-0"}>
+                      {!isChat && (
+                        <p className="text-sm font-medium mb-3 text-foreground">
+                          {t("aiHub.publicModelHub.models.featuresLabel")}
+                        </p>
+                      )}
                       <MultiSelect
                         options={featureOptions}
+                        contentClassName={portalClassName}
                         value={models.featureValues}
                         onValueChange={models.onFeaturesChange}
-                        placeholder="Select features"
+                        placeholder={
+                          isChat
+                            ? t("aiHub.publicModelHub.models.chatFeaturesPlaceholder")
+                            : t("aiHub.publicModelHub.models.featuresPlaceholder")
+                        }
                         className="w-full"
                       />
                     </div>
                   </div>
 
-                  <DataTable
-                    data={models.rows}
-                    columns={modelColumns}
-                    getRowId={(model, index) => model.model_group || String(index)}
-                    sortingMode="server"
-                    sorting={models.sorting}
-                    onSortingChange={models.onSortingChange}
-                    paginationMode="server"
-                    pagination={models.pagination}
-                    onPaginationChange={models.onPaginationChange}
-                    rowCount={models.rowCount}
-                    isLoading={models.isLoading}
-                    loadingMessage="Loading models…"
-                    noDataMessage={
-                      <PublicHubEmptyState
-                        title={models.hasActiveQuery ? "No matching models" : "No models available"}
-                        body={
-                          models.hasActiveQuery
-                            ? "Adjust the search or filters to see more models."
-                            : "Models made public by the proxy admin will appear here."
-                        }
-                      />
-                    }
-                    size="compact"
-                  />
+                  <div className="model-hub-table">
+                    <DataTable
+                      data={models.rows}
+                      columns={modelColumns}
+                      getRowId={(model, index) => model.model_group || String(index)}
+                      sortingMode="server"
+                      sorting={models.sorting}
+                      onSortingChange={models.onSortingChange}
+                      paginationMode="server"
+                      pagination={models.pagination}
+                      onPaginationChange={models.onPaginationChange}
+                      rowCount={models.rowCount}
+                      isLoading={models.isLoading}
+                      loadingMessage={t("aiHub.publicModelHub.models.loading")}
+                      noDataMessage={
+                        <PublicHubEmptyState
+                          title={
+                            models.hasActiveQuery
+                              ? t("aiHub.publicModelHub.models.noMatchTitle")
+                              : t("aiHub.publicModelHub.models.emptyTitle")
+                          }
+                          body={
+                            models.hasActiveQuery
+                              ? t("aiHub.publicModelHub.models.noMatchBody")
+                              : t("aiHub.publicModelHub.models.emptyBody")
+                          }
+                        />
+                      }
+                      size="compact"
+                    />
+                  </div>
                 </TabsContent>
 
                 {/* Agents Tab */}
-                {hasAgents && (
+                {!isChat && hasAgents && (
                   <TabsContent value="agents">
                     <div className="flex justify-between items-center mb-8">
-                      <h2 className="text-2xl font-semibold text-foreground">Available Agents</h2>
+                      <h2 className="text-2xl font-semibold text-foreground">
+                        {t("aiHub.publicModelHub.agents.title")}
+                      </h2>
                     </div>
 
                     {/* Filters */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
                       <div>
                         <div className="flex items-center space-x-2 mb-3">
-                          <p className="text-sm font-medium text-foreground">Search Agents:</p>
+                          <p className="text-sm font-medium text-foreground">
+                            {t("aiHub.publicModelHub.agents.searchLabel")}
+                          </p>
                           <Tooltip>
                             <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                            <TooltipContent side="top">Search agents by name or description</TooltipContent>
+                            <TooltipContent side="top" className={portalClassName}>
+                              {t("aiHub.publicModelHub.agents.searchTooltip")}
+                            </TooltipContent>
                           </Tooltip>
                         </div>
                         <div className="relative">
                           <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
                           <input
                             type="text"
-                            placeholder="Search agent names or descriptions..."
+                            placeholder={t("aiHub.publicModelHub.agents.searchPlaceholder")}
                             value={agentSearchTerm}
                             onChange={(e) => setAgentSearchTerm(e.target.value)}
                             className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
@@ -541,12 +675,14 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         </div>
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium mb-3 text-foreground">Skills:</p>
+                        <p className="text-sm font-medium mb-3 text-foreground">
+                          {t("aiHub.publicModelHub.agents.skillsLabel")}
+                        </p>
                         <MultiSelect
                           options={agentSkillOptions}
                           value={selectedAgentSkills}
                           onValueChange={setSelectedAgentSkills}
-                          placeholder="Select skills"
+                          placeholder={t("aiHub.publicModelHub.agents.skillsPlaceholder")}
                           className="w-full"
                         />
                       </div>
@@ -561,11 +697,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       sorting={agentSorting}
                       onSortingChange={setAgentSorting}
                       isLoading={agentLoading}
-                      loadingMessage="Loading agents…"
+                      loadingMessage={t("aiHub.publicModelHub.agents.loading")}
                       noDataMessage={
                         <PublicHubEmptyState
-                          title="No matching agents"
-                          body="Adjust the search or skill filter to see more agents."
+                          title={t("aiHub.publicModelHub.agents.noMatchTitle")}
+                          body={t("aiHub.publicModelHub.agents.noMatchBody")}
                         />
                       }
                       size="compact"
@@ -573,34 +709,41 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                     <div className="mt-8 text-center">
                       <p className="text-sm text-muted-foreground">
-                        Showing {filteredAgentData.length} of {agentHubData?.length || 0} agents
+                        {t("aiHub.publicModelHub.agents.showing", {
+                          shown: filteredAgentData.length,
+                          total: agentHubData?.length || 0,
+                        })}
                       </p>
                     </div>
                   </TabsContent>
                 )}
 
                 {/* MCP Servers Tab */}
-                {hasMcpServers && (
+                {!isChat && hasMcpServers && (
                   <TabsContent value="mcp">
                     <div className="flex justify-between items-center mb-8">
-                      <h2 className="text-2xl font-semibold text-foreground">Available MCP Servers</h2>
+                      <h2 className="text-2xl font-semibold text-foreground">{t("aiHub.publicModelHub.mcp.title")}</h2>
                     </div>
 
                     {/* Filters */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
                       <div>
                         <div className="flex items-center space-x-2 mb-3">
-                          <p className="text-sm font-medium text-foreground">Search MCP Servers:</p>
+                          <p className="text-sm font-medium text-foreground">
+                            {t("aiHub.publicModelHub.mcp.searchLabel")}
+                          </p>
                           <Tooltip>
                             <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                            <TooltipContent side="top">Search MCP servers by name or description</TooltipContent>
+                            <TooltipContent side="top" className={portalClassName}>
+                              {t("aiHub.publicModelHub.mcp.searchTooltip")}
+                            </TooltipContent>
                           </Tooltip>
                         </div>
                         <div className="relative">
                           <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
                           <input
                             type="text"
-                            placeholder="Search MCP server names or descriptions..."
+                            placeholder={t("aiHub.publicModelHub.mcp.searchPlaceholder")}
                             value={mcpSearchTerm}
                             onChange={(e) => setMcpSearchTerm(e.target.value)}
                             className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
@@ -608,12 +751,14 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         </div>
                       </div>
                       <div className="min-w-0">
-                        <p className="text-sm font-medium mb-3 text-foreground">Transport:</p>
+                        <p className="text-sm font-medium mb-3 text-foreground">
+                          {t("aiHub.publicModelHub.mcp.transportLabel")}
+                        </p>
                         <MultiSelect
                           options={mcpTransportOptions}
                           value={selectedMcpTransports}
                           onValueChange={setSelectedMcpTransports}
-                          placeholder="Select transport types"
+                          placeholder={t("aiHub.publicModelHub.mcp.transportPlaceholder")}
                           className="w-full"
                         />
                       </div>
@@ -628,11 +773,11 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       sorting={mcpSorting}
                       onSortingChange={setMcpSorting}
                       isLoading={mcpLoading}
-                      loadingMessage="Loading MCP servers…"
+                      loadingMessage={t("aiHub.publicModelHub.mcp.loading")}
                       noDataMessage={
                         <PublicHubEmptyState
-                          title="No matching MCP servers"
-                          body="Adjust the search or transport filter to see more servers."
+                          title={t("aiHub.publicModelHub.mcp.noMatchTitle")}
+                          body={t("aiHub.publicModelHub.mcp.noMatchBody")}
                         />
                       }
                       size="compact"
@@ -640,26 +785,35 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                     <div className="mt-8 text-center">
                       <p className="text-sm text-muted-foreground">
-                        Showing {filteredMcpData.length} of {mcpHubData?.length || 0} MCP servers
+                        {t("aiHub.publicModelHub.mcp.showing", {
+                          shown: filteredMcpData.length,
+                          total: mcpHubData?.length || 0,
+                        })}
                       </p>
                     </div>
                   </TabsContent>
                 )}
 
                 {/* Skill Hub Tab */}
-                <TabsContent value="skills">
-                  <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
-                </TabsContent>
+                {!isChat && (
+                  <TabsContent value="skills">
+                    <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
+                  </TabsContent>
+                )}
               </Tabs>
             </Card>
           </div>
 
           {/* Model Details Modal */}
           <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleModalCancel()}>
-            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+            <DialogContent
+              className={`${isChat ? "chat-theme chat-model-hub-dialog " : ""}max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]`}
+            >
               <DialogHeader>
                 <DialogTitle className="flex min-w-0 items-center space-x-2">
-                  <span className="break-words">{selectedModel?.model_group || "Model Details"}</span>
+                  <span className="break-words">
+                    {selectedModel?.model_group || t("aiHub.publicModelHub.modelDialog.fallbackTitle")}
+                  </span>
                   {selectedModel && (
                     <Tooltip>
                       <TooltipTrigger
@@ -670,7 +824,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           />
                         }
                       />
-                      <TooltipContent>Copy model name</TooltipContent>
+                      <TooltipContent className={portalClassName}>
+                        {t("aiHub.publicModelHub.modelDialog.copyName")}
+                      </TooltipContent>
                     </Tooltip>
                   )}
                 </DialogTitle>
@@ -679,18 +835,18 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 <div className="space-y-6">
                   {/* Model Overview */}
                   <div>
-                    <p className="text-lg font-semibold mb-4">Model Overview</p>
+                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.modelDialog.overview")}</p>
                     <div className="grid grid-cols-2 gap-4 mb-4">
                       <div>
-                        <p className="font-medium">Model Name:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.modelName")}</p>
                         <p>{selectedModel.model_group}</p>
                       </div>
                       <div>
-                        <p className="font-medium">Mode:</p>
-                        <p>{selectedModel.mode || "Not specified"}</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.mode")}</p>
+                        <p>{displayMode(selectedModel.mode) ?? t("aiHub.publicModelHub.modelDialog.notSpecified")}</p>
                       </div>
                       <div>
-                        <p className="font-medium">Providers:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.providers")}</p>
                         <div className="flex flex-wrap gap-1 mt-1">
                           {(selectedModel.providers ?? []).map((provider) => {
                             const { logo } = getProviderLogoAndName(provider);
@@ -716,10 +872,14 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       </div>
                       {selectedModel.description && (
                         <div className="col-span-2">
-                          <p className="font-medium">Description:</p>
+                          <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.description")}</p>
                           <p className="mt-1">{selectedModel.description}</p>
                         </div>
                       )}
+                      <ModelCustomMetadata
+                        customTags={selectedModel.custom_tags}
+                        customMetadata={selectedModel.custom_metadata}
+                      />
                     </div>
 
                     {/* Wildcard Routing Note */}
@@ -728,21 +888,31 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         <div className="flex items-start space-x-2">
                           <Info className="w-4 h-4 text-info mt-0.5 shrink-0" />
                           <div>
-                            <p className="font-medium text-info mb-2">Wildcard Routing</p>
+                            <p className="font-medium text-info mb-2">
+                              {t("aiHub.publicModelHub.modelDialog.wildcardTitle")}
+                            </p>
                             <p className="text-sm text-info mb-2">
-                              This model uses wildcard routing. You can pass any value where you see the{" "}
-                              <code className="bg-info/15 px-1 py-0.5 rounded-sm text-xs">*</code> symbol.
+                              <Trans
+                                i18nKey="aiHub.publicModelHub.modelDialog.wildcardIntro"
+                                components={{ code: <code className="bg-info/15 px-1 py-0.5 rounded-sm text-xs" /> }}
+                              />
                             </p>
                             <p className="text-sm text-info">
-                              For example, with{" "}
-                              <code className="bg-info/15 px-1 py-0.5 rounded-sm text-xs">
-                                {selectedModel.model_group}
-                              </code>
-                              , you can use any string (
-                              <code className="bg-info/15 px-1 py-0.5 rounded-sm text-xs">
-                                {selectedModel.model_group.replaceAll("*", "my-custom-value")}
-                              </code>
-                              ) that matches this pattern.
+                              <Trans
+                                i18nKey="aiHub.publicModelHub.modelDialog.wildcardExample"
+                                components={{
+                                  model: (
+                                    <code className="bg-info/15 px-1 py-0.5 rounded-sm text-xs">
+                                      {selectedModel.model_group}
+                                    </code>
+                                  ),
+                                  example: (
+                                    <code className="bg-info/15 px-1 py-0.5 rounded-sm text-xs">
+                                      {selectedModel.model_group.replaceAll("*", "my-custom-value")}
+                                    </code>
+                                  ),
+                                }}
+                              />
                             </p>
                           </div>
                         </div>
@@ -752,44 +922,61 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                   {/* Token and Cost Information */}
                   <div>
-                    <p className="text-lg font-semibold mb-4">Token & Cost Information</p>
+                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.modelDialog.tokenCost")}</p>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <p className="font-medium">Max Input Tokens:</p>
-                        <p>{selectedModel.max_input_tokens?.toLocaleString() || "Not specified"}</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.maxInputTokens")}</p>
+                        <p>
+                          {selectedModel.max_input_tokens?.toLocaleString() ||
+                            t("aiHub.publicModelHub.modelDialog.notSpecified")}
+                        </p>
                       </div>
                       <div>
-                        <p className="font-medium">Max Output Tokens:</p>
-                        <p>{selectedModel.max_output_tokens?.toLocaleString() || "Not specified"}</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.maxOutputTokens")}</p>
+                        <p>
+                          {selectedModel.max_output_tokens?.toLocaleString() ||
+                            t("aiHub.publicModelHub.modelDialog.notSpecified")}
+                        </p>
                       </div>
                       <div>
-                        <p className="font-medium">Input Cost per 1M Tokens:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.inputCost")}</p>
                         <p>
                           {selectedModel.input_cost_per_token
                             ? formatCost(selectedModel.input_cost_per_token)
-                            : "Not specified"}
+                            : t("aiHub.publicModelHub.modelDialog.notSpecified")}
                         </p>
                       </div>
                       <div>
-                        <p className="font-medium">Output Cost per 1M Tokens:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.outputCost")}</p>
                         <p>
                           {selectedModel.output_cost_per_token
                             ? formatCost(selectedModel.output_cost_per_token)
-                            : "Not specified"}
+                            : t("aiHub.publicModelHub.modelDialog.notSpecified")}
                         </p>
                       </div>
                     </div>
+                    <DeploymentPricingBreakdown
+                      className="mt-4"
+                      deployments={selectedModel.deployment_pricing}
+                      heading={
+                        <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.pricingByDeployment")}</p>
+                      }
+                    />
                   </div>
 
                   {/* Capabilities */}
                   <div>
-                    <p className="text-lg font-semibold mb-4">Capabilities</p>
+                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.modelDialog.capabilities")}</p>
                     <div className="flex flex-wrap gap-2">
                       {(() => {
                         const capabilities = getModelCapabilities(selectedModel);
 
                         if (capabilities.length === 0) {
-                          return <p className="text-muted-foreground">No special capabilities listed</p>;
+                          return (
+                            <p className="text-muted-foreground">
+                              {t("aiHub.publicModelHub.modelDialog.noCapabilities")}
+                            </p>
+                          );
                         }
 
                         return capabilities.map((capability) => (
@@ -804,17 +991,17 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   {/* Rate Limits */}
                   {(selectedModel.tpm || selectedModel.rpm) && (
                     <div>
-                      <p className="text-lg font-semibold mb-4">Rate Limits</p>
+                      <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.modelDialog.rateLimits")}</p>
                       <div className="grid grid-cols-2 gap-4">
                         {selectedModel.tpm && (
                           <div>
-                            <p className="font-medium">Tokens per Minute:</p>
+                            <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.tpm")}</p>
                             <p>{selectedModel.tpm.toLocaleString()}</p>
                           </div>
                         )}
                         {selectedModel.rpm && (
                           <div>
-                            <p className="font-medium">Requests per Minute:</p>
+                            <p className="font-medium">{t("aiHub.publicModelHub.modelDialog.rpm")}</p>
                             <p>{selectedModel.rpm.toLocaleString()}</p>
                           </div>
                         )}
@@ -825,7 +1012,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   {/* Supported OpenAI Parameters */}
                   {selectedModel.supported_openai_params && selectedModel.supported_openai_params.length > 0 && (
                     <div>
-                      <p className="text-lg font-semibold mb-4">Supported OpenAI Parameters</p>
+                      <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.modelDialog.openaiParams")}</p>
                       <div className="flex flex-wrap gap-2">
                         {selectedModel.supported_openai_params.map((param) => (
                           <Badge key={param} variant="secondary">
@@ -838,56 +1025,16 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                   {/* Usage Example */}
                   <div>
-                    <p className="text-lg font-semibold mb-4">Usage Example</p>
+                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.modelDialog.usageExample")}</p>
                     <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
-                      <pre className="text-sm">
-                        {(() => {
-                          const codeSnippet = generateCodeSnippet({
-                            apiKeySource: "custom",
-                            accessToken: null,
-                            apiKey: "your_api_key",
-                            inputMessage: "Hello, how are you?",
-                            chatHistory: [
-                              { role: "user", content: "Hello, how are you?", isImage: false } as MessageType,
-                            ],
-                            selectedTags: [],
-                            selectedVectorStores: [],
-                            selectedGuardrails: [],
-                            selectedPolicies: [],
-                            selectedMCPServers: [],
-                            endpointType: getEndpointType(selectedModel.mode || "chat"),
-                            selectedModel: selectedModel.model_group,
-                            selectedSdk: "openai",
-                          });
-                          return codeSnippet;
-                        })()}
-                      </pre>
+                      <pre className="text-sm">{usageExample(selectedModel)}</pre>
                     </div>
                     <div className="mt-2 text-right">
                       <button
-                        onClick={() => {
-                          const codeSnippet = generateCodeSnippet({
-                            apiKeySource: "custom",
-                            accessToken: null,
-                            apiKey: "your_api_key",
-                            inputMessage: "Hello, how are you?",
-                            chatHistory: [
-                              { role: "user", content: "Hello, how are you?", isImage: false } as MessageType,
-                            ],
-                            selectedTags: [],
-                            selectedVectorStores: [],
-                            selectedGuardrails: [],
-                            selectedPolicies: [],
-                            selectedMCPServers: [],
-                            endpointType: getEndpointType(selectedModel.mode || "chat"),
-                            selectedModel: selectedModel.model_group,
-                            selectedSdk: "openai",
-                          });
-                          copyToClipboard(codeSnippet);
-                        }}
+                        onClick={() => copyToClipboard(usageExample(selectedModel))}
                         className="text-sm text-info hover:text-info/80 cursor-pointer"
                       >
-                        Copy to clipboard
+                        {t("aiHub.publicModelHub.modelDialog.copyToClipboard")}
                       </button>
                     </div>
                   </div>
@@ -898,10 +1045,14 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
           {/* Agent Details Modal */}
           <Dialog open={isAgentModalVisible} onOpenChange={(open) => !open && handleAgentModalCancel()}>
-            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+            <DialogContent
+              className={`${isChat ? "chat-theme chat-model-hub-dialog " : ""}max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]`}
+            >
               <DialogHeader>
                 <DialogTitle className="flex min-w-0 items-center space-x-2">
-                  <span className="break-words">{selectedAgent?.name || "Agent Details"}</span>
+                  <span className="break-words">
+                    {selectedAgent?.name || t("aiHub.publicModelHub.agentDialog.fallbackTitle")}
+                  </span>
                   {selectedAgent && (
                     <Tooltip>
                       <TooltipTrigger
@@ -912,7 +1063,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           />
                         }
                       />
-                      <TooltipContent>Copy agent name</TooltipContent>
+                      <TooltipContent className={portalClassName}>
+                        {t("aiHub.publicModelHub.agentDialog.copyName")}
+                      </TooltipContent>
                     </Tooltip>
                   )}
                 </DialogTitle>
@@ -921,23 +1074,23 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 <div className="space-y-6">
                   {/* Agent Overview */}
                   <div>
-                    <p className="text-lg font-semibold mb-4">Agent Overview</p>
+                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.agentDialog.overview")}</p>
                     <div className="grid grid-cols-2 gap-4 mb-4">
                       <div>
-                        <p className="font-medium">Name:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.agentDialog.name")}</p>
                         <p>{selectedAgent.name}</p>
                       </div>
                       <div>
-                        <p className="font-medium">Version:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.agentDialog.version")}</p>
                         <p>{selectedAgent.version}</p>
                       </div>
                       <div className="col-span-2">
-                        <p className="font-medium">Description:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.agentDialog.description")}</p>
                         <p>{selectedAgent.description}</p>
                       </div>
                       {selectedAgent.url && (
                         <div>
-                          <p className="font-medium">URL:</p>
+                          <p className="font-medium">{t("aiHub.publicModelHub.agentDialog.url")}</p>
                           <a
                             href={selectedAgent.url}
                             target="_blank"
@@ -954,7 +1107,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   {/* Capabilities */}
                   {selectedAgent.capabilities && (
                     <div>
-                      <p className="text-lg font-semibold mb-4">Capabilities</p>
+                      <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.agentDialog.capabilities")}</p>
                       <div className="flex flex-wrap gap-2">
                         {Object.entries(selectedAgent.capabilities)
                           .filter(([_, value]) => value === true)
@@ -970,7 +1123,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   {/* Skills */}
                   {selectedAgent.skills && selectedAgent.skills.length > 0 && (
                     <div>
-                      <p className="text-lg font-semibold mb-4">Skills</p>
+                      <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.agentDialog.skills")}</p>
                       <div className="space-y-4">
                         {selectedAgent.skills.map((skill, index) => (
                           <div key={index} className="border border-border rounded-lg p-4">
@@ -997,10 +1150,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
                   {/* Input/Output Modes */}
                   <div>
-                    <p className="text-lg font-semibold mb-4">Input/Output Modes</p>
+                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.agentDialog.ioModes")}</p>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <p className="font-medium">Input Modes:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.agentDialog.inputModes")}</p>
                         <div className="flex flex-wrap gap-1 mt-1">
                           {(selectedAgent.defaultInputModes ?? []).map((mode) => (
                             <Badge key={mode} variant="secondary">
@@ -1010,7 +1163,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         </div>
                       </div>
                       <div>
-                        <p className="font-medium">Output Modes:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.agentDialog.outputModes")}</p>
                         <div className="flex flex-wrap gap-1 mt-1">
                           {(selectedAgent.defaultOutputModes ?? []).map((mode) => (
                             <Badge key={mode} variant="secondary">
@@ -1025,7 +1178,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                   {/* Documentation */}
                   {selectedAgent.documentationUrl && (
                     <div>
-                      <p className="text-lg font-semibold mb-4">Documentation</p>
+                      <p className="text-lg font-semibold mb-4">
+                        {t("aiHub.publicModelHub.agentDialog.documentation")}
+                      </p>
                       <a
                         href={selectedAgent.documentationUrl}
                         target="_blank"
@@ -1033,18 +1188,20 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         className="text-info hover:text-info/80 flex items-center space-x-2"
                       >
                         <ExternalLinkIcon className="w-4 h-4" />
-                        <span>View Documentation</span>
+                        <span>{t("aiHub.publicModelHub.agentDialog.viewDocumentation")}</span>
                       </a>
                     </div>
                   )}
 
                   {/* A2A Usage Example */}
                   <div>
-                    <p className="text-lg font-semibold mb-4">Usage Example (A2A Protocol)</p>
+                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.agentDialog.usageExample")}</p>
 
                     {/* Step 1: Retrieve Agent Card */}
                     <div className="mb-4">
-                      <p className="text-sm font-medium mb-2 text-foreground">Step 1: Retrieve Agent Card</p>
+                      <p className="text-sm font-medium mb-2 text-foreground">
+                        {t("aiHub.publicModelHub.agentDialog.stepRetrieveCard")}
+                      </p>
                       <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
                         <pre className="text-xs">
                           {`base_url = '${selectedAgent.url}'
@@ -1132,14 +1289,16 @@ if _public_card.supports_authenticated_extended_card:
                           }}
                           className="text-sm text-info hover:text-info/80 cursor-pointer"
                         >
-                          Copy to clipboard
+                          {t("aiHub.publicModelHub.agentDialog.copyToClipboard")}
                         </button>
                       </div>
                     </div>
 
                     {/* Step 2: Call the Agent */}
                     <div>
-                      <p className="text-sm font-medium mb-2 text-foreground">Step 2: Call the Agent</p>
+                      <p className="text-sm font-medium mb-2 text-foreground">
+                        {t("aiHub.publicModelHub.agentDialog.stepCallAgent")}
+                      </p>
                       <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
                         <pre className="text-xs">
                           {`client = A2AClient(
@@ -1189,7 +1348,7 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                           }}
                           className="text-sm text-info hover:text-info/80 cursor-pointer"
                         >
-                          Copy to clipboard
+                          {t("aiHub.publicModelHub.agentDialog.copyToClipboard")}
                         </button>
                       </div>
                     </div>
@@ -1201,10 +1360,14 @@ print(response.model_dump(mode='json', exclude_none=True))`;
 
           {/* MCP Server Details Modal */}
           <Dialog open={isMcpModalVisible} onOpenChange={(open) => !open && handleMcpModalCancel()}>
-            <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]">
+            <DialogContent
+              className={`${isChat ? "chat-theme chat-model-hub-dialog " : ""}max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[1000px]`}
+            >
               <DialogHeader>
                 <DialogTitle className="flex min-w-0 items-center space-x-2">
-                  <span className="break-words">{selectedMcpServer?.server_name || "MCP Server Details"}</span>
+                  <span className="break-words">
+                    {selectedMcpServer?.server_name || t("aiHub.publicModelHub.mcpDialog.fallbackTitle")}
+                  </span>
                   {selectedMcpServer && (
                     <Tooltip>
                       <TooltipTrigger
@@ -1215,7 +1378,9 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                           />
                         }
                       />
-                      <TooltipContent>Copy server name</TooltipContent>
+                      <TooltipContent className={portalClassName}>
+                        {t("aiHub.publicModelHub.mcpDialog.copyName")}
+                      </TooltipContent>
                     </Tooltip>
                   )}
                 </DialogTitle>
@@ -1224,30 +1389,30 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                 <div className="space-y-6">
                   {/* Server Overview */}
                   <div>
-                    <p className="text-lg font-semibold mb-4">Server Overview</p>
+                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.mcpDialog.overview")}</p>
                     <div className="grid grid-cols-2 gap-4 mb-4">
                       <div>
-                        <p className="font-medium">Server Name:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.mcpDialog.serverName")}</p>
                         <p>{selectedMcpServer.server_name}</p>
                       </div>
                       <div>
-                        <p className="font-medium">Transport:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.mcpDialog.transport")}</p>
                         <Badge variant="secondary">{selectedMcpServer.transport}</Badge>
                       </div>
                       {selectedMcpServer.alias && (
                         <div>
-                          <p className="font-medium">Alias:</p>
+                          <p className="font-medium">{t("aiHub.publicModelHub.mcpDialog.alias")}</p>
                           <p>{selectedMcpServer.alias}</p>
                         </div>
                       )}
                       <div>
-                        <p className="font-medium">Auth Type:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.mcpDialog.authType")}</p>
                         <Badge variant={selectedMcpServer.auth_type === "none" ? "outline" : "secondary"}>
                           {selectedMcpServer.auth_type}
                         </Badge>
                       </div>
                       <div className="col-span-2">
-                        <p className="font-medium">Description:</p>
+                        <p className="font-medium">{t("aiHub.publicModelHub.mcpDialog.description")}</p>
                         <p>{selectedMcpServer.mcp_info?.description || "-"}</p>
                       </div>
                     </div>
@@ -1256,7 +1421,7 @@ print(response.model_dump(mode='json', exclude_none=True))`;
                   {/* Additional Info */}
                   {selectedMcpServer.mcp_info && Object.keys(selectedMcpServer.mcp_info).length > 0 && (
                     <div>
-                      <p className="text-lg font-semibold mb-4">Additional Information</p>
+                      <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.mcpDialog.additionalInfo")}</p>
                       <div className="bg-muted p-4 rounded-lg">
                         <pre className="text-xs overflow-x-auto">
                           {JSON.stringify(selectedMcpServer.mcp_info, null, 2)}
@@ -1267,7 +1432,7 @@ print(response.model_dump(mode='json', exclude_none=True))`;
 
                   {/* Usage Example */}
                   <div>
-                    <p className="text-lg font-semibold mb-4">Usage Example</p>
+                    <p className="text-lg font-semibold mb-4">{t("aiHub.publicModelHub.mcpDialog.usageExample")}</p>
                     <div className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto">
                       <pre className="text-sm">
                         {`# Using MCP Server with Python FastMCP
@@ -1349,7 +1514,7 @@ if __name__ == "__main__":
                         }}
                         className="text-sm text-info hover:text-info/80 cursor-pointer"
                       >
-                        Copy to clipboard
+                        {t("aiHub.publicModelHub.mcpDialog.copyToClipboard")}
                       </button>
                     </div>
                   </div>
