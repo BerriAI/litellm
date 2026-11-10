@@ -8,6 +8,7 @@ import hashlib
 import itertools
 import json
 import logging
+import socket
 import threading
 import traceback
 import uuid
@@ -4976,6 +4977,96 @@ async def test_call_endpoint_counts_a_prompt_locally_on_a_provider_without_a_cou
     assert sent == []
     assert (from_prompt.count_source, from_prompt.error) == ("local_estimate", False)
     assert from_prompt.total_tokens == from_message.total_tokens > local_prompt.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment",
+    [
+        pytest.param(
+            {"litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "test-key"}}, id="cost map mode"
+        ),
+        pytest.param(
+            {
+                "litellm_params": {"model": "openai/in-house-embedder", "api_key": "test-key"},
+                "model_info": {"mode": "embedding"},
+            },
+            id="configured mode",
+        ),
+    ],
+)
+async def test_call_endpoint_counts_a_prompt_on_a_non_chat_deployment_as_raw_text_without_the_provider(
+    deployment: dict[str, JsonValue], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "llm_router", Router(model_list=[{"model_name": "provider-counted", **deployment}])
+    )
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_api(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"input_tokens": 41}, request=request)
+
+    with _count_apis_answering(count_api):
+        from_endpoint: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+    local: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=False)
+
+    assert sent == []
+    assert (from_endpoint.total_tokens, from_endpoint.error) == (local.total_tokens, False)
+
+
+@pytest.mark.asyncio
+async def test_call_endpoint_counts_a_prompt_for_a_model_without_a_deployment_as_raw_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(model_list=[{"model_name": "other", "litellm_params": {"model": "openai/gpt-5.6"}}]),
+    )
+    request: Final = TokenCountRequest(model="deepseek/deepseek-v4-flash", prompt=_FOX)
+
+    from_endpoint: Final = await token_counter(request=request, call_endpoint=True)
+    local: Final = await token_counter(request=request, call_endpoint=False)
+
+    assert (from_endpoint.total_tokens, from_endpoint.error) == (local.total_tokens, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "path"),
+    [("anthropic/claude-sonnet-5-5", ""), ("azure_ai/claude-sonnet-5-5", ""), ("openai/gpt-5.6", "/v1")],
+    ids=["anthropic", "azure_ai", "openai"],
+)
+async def test_call_endpoint_gives_up_on_a_stalled_count_api_after_the_deployment_timeout(
+    model: str, path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with socket.create_server(("127.0.0.1", 0)) as never_answers:
+        port: Final = never_answers.getsockname()[1]
+        _route_to_one_deployment(
+            {"model": model, "api_key": "test-key", "api_base": f"http://127.0.0.1:{port}{path}", "timeout": 0.5},
+            monkeypatch,
+        )
+
+        with pytest.raises(ProxyException):
+            async with asyncio.timeout(10):
+                await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+
+
+@pytest.mark.asyncio
+async def test_call_endpoint_names_the_status_of_a_count_api_error_with_an_empty_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _route_to_one_deployment(
+        {"model": "openai/gpt-5.6", "api_key": "test-key", "api_base": "https://count-tokens.test/v1"}, monkeypatch
+    )
+
+    with _count_apis_answering(lambda request: httpx.Response(404, request=request)):
+        with pytest.raises(ProxyException) as error:
+            await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+
+    assert error.value.code == "404"
+    assert "404" in error.value.message
 
 
 _PINNED_COUNTS: Final = MappingProxyType({"deployment-a.test": 11, "deployment-b.test": 22})

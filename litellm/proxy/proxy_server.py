@@ -15318,7 +15318,12 @@ def _provider_count_outcome(
     if result is not None and result.error is True:
         return ProviderCountFailure(
             status_code=result.status_code or 500,
-            message=result.error_message or "Token counting failed",
+            message=result.error_message
+            or (
+                "Token counting failed"
+                if result.status_code is None
+                else f"The provider's count API answered {result.status_code} with no error message"
+            ),
             rejected_before_provider_call=result.rejected_before_provider_call,
         )
     return result
@@ -15784,6 +15789,19 @@ def _token_count_settings_model(deployment: _TokenCountDeployment, request_model
     return model, _non_empty_str(params.get("custom_llm_provider"))
 
 
+_PROVIDERS_COUNTING_WITHOUT_MESSAGES: Final = frozenset(
+    {litellm.LlmProviders.GEMINI.value, litellm.LlmProviders.VERTEX_AI.value}
+)
+_CHAT_MODES: Final = frozenset({"chat", "responses"})
+
+
+def _serves_chat(deployment: _TokenCountDeployment, cost_map_row: Mapping[str, object]) -> bool:
+    mode: Final = _non_empty_str(deployment.get("model_info", {}).get("mode")) or _non_empty_str(
+        cost_map_row.get("mode")
+    )
+    return mode is None or mode in _CHAT_MODES
+
+
 _ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
 
 
@@ -16130,9 +16148,10 @@ async def _count_request_tokens(
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
         deployment or _model_group_deployment(llm_router, request.model) or {}
     )
+    cost_map_row: Final = await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model))
     settings: Final = await asyncify(resolve_token_count_settings)(
         configured=deployment_view.get("model_info", {}),
-        default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
+        default=cost_map_row,
         deployment_region=partial(_deployment_aws_region, deployment_view),
     )
 
@@ -16157,6 +16176,12 @@ async def _count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    prompt_as_turn: Final = (
+        prompt_only and call_endpoint is True and deployment is not None and _serves_chat(deployment_view, cost_map_row)
+    )
+    prompt_as_message: Final = prompt_as_turn or (
+        prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
+    )
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
     local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
     malformed_messages: Final = (
@@ -16229,10 +16254,10 @@ async def _count_request_tokens(
                     [dict(message) for message in chat_count.messages]
                     if chat_count is not None
                     else [{"role": "user", "content": prompt}]
-                    if prompt_only
+                    if prompt_as_message
                     else inference_messages
                 ),
-                contents=None if prompt_only else contents,
+                contents=None if prompt_as_message else contents,
                 deployment=count_deployment,
                 request_model=request.model,
                 tools=tools if chat_count is None else [dict(tool) for tool in chat_count.tools or ()] or None,
@@ -16293,7 +16318,7 @@ async def _count_request_tokens(
             _with_get(model_info).get("custom_tokenizer", None),
         )
     system_message: Final = _system_message(local_system)
-    prompt_turn: Final = prompt_only and not (call_endpoint is not True and system_message is None and not tools)
+    prompt_turn: Final = prompt_as_turn or (prompt_only and not (system_message is None and not tools))
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
         [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else local_messages),
