@@ -118,37 +118,46 @@ def test_a_single_attempt_endpoint_raises_with_no_note(make_core: MakeCore, host
     show_router_debug(host)
     host.answer("openai/a", server_error())
     with pytest.raises(litellm.InternalServerError) as raised:
-        core.generate_content(model="a", contents=[])  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
+        core.ocr(model="a", document={})  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
     assert NOTE not in str(raised.value)
     assert host.deployments_called() == ["a"]
 
 
-async def respond(core: RouterCore, mode: str) -> object:
+ROUTER_RETRIED: Final[dict[str, tuple[str, str, Mapping[str, object]]]] = {
+    "responses": ("responses", "aresponses", {"input": "hi"}),
+    "generate_content": ("generate_content", "agenerate_content", {"contents": []}),
+}
+
+
+async def call_routed(core: RouterCore, endpoint: str, mode: str) -> object:
+    sync_name, async_name, request = ROUTER_RETRIED[endpoint]
     if mode == "sync":
-        return core.responses(model="a", input="hi")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
-    return await core.aresponses(model="a", input="hi")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
+        return getattr(core, sync_name)(model="a", **request)
+    return await getattr(core, async_name)(model="a", **request)
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
-async def test_responses_retries_a_failed_attempt_with_the_router_num_retries(
-    make_core: MakeCore, host: EndpointHost, mode: str
+@pytest.mark.parametrize("endpoint", sorted(ROUTER_RETRIED))
+async def test_a_router_retried_endpoint_retries_a_failed_attempt_with_the_router_num_retries(
+    make_core: MakeCore, host: EndpointHost, endpoint: str, mode: str
 ) -> None:
     core: Final = build(make_core, num_retries=1)
     recovered: Final = completion_response(content="recovered")
     host.answer("openai/a", server_error(), recovered)
-    assert await respond(core, mode) is recovered
+    assert await call_routed(core, endpoint, mode) is recovered
     assert host.deployments_called() == ["a", "a"]
 
 
 @pytest.mark.parametrize("mode", ["sync", "async"])
-async def test_responses_falls_back_to_the_next_group_when_its_group_fails(
-    make_core: MakeCore, host: EndpointHost, mode: str
+@pytest.mark.parametrize("endpoint", sorted(ROUTER_RETRIED))
+async def test_a_router_retried_endpoint_falls_back_to_the_next_group_when_its_group_fails(
+    make_core: MakeCore, host: EndpointHost, endpoint: str, mode: str
 ) -> None:
     core: Final = build(make_core, fallbacks=[{"a": ["b"]}])
     fallback: Final = completion_response(content="from b")
     host.answer("openai/a", server_error())
     host.answer("openai/b", fallback)
-    assert await respond(core, mode) is fallback
+    assert await call_routed(core, endpoint, mode) is fallback
     assert host.deployments_called() == ["a", "b"]
 
 

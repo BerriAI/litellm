@@ -583,6 +583,8 @@ _SYNC_GENERIC: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
+_ROUTER_RETRIED_SYNC_GENERIC: Final = frozenset({"generate_content", "generate_content_stream"})
+
 _CONTAINER_FILE_ROUTED: Final = frozenset(
     {
         "aupload_container_file",
@@ -708,7 +710,12 @@ def generic_plan(endpoint: str) -> Plan | None:
     if endpoint in _VIDEO_DIRECT:
         return _generic(endpoint, f"videos.{endpoint}")
     if endpoint in _SYNC_GENERIC:
-        return _generic(endpoint, _SYNC_GENERIC[endpoint], sync=True)
+        return _generic(
+            endpoint,
+            _SYNC_GENERIC[endpoint],
+            sync=True,
+            single_attempt=endpoint not in _ROUTER_RETRIED_SYNC_GENERIC,
+        )
     return None
 
 
