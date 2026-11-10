@@ -15,10 +15,10 @@ from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     get_session_id_from_request_data,
-    log_guardrail_information,
+    log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped
 )
 from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # helper is untyped in http_handler
     httpxSpecialProvider,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -162,7 +162,10 @@ class HighflameGuardrail(CustomGuardrail):
         if "supported_event_hooks" not in kwargs:
             kwargs["supported_event_hooks"] = self.get_supported_event_hooks()  # rebind-ok: per-call kwargs dict
 
-        super().__init__(timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT_SECONDS, **kwargs)
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # parent takes untyped extra_headers and **kwargs
+            timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT_SECONDS,
+            **kwargs,
+        )
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: parent's signature
