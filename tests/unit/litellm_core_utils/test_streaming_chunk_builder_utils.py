@@ -31,6 +31,33 @@ from litellm.types.utils import (
 )
 
 
+@pytest.mark.parametrize(
+    ("reasoning", "expected"),
+    [
+        ([{"thinking": "first", "signature": "secret"}, {"content": " second"}], "first second"),
+        ([{"content": "hello", "text": "fallback"}, {"text": " world"}], "hello world"),
+        ([{"signature": "redacted"}, {"thinking": None}, 123, None], ""),
+        (["direct", {"thinking": " blocks"}], "direct blocks"),
+        ("plain reasoning", "plain reasoning"),
+    ],
+)
+def test_combine_structured_reasoning_blocks(reasoning, expected):
+    chunks = [{"choices": [{"delta": {"reasoning_content": reasoning}}]}]
+    processor = ChunkProcessor(chunks=chunks)
+    assert processor.get_combined_reasoning_content(chunks) == expected
+
+
+def test_combine_mixed_reasoning_chunks_preserves_order():
+    chunks = [
+        {"choices": [{"delta": {"reasoning_content": "first "}}]},
+        {"choices": [{"delta": {"reasoning_content": [{"thinking": "second"}, {"signature": "ignored"}]}}]},
+        {"choices": [{"delta": {"reasoning_content": None}}]},
+        {"choices": [{"delta": {"reasoning_content": [{"content": " third"}]}}]},
+    ]
+    processor = ChunkProcessor(chunks=chunks)
+    assert processor.get_combined_reasoning_content(chunks) == "first second third"
+
+
 def test_get_combined_tool_content():
     chunks = [
         ModelResponseStream(
