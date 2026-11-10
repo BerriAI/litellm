@@ -51,15 +51,21 @@ fn selected_cache<'py>(
     kwargs: &Bound<'py, PyDict>,
     call_type: &str,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if kwargs
+        .get_item("caching")?
+        .is_some_and(|value| value.is(pyo3::types::PyBool::new(py, false)))
+    {
+        return Ok(None);
+    }
+    configured_cache(py, call_type)
+}
+
+fn configured_cache<'py>(py: Python<'py>, call_type: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
     let configured = py
         .import(CACHE_HOST_MODULE)?
         .getattr("configured_cache")?
         .call0()?;
-    if configured.is_none()
-        || kwargs
-            .get_item("caching")?
-            .is_some_and(|value| value.is(pyo3::types::PyBool::new(py, false)))
-    {
+    if configured.is_none() {
         return Ok(None);
     }
     let supported = configured.getattr("supported_call_types")?;
@@ -94,7 +100,7 @@ pub(crate) fn configure(
 ) -> PyResult<Selection> {
     let call_type: String = function.getattr("__name__")?.extract()?;
     let selected = if python.asynchronous() {
-        selected_cache(py, arguments, &call_type)?
+        configured_cache(py, &call_type)?
     } else {
         None
     };
@@ -107,6 +113,9 @@ pub(crate) fn configure(
     let enabled = cache
         .call_method("should_use_cache", (), Some(arguments))?
         .extract::<bool>()?;
+    let skips_read = arguments
+        .get_item("caching")?
+        .is_some_and(|value| !value.is_none() && !value.is(pyo3::types::PyBool::new(py, true)));
     let controls = arguments
         .get_item("cache")?
         .filter(|value| !value.is_none());
@@ -122,7 +131,7 @@ pub(crate) fn configure(
     };
     let options = CacheOptions {
         policy: CachePolicy {
-            no_cache: boolean("no-cache")?,
+            no_cache: boolean("no-cache")? || skips_read,
             no_store: boolean("no-store")?,
             ..CachePolicy::default()
         },
