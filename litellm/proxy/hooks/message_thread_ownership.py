@@ -138,6 +138,18 @@ def _owner(user_api_key_dict: "UserAPIKeyAuth") -> str:
     )
 
 
+def _continued_message_ids(data: Mapping[str, object]) -> tuple[str, ...]:
+    extra_body: Final = _as_mapping(data.get("extra_body")) or {}
+    continued: Final = (continued_message_id(thread) for thread in (data.get("thread"), extra_body.get("thread")))
+    return tuple(message_id for message_id in continued if message_id is not None)
+
+
+def _may_continue(binding: _ThreadBinding | None, owner: str, pass_through: bool) -> bool:
+    if binding is None:
+        return pass_through
+    return binding.owner == owner
+
+
 def _response_message_id(response: object) -> str | None:
     message: Final = _as_mapping(response)
     if message is None or message.get("type") != "message":
@@ -212,20 +224,25 @@ class MessageThreadOwnership(CustomLogger):
         data: Mapping[str, object],
         call_type: CallTypesLiteral,
     ) -> dict[str, object] | None:  # mutable-ok: the proxy swaps in a pre-call hook's result only when it is a dict
-        previous_message_id: Final = continued_message_id(data.get("thread"))
-        if previous_message_id is None:
+        previous_message_ids: Final = _continued_message_ids(data)
+        if not previous_message_ids:
             return None
-        binding: Final = await self._binding(previous_message_id, user_api_key_dict)
-        if binding is None and call_type == _PASS_THROUGH_CALL_TYPE:
-            return None
-        if binding is None or binding.owner != _owner(user_api_key_dict):
+        bindings: Final = tuple(
+            [await self._binding(message_id, user_api_key_dict) for message_id in previous_message_ids]
+        )
+        owner: Final = _owner(user_api_key_dict)
+        pass_through: Final = call_type == _PASS_THROUGH_CALL_TYPE
+        if not all(_may_continue(binding, owner, pass_through) for binding in bindings):
             raise HTTPException(status_code=404, detail=message_thread_not_found_body(_UNOWNED_THREAD_MESSAGE))
-        if binding.anthropic_beta is None or call_type == _PASS_THROUGH_CALL_TYPE:
+        anthropic_beta: Final = next(
+            (binding.anthropic_beta for binding in bindings if binding is not None and binding.anthropic_beta), None
+        )
+        if anthropic_beta is None or pass_through:
             return None
         return {
             **data,
-            "extra_headers": _with_anthropic_beta(data.get("extra_headers"), binding.anthropic_beta),
-            **_provider_headers_with_anthropic_beta(data.get("provider_specific_header"), binding.anthropic_beta),
+            "extra_headers": _with_anthropic_beta(data.get("extra_headers"), anthropic_beta),
+            **_provider_headers_with_anthropic_beta(data.get("provider_specific_header"), anthropic_beta),
         }
 
     async def async_post_call_success_hook(

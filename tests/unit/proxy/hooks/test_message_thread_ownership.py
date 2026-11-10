@@ -186,6 +186,46 @@ async def test_a_thread_continue_on_another_route_stays_with_the_key_that_create
     assert not await allows(ownership, INTRUDER, "msg_cross_route", call_type)
 
 
+@pytest.mark.parametrize("call_type", ("anthropic_messages", "acompletion", "aresponses"))
+@pytest.mark.asyncio
+async def test_a_continue_sent_in_extra_body_stays_with_the_key_that_created_the_thread(
+    call_type: CallTypesLiteral,
+) -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data={"thread": CREATE}, user_api_key_dict=OWNER, response=anthropic_message("msg_extra_body")
+    )
+    in_extra_body: Final = {"messages": [], "extra_body": {"thread": continue_from("msg_extra_body")["thread"]}}
+
+    assert (
+        await ownership.async_pre_call_hook(
+            user_api_key_dict=OWNER, cache=DualCache(), data=in_extra_body, call_type=call_type
+        )
+        is None
+    )
+    with pytest.raises(HTTPException) as rejected:
+        await ownership.async_pre_call_hook(
+            user_api_key_dict=INTRUDER, cache=DualCache(), data=in_extra_body, call_type=call_type
+        )
+    assert rejected.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_an_owned_top_level_continue_does_not_let_another_keys_extra_body_continue_through() -> None:
+    ownership: Final = hook()
+    for key, message_id in ((OWNER, "msg_owner"), (INTRUDER, "msg_intruder")):
+        await ownership.async_post_call_success_hook(
+            data={"thread": CREATE}, user_api_key_dict=key, response=anthropic_message(message_id)
+        )
+    mixed: Final = {**continue_from("msg_intruder"), "extra_body": {"thread": continue_from("msg_owner")["thread"]}}
+
+    with pytest.raises(HTTPException) as rejected:
+        await ownership.async_pre_call_hook(
+            user_api_key_dict=INTRUDER, cache=DualCache(), data=mixed, call_type="acompletion"
+        )
+    assert rejected.value.status_code == 404
+
+
 @pytest.mark.asyncio
 async def test_a_pass_through_continue_of_a_message_the_proxy_never_bound_is_left_to_the_upstream() -> None:
     assert await allows(hook(), OWNER, "msg_unknown", "pass_through_endpoint")
