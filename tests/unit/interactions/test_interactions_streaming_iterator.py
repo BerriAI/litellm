@@ -106,6 +106,42 @@ async def test_custom_logger_only_never_submits_sync_success_handler(monkeypatch
     assert recording_executor.submitted_for(logging_obj) == []
 
 
+@pytest.mark.asyncio
+async def test_async_success_logging_runs_through_the_tracked_logging_task_helper(monkeypatch):
+    spawned_task_names: list[str] = []
+    real_spawn_logging_task = interactions_streaming_iterator_module.spawn_logging_task
+
+    def _spawn(loop, coroutine, *, task_name):
+        spawned_task_names.append(task_name)
+        return real_spawn_logging_task(loop, coroutine, task_name=task_name)
+
+    monkeypatch.setattr(interactions_streaming_iterator_module, "spawn_logging_task", _spawn)
+
+    logging_obj = LitellmLogging(
+        model="gemini/gemini-3-pro-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="ainteraction",
+        start_time=time.time(),
+        litellm_call_id="interactions-tracked-logging",
+        function_id="interactions-tracked-logging",
+    )
+    iterator = InteractionsAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="gemini/gemini-3-pro-preview",
+        interactions_api_config=None,
+        logging_obj=logging_obj,
+    )
+    iterator.completed_response = InteractionsAPIStreamingResponse()
+
+    existing_tasks = asyncio.all_tasks()
+    iterator._handle_logging_completed_response()
+    spawned_tasks = asyncio.all_tasks() - existing_tasks
+    await asyncio.wait_for(asyncio.gather(*spawned_tasks, return_exceptions=True), timeout=5)
+
+    assert spawned_task_names == ["Interactions stream success logging"]
+
+
 class _SuccessRecorder(CustomLogger):
     def __init__(self):
         super().__init__()
