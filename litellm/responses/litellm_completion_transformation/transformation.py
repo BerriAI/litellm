@@ -371,7 +371,7 @@ def _resolved_chat_config(model: str, custom_llm_provider: str | None) -> "BaseC
 
 def _routed_base_model(request_kwargs: Mapping[str, object]) -> object:
     base_model: Final = request_kwargs.get("base_model")
-    if base_model is not None:
+    if base_model:
         return base_model
     model_info: Final = as_str_mapping(request_kwargs.get("model_info"))
     return None if model_info is None else model_info.get("base_model")

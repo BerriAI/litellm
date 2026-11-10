@@ -5784,6 +5784,11 @@ _ROUTED_BASE_MODEL_CASES: Final = (
     pytest.param({"model_info": {"base_model": "anthropic.claude-opus-5-5"}}, [("user", "")], id="model_info_base_model"),
     pytest.param({"model_info": {}}, [], id="no_base_model"),
     pytest.param(
+        {"base_model": "", "model_info": {"base_model": "anthropic.claude-opus-5-5"}},
+        [("user", "")],
+        id="empty_request_base_model_falls_back",
+    ),
+    pytest.param(
         {"base_model": "amazon.nova-pro-v1:0", "model_info": {"base_model": "anthropic.claude-opus-5-5"}},
         [],
         id="request_base_model_wins",
