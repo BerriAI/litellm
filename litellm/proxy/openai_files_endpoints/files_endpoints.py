@@ -183,6 +183,9 @@ async def _litellm_executed_batch_input_model(
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
 _LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
 _REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DECODED_BODY_STALE_HEADERS: Final = frozenset(
+    {"content-encoding", "content-length", "transfer-encoding", "connection"}
+)
 
 
 class UploadedFileInfo(TypedDict):
@@ -1238,7 +1241,13 @@ async def get_file_content(
         return Response(
             content=httpx_response.content,
             status_code=httpx_response.status_code,
-            headers=httpx_response.headers,
+            headers=httpx.Headers(
+                [
+                    (name, value)
+                    for name, value in httpx_response.headers.multi_items()
+                    if name.lower() not in _DECODED_BODY_STALE_HEADERS
+                ]
+            ),
         )
 
     except Exception as e:
