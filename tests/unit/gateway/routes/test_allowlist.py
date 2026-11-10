@@ -4,7 +4,7 @@ from typing import Final
 
 import pytest
 
-from backend.routes.allowlist import BACKEND_EXACT_PATHS
+from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
 from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
 
 _INGRESS_TEMPLATE: Final = Path(__file__).parents[4] / "helm" / "litellm" / "templates" / "ingress.yaml"
@@ -24,6 +24,17 @@ _CHART_PREFIXES: Final = _template_list("gatewayPrefixes")
 _CHART_EXACT_PATHS: Final = _template_list("gatewayExactPaths")
 
 
+def _backend_keeps(path: str) -> bool:
+    return path in BACKEND_EXACT_PATHS or any(path.startswith(prefix) for prefix in BACKEND_PATH_PREFIXES)
+
+
+_GATEWAY_ONLY_PREFIXES: Final = sorted(
+    frozenset(prefix for prefix in GATEWAY_PATH_PREFIXES if not _backend_keeps(prefix))
+    - _PREFIXES_AN_INGRESS_CANNOT_ROUTE
+)
+_GATEWAY_ONLY_EXACT_PATHS: Final = sorted(path for path in GATEWAY_EXACT_PATHS if not _backend_keeps(path))
+
+
 def _routed_to_gateway_by_chart_prefix(path: str) -> bool:
     trimmed: Final = path.rstrip("/")
     return any(trimmed == prefix or trimmed.startswith(f"{prefix}/") for prefix in _CHART_PREFIXES)
@@ -38,12 +49,12 @@ def _gateway_serves_something_under(chart_prefix: str) -> bool:
     return by_prefix or any(path == chart_prefix or path.startswith(under) for path in GATEWAY_EXACT_PATHS)
 
 
-@pytest.mark.parametrize("prefix", sorted(frozenset(GATEWAY_PATH_PREFIXES) - _PREFIXES_AN_INGRESS_CANNOT_ROUTE))
-def test_ingress_sends_every_gateway_prefix_to_the_gateway(prefix: str) -> None:
+@pytest.mark.parametrize("prefix", _GATEWAY_ONLY_PREFIXES)
+def test_ingress_sends_every_gateway_only_prefix_to_the_gateway(prefix: str) -> None:
     assert _routed_to_gateway_by_chart_prefix(prefix)
 
 
-@pytest.mark.parametrize("path", sorted(GATEWAY_EXACT_PATHS - BACKEND_EXACT_PATHS))
+@pytest.mark.parametrize("path", _GATEWAY_ONLY_EXACT_PATHS)
 def test_ingress_sends_every_gateway_only_exact_path_to_the_gateway(path: str) -> None:
     assert path in _CHART_EXACT_PATHS or _routed_to_gateway_by_chart_prefix(path)
 
