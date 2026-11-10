@@ -16,7 +16,7 @@ from litellm.llms.chatgpt import authenticator as chatgpt_authenticator
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.db.health_check_latest import LatestHealthCheckRow
-from litellm.proxy.health_check import _same_health_check_model
+from litellm.proxy.health_check import _same_health_check_model, update_litellm_params_for_health_check
 from litellm.proxy.health_endpoints._health_endpoints import (
     _aggregate_health_check_results,
     _build_model_param_to_info_mapping,
@@ -1131,6 +1131,24 @@ async def test_equivalent_health_check_model_names_keep_deployment_prices(
     assert health["response_cost"] == 10 * model_info["input_cost_per_token"] + 5 * model_info["output_cost_per_token"]
     assert health["model"] == "health-probe"
     assert health["model_id"] == deployment_id
+
+
+def test_health_check_without_deployment_model_keeps_probe_but_drops_deployment_prices() -> None:
+    deployment_info: Final = {
+        "id": "probe-deployment",
+        "base_model": "openai/deployment-model",
+        "input_cost_per_token": 0.02,
+        "output_cost_per_token": 0.03,
+    }
+    probe_model: Final = "openai/health-probe"
+
+    probe_params: Final = update_litellm_params_for_health_check(
+        model_info={"mode": "chat", "health_check_model": probe_model},
+        litellm_params={"model_info": deployment_info},
+    )
+
+    assert probe_params["model"] == probe_model
+    assert probe_params["model_info"] == {"id": deployment_info["id"]}
 
 
 @pytest.mark.parametrize(("model", "expected"), [("health-probe", True), ("other-health-probe", False)])
