@@ -12,7 +12,8 @@ use crate::{
     anthropic::common_utils::{
         flatten_unencrypted_raw_web_search_results, flatten_unencrypted_web_search_results,
         map_messages, sanitize_raw_tool_use_ids, sanitize_tool_use_ids, strip_empty_content_blocks,
-        strip_empty_raw_content_blocks, strip_provider_specific_fields,
+        strip_empty_raw_content_blocks, strip_encrypted_reasoning_blocks,
+        strip_provider_specific_fields, strip_raw_encrypted_reasoning_blocks,
         strip_raw_provider_specific_fields,
     },
     base_llm::messages::context::MessagesShapeOptions,
@@ -56,12 +57,15 @@ pub fn shape_anthropic_messages_request(
 
 fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
     strip_provider_specific_fields(flatten_unencrypted_web_search_results(
-        sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
+        sanitize_tool_use_ids(strip_empty_content_blocks(
+            strip_encrypted_reasoning_blocks(messages),
+        )),
     ))
 }
 
 fn sanitize_raw_anthropic_message(message: Value) -> Option<Value> {
-    strip_empty_raw_content_blocks(message)
+    strip_raw_encrypted_reasoning_blocks(message)
+        .and_then(strip_empty_raw_content_blocks)
         .and_then(sanitize_raw_tool_use_ids)
         .and_then(flatten_unencrypted_raw_web_search_results)
         .and_then(strip_raw_provider_specific_fields)
@@ -217,6 +221,16 @@ mod tests {
             ]},
             {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"}]}
         ]),
+    )]
+    #[case::gemini_empty_signed_carrier_strips_sibling_unsigned_thinking_before_empty_check(
+        json!([{"role": "assistant", "content": [
+            {"type": "thinking", "thinking": "streamed thought", "signature": ""},
+            {"type": "thinking", "thinking": "", "signature": "litellm_thought_signature:EvkFCvY"},
+            {"type": "text", "text": "Answer."}
+        ]}]),
+        json!([{"role": "assistant", "content": [
+            {"type": "text", "text": "Answer."}
+        ]}]),
     )]
     fn sanitize_anthropic_messages_cleans_replayed_history(
         #[case] history: Value,
