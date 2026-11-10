@@ -353,6 +353,10 @@ class ModelInfo(MirroredPricingParams):
 
     max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
 
+    # deployments that set the same value share one provider encryption boundary, so encrypted reasoning
+    # minted on one can be replayed to another (e.g. regional endpoints of one OpenAI organization)
+    encrypted_content_boundary: Annotated[str, Field(min_length=1)] | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided

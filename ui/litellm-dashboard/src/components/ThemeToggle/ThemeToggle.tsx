@@ -7,6 +7,8 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 
+const oppositeTheme = (isDark: boolean) => (isDark ? "light" : "dark");
+
 const ThemeToggle: React.FC = () => {
   const { t } = useTranslation();
   const { setTheme, resolvedTheme } = useTheme();
@@ -20,7 +22,7 @@ const ThemeToggle: React.FC = () => {
       aria-label={label}
       title={label}
       className="text-muted-foreground"
-      onClick={() => setTheme(isDark ? "light" : "dark")}
+      onClick={() => setTheme(oppositeTheme(isDark))}
     >
       {isDark ? <Moon /> : <Sun />}
     </Button>

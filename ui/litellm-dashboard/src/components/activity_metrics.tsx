@@ -28,6 +28,8 @@ import type { ModelTopKeysResponse } from "./UsagePage/dailyActivityApi";
 import { DailyData, KeyMetricWithMetadata, ModelActivityData, TopModelData } from "./UsagePage/types";
 import { averageResponseTimeMs, formatResponseTime, valueFormatter } from "./UsagePage/utils/value_formatters";
 
+const UNKNOWN_MODEL_NAME = "Unknown Model";
+
 interface ActivityMetricsProps {
   modelMetrics: Record<string, ModelActivityData>;
   summaryMetrics?: ModelActivityData;
@@ -680,7 +682,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
                 }
               >
                 <ModelSection
-                  modelName={modelName || "Unknown Model"}
+                  modelName={modelName || UNKNOWN_MODEL_NAME}
                   metrics={metrics}
                   hidePromptCachingMetrics={hidePromptCachingMetrics}
                   fetchTopApiKeys={fetchTopApiKeys}

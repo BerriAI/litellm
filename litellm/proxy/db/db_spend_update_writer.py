@@ -28,6 +28,7 @@ from typing_extensions import LiteralString, ReadOnly, TypedDict
 import litellm
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.accounting.metrics import Cadence
 from litellm.caching import RedisCache
 from litellm.constants import (
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
@@ -38,6 +39,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
 from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
@@ -682,8 +684,11 @@ class DBSpendUpdateWriter:
     def __init__(
         self,
         redis_cache: RedisCache | None = None,
+        accounting_clock: Callable[[], float] = time.monotonic,
     ):
         self.redis_cache = redis_cache
+        self.accounting_storage_checks = Cadence(accounting_clock)
+        self.accounting_delay_alerts = Cadence(accounting_clock)
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
         self.pod_lock_manager = PodLockManager()
         self.spend_update_queue = SpendUpdateQueue()
@@ -3160,6 +3165,10 @@ class DBSpendUpdateWriter:
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
                 gateway_injected_caching_savings_spend=savings_spend.gateway_injected_caching,
                 autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
+                guardrail_spend=guardrail_share_of_spend(
+                    _metadata,
+                    payload["spend"],  # pyright: ignore[reportUnknownArgumentType]  # legacy dict | SpendLogsPayload union
+                ),
                 total_response_time_ms=timed_duration_ms or 0,
                 timed_requests=0 if timed_duration_ms is None else 1,
             )

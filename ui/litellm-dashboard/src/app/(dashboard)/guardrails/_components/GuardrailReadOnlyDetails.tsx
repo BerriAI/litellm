@@ -5,6 +5,8 @@ import { GuardrailModeRows } from "./GuardrailModeDisplay";
 import { GuardrailStreamScopeDetail } from "./StreamScopeFields";
 import ToolPermissionRulesEditor, { type ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
 
+const DEFAULT_CHECK_ACTION = "block";
+
 interface DecisionModelCheckView {
   name: string;
   action?: string;
@@ -35,7 +37,7 @@ const DecisionModelSection = ({
           <div key={check.name} className="flex items-center border-b border-border px-4 py-2 text-sm last:border-b-0">
             <span className="flex-1">{check.name.replace(/_/g, " ")}</span>
             <span className="w-24 text-right">
-              <Badge variant="secondary">{check.action ?? "block"}</Badge>
+              <Badge variant="secondary">{check.action ?? DEFAULT_CHECK_ACTION}</Badge>
             </span>
             <span className="w-24 text-right">{check.threshold ?? DEFAULT_DECISION_THRESHOLD}</span>
           </div>
