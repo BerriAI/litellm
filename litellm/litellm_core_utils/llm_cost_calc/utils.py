@@ -2152,11 +2152,15 @@ def calculate_image_response_cost_from_usage(
                 else None
             )
         )
+        has_complete_cache_split: Final = (
+            modality_cache is not None
+            and (modality_cache.text_tokens or 0) + (modality_cache.image_tokens or 0) == cached_tokens
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
             text_tokens=text_input_tokens,
             image_tokens=image_input_tokens,
-            cached_tokens=cached_tokens,
-            cached_tokens_details=modality_cache,
+            cached_tokens=cached_tokens if has_complete_cache_split else 0,
+            cached_tokens_details=modality_cache if has_complete_cache_split else None,
         )
 
     completion_tokens_details_attr: Final[object] = getattr(usage, "completion_tokens_details", None)

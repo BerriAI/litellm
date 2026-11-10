@@ -35,8 +35,18 @@ REALTIME_OUTPUT_AUDIO_TOKENS: Final = 7
         (0, None, 4 * 0.000005 + 6 * 0.000008),
         (10, None, 4 * 0.00000125 + 6 * 0.000002),
         (5, {"text_tokens": 2, "image_tokens": 3}, 2 * 0.000005 + 3 * 0.000008 + 2 * 0.00000125 + 3 * 0.000002),
+        (5, None, 4 * 0.000005 + 6 * 0.000008),
+        (5, {}, 4 * 0.000005 + 6 * 0.000008),
+        (5, {"text_tokens": 2}, 4 * 0.000005 + 6 * 0.000008),
     ),
-    ids=("uncached", "fully_cached", "partial_modality_cache"),
+    ids=(
+        "uncached",
+        "fully_cached",
+        "partial_modality_cache",
+        "partial_cache_without_split",
+        "partial_cache_empty_split",
+        "partial_cache_incomplete_split",
+    ),
 )
 def test_image_usage_cache_discounts_are_reported_and_persisted(
     gateway: Gateway,
