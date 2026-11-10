@@ -4269,6 +4269,26 @@ async def test_a_guardrail_masks_the_arguments_of_a_replayed_claude_tool_search_
 
 
 @pytest.mark.asyncio
+async def test_a_follow_up_without_a_search_tool_still_scans_the_claude_search_and_keeps_it_through_a_rewrite() -> None:
+    guardrail: Final = _WordMaskingGuardrail("Paris")
+    sent_input: Final = [{"role": "user", "content": "What is the weather?"}, *_REPLAYED_CLAUDE_SEARCH_INPUT[1:]]
+    data: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "input": copy.deepcopy(sent_input),
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}}],
+    }
+
+    result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.seen_tool_call_arguments == ['{"pattern": "Paris weather"}', '{"city": "Paris"}']
+    assert result["input"][1:4] == [
+        {**sent_input[1], "arguments": {"pattern": "[MASKED] weather"}},
+        sent_input[2],
+        {**sent_input[3], "arguments": '{"city": "[MASKED]"}'},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_guardrail_rewriting_another_turn_leaves_a_replayed_claude_tool_search_as_sent() -> None:
     data: Final = {
         "model": "anthropic/claude-sonnet-5-5",
