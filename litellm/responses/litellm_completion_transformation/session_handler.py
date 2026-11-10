@@ -468,6 +468,7 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
+                    replay_tool_search=True,
                 )
             )
 
@@ -484,6 +485,7 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
+                    replay_tool_search=True,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
