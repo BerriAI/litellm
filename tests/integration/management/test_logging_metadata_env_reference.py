@@ -110,17 +110,53 @@ def test_user_new_refuses_an_env_reference_in_its_keys_logging_metadata(gateway:
         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE user_id = %s', (user,)) == []
 
 
-def test_user_new_without_a_key_still_accepts_the_metadata(gateway: Gateway) -> None:
+def test_user_new_without_a_key_refuses_an_env_reference(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         user: Final = f"env-reference-{uuid.uuid4().hex}"
-        created: Final = gateway.request(
+        refused: Final = gateway.request(
             "POST", "/user/new", {"user_id": user, "metadata": _logging(SPACE_ID), "auto_create_key": False}
         )
-        if created.status_code == 200:
+        if refused.status_code == 200:
             scenario.cleanups.callback(scenario.delete_user, user)
-        assert created.status_code == 200, created.text
-        assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == [{"user_id": user}]
-        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE user_id = %s', (user,)) == []
+        _assert_refused(refused, SPACE_ID)
+        assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == []
+
+
+@pytest.mark.parametrize("field", FIELDS)
+def test_user_update_refuses_an_env_reference_in_logging_metadata(gateway: Gateway, field: str) -> None:
+    with gateway.scenario() as scenario:
+        user: Final = scenario.user(metadata={"owner": "env-reference-audit"})
+        refused: Final = gateway.request("POST", "/user/update", {"user_id": user, "metadata": _logging(field)})
+        _assert_refused(refused, field)
+        rows: Final = read_rows('SELECT metadata FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,))
+        assert rows == [{"metadata": {"owner": "env-reference-audit"}}]
+
+
+def _callback_settings(field: str) -> dict[str, JsonValue]:
+    return {
+        "callback_settings": {
+            "success_callback": ["arize"],
+            "callback_vars": {**LITERAL_VARS, field: REFERENCE},
+        }
+    }
+
+
+@pytest.mark.parametrize("field", FIELDS)
+def test_team_writes_refuse_an_env_reference_in_callback_settings(gateway: Gateway, field: str) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team(metadata={"owner": "env-reference-audit"})
+        updated: Final = gateway.request("POST", "/team/update", {"team_id": team, "metadata": _callback_settings(field)})
+        _assert_refused(updated, field)
+        patched: Final = gateway.request("PATCH", f"/team/{team}", {"metadata": _callback_settings(field)})
+        _assert_refused(patched, field)
+        assert "already stores" not in patched.text
+        assert _team_metadata(team) == {"owner": "env-reference-audit"}
+        alias: Final = f"env-reference-{uuid.uuid4().hex}"
+        created: Final = gateway.request("POST", "/team/new", {"team_alias": alias, "metadata": _callback_settings(field)})
+        if created.status_code == 200:
+            scenario.cleanups.callback(scenario.delete_team, string_value(created.json()["team_id"]))
+        _assert_refused(created, field)
+        assert read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_alias = %s', (alias,)) == []
 
 
 def test_team_key_bulk_update_reports_the_key_with_an_env_reference_as_failed(gateway: Gateway) -> None:
@@ -162,6 +198,7 @@ def test_a_stored_env_reference_blocks_metadata_saves_until_it_is_removed(gatewa
         write_rows('UPDATE "LiteLLM_TeamTable" SET metadata = %s::jsonb WHERE team_id = %s', (json.dumps(legacy), team))
         patched: Final = gateway.request("PATCH", f"/team/{team}", {"metadata": {"cost_center": "1"}})
         _assert_refused(patched, SPACE_ID)
+        assert f"Team {team} already stores this reference" in patched.text, patched.text
         assert _team_metadata(team) == legacy
         unrelated: Final = gateway.request("POST", "/team/update", {"team_id": team, "tpm_limit": 5000})
         assert unrelated.status_code == 200, unrelated.text
@@ -183,7 +220,7 @@ def test_bulk_user_creation_refuses_only_the_row_with_an_env_reference(gateway: 
             BULK_ROUTE,
             {
                 "users": [
-                    {"user_id": refused_user, "metadata": _logging(field), "auto_create_key": True},
+                    {"user_id": refused_user, "metadata": _logging(field), "auto_create_key": False},
                     {"user_id": plain_user, "auto_create_key": True},
                 ]
             },

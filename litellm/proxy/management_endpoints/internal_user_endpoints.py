@@ -593,9 +593,9 @@ async def new_user(
                 detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}",
             )
 
+        raise_on_logging_metadata_env_reference(data.metadata)
         if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
-            raise_on_logging_metadata_env_reference(data.metadata)
 
         check_permissions_caller_permission(
             data=data,

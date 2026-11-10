@@ -306,9 +306,11 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
 
 
 def logging_metadata_env_reference_error(metadata: Mapping[str, object] | None) -> str | None:
-    entries: Final = _object_sequence(metadata.get("logging")) if metadata else None
+    if not metadata:
+        return None
+    entries: Final = (*(_object_sequence(metadata.get("logging")) or ()), metadata.get("callback_settings"))
     return next(
-        (error for entry in entries or () if (error := _entry_env_reference_error(entry)) is not None),
+        (error for entry in entries if (error := _entry_env_reference_error(entry)) is not None),
         None,
     )
 
@@ -319,6 +321,22 @@ def raise_on_logging_metadata_env_reference(metadata: object) -> None:
     error: Final = logging_metadata_env_reference_error(_LOGGING_METADATA.validate_python(metadata))
     if error is not None:
         raise HTTPException(status_code=400, detail={"error": error})
+
+
+def raise_on_stored_team_metadata_env_reference(team_id: str, metadata_patch: object, merged_metadata: object) -> None:
+    raise_on_logging_metadata_env_reference(metadata_patch)
+    if merged_metadata is None:
+        return
+    error: Final = logging_metadata_env_reference_error(_LOGGING_METADATA.validate_python(merged_metadata))
+    if error is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Team {team_id} already stores this reference in its metadata, so it must be removed "
+                "before metadata can be patched. Send metadata.logging or metadata.callback_settings without "
+                f"it to clear it. {error}"
+            },
+        )
 
 
 def _entry_env_reference_error(entry: object) -> str | None:

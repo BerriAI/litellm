@@ -131,7 +131,10 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_shared,
     publish_auth_cache_invalidation,
 )
-from litellm.proxy.common_utils.callback_config_validation import raise_on_logging_metadata_env_reference
+from litellm.proxy.common_utils.callback_config_validation import (
+    raise_on_logging_metadata_env_reference,
+    raise_on_stored_team_metadata_env_reference,
+)
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
@@ -2975,7 +2978,9 @@ async def patch_team(
                     detail={"error": f"Team not found, passed team_id={team_id}"},
                 )
             existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
+            merged_metadata: Final = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
+            raise_on_stored_team_metadata_env_reference(team_id, patch_fields["metadata"], merged_metadata)
+            patch_fields["metadata"] = merged_metadata
 
         update_request: Final = UpdateTeamRequest.model_validate({"team_id": team_id, **patch_fields})
 
