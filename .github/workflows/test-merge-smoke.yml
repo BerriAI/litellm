@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
 
       - name: Build the dashboard stage
-        run: docker build --target ui-builder -f Dockerfile .
+        run: docker build --target ui-builder -f litellm/deploy/docker/Dockerfile .
 
   core-checks:
     name: py${{ matrix.python-version }}

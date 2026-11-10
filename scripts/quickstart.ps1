@@ -41,7 +41,7 @@ function Invoke-LiteLLMQuickstart {
   $ProgressPreference = 'SilentlyContinue'
   Set-StrictMode -Version 2
 
-  $composeUrl = 'https://raw.githubusercontent.com/BerriAI/litellm/main/docker/docker-compose.quickstart.yml'
+  $composeUrl = 'https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/deploy/docker/docker-compose.quickstart.yml'
   if ($env:LITELLM_COMPOSE_URL) { $composeUrl = $env:LITELLM_COMPOSE_URL }
   $scriptUrl = 'https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.ps1'
   if ($env:LITELLM_SCRIPT_URL) { $scriptUrl = $env:LITELLM_SCRIPT_URL }

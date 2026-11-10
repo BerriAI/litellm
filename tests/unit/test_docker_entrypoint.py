@@ -12,11 +12,11 @@ import pytest
 from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-DOCKER_ENTRYPOINT: Final = REPO_ROOT / "docker-entrypoint.sh"
-DOCKERFILE: Final = REPO_ROOT / "Dockerfile"
+DOCKER_ENTRYPOINT: Final = REPO_ROOT / "litellm/deploy/docker/docker-entrypoint.sh"
+DOCKERFILE: Final = REPO_ROOT / "litellm/deploy/docker/Dockerfile"
 TERRAFORM_MODULES: Final = {
-    "aws": REPO_ROOT / "terraform" / "litellm" / "aws",
-    "gcp": REPO_ROOT / "terraform" / "litellm" / "gcp",
+    "aws": REPO_ROOT / "litellm" / "deploy" / "terraform" / "litellm" / "aws",
+    "gcp": REPO_ROOT / "litellm" / "deploy" / "terraform" / "litellm" / "gcp",
 }
 
 IMAGE_ENTRYPOINT_PATH: Final = "/app/docker-entrypoint.sh"

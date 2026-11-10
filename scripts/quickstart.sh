@@ -34,7 +34,7 @@
 # Everything runs inside main(), so a partial download runs nothing.
 set -eu
 
-COMPOSE_URL="${LITELLM_COMPOSE_URL:-https://raw.githubusercontent.com/BerriAI/litellm/main/docker/docker-compose.quickstart.yml}"
+COMPOSE_URL="${LITELLM_COMPOSE_URL:-https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/deploy/docker/docker-compose.quickstart.yml}"
 SCRIPT_URL="${LITELLM_SCRIPT_URL:-https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.sh}"
 # A port set by the caller is never moved; later steps export LITELLM_PORT too.
 PORT_PINNED="${LITELLM_PORT:+1}"

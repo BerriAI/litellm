@@ -131,6 +131,18 @@ def test_accepts_expected_release_wheel_tags(tmp_path: Path) -> None:
     assert _run_verifier(wheel) == 0
 
 
+@pytest.mark.parametrize("member", ("litellm/deploy/docker/Dockerfile", "litellm/deploy/cosign.pub"))
+def test_rejects_deployment_sources_in_the_wheel(
+    tmp_path: Path, member: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wheel: Final = _write_wheel(tmp_path, filename_tag=_EXPECTED_TAG)
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr(member, "deployment source")
+
+    assert _run_verifier(wheel) == 1
+    assert member in capsys.readouterr().err
+
+
 def test_rejects_cp312_version_specific_wheel(tmp_path: Path) -> None:
     tag: Final = "cp312-cp312-linux_x86_64"
     wheel: Final = _write_wheel(tmp_path, filename_tag=tag, metadata_tags=(tag,))

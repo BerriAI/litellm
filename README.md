@@ -526,7 +526,7 @@ Run the LiteLLM proxy as a production-ready componentized stack (gateway, backen
 
 ```bash
 git clone https://github.com/BerriAI/litellm.git
-cd litellm/terraform/litellm/aws/examples/default
+cd litellm/litellm/deploy/terraform/litellm/aws/examples/default
 cp terraform.tfvars.example terraform.tfvars   # edit region/tenant/env
 terraform init && terraform apply
 ```
@@ -579,7 +579,7 @@ Provider API keys live in AWS Secrets Manager; reference ARNs via `gateway_extra
 
 [![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.png)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Fterraform-google-litellm&cloudshell_git_branch=v1.105.0&cloudshell_workspace=examples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true)
 
-Real 1-click. Opens Cloud Shell, clones the [terraform-google-litellm](https://github.com/BerriAI/terraform-google-litellm) module mirror at the latest stable release (a small download instead of the full litellm repo), and walks you through `terraform apply` via a built-in [DeployStack tutorial](./terraform/litellm/gcp/examples/default/TUTORIAL.md). Pick the project, the tutorial sets up the Artifact Registry remote repo, writes `terraform.tfvars` from your answers, and runs apply
+Real 1-click. Opens Cloud Shell, clones the [terraform-google-litellm](https://github.com/BerriAI/terraform-google-litellm) module mirror at the latest stable release (a small download instead of the full litellm repo), and walks you through `terraform apply` via a built-in [DeployStack tutorial](./litellm/deploy/terraform/litellm/gcp/examples/default/TUTORIAL.md). Pick the project, the tutorial sets up the Artifact Registry remote repo, writes `terraform.tfvars` from your answers, and runs apply
 
 [Module page →](https://registry.terraform.io/modules/BerriAI/litellm/google/latest)
 
@@ -646,14 +646,14 @@ Provider API keys live in Secret Manager; reference resource IDs (e.g. `projects
 - Versioned object store for proxy state + file uploads
 - An auto-generated `LITELLM_MASTER_KEY` in your cloud's secret manager
 - A one-off migration job that runs `prisma migrate deploy` before the proxy starts
-- The same `proxy_config` surface as the [Helm chart](./helm/litellm/) — pass YAML as a typed map
+- The same `proxy_config` surface as the [Helm chart](./litellm/deploy/helm/litellm/) — pass YAML as a typed map
 
-The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws/) and [`terraform/litellm/gcp/`](./terraform/litellm/gcp/) in this repo; the registry entries are read-only mirrors updated on each release.
+The Terraform modules live at [`litellm/deploy/terraform/litellm/aws/`](./litellm/deploy/terraform/litellm/aws/) and [`litellm/deploy/terraform/litellm/gcp/`](./litellm/deploy/terraform/litellm/gcp/) in this repo; the registry entries are read-only mirrors updated on each release.
 
 ### Run in Developer Mode
 #### Services
 1. Setup .env file in root
-2. Run dependent services `docker-compose up db prometheus`
+2. Run dependent services `docker compose -f litellm/deploy/compose/docker-compose.yml up db prometheus`
 
 #### Backend
 1. Run `make bootstrap`
@@ -683,7 +683,7 @@ Tags are protected in this repository and resolve to the same key. This option i
 
 ```bash
 cosign verify \
-  --key https://raw.githubusercontent.com/BerriAI/litellm/<release-tag>/cosign.pub \
+  --key https://raw.githubusercontent.com/BerriAI/litellm/<release-tag>/litellm/deploy/cosign.pub \
   ghcr.io/berriai/litellm:<release-tag>
 ```
 

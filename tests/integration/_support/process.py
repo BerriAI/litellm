@@ -953,7 +953,7 @@ def owned_gateway_image(
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     command: Final = (
-        str(root / "docker-entrypoint.sh"),
+        str(root / "litellm/deploy/docker/docker-entrypoint.sh"),
         sys.executable,
         "-m",
         "gateway.launch",

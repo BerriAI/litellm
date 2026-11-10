@@ -3,14 +3,14 @@ name: Terraform Provider
 on:
   push:
     paths:
-      - "terraform/provider/**"
+      - "litellm/deploy/terraform/provider/**"
       - ".github/workflows/test-terraform-provider.yml"
   pull_request:
     branches:
       - main
       - "litellm_**"
     paths:
-      - "terraform/provider/**"
+      - "litellm/deploy/terraform/provider/**"
       - "litellm/proxy/**"
       - "enterprise/**"
       - ".github/workflows/test-terraform-provider.yml"
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: terraform/provider
+        working-directory: litellm/deploy/terraform/provider
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -37,9 +37,9 @@ jobs:
 
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
-          go-version-file: terraform/provider/go.mod
+          go-version-file: litellm/deploy/terraform/provider/go.mod
           cache: true
-          cache-dependency-path: terraform/provider/go.sum
+          cache-dependency-path: litellm/deploy/terraform/provider/go.sum
 
       - name: gofmt
         run: |
@@ -115,14 +115,14 @@ jobs:
 
       - name: Generate proxy OpenAPI schema
         run: |
-          uv run --no-sync python terraform/provider/tools/dump_openapi.py "${RUNNER_TEMP}/openapi.json"
+          uv run --no-sync python litellm/deploy/terraform/provider/tools/dump_openapi.py "${RUNNER_TEMP}/openapi.json"
 
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
-          go-version-file: terraform/provider/go.mod
+          go-version-file: litellm/deploy/terraform/provider/go.mod
           cache: true
-          cache-dependency-path: terraform/provider/go.sum
+          cache-dependency-path: litellm/deploy/terraform/provider/go.sum
 
       - name: Audit provider endpoints against the schema
-        working-directory: terraform/provider
+        working-directory: litellm/deploy/terraform/provider
         run: go run ./tools/endpointaudit -provider-dir ./litellm -spec "${RUNNER_TEMP}/openapi.json" -coverage-allowlist ./tools/endpointaudit/coverage_allowlist.txt

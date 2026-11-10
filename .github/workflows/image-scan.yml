@@ -7,9 +7,9 @@ on:
       - litellm_oss_branch
       - "litellm_**"
     paths:
-      - Dockerfile
-      - .dockerignore
-      - docker-entrypoint.sh
+      - litellm/deploy/docker/Dockerfile
+      - litellm/deploy/docker/Dockerfile.dockerignore
+      - litellm/deploy/docker/docker-entrypoint.sh
       - migrations/run.py
       - gateway/main.py
       - gateway/launch.py
@@ -60,7 +60,7 @@ jobs:
           persist-credentials: false
 
       - name: Build the image
-        run: docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -t "$IMAGE" .
+        run: docker build -f litellm/deploy/docker/Dockerfile --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -t "$IMAGE" .
 
       - name: Save the image for the verify matrix
         run: docker save "$IMAGE" | zstd -T0 -3 -o "$RUNNER_TEMP/litellm-image.tar.zst"
@@ -73,7 +73,7 @@ jobs:
           compression-level: 0
 
       - name: Build the Admin MCP schema image
-        run: docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci --target builder -t "$ADMIN_MCP_SCHEMA_IMAGE" .
+        run: docker build -f litellm/deploy/docker/Dockerfile --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci --target builder -t "$ADMIN_MCP_SCHEMA_IMAGE" .
 
       - name: Save the Admin MCP schema image for the verify matrix
         run: docker save "$ADMIN_MCP_SCHEMA_IMAGE" | zstd -T0 -3 -o "$RUNNER_TEMP/litellm-admin-mcp-schema.tar.zst"

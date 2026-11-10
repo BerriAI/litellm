@@ -1342,7 +1342,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          chart=helm/litellm
+          chart=litellm/deploy/helm/litellm
           declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
           output="$(mktemp)"
           helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"

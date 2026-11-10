@@ -7,8 +7,8 @@ the app directly, so they call ``DatabaseURLSettings.from_env().apply_to_env()``
 to do the same thing before importing ``proxy_server``.
 
 The env var names this module reads are exactly the ones emitted by the
-``helm/litellm`` chart's ``litellm.serverEnv`` block
-(``helm/litellm/templates/_helpers.tpl``). Both auth styles and both
+``litellm/deploy/helm/litellm`` chart's ``litellm.serverEnv`` block
+(``litellm/deploy/helm/litellm/templates/_helpers.tpl``). Both auth styles and both
 endpoints are covered:
 
   * Token auth (``IAM_TOKEN_DB_AUTH`` truthy for AWS RDS IAM, or

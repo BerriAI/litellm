@@ -352,6 +352,8 @@ include = [
     { path = "model_prices_and_context_window.json", format = "sdist" },
 ]
 exclude = [
+    "litellm/deploy",
+    "litellm/deploy/**",
     "litellm/proxy/discovery_endpoints/skill_scanner_adapter",
     "litellm/proxy/discovery_endpoints/skill_scanner_adapter/**",
     "litellm/proxy/enterprise",
@@ -517,7 +519,7 @@ lint.external = [
 ]
 line-length = 120
 
-extend-exclude = ["litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
+extend-exclude = ["litellm/deploy", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
 
 format.exclude = ["**/enterprise/**"]
 
@@ -549,7 +551,7 @@ banned-module-level-imports = ["prisma"]
 [tool.pyright]
 include = ["litellm", "litellm_cli"]
 ignore = []
-exclude = ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
+exclude = ["**/node_modules", "**/__pycache__", "tests/e2e/claude_code", "tests/e2e_harness/claude_code", "tests/e2e/ui", "litellm/types/utils.py", "litellm/proxy/_types.py", "litellm/deploy", "litellm/proxy/discovery_endpoints/skill_scanner_adapter"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 enableTypeIgnoreComments = false

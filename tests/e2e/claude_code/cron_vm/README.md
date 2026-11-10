@@ -105,7 +105,7 @@ the same values if it ever has to be rebuilt.
 | Workspace | Litellm (the one that already builds the other litellm services) |
 | Type | Cron job, Docker runtime |
 | Repo / branch | `BerriAI/litellm` @ `main` |
-| Image | Built from the recipe under [Image](#image). Render only builds a Dockerfile that lives in the connected repo, and this repo ships exactly one Dockerfile (the LiteLLM image in its root), so the service has to point at a copy of the recipe kept with the service or at a prebuilt image |
+| Image | Built from the recipe under [Image](#image). Render only builds a Dockerfile that lives in the connected repo, and this repo ships exactly one Dockerfile (the LiteLLM image at `litellm/deploy/docker/Dockerfile`), so the service has to point at a copy of the recipe kept with the service or at a prebuilt image |
 | Docker build context | `tests/e2e` (the repo root `.dockerignore` excludes `tests`, so the context has to start below it) |
 | Build filter | included paths `tests/e2e/**` |
 | Schedule | `0 6 * * *` (06:00 UTC daily) |
@@ -158,7 +158,7 @@ this `tests/e2e/` tree copied to `/opt/litellm/tests/e2e/`. Runs as the
 non-root user `populator` (uid/gid 1000, which is what Render's secret
 files are readable by). This is the recipe the Render service builds;
 it lives with the service because the repo ships exactly one Dockerfile,
-the LiteLLM image in its root
+the LiteLLM image at `litellm/deploy/docker/Dockerfile`
 
 ```dockerfile
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
