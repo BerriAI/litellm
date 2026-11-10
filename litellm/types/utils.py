@@ -476,6 +476,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_512: ReadOnly[float | None]
     output_cost_per_image_1024: ReadOnly[float | None]
     output_cost_per_image_1536: ReadOnly[float | None]
+    output_cost_per_image_1K: ReadOnly[float | None]
+    output_cost_per_image_2K: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
@@ -4151,6 +4153,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_512: float | None = None
     output_cost_per_image_1024: float | None = None
     output_cost_per_image_1536: float | None = None
+    output_cost_per_image_1K: float | None = None
+    output_cost_per_image_2K: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 

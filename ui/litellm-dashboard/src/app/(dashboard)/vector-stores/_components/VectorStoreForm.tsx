@@ -38,6 +38,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { credentialOptions } from "@/components/shared/credentialOptions";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 const EMBEDDING_MODEL_RENAME_PROVIDERS = new Set(["milvus", "valkey", "mongodb", "opensearch"]);
 
@@ -521,7 +522,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   rows={4}
                   value={metadataJson}
                   onChange={(event) => setMetadataJson(event.target.value)}
-                  placeholder='{"key": "value"}'
+                  placeholder={codeSamples.vectorStores.metadataJson}
                 />
               </div>
             </FieldGroup>

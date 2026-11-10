@@ -406,11 +406,15 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         header: ({ column }) => (
           <DataTableSortHeader column={column} title={t("teams.virtualKeysTable.columns.budgetReset")} />
         ),
-        size: 130,
+        size: 160,
         enableSorting: true,
         sortDescFirst: false,
         cell: (info) => (
-          <DateCell value={info.getValue() as string | null} fallback={t("teams.virtualKeysTable.dates.never")} />
+          <DateCell
+            value={info.getValue() as string | null}
+            fallback={t("teams.virtualKeysTable.dates.never")}
+            timeZone="UTC"
+          />
         ),
       },
       {

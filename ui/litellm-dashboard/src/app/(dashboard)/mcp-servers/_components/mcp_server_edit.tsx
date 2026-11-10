@@ -84,6 +84,7 @@ import {
   textControl,
 } from "./mcpFieldRules";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface MCPServerEditProps {
   mcpServer: MCPServer;
@@ -1095,7 +1096,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                           {...textControl(control)}
                           rows={6}
                           className="rounded-lg border-border focus:border-info focus:ring-ring font-mono text-sm"
-                          placeholder={`{\n  \"KEY\": \"value\"\n}`}
+                          placeholder={codeSamples.mcpServers.envJson}
                         />
                       )}
                     </MountedFormField>

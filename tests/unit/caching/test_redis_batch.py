@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Generic, TypeVar
+from typing import Any, Final, Generic, TypeVar
 
 import pytest
 from redis.exceptions import NoScriptError
@@ -23,11 +24,12 @@ from litellm.caching.redis_batch import (
 )
 from litellm.caching.redis_cache import (
     RedisCache,
-    RedisCircuitBreaker,
+    RedisHealth,
     _get_call_stack_info,  # pyright: ignore[reportPrivateUsage]  # the chain the service hook reports
 )
 from litellm.caching.redis_cluster_cache import RedisClusterCache
-from litellm.redis.store_settings import RedisStoreSettings, breaker_settings
+from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
+from litellm.rust_bridge._native import NativeRedisBreaker
 
 SCRIPT = "return redis.call('GET', KEYS[1])"
 _Answer = TypeVar("_Answer")
@@ -93,15 +95,22 @@ class FakeClient:
 
 
 class FakeRedisCache(RedisCache):
-    def __init__(self, client: FakeClient, namespace: str | None = None) -> None:  # super().__init__ needs a server
+    def __init__(
+        self, client: FakeClient, namespace: str | None = None, failure_threshold: int = 5
+    ) -> None:  # super().__init__ needs a server
         self.client = client
         self.namespace = namespace
-        self.redis_kwargs = {"host": "127.0.0.1", "port": 1, "socket_timeout": 0.2, "db": id(self) % 1_000_000}
-        self.store_settings = RedisStoreSettings(
-            redis_kwargs=self.redis_kwargs, namespace=namespace, default_ttl=60, breaker=breaker_settings()
-        )
-        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=5, recovery_timeout=30)
+        self.redis_kwargs = {"host": f"batch-{uuid.uuid4().hex}.invalid", "port": 1, "socket_timeout": 0.2}
         self.service_logger_obj = ServiceLogging()
+        breaker: Final = RedisBreakerSettings(
+            failure_threshold=failure_threshold, recovery_timeout=30.0, timeout_min_duration=5.0
+        )
+        self._health = RedisHealth(  # pyright: ignore[reportGeneralTypeIssues]  # the fake skips RedisCache.__init__, which sets it
+            NativeRedisBreaker.shared(self.redis_kwargs, breaker), self.service_logger_obj
+        )
+        self.store_settings = RedisStoreSettings(
+            redis_kwargs=self.redis_kwargs, namespace=namespace, default_ttl=60, breaker=breaker
+        )
         self.default_ttl = None
         self.alone: list[tuple[str, Any]] = []
         self.store: dict[str, Any] = {}
@@ -211,9 +220,11 @@ def fake_pending(send: object, answer: Callable[[], _Answer]) -> FakeNativePendi
     return FakeNativePending(send, answer) if isinstance(send, FakeNativeRequest) else ReadyPending(answer)
 
 
-def make(fail: Exception | None = None, namespace: str | None = None) -> tuple[FakeRedisCache, FakeClient]:
+def make(
+    fail: Exception | None = None, namespace: str | None = None, failure_threshold: int = 5
+) -> tuple[FakeRedisCache, FakeClient]:
     client = FakeClient(replies, fail)
-    return FakeRedisCache(client, namespace), client
+    return FakeRedisCache(client, namespace, failure_threshold), client
 
 
 async def run_alone_script(keys: Sequence[str], args: Sequence[Any]) -> object:
@@ -324,7 +335,7 @@ async def test_a_reply_an_operation_cannot_decode_fails_only_that_operation() ->
 
 @pytest.mark.asyncio
 async def test_pipeline_failure_fails_every_operation_and_trips_the_breaker() -> None:
-    cache, _client = make(fail=ConnectionError("redis down"))
+    cache, _client = make(fail=ConnectionError("redis down"), failure_threshold=1)
     batch = RedisBatch(cache)
     got = batch.mget(["a"])
     incr = batch.increment("cnt", 1)
@@ -332,7 +343,7 @@ async def test_pipeline_failure_fails_every_operation_and_trips_the_breaker() ->
         await got
     with pytest.raises(ConnectionError):
         await incr
-    assert cache._circuit_breaker._failure_count == 1  # pyright: ignore[reportPrivateUsage]
+    assert cache._health.breaker.state == "open"  # pyright: ignore[reportPrivateUsage]  # the breaker the pipeline fed
 
 
 @pytest.mark.asyncio
