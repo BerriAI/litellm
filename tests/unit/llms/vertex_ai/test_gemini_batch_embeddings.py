@@ -194,7 +194,7 @@ def test_parse_data_url_invalid_format():
     with pytest.raises(ValueError, match="Invalid data URL format"):
         _parse_data_url("not-a-data-url")
 
-    with pytest.raises(ValueError, match="missing comma"):
+    with pytest.raises(ValueError, match="Invalid data URL format"):
         _parse_data_url("data:image/png;base64")
 
 

@@ -10,6 +10,7 @@ from typing import Annotated, Final, Literal, cast
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.prompt_templates.image_handling import parse_data_uri
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.vertex_ai import (
@@ -116,25 +117,20 @@ def _parse_data_url(data_url: str, mime_type_override: str | None = None) -> tup
     Raises:
         ValueError: If data URL format is invalid or MIME type is unsupported
     """
-    if not data_url.startswith("data:"):
+    parsed: Final = parse_data_uri(data_url)
+    if parsed is None:
         raise ValueError(f"Invalid data URL format: {data_url[:50]}...")
 
-    if "," not in data_url:
-        raise ValueError(f"Invalid data URL format (missing comma): {data_url[:50]}...")
-
-    metadata, base64_data = data_url.split(",", 1)
-    declared_media_type: Final = metadata[5:].split(";")[0]
-
     if mime_type_override is not None:
-        return mime_type_override, base64_data
+        return mime_type_override, parsed.data
 
-    if declared_media_type not in SUPPORTED_EMBEDDING_MIME_TYPES:
+    if parsed.media_type not in SUPPORTED_EMBEDDING_MIME_TYPES:
         raise ValueError(
-            f"Unsupported MIME type for embedding: {declared_media_type}. "
+            f"Unsupported MIME type for embedding: {parsed.media_type}. "
             f"Supported types: {', '.join(sorted(SUPPORTED_EMBEDDING_MIME_TYPES))}"
         )
 
-    return declared_media_type, base64_data
+    return parsed.media_type, parsed.data
 
 
 def _is_data_url(s: str) -> bool:

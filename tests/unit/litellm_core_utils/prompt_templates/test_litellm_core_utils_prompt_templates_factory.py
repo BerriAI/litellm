@@ -6604,12 +6604,29 @@ def test_bedrock_tool_calling_pt():
         ("data:image/jpeg;base64,1234", "image/jpeg"),
         ("data:application/pdf;base64,1234", "application/pdf"),
         (r"data:image\/jpeg;base64,1234", "image/jpeg"),
+        ("data:image/png;charset=utf-8;base64,1234", "image/png"),
+        ("data:image/PNG;base64,1234", "image/png"),
     ],
 )
 def test_base64_image_input(url, expected_media_type):
     response = convert_to_anthropic_image_obj(openai_image_url=url, format=None)
 
     assert response["media_type"] == expected_media_type
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "data:image/png;base64,iVBORw0KGgo=",
+        "data:image/png;charset=utf-8;base64,iVBORw0KGgo=",
+        "data:Image/WEBP;base64,UklGRg==",
+    ],
+)
+def test_anthropic_and_bedrock_converse_agree_on_data_uri_media_type(url):
+    anthropic_media_type = convert_to_anthropic_image_obj(openai_image_url=url, format=None)["media_type"]
+    bedrock_format = BedrockImageProcessor.process_image_sync(url)["image"]["format"]
+
+    assert anthropic_media_type == f"image/{bedrock_format}"
 
 
 def test_create_anthropic_image_param_with_http_url():

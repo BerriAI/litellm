@@ -90,16 +90,9 @@ class TestParseDataUrl:
         assert content_type == "image/jpeg"
         assert ext == "jpeg"
 
-    def test_valid_base64_with_semicolon_in_type(self):
-        """Data URLs with charset before base64 segment do not match the regex."""
-        # The regex `data:([^;]+);base64,(.+)` requires the pattern to be
-        # `data:<type>;base64,<data>`. If `;charset=utf-8` appears before
-        # `;base64,`, the regex sees `data:image/png` as group 1 but then
-        # looks for `;base64,` immediately after — which isn't there because
-        # `;charset=utf-8;base64,` has extra text before `;base64,`
+    def test_media_type_parameters_are_dropped(self):
         data_url = "data:image/png;charset=utf-8;base64," + _RED_PNG_B64
-        result = _parse_data_url(data_url)
-        assert result is None
+        assert _parse_data_url(data_url) == _parse_data_url(_RED_PNG_DATA_URL)
 
     def test_invalid_data_url_returns_none(self):
         assert _parse_data_url("not-a-data-url") is None

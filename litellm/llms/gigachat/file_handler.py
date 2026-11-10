@@ -7,7 +7,6 @@ GigaChat requires files to be uploaded first, then referenced by file_id.
 
 import base64
 import hashlib
-import re
 import uuid
 from collections.abc import Mapping
 from typing import Final
@@ -15,6 +14,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.image_handling import parse_data_uri
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -43,16 +43,14 @@ def _parse_data_url(data_url: str) -> tuple[bytes, str, str] | None:
     Returns:
         Tuple of (content_bytes, content_type, extension) or None
     """
-    match: Final = re.match(r"data:([^;]+);base64,(.+)", data_url)
-    if not match:
+    parsed: Final = parse_data_uri(data_url)
+    if parsed is None or not parsed.is_base64 or not parsed.media_type or not parsed.data:
         return None
 
-    content_type: Final = match.group(1)
-    base64_data: Final = match.group(2)
-    content_bytes: Final = base64.b64decode(base64_data)
-    ext: Final = content_type.split("/")[-1].split(";")[0] or "jpg"
+    content_bytes: Final = base64.b64decode(parsed.data)
+    ext: Final = parsed.media_type.rpartition("/")[2] or "jpg"
 
-    return content_bytes, content_type, ext
+    return content_bytes, parsed.media_type, ext
 
 
 def _content_type_or_default(headers: Mapping[str, str]) -> str:

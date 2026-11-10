@@ -10,7 +10,6 @@ Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 
 import copy
 import json
-import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
@@ -24,7 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     create_anthropic_image_param,
     select_anthropic_content_block_type_for_file,
 )
-from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media, parse_data_uri
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -150,8 +149,8 @@ def _str_field(container: object, key: str) -> str | None:
 
 
 def _data_uri_media_type(url: str) -> str:
-    match: Final = re.match(r"data:([^;,]+)", url)
-    return match.group(1) if match else ""
+    parsed: Final = parse_data_uri(url)
+    return parsed.media_type if parsed else ""
 
 
 def _convert_media_block_to_anthropic(block: object) -> object:

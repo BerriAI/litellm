@@ -14,6 +14,7 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/nova-embed.html
 
 from typing import Final
 
+from litellm.litellm_core_utils.prompt_templates.image_handling import parse_data_uri
 from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
@@ -62,26 +63,10 @@ class AmazonNovaEmbeddingConfig:
                 media_type: e.g., "image/jpeg", "video/mp4", "audio/mpeg"
                 base64_data: The base64-encoded data without the prefix
         """
-        if not data_url.startswith("data:"):
+        parsed: Final = parse_data_uri(data_url)
+        if parsed is None:
             raise ValueError(f"Invalid data URL format: {data_url[:50]}...")
-
-        # Split by comma to separate metadata from data
-        # Format: data:image/jpeg;base64,<base64_data>
-        if "," not in data_url:
-            raise ValueError(f"Invalid data URL format (missing comma): {data_url[:50]}...")
-
-        metadata, base64_data = data_url.split(",", 1)
-
-        # Extract media type from metadata
-        # Remove 'data:' prefix and ';base64' suffix
-        metadata = metadata[5:]  # Remove 'data:'
-
-        if ";" in metadata:
-            media_type = metadata.split(";")[0]
-        else:
-            media_type = metadata
-
-        return media_type, base64_data
+        return parsed.media_type, parsed.data
 
     def _transform_request(
         self,
