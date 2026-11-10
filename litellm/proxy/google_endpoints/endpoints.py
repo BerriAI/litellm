@@ -101,6 +101,45 @@ def _google_error_response(request: Request, error: ProxyException) -> JSONRespo
     )
 
 
+def _is_google_tool(tool: Mapping[str, JsonValue]) -> bool:
+    return "type" not in tool and "name" not in tool
+
+
+class _TokenCountExtras(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    tools: tuple[Mapping[str, JsonValue], ...] | None = None
+    system: JsonValue = None
+
+
+def google_token_count_request(request: TokenCountRequest) -> TokenCountRequest:
+    if request.contents is None or request.messages is not None:
+        return request
+    caller: Final = _TokenCountExtras.model_validate(request)
+    try:
+        google_request: Final = _google_count_tokens_request(
+            request.model,
+            {
+                "contents": request.contents,
+                "systemInstruction": request.system_instruction,
+                "tools": caller.tools or (),
+            },
+        )
+    except ValidationError:
+        return with_google_contents_as_messages(request)
+    translated: Final = _TokenCountExtras.model_validate(google_request)
+    return request.model_copy(
+        update={
+            "messages": google_request.messages,
+            "system": caller.system if caller.system is not None else translated.system,
+            "tools": [
+                *(dict(tool) for tool in caller.tools or () if not _is_google_tool(tool)),
+                *(dict(tool) for tool in translated.tools or ()),
+            ]
+            or None,
+        }
+    )
+
+
 def with_google_contents_as_messages(request: TokenCountRequest) -> TokenCountRequest:
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 

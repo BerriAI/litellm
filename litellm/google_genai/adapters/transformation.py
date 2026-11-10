@@ -145,6 +145,11 @@ def _deployment_supports_response_format(model: str, custom_llm_provider: str | 
     return supported_params is None or "response_format" in supported_params
 
 
+def _numbered_call_id(name: str, earlier_names: Sequence[str]) -> str:
+    earlier: Final = earlier_names.count(name)
+    return f"call_{name}" if earlier == 0 else f"call_{name}_{earlier}"
+
+
 class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
     """
     Wrapper for streaming Google GenAI generate_content responses.
@@ -510,6 +515,7 @@ class GoogleGenAIAdapter:
                 # Handle user messages with potential function responses
                 content_parts: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
                 tool_messages: list[ChatCompletionToolMessage] = []
+                response_names: list[str] = []
 
                 for part in parts:
                     if isinstance(part, dict):
@@ -537,12 +543,14 @@ class GoogleGenAIAdapter:
                         elif "functionResponse" in part:
                             # Transform function response to tool message
                             func_response = part["functionResponse"]
+                            response_name = func_response.get("name", "unknown")
                             tool_message = ChatCompletionToolMessage(
                                 role="tool",
-                                tool_call_id=f"call_{func_response.get('name', 'unknown')}",
+                                tool_call_id=_numbered_call_id(response_name, response_names),
                                 content=json.dumps(func_response.get("response", {})),
                             )
                             tool_messages.append(tool_message)
+                            response_names.append(response_name)
                     elif isinstance(part, str):
                         content_parts.append(cast(ChatCompletionTextObject, {"type": "text", "text": part}))
 
@@ -567,6 +575,7 @@ class GoogleGenAIAdapter:
                 # Handle assistant messages with potential function calls
                 combined_text = ""
                 tool_calls: list[ChatCompletionAssistantToolCall] = []
+                call_names: list[str] = []
 
                 for part in parts:
                     if isinstance(part, dict):
@@ -575,8 +584,9 @@ class GoogleGenAIAdapter:
                         elif "functionCall" in part:
                             # Transform function call to tool call
                             func_call = part["functionCall"]
+                            call_name = func_call.get("name", "unknown")
                             tool_call = ChatCompletionAssistantToolCall(
-                                id=f"call_{func_call.get('name', 'unknown')}",
+                                id=_numbered_call_id(call_name, call_names),
                                 type="function",
                                 function=ChatCompletionToolCallFunctionChunk(
                                     name=func_call.get("name", ""),
@@ -584,6 +594,7 @@ class GoogleGenAIAdapter:
                                 ),
                             )
                             tool_calls.append(tool_call)
+                            call_names.append(call_name)
                     elif isinstance(part, str):
                         combined_text += part
 

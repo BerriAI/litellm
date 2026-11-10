@@ -1793,6 +1793,138 @@ async def test_utils_token_counter_counts_a_contents_only_body_like_the_google_c
     assert from_utils.total_tokens == from_google.total_tokens > 0
 
 
+_WEATHER_CONTENTS: Final = ({"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system_instruction",
+    [
+        pytest.param({"parts": 4}, id="parts_number"),
+        pytest.param("Answer in one short sentence.", id="string"),
+        pytest.param({"parts": [{"inlineData": {"mimeType": "image/png", "data": "aGk="}}]}, id="media_only_part"),
+    ],
+)
+async def test_utils_token_counter_counts_the_contents_when_it_cannot_read_the_system_instruction(
+    monkeypatch: pytest.MonkeyPatch, system_instruction: JsonValue
+):
+    _local_luna(monkeypatch)
+
+    with_unreadable_system: Final = await token_counter(
+        request=TokenCountRequest(
+            model="kimi", contents=list(_WEATHER_CONTENTS), systemInstruction=system_instruction
+        ),
+        call_endpoint=False,
+    )
+    contents_only: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=list(_WEATHER_CONTENTS)), call_endpoint=False
+    )
+
+    assert with_unreadable_system.total_tokens == contents_only.total_tokens > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extras",
+    [
+        pytest.param(
+            {"systemInstruction": {"parts": [{"text": "Answer in one short sentence."}]}}, id="system_instruction"
+        ),
+        pytest.param(
+            {"system_instruction": {"parts": [{"text": "Answer in one short sentence."}]}},
+            id="snake_case_system_instruction",
+        ),
+        pytest.param(
+            {
+                "tools": [
+                    {
+                        "functionDeclarations": [
+                            {
+                                "name": "get_weather",
+                                "description": "Look up the forecast for a city",
+                                "parameters": {"type": "OBJECT", "properties": {"city": {"type": "STRING"}}},
+                            }
+                        ]
+                    }
+                ]
+            },
+            id="google_tools",
+        ),
+    ],
+)
+async def test_utils_token_counter_counts_system_instruction_and_google_tools_like_the_google_count_tokens_route(
+    monkeypatch: pytest.MonkeyPatch, extras: dict[str, object]
+):
+    _local_luna(monkeypatch)
+    contents: Final = list(_WEATHER_CONTENTS)
+
+    from_utils: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=contents, **extras), call_endpoint=False
+    )
+    from_google: Final = await token_counter(
+        request=_google_count_tokens_request("kimi", {"contents": contents, **extras}), call_endpoint=False
+    )
+    contents_only: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=contents), call_endpoint=False
+    )
+
+    assert from_utils.total_tokens == from_google.total_tokens > contents_only.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool",
+    [
+        pytest.param(
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            },
+            id="openai_tool",
+        ),
+        pytest.param(
+            {
+                "name": "get_weather",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+            },
+            id="anthropic_tool",
+        ),
+    ],
+)
+async def test_utils_token_counter_keeps_its_own_system_and_tools_next_to_google_contents(
+    monkeypatch: pytest.MonkeyPatch, tool: dict[str, object]
+):
+    _local_luna(monkeypatch)
+    contents: Final = list(_WEATHER_CONTENTS)
+    system: Final = "Answer in one short sentence."
+    tools: Final = [tool]
+
+    from_contents: Final = await token_counter(
+        request=TokenCountRequest(
+            model="kimi",
+            contents=contents,
+            system=system,
+            tools=tools,
+            systemInstruction={"parts": [{"text": "A much longer instruction that the route's own system replaces."}]},
+        ),
+        call_endpoint=False,
+    )
+    from_messages: Final = await token_counter(
+        request=TokenCountRequest(
+            model="kimi",
+            messages=_google_count_tokens_request("kimi", {"contents": contents}).messages,
+            system=system,
+            tools=tools,
+        ),
+        call_endpoint=False,
+    )
+
+    assert from_contents.total_tokens == from_messages.total_tokens
+
+
 @pytest.mark.asyncio
 async def test_utils_token_counter_drops_a_prompt_sent_with_contents_like_one_sent_with_messages(
     monkeypatch: pytest.MonkeyPatch,
