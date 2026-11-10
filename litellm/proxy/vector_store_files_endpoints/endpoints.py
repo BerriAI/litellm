@@ -17,7 +17,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, proxy_exception_from_route_error
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
@@ -134,7 +134,7 @@ _PROBE_ARGUMENTS: Final = frozenset({"vector_store_id", "file_id", "extra_header
 _EXTRA_HEADERS: Final = TypeAdapter(dict[str, str] | None)
 
 
-async def _store_holds_file(
+async def _store_lacks_file(
     provider: LlmProviders, vector_store_id: str, file_id: str, credentials: Mapping[str, object]
 ) -> bool:
     try:
@@ -148,10 +148,10 @@ async def _store_holds_file(
             **{"no-log": True},
         )
     except openai.NotFoundError:
+        return True
+    except openai.APIError:
         return False
-    except openai.APIError as error:
-        raise proxy_exception_from_route_error(error) from error
-    return True
+    return False
 
 
 def _raw_vector_store_id(data: Mapping[str, object]) -> str | None:
@@ -184,12 +184,12 @@ async def _caller_team_copy_of_managed_file(
     team_copy: Final = _ManagedFileCopy(team_deployment.deployment_id, provider_file_id)
     if provider_file_id == upload_copy:
         return team_copy
-    store_holds_upload_copy: Final = (
-        upload_copy is not None
-        and upload_credentials is not None
-        and await _store_holds_file(provider, vector_store_id, upload_copy, upload_credentials)
+    store_lacks_upload_copy: Final = (
+        upload_copy is None
+        or upload_credentials is None
+        or await _store_lacks_file(provider, vector_store_id, upload_copy, upload_credentials)
     )
-    return None if store_holds_upload_copy else team_copy
+    return team_copy if store_lacks_upload_copy else None
 
 
 def _store_carries_credentials(store: LiteLLM_ManagedVectorStore | None) -> bool:

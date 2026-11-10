@@ -26,7 +26,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
@@ -863,11 +863,12 @@ async def test_managed_file_id_attached_by_a_team_key_attaches_the_copy_the_stor
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("check_status", [429, 500])
-async def test_managed_file_id_whose_store_check_fails_without_a_404_never_falls_back_to_the_team_copy(
+async def test_managed_file_id_whose_store_check_fails_without_a_404_still_reaches_the_upload_copy(
     monkeypatch: pytest.MonkeyPatch, check_status: int
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     caller: Final = UserAPIKeyAuth(api_key="sk-test", user_id="caller-user", team_id="team-b")
+    router: Final = _proxy_and_team_b_openai_router()
     managed_file_id: Final = (
         base64.urlsafe_b64encode(
             SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
@@ -880,23 +881,35 @@ async def test_managed_file_id_whose_store_check_fails_without_a_404_never_falls
 
     with respx.mock(assert_all_called=False) as respx_mock:
         team_deployment: Final = respx_mock.route(host="team-openai.example")
-        respx_mock.get(f"{_PROXY_OPENAI_BASE}/vector_stores/vs-test/files/file-proxy-copy").mock(
-            return_value=httpx.Response(check_status, json={"error": {"message": "try again", "type": "server_error"}})
+        upstream: Final = respx_mock.get(f"{_PROXY_OPENAI_BASE}/vector_stores/vs-test/files/file-proxy-copy").mock(
+            side_effect=[
+                httpx.Response(check_status, json={"error": {"message": "try again", "type": "server_error"}}),
+                httpx.Response(200, json=dict(_vector_store_file_row("file-proxy-copy"))),
+            ]
         )
-        with pytest.raises(ProxyException) as raised:
-            await _update_request_data_with_managed_file_id(
-                data={"vector_store_id": "vs-test", "file_id": managed_file_id},
-                file_id=managed_file_id,
-                request=MagicMock(headers={}, query_params={}),
+        data, _ = await _update_request_data_with_managed_file_id(
+            data={"vector_store_id": "vs-test", "file_id": managed_file_id},
+            file_id=managed_file_id,
+            request=MagicMock(headers={}, query_params={}),
+            user_api_key_dict=caller,
+            managed_files_obj=ManagedFileCopiesStub(
+                copies={"proxy-openai": "file-proxy-copy", "team-b-openai": "file-team-copy"}
+            ),
+            llm_router=router,
+        )
+        response: Final = await (
+            await route_request(
+                {**data, "custom_llm_provider": "openai", "metadata": {"user_api_key_team_id": caller.team_id}},
+                router,
+                None,
+                "avector_store_file_retrieve",
                 user_api_key_dict=caller,
-                managed_files_obj=ManagedFileCopiesStub(
-                    copies={"proxy-openai": "file-proxy-copy", "team-b-openai": "file-team-copy"}
-                ),
-                llm_router=_proxy_and_team_b_openai_router(),
             )
+        )
 
-    assert raised.value.code == str(check_status)
-    assert "try again" in raised.value.message
+    assert response["id"] == "file-proxy-copy"
+    assert upstream.call_count == 2
+    assert upstream.calls.last.request.headers["Authorization"] == "Bearer proxy-openai-key"
     assert team_deployment.call_count == 0
 
 
