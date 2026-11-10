@@ -2125,7 +2125,9 @@ class LiteLLMProxyRequestSetup:
     def add_key_level_controls(key_metadata: dict | None, data: dict, _metadata_variable_name: str):
         if key_metadata is None:
             return data
-        if "cache" in key_metadata and isinstance(key_metadata["cache"], dict):
+        if "cache" in key_metadata and not isinstance(key_metadata["cache"], dict):
+            data["cache"] = {}  # rebind-ok: data is an out-param
+        elif "cache" in key_metadata:
             request_cache: Final = _DECODED_JSON.validate_python(data["cache"]) if "cache" in data else None
             key_cache_controls: Final = {
                 k: v
