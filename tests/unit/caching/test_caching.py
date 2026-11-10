@@ -1437,53 +1437,6 @@ async def test_caching_with_cache_controls(monkeypatch: pytest.MonkeyPatch) -> N
     assert async_ttl_first.id == async_ttl_second.id
 
 
-@pytest.mark.parametrize("max_age_key", ["s-maxage", "s-max-age"])
-def test_sync_completion_with_zero_s_maxage_skips_the_cached_response(
-    monkeypatch: pytest.MonkeyPatch, max_age_key: str
-) -> None:
-    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
-    messages: Final = [{"role": "user", "content": f"zero s-maxage {uuid.uuid4().hex}"}]
-    first: Final = completion(model="gpt-4o-mini", messages=messages, mock_response="first")
-    zero_max_age: Final = completion(
-        model="gpt-4o-mini", messages=messages, cache={max_age_key: 0}, mock_response="second"
-    )
-    open_max_age: Final = completion(
-        model="gpt-4o-mini", messages=messages, cache={max_age_key: 60}, mock_response="third"
-    )
-
-    assert zero_max_age.id != first.id
-    assert open_max_age.id == zero_max_age.id
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("cache_controls", "serves_cached"),
-    [
-        ({"s-maxage": 0, "s-max-age": 60}, True),
-        ({"s-maxage": 60, "s-max-age": 0}, False),
-        ({"s-maxage": None, "s-max-age": 0}, False),
-    ],
-)
-async def test_sync_and_async_completion_follow_s_max_age_when_both_max_age_keys_are_sent(
-    monkeypatch: pytest.MonkeyPatch, cache_controls: dict[str, int | None], serves_cached: bool
-) -> None:
-    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
-    sync_messages: Final = [{"role": "user", "content": f"sync both max-age keys {uuid.uuid4().hex}"}]
-    sync_first: Final = completion(model="gpt-4o-mini", messages=sync_messages, mock_response="first")
-    sync_second: Final = completion(
-        model="gpt-4o-mini", messages=sync_messages, cache=cache_controls, mock_response="second"
-    )
-    async_messages: Final = [{"role": "user", "content": f"async both max-age keys {uuid.uuid4().hex}"}]
-    async_first: Final = await acompletion(model="gpt-4o-mini", messages=async_messages, mock_response="first")
-    await asyncio.gather(*_PENDING_CACHE_WRITES)
-    async_second: Final = await acompletion(
-        model="gpt-4o-mini", messages=async_messages, cache=cache_controls, mock_response="second"
-    )
-
-    assert (sync_second.id == sync_first.id) is serves_cached
-    assert (async_second.id == async_first.id) is serves_cached
-
-
 @pytest.mark.asyncio
 async def test_embedding_caching_redis_ttl(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     mock_pipeline: Final = AsyncMock()

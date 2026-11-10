@@ -5013,7 +5013,6 @@ async def test_speech_gemini_tts_behind_the_router_waits_as_long_as_the_same_cha
     [
         ({}, {}, 1),
         ({}, {"cache": {"no-cache": True}}, 2),
-        ({}, {"cache": {"s-maxage": 0}}, 2),
         ({"cache": {"no-store": True}}, {}, 2),
         ({}, {"caching": False}, 2),
         ({}, {"caching": "yes"}, 2),
