@@ -13119,7 +13119,10 @@
         }
       },
       "toasts": {
-        "deleted": "Deleted MCP Server successfully"
+        "deleted": "Deleted MCP Server successfully",
+        "enabled": "MCP server enabled",
+        "disabled": "MCP server disabled",
+        "toggleFailed": "Failed to update MCP server status"
       },
       "missingAuth": "Missing required authentication parameters.",
       "header": {
@@ -13729,6 +13732,11 @@
         "delete": "Delete"
       },
       "stdioDisabled": "stdio disabled",
+      "enabledToggle": {
+        "label": "Enable server",
+        "disabledBadge": "Disabled",
+        "disabledTooltip": "This server is disabled and will not serve requests. Toggle the switch to re-enable it."
+      },
       "oauthFlowUnset": {
         "badge": "OAuth flow not set",
         "tooltip": "This OAuth server has no flow set (Machine-to-Machine vs Interactive). Open it and choose an OAuth Flow Type so LiteLLM authenticates it as you intend."

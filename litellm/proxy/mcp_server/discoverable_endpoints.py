@@ -585,10 +585,13 @@ def _resolve_mcp_server_by_name_or_id(lookup: str, client_ip: str | None) -> MCP
         global_mcp_server_manager,
     )
 
-    by_name: Final = global_mcp_server_manager.get_mcp_server_by_name(lookup, client_ip=client_ip)
-    if by_name is not None:
-        return by_name
-    return global_mcp_server_manager.get_mcp_server_by_id(lookup, client_ip=client_ip)
+    resolved: Final = global_mcp_server_manager.get_mcp_server_by_name(
+        lookup, client_ip=client_ip
+    ) or global_mcp_server_manager.get_mcp_server_by_id(lookup, client_ip=client_ip)
+    # Admin-disabled config servers stay in the raw registry; treat them as not found.
+    if resolved is not None and global_mcp_server_manager.is_server_caller_hidden(resolved.server_id):
+        return None
+    return resolved
 
 
 def _resolve_oauth2_server_for_root_endpoints(
@@ -987,6 +990,9 @@ async def _user_can_reach_mcp_server(user_id: str, server_id: str) -> bool:
     except HTTPException as exc:
         if exc.status_code >= 500:
             raise
+        return False
+    # Caller-facing: an admin-disabled config server is unreachable for OAuth authorization binding.
+    if global_mcp_server_manager.is_server_caller_hidden(server_id):
         return False
     return server_id in await global_mcp_server_manager.get_allowed_mcp_servers(admitted)
 

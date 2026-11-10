@@ -243,9 +243,16 @@ class CatalogSnapshots:
 
     async def resolve(self, identifier: str, client_ip: str | None = None) -> MCPServer | None:
         async with self.operation():
-            return self.manager.get_mcp_server_by_name(
+            resolved: Final = self.manager.get_mcp_server_by_name(
                 identifier, client_ip=client_ip
             ) or self.manager.get_mcp_server_by_id(identifier, client_ip=client_ip)
+            # Caller-facing resolver (OAuth authorize/token/register + the anonymous-access gate).
+            # An admin-disabled server stays in the raw registry (and a disabled DB server's config
+            # twin resurfaces through the config|registry merge), so treat a hidden id as not-found
+            # BEFORE any redirect/upstream request. Raw admin lookups do not go through here.
+            if resolved is not None and self.manager.is_server_caller_hidden(resolved.server_id):
+                return None
+            return resolved
 
     async def resolve_oauth_metadata(
         self,

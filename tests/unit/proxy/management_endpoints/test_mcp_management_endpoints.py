@@ -2652,6 +2652,38 @@ class TestTemporaryMCPSessionEndpoints:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_or_404_hides_disabled_server(self):
+        """BUG #1: the OAuth-by-id resolver (authorize/token/register) must 404 an admin-disabled
+        server before any upstream request, so a held grant/refresh token cannot keep exchanging
+        tokens after disable. Gated even for admins, since a disabled server makes no connections."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+        )
+
+        registry_server = generate_mock_mcp_server_config_record(server_id="server-x")
+        admin_auth = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = registry_server
+        mock_manager.get_mcp_server_by_name.return_value = None
+        mock_manager.is_server_caller_hidden.return_value = True
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_cached_temporary_mcp_server_or_404("server-x", admin_auth)
+
+        assert exc_info.value.status_code == 404
+        mock_manager.is_server_caller_hidden.assert_called_once_with("server-x")
+
+    @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_non_admin_denied(self):
         """Non-admin without access to the server gets 403, not the server."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -5587,6 +5619,99 @@ class TestMCPApprovalWorkflow:
         mock_manager.reload_servers_from_database.assert_awaited_once()
 
 
+class TestMCPEnableDisableEndpoints:
+    """PUT /server/{id}/enable and /disable (admin only, delegate to the manager)."""
+
+    @staticmethod
+    def _manager(return_value):
+        mock_manager = MagicMock()
+        mock_manager.set_server_enabled = AsyncMock(side_effect=return_value)
+        return mock_manager
+
+    @pytest.mark.asyncio
+    async def test_disable_then_enable_server_admin(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            disable_mcp_server,
+            enable_mcp_server,
+        )
+
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+        disabled = generate_mock_mcp_server_db_record(server_id="srv-1")
+        disabled.enabled = False
+        enabled = generate_mock_mcp_server_db_record(server_id="srv-1")
+        enabled.enabled = True
+        mock_manager = self._manager([disabled, enabled])
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            off = await disable_mcp_server(server_id="srv-1", user_api_key_dict=admin)
+            on = await enable_mcp_server(server_id="srv-1", user_api_key_dict=admin)
+
+        assert off.enabled is False
+        assert on.enabled is True
+        assert mock_manager.set_server_enabled.await_args_list[0].args == ("srv-1",)
+        assert mock_manager.set_server_enabled.await_args_list[0].kwargs == {
+            "enabled": False,
+            "touched_by": "admin-1",
+        }
+        assert mock_manager.set_server_enabled.await_args_list[1].kwargs == {
+            "enabled": True,
+            "touched_by": "admin-1",
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("handler_name", ["enable_mcp_server", "disable_mcp_server"])
+    async def test_enable_disable_requires_admin(self, handler_name):
+        from litellm.proxy.management_endpoints import mcp_management_endpoints as mod
+
+        user = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
+        mock_manager = self._manager([generate_mock_mcp_server_db_record()])
+
+        with patch.object(mod, "global_mcp_server_manager", mock_manager):
+            with pytest.raises(HTTPException) as exc_info:
+                await getattr(mod, handler_name)(server_id="srv-1", user_api_key_dict=user)
+
+        assert exc_info.value.status_code == 403
+        mock_manager.set_server_enabled.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("handler_name", ["enable_mcp_server", "disable_mcp_server"])
+    async def test_toggle_unknown_server_404(self, handler_name):
+        from litellm.proxy.management_endpoints import mcp_management_endpoints as mod
+
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        mock_manager = self._manager([None])
+
+        with patch.object(mod, "global_mcp_server_manager", mock_manager):
+            with pytest.raises(HTTPException) as exc_info:
+                await getattr(mod, handler_name)(server_id="nope", user_api_key_dict=admin)
+
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_disable_is_idempotent(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            disable_mcp_server,
+        )
+
+        admin = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        already = generate_mock_mcp_server_db_record(server_id="srv-1")
+        already.enabled = False
+        mock_manager = self._manager([already, already])
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            first = await disable_mcp_server(server_id="srv-1", user_api_key_dict=admin)
+            second = await disable_mcp_server(server_id="srv-1", user_api_key_dict=admin)
+
+        assert first.enabled is False
+        assert second.enabled is False
+
+
 class TestValidateMCPRequiredFields:
     """Tests for _validate_mcp_required_fields."""
 
@@ -6452,6 +6577,9 @@ async def test_list_mcp_servers_admin_keeps_url():
     assert len(result) == 1
     assert result[0].url == "https://actions.zapier.com/mcp/SUPER-SECRET-TOKEN/sse"
     assert result[0].static_headers == {"Authorization": "Bearer SUPER-SECRET-TOKEN"}
+    # enabled surfaces on list items (defaults to True)
+    assert "enabled" in result[0].model_dump()
+    assert result[0].enabled is True
 
 
 def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
@@ -9202,8 +9330,21 @@ def _mock_mcp_resolution_prisma_client(
     )
 
     def matches_server_filter(name: str, condition: object) -> bool:
+        if name == "AND" and isinstance(condition, list):
+            return all(
+                matches_server_filter(sub_name, sub_condition)
+                for clause in condition
+                if isinstance(clause, Mapping)
+                for sub_name, sub_condition in clause.items()
+            )
         if name == "OR" and condition == [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]:
             return server.approval_status in (None, "active", "approved")
+        if name == "OR" and condition == [{"approval_status": None}, {"approval_status": {"not": "draft"}}]:
+            # Admin unfiltered listing query (get_all_mcp_servers): every non-draft row.
+            return server.approval_status != "draft"
+        if name == "OR" and condition == [{"enabled": None}, {"enabled": True}]:
+            # Runtime gate: NULL/legacy and True are enabled; only explicit False is filtered out.
+            return getattr(server, "enabled", True) is not False
         if name == "submitted_by":
             return server.submitted_by == condition
         if name == "server_id":
@@ -9778,8 +9919,13 @@ class TestMCPServerResolutionCharacterization:
         existing_find_many: Final = prisma.db.litellm_mcpservertable.find_many
 
         async def current_rows(**kwargs: object) -> list[LiteLLM_MCPServerTable]:
-            if kwargs.get("where") == {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]}:
+            where: Final = kwargs.get("where")
+            if where == {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]}:
                 return [hidden] if eligible else []
+            if where == {"OR": [{"approval_status": None}, {"approval_status": {"not": "draft"}}]}:
+                # Admin unfiltered listing query (get_all_mcp_servers): every non-draft row of the
+                # server under test; get_all_mcp_servers_unfiltered then applies its own approval scope.
+                return [hidden] if hidden.approval_status != "draft" else []
             return await existing_find_many(**kwargs)
 
         prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=current_rows)

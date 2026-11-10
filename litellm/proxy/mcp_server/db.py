@@ -885,7 +885,13 @@ async def get_runtime_mcp_server_rows(
     prisma_client: PrismaClient,
 ) -> Sequence["prisma_db_models.LiteLLM_MCPServerTable"]:
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
-        "OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]
+        "AND": [
+            {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]},
+            # ``enabled`` is a NOT NULL column defaulting to true (legacy rows were backfilled
+            # to true by the migration), so only an explicit false is gated out. A ``{"enabled":
+            # None}`` arm is invalid here: Prisma rejects a null filter on a non-nullable field.
+            {"enabled": True},
+        ]
     }
     return await MCPServerRepository(prisma_client, use_writer=True).table.find_many(where=where)
 
@@ -2374,6 +2380,68 @@ async def set_mcp_server_pinned_tools(
     table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
     decrypt_global_env_var_values(table.env_vars)
     return table
+
+
+async def set_mcp_server_enabled(
+    prisma_client: PrismaClient,
+    server_id: str,
+    enabled: bool,
+    touched_by: str,
+) -> LiteLLM_MCPServerTable | None:
+    """Set the DB row's ``enabled`` flag; ``None`` if there is no such row."""
+    if await _db_find_mcp_server_row(prisma_client, server_id) is None:
+        return None
+    updated: Final = await _db_update_mcp_server_row(
+        prisma_client,
+        server_id,
+        {"enabled": enabled, "updated_by": touched_by},
+    )
+    table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
+    decrypt_global_env_var_values(table.env_vars)
+    return table
+
+
+class _MCPServerStateOverrideRepository(PrismaTableRepository["prisma_db_models.LiteLLM_MCPServerStateOverride"]):
+    table_name = "litellm_mcpserverstateoverride"
+
+
+def _server_state_override_actions(
+    prisma_client: PrismaClient,
+) -> "TableActions[prisma_db_models.LiteLLM_MCPServerStateOverride]":
+    return _MCPServerStateOverrideRepository(prisma_client, use_writer=True).table
+
+
+async def set_config_mcp_server_override(
+    prisma_client: PrismaClient,
+    server_id: str,
+    enabled: bool,
+    touched_by: str,
+) -> None:
+    """Upsert the enabled override for a config-defined (non-DB) MCP server."""
+    await _server_state_override_actions(prisma_client).upsert(
+        where={"server_id": server_id},
+        data={
+            "create": {"server_id": server_id, "enabled": enabled, "updated_by": touched_by},
+            "update": {"enabled": enabled, "updated_by": touched_by},
+        },
+    )
+
+
+async def get_disabled_config_server_ids(prisma_client: PrismaClient) -> set[str]:
+    rows: Final = await _server_state_override_actions(prisma_client).find_many(where={"enabled": False})
+    return {row.server_id for row in rows}
+
+
+async def get_disabled_db_server_ids(prisma_client: PrismaClient) -> set[str]:
+    """Server ids of DB-backed MCP servers an admin disabled (``enabled=false``).
+
+    ``get_runtime_mcp_server_rows`` already gates these rows out of ``manager.registry``. This set
+    lets caller-facing readers ALSO suppress a same-id *config* fallback, so disabling a DB server
+    cannot resurrect it through the ``config_mcp_servers | registry`` merge (right wins, and the
+    disabled DB row no longer shadows the config entry). Admin listings read the rows directly and
+    stay unaffected."""
+    rows: Final = await _mcp_server_table_actions(prisma_client).find_many(where={"enabled": False})
+    return {row.server_id for row in rows}
 
 
 async def reject_mcp_server(

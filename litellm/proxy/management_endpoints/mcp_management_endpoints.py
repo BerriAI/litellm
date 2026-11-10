@@ -1878,6 +1878,72 @@ if MCP_AVAILABLE:
         return _redact_mcp_credentials(approved)
 
     @router.put(
+        "/server/{server_id}/enable",
+        description="Enable an MCP server (admin only). Idempotent.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=LiteLLM_MCPServerTable,
+    )
+    @management_endpoint_wrapper
+    async def enable_mcp_server(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Admin enables an MCP server (DB-backed or config-declared). Idempotent.
+        """
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to enable MCP servers."},
+            )
+
+        updated: Final = await global_mcp_server_manager.set_server_enabled(
+            server_id,
+            enabled=True,
+            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        )
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found."},
+            )
+
+        return _redact_mcp_credentials(updated)
+
+    @router.put(
+        "/server/{server_id}/disable",
+        description="Disable an MCP server (admin only). Idempotent.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=LiteLLM_MCPServerTable,
+    )
+    @management_endpoint_wrapper
+    async def disable_mcp_server(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Admin disables an MCP server (DB-backed or config-declared). Idempotent.
+        """
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Admin access required to disable MCP servers."},
+            )
+
+        updated: Final = await global_mcp_server_manager.set_server_enabled(
+            server_id,
+            enabled=False,
+            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+        )
+        if updated is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server '{server_id}' not found."},
+            )
+
+        return _redact_mcp_credentials(updated)
+
+    @router.put(
         "/server/{server_id}/reject",
         description="Reject a pending MCP server submission (admin only). Mirrors PUT /guardrails/{id}/reject.",
         dependencies=[Depends(user_api_key_auth)],
@@ -2418,6 +2484,16 @@ if MCP_AVAILABLE:
             non_admin_missing="not_found",
         )
         assert authorized.runtime is not None
+        # Caller-facing OAuth-by-id entry point (authorize/token/register). An admin-disabled server
+        # stays in the raw registry (and a disabled DB server's config twin resurfaces through the
+        # config|registry merge), so a caller holding an existing grant/refresh token must not keep
+        # exchanging tokens after disable. Treat a hidden id as not-found before any upstream request
+        # — even for admins, since a disabled server makes no upstream connections.
+        if global_mcp_server_manager.is_server_caller_hidden(authorized.runtime.server_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"MCP server {server_id} not found"},
+            )
         return authorized.runtime
 
     @asynccontextmanager

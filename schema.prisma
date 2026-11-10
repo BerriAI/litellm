@@ -427,8 +427,18 @@ model LiteLLM_MCPServerTable {
   submitted_at     DateTime?
   reviewed_at      DateTime?
   review_notes     String?
+  // Admin on/off switch; disabled servers are hidden from routing and tool listing
+  enabled          Boolean   @default(true)
 
   @@index([approval_status])
+}
+
+// Per-server enabled override for servers defined in config (not in DB)
+model LiteLLM_MCPServerStateOverride {
+  server_id  String   @id
+  enabled    Boolean
+  updated_at DateTime @default(now()) @updatedAt @map("updated_at")
+  updated_by String?
 }
 
 // Named collection of {server_id, tool_name} pairs that can be granted to keys/teams

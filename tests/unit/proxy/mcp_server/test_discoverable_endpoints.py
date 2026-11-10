@@ -13747,6 +13747,8 @@ async def test_identity_bound_authorize_preserves_presented_jwt_permissions(
     manager.get_allowed_mcp_servers = AsyncMock(
         side_effect=lambda auth: [server.server_id] if allowed or auth.mcp_admitted_user_subject else [],
     )
+    # The server under test is an enabled (non-disabled) server for reachability checks.
+    manager.is_server_caller_hidden = MagicMock(return_value=False)
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     bearer: Final = (
         key
@@ -13855,6 +13857,8 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     manager.get_allowed_mcp_servers = AsyncMock(
         return_value=[] if cookie_state == "server_denied" else [server.server_id]
     )
+    # The server under test is an enabled (non-disabled) server for reachability checks.
+    manager.is_server_caller_hidden = MagicMock(return_value=False)
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     bearer: Final = (
         _oauth_identity_jwt(signing_key, issuer="https://unrelated.example.test")
@@ -15586,3 +15590,52 @@ def test_root_metadata_owned_by_a_resolved_oauth2_server_never_lists_the_gateway
     assert JWT_BEARER_GRANT_TYPE not in document["grant_types_supported"]
     assert document["grant_types_supported"] == ["authorization_code", "refresh_token"]
     assert document["token_endpoint_auth_methods_supported"] == ["client_secret_post"]
+
+
+def test_resolve_by_name_or_id_hides_disabled_config_server():
+    from litellm.proxy.mcp_server import discoverable_endpoints as de
+
+    server = MagicMock(server_id="cfg-1")
+    with patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager") as mgr:
+        mgr.get_mcp_server_by_name.return_value = server
+        mgr.is_server_caller_hidden.return_value = True
+        assert de._resolve_mcp_server_by_name_or_id("cfg", None) is None
+        mgr.is_server_caller_hidden.return_value = False
+        assert de._resolve_mcp_server_by_name_or_id("cfg", None) is server
+
+
+@pytest.mark.asyncio
+async def test_catalog_resolve_hides_disabled_server_on_oauth_path():
+    """BUG #1: the shared OAuth resolver (catalog.resolve) must treat an admin-disabled server as
+    not-found before any redirect/upstream request, covering both an admin-disabled config server
+    and a disabled DB server whose config twin would otherwise resurface via the config|registry
+    merge. This is the resolver behind /mcp/{name}/authorize and the anonymous-access gate."""
+    from litellm.proxy.mcp_server import mcp_server_manager as manager_module
+
+    manager = manager_module.MCPServerManager()
+    with patch.object(manager, "initialize_tool_name_to_mcp_server_name_mapping", lambda: None):
+        await manager.load_servers_from_config(
+            {
+                "cfg_oauth": {
+                    "url": "https://mcp.example.com/mcp",
+                    "transport": "http",
+                    "auth_type": "none",
+                }
+            }
+        )
+    server = next(iter(manager.config_mcp_servers.values()))
+    server_id = server.server_id
+
+    # Enabled: resolvable by id and by name.
+    assert (await manager.catalog.resolve(server_id)) is not None
+    assert (await manager.catalog.resolve(server.server_name)) is not None
+
+    # Admin-disabled config server: resolver returns None.
+    manager._disabled_config_server_ids.add(server_id)
+    assert await manager.catalog.resolve(server_id) is None
+    assert await manager.catalog.resolve(server.server_name) is None
+    manager._disabled_config_server_ids.discard(server_id)
+
+    # Disabled DB twin (same id): config fallback suppressed through the OAuth resolver too.
+    manager._disabled_db_server_ids.add(server_id)
+    assert await manager.catalog.resolve(server_id) is None

@@ -21,7 +21,7 @@ import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useQueryState } from "nuqs";
 import { useTranslation } from "react-i18next";
-import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPServers, useToggleMCPServerEnabled } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import { toast } from "@/lib/toast";
 import { deleteMCPServer } from "@/components/networking";
@@ -178,6 +178,24 @@ function DeleteServerDialog({
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
   const { t } = useTranslation();
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
+  const toggleServerEnabled = useToggleMCPServerEnabled();
+  const [togglingServerId, setTogglingServerId] = useState<string | null>(null);
+
+  const handleToggleEnabled = (serverId: string, enabled: boolean) => {
+    setTogglingServerId(serverId);
+    toggleServerEnabled.mutate(
+      { serverId, enabled },
+      {
+        onSuccess: () =>
+          toast.success(enabled ? t("mcpServers.servers.toasts.enabled") : t("mcpServers.servers.toasts.disabled")),
+        onError: (error) => {
+          console.error("Error toggling the mcp server:", error);
+          toast.error(t("mcpServers.servers.toasts.toggleFailed"));
+        },
+        onSettled: () => setTogglingServerId((current) => (current === serverId ? null : current)),
+      },
+    );
+  };
 
   // Fetch health status for all servers
   const {
@@ -762,6 +780,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                           onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
                           onOpenFillFields={() => setEnvVarsModalServer(server)}
                           onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
+                          onToggleEnabled={
+                            isProxyAdminRole(userRole) && !isViewOnly
+                              ? (enabled) => handleToggleEnabled(server.server_id, enabled)
+                              : undefined
+                          }
+                          isTogglingEnabled={togglingServerId === server.server_id}
                           stdioEnabled={stdioEnabled}
                         />
                       ))}

@@ -14,6 +14,8 @@ vi.mock("@/components/networking", () => ({
   fetchMCPServers: vi.fn(),
   fetchMCPServerHealth: vi.fn(),
   deleteMCPServer: vi.fn(),
+  enableMCPServerCall: vi.fn(),
+  disableMCPServerCall: vi.fn(),
   getProxyBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
   getGatewayBaseUrl: vi.fn().mockReturnValue("http://localhost:4000"),
   fetchMCPClientIp: vi.fn().mockResolvedValue(null),
@@ -289,6 +291,59 @@ describe("MCPServers", () => {
       await act(async () => finishDelete());
     }
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  });
+
+  describe("enable/disable toggle", () => {
+    const mk = (enabled: boolean): MCPServer => ({
+      server_id: "toggle-server",
+      server_name: "Toggle fixture",
+      alias: "toggle-alias",
+      url: "https://example.com/mcp",
+      created_by: "user",
+      updated_by: "user",
+      created_at: "",
+      updated_at: "",
+      enabled,
+    });
+    const renderPage = (userRole: string) =>
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MCPServers {...defaultProps} userRole={userRole} />
+        </QueryClientProvider>,
+      );
+
+    it("shows Disabled state for a disabled server and calls enable on toggle", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([mk(false)]);
+      vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+      vi.mocked(networking.enableMCPServerCall).mockResolvedValue({} as any);
+      renderPage("Admin");
+      expect(await screen.findByText("Disabled")).toBeVisible();
+      const toggle = screen.getByRole("switch", { name: "Enable server" });
+      expect(toggle).not.toBeChecked();
+      await userEvent.click(toggle);
+      await waitFor(() => expect(networking.enableMCPServerCall).toHaveBeenCalledWith("123", "toggle-server"));
+      expect(networking.disableMCPServerCall).not.toHaveBeenCalled();
+    });
+
+    it("calls disable when toggling an enabled server", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([mk(true)]);
+      vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+      vi.mocked(networking.disableMCPServerCall).mockResolvedValue({} as any);
+      renderPage("Admin");
+      const toggle = await screen.findByRole("switch", { name: "Enable server" });
+      expect(toggle).toBeChecked();
+      expect(screen.queryByText("Disabled")).not.toBeInTheDocument();
+      await userEvent.click(toggle);
+      await waitFor(() => expect(networking.disableMCPServerCall).toHaveBeenCalledWith("123", "toggle-server"));
+    });
+
+    it("does not render the toggle for a non-admin user", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([mk(false)]);
+      vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+      renderPage("Internal User");
+      expect(await screen.findByText("Disabled")).toBeVisible();
+      expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    });
   });
 
   it("filters servers by access group", async () => {

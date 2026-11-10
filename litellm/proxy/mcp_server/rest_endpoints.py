@@ -689,6 +689,14 @@ if MCP_AVAILABLE:
             global_mcp_server_manager.filter_server_ids_by_ip(list(allowed_server_ids_set), _rest_client_ip)
         )
 
+        # Caller-facing: drop admin-disabled config servers so a disabled server is rejected on
+        # a REST tool call (it is also absent from the resolved allowed_mcp_servers below).
+        allowed_server_ids_set = {
+            sid
+            for sid in allowed_server_ids_set
+            if not global_mcp_server_manager.is_server_caller_hidden(sid)
+        }
+
         canonical_server_id: Final = _resolve_mcp_server_id_for_rest(server_id, allowed_server_ids_set, _rest_client_ip)
 
         if canonical_server_id not in allowed_server_ids_set:
@@ -1087,11 +1095,18 @@ if MCP_AVAILABLE:
                 )
                 allowed_server_ids_set.update(servers)
 
+            # Caller-facing: drop admin-disabled config servers so a disabled server is absent
+            # from both the aggregate and single-server REST tool listing.
             (
                 allowed_server_ids,
                 _ip_blocked_count,
             ) = global_mcp_server_manager.filter_server_ids_by_ip_with_info(
-                list(allowed_server_ids_set), _rest_client_ip
+                [
+                    sid
+                    for sid in allowed_server_ids_set
+                    if not global_mcp_server_manager.is_server_caller_hidden(sid)
+                ],
+                _rest_client_ip,
             )
 
             # If server_id is specified, only query that specific server

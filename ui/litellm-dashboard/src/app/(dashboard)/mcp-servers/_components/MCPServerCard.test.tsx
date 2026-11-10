@@ -171,3 +171,56 @@ describe("MCPServerCard stdio availability", () => {
     expect(screen.queryByText("stdio disabled")).not.toBeInTheDocument();
   });
 });
+
+describe("MCPServerCard enable/disable toggle", () => {
+  it("renders no toggle when onToggleEnabled is not provided (non-admin)", () => {
+    renderCard({ enabled: true });
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("shows a checked switch and no Disabled badge for an enabled server; toggling disables", () => {
+    const onToggleEnabled = vi.fn();
+    const onClick = vi.fn();
+    render(
+      <MCPServerCard
+        server={{ ...baseServer, enabled: true } as MCPServer}
+        onClick={onClick}
+        onToggleEnabled={onToggleEnabled}
+      />,
+    );
+    const toggle = screen.getByRole("switch", { name: "Enable server" });
+    expect(toggle).toBeChecked();
+    expect(screen.queryByText("Disabled")).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(onToggleEnabled).toHaveBeenCalledWith(false);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing enabled field as enabled", () => {
+    render(<MCPServerCard server={baseServer} onClick={vi.fn()} onToggleEnabled={vi.fn()} />);
+    expect(screen.getByRole("switch")).toBeChecked();
+  });
+
+  it("renders a Disabled badge, greyed card and operable switch for a disabled server; toggling enables", () => {
+    const onToggleEnabled = vi.fn();
+    render(
+      <MCPServerCard
+        server={{ ...baseServer, enabled: false } as MCPServer}
+        onClick={vi.fn()}
+        onToggleEnabled={onToggleEnabled}
+      />,
+    );
+    expect(screen.getByText("Disabled")).toBeInTheDocument();
+    const toggle = screen.getByRole("switch");
+    expect(toggle).not.toBeChecked();
+    expect(toggle).not.toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByTestId("mcp-server-card")).toHaveClass("opacity-60");
+    fireEvent.click(toggle);
+    expect(onToggleEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it("disables the switch while a toggle is pending", () => {
+    render(<MCPServerCard server={baseServer} onClick={vi.fn()} onToggleEnabled={vi.fn()} isTogglingEnabled />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-disabled", "true");
+  });
+});
