@@ -193,10 +193,13 @@ def _user_message(content: object) -> list[dict[str, object]]:  # mutable-ok: a 
     return [{"role": "user", "content": content}]
 
 
+PINNED_DEPLOYMENT_KEY: Final = "_pinned_deployment_id"
+
 # Request keys the router reads to route the call; the deployment call never receives them.
 ROUTING_KEYS: Final = frozenset(
     {
         "model",
+        PINNED_DEPLOYMENT_KEY,
         "num_retries",
         "disable_fallbacks",
         "specific_deployment",
@@ -1386,6 +1389,13 @@ def pinned_video_deployment(plan: Plan, request: Mapping[str, object]) -> Mappin
     return {"pinned_deployment_id": deployment_id} if deployment_id else {}
 
 
+def pinned_vector_store_file_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+    deployment_id: Final = request.get(PINNED_DEPLOYMENT_KEY)
+    if not plan.endpoint.startswith("avector_store_file_") or not isinstance(deployment_id, str) or not deployment_id:
+        return {}
+    return {"pinned_deployment_id": deployment_id}
+
+
 async def _await(value: object) -> object:
     """``await value``, raising the TypeError Python raises for a value that is not awaitable."""
     return await value  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]  # deliberately awaited as the Python router does
@@ -2493,6 +2503,7 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "PINNED_DEPLOYMENT_KEY",
     "PLANS",
     "ROUTING_KEYS",
     "AttemptCall",
@@ -2509,6 +2520,7 @@ __all__ = [
     "generic_plan",
     "log_refused_call",
     "log_refused_call_sync",
+    "pinned_vector_store_file_deployment",
     "pinned_video_deployment",
     "plan_for",
     "prepare_request",
