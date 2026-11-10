@@ -31,6 +31,7 @@ from litellm.proxy.common_utils.codex_model_catalog import (
     merged_codex_catalog,
 )
 from litellm.proxy.common_utils.codex_model_translation import CodexDeploymentCapabilities, CodexServiceTier
+from litellm.types.proxy.model_listing import ModelInfoResponse
 
 _PROMPT = "base prompt"
 _FAST = {"id": "priority", "name": "Fast", "description": "2x speed, increased usage"}
@@ -193,6 +194,7 @@ def test_a_model_codex_knows_keeps_its_own_reasoning_levels(levels):
     [
         ("0.153.0", "GPT-6.1 Terra", ["low", "max"]),
         ("0.166.0", "GPT-6.1 Terra", ["low", "max"]),
+        ("0.166.0-alpha.5.1", "GPT-6.1 Terra", ["low", "max"]),
         (None, "GPT-6.1 Terra", ["low", "max"]),
         ("0.152.9", "gpt-6.1-terra", ["low", "max"]),
         ("0.137.0", "gpt-6.1-terra", ["low"]),
@@ -780,6 +782,43 @@ def test_unlimited_body_keeps_every_entry():
 
     assert (body.listed, body.left_out) == (tuple(row.id for row in rows), ())
     assert CODEX_CATALOG_BYTE_LIMIT == 1024 * 1024
+
+
+_LIMITED_CODEX: Final = "a codex that drops a catalog over 1 MiB gets one cut to fit"
+_UNLIMITED_CODEX: Final = "a codex that reads any size gets every model"
+
+
+@pytest.mark.parametrize(
+    ("client_version", "cut"),
+    [
+        pytest.param("0.166.0-alpha.1", False, id=f"0.166.0-alpha.1, {_UNLIMITED_CODEX}"),
+        pytest.param("0.166.0", False, id=f"0.166.0, {_UNLIMITED_CODEX}"),
+        pytest.param("0.169.0-alpha.7", False, id=f"0.169.0-alpha.7, {_UNLIMITED_CODEX}"),
+        pytest.param("0.166.0-alpha.5.1", False, id=f"0.166.0-alpha.5.1, {_UNLIMITED_CODEX}"),
+        pytest.param("0.165.0", True, id=f"0.165.0, {_LIMITED_CODEX}"),
+        pytest.param("0.165.0-alpha.1.2", True, id=f"0.165.0-alpha.1.2, {_LIMITED_CODEX}"),
+        pytest.param("0.164.0", True, id=f"0.164.0, {_LIMITED_CODEX}"),
+        pytest.param(None, True, id=f"no version, {_LIMITED_CODEX}"),
+        pytest.param("not-a-version", True, id=f"unparseable version, {_LIMITED_CODEX}"),
+        pytest.param("9" * 5000 + ".0.0", True, id=f"absurdly long version, {_LIMITED_CODEX}"),
+    ],
+)
+def test_model_list_body_is_cut_to_1_mib_only_for_a_codex_that_drops_a_larger_catalog(
+    client_version: str | None, cut: bool
+) -> None:
+    names: Final = tuple(f"model-{index}" for index in range(60))
+    listing: Final[tuple[ModelInfoResponse, ...]] = tuple(
+        {"id": name, "object": "model", "created": 0, "owned_by": "openai", "mode": "chat"} for name in names
+    )
+
+    body: Final = codex_model_list_body(
+        listing, tuple((name, name) for name in names), None, client_version=client_version, instructions="x" * 20_000
+    )
+    slugs: Final[list[str]] = [entry["slug"] for entry in json.loads(body)["models"]]
+
+    assert slugs == list(names[: len(slugs)])
+    assert (len(slugs) < len(names)) is cut
+    assert (len(body.encode()) <= CODEX_CATALOG_BYTE_LIMIT) is cut
 
 
 def test_vendored_codex_catalog_entries_decode_on_codex():

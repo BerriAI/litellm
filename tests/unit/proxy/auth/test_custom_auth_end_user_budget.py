@@ -1,16 +1,18 @@
-import pytest
 from typing import Final
 from unittest.mock import AsyncMock, patch
+
+import pytest
 from starlette.requests import Request
+
 import litellm
-from litellm.proxy.auth.user_api_key_auth import (
-    _run_post_custom_auth_checks,
-    update_valid_token_with_end_user_params,
-)
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     UserAPIKeyAuth,
+)
+from litellm.proxy.auth.user_api_key_auth import (
+    _run_post_custom_auth_checks,
+    update_valid_token_with_end_user_params,
 )
 
 
@@ -407,3 +409,45 @@ def test_end_user_budget_tpd_limit_reaches_the_token():
 
     assert result.end_user_rpm_limit == 5
     assert result.end_user_tpd_limit == 750000
+
+
+def test_update_valid_token_loads_per_model_tpm_and_rpm_limits_from_the_customer_budget():
+    valid_token: Final = UserAPIKeyAuth(token="test_token")
+    end_user_params: Final[dict[str, object]] = {
+        "end_user_id": "acme",
+        "end_user_model_tpm_limit": {"gpt-4o": 400000},
+        "end_user_model_rpm_limit": {"gpt-4o": 200},
+    }
+
+    result: Final = update_valid_token_with_end_user_params(valid_token, end_user_params)
+
+    assert result.end_user_model_tpm_limit == {"gpt-4o": 400000}
+    assert result.end_user_model_rpm_limit == {"gpt-4o": 200}
+
+
+def test_update_valid_token_keeps_custom_auth_per_model_limits_when_the_budget_has_none():
+    valid_token: Final = UserAPIKeyAuth(
+        token="test_token",
+        end_user_id="acme",
+        end_user_model_tpm_limit={"gpt-4o": 1000},
+        end_user_model_rpm_limit={"gpt-4o": 10},
+    )
+
+    result: Final = update_valid_token_with_end_user_params(valid_token, {"end_user_id": "acme"})
+
+    assert result.end_user_model_tpm_limit == {"gpt-4o": 1000}
+    assert result.end_user_model_rpm_limit == {"gpt-4o": 10}
+
+
+def test_apply_budget_limits_copies_per_model_limits_onto_end_user_params():
+    from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
+
+    end_user_params: Final[dict[str, object]] = {}
+    budget: Final = LiteLLM_BudgetTable(model_tpm_limit={"gpt-4o": 400000}, model_rpm_limit={"gpt-4o": 200})
+
+    _apply_budget_limits_to_end_user_params(end_user_params, budget, "acme")
+
+    assert end_user_params == {
+        "end_user_model_tpm_limit": {"gpt-4o": 400000},
+        "end_user_model_rpm_limit": {"gpt-4o": 200},
+    }

@@ -155,11 +155,13 @@ async function openAddCredentialDialog(
 async function openEditDialog(
   page: PlaywrightPage,
   name: string,
+  afterMenuOpen?: () => Promise<void>,
 ): Promise<Locator> {
   await expect(page.getByText(UPDATED_TOAST)).toHaveCount(0);
   const row = page.locator("tr", { hasText: name });
   await expect(row).toBeVisible({ timeout: 15_000 });
   await row.getByTestId(`credential-actions-${name}`).click();
+  await afterMenuOpen?.();
   await page.getByTestId("credential-action-edit").click();
   const dialog = page.getByRole("dialog", { name: "Edit Credential" });
   await expect(dialog).toBeVisible();
@@ -478,6 +480,15 @@ test("the Edit Credential dialog sends only the changed values and deletes the k
   };
   const ruleId = `fdrl_${suffix}`;
   const tokenFile = `/var/run/secrets/anthropic/${suffix}/token`;
+  let releaseModels!: () => void;
+  const modelsReleased = new Promise<void>((resolve) => {
+    releaseModels = resolve;
+  });
+  await page.route("**/v2/model/info?*", async (route) => {
+    const response = await route.fetch();
+    await modelsReleased;
+    await route.fulfill({ response });
+  });
   try {
     await createCredential(request, names.fromApiKey, {
       api_key: `sk-ant-${suffix}`,
@@ -500,7 +511,11 @@ test("the Edit Credential dialog sends only the changed values and deletes the k
     await logInAsAdmin(page);
     await openModelsTab(page, "LLM Credentials");
 
-    const keyDialog = await openEditDialog(page, names.fromApiKey);
+    const keyDialog = await openEditDialog(page, names.fromApiKey, async () => {
+      const response = page.waitForResponse((response) => response.url().includes("/v2/model/info?"));
+      releaseModels();
+      await (await response).finished();
+    });
     await pickAuthMethod(page, keyDialog, FEDERATION_BADGE);
     await fillFields(keyDialog, {
       anthropic_federation_rule_id: ruleId,
@@ -612,6 +627,7 @@ test("the Edit Credential dialog sends only the changed values and deletes the k
       page.locator("tr", { hasText: names.switchProvider }),
     ).not.toContainText(FEDERATION_BADGE);
   } finally {
+    releaseModels();
     await deleteCredentials(request, Object.values(names));
   }
 });

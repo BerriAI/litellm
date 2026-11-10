@@ -15,10 +15,10 @@ from functools import cache
 from types import NoneType
 from typing import Annotated, Final, Literal, TypeAlias
 
-from packaging.version import Version
 from pydantic import ConfigDict, Field, StringConstraints, field_serializer
 
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
+from litellm.proxy.common_utils.codex_version import codex_version_at_least
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 TierId: TypeAlias = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -27,7 +27,7 @@ CodexInputModality: TypeAlias = Literal["text", "image"]
 _TEXT_ONLY: Final[tuple[CodexInputModality, ...]] = ("text",)
 _TEXT_AND_IMAGE: Final[tuple[CodexInputModality, ...]] = ("text", "image")
 TOKEN_PRICE_KEY: Final = "input_cost_per_token"
-_FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
+_FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = "0.138.0"
 _EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
 _PREFERRED_DEFAULT_EFFORT: Final = "medium"
 _CODEX_UNSET_EFFORT: Final = "none"
@@ -191,13 +191,6 @@ def combined_capabilities(
     )
 
 
-def _parses_custom_efforts(client_version: str | None) -> bool:
-    try:
-        return client_version is not None and Version(client_version) >= _FIRST_CODEX_WITH_CUSTOM_EFFORTS
-    except ValueError:
-        return False
-
-
 def codex_reasoning_levels(
     efforts: Sequence[str], client_version: str | None
 ) -> tuple[tuple[CodexFallbackReasoningLevel, ...], str | None]:
@@ -209,7 +202,7 @@ def codex_reasoning_levels(
     group accepts it, so a user who picks no level sends what Codex sent before, else medium, else the
     nearest weaker declared level, so picking no level never costs more reasoning than Codex's usual medium,
     else the weakest declared level, else the first one."""
-    parses_any: Final = _parses_custom_efforts(client_version)
+    parses_any: Final = codex_version_at_least(client_version, _FIRST_CODEX_WITH_CUSTOM_EFFORTS)
     offered: Final = tuple(effort for effort in efforts if parses_any or effort in _EFFORTS_EVERY_CODEX_PARSES)
     if not offered:
         return (), None

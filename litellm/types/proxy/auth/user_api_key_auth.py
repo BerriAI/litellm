@@ -87,6 +87,8 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
     end_user_model_max_budget: _UntypedDict | None = None
+    end_user_model_tpm_limit: Mapping[str, int] | None = None
+    end_user_model_rpm_limit: Mapping[str, int] | None = None
 
     # Organization Params
     organization_alias: str | None = None
