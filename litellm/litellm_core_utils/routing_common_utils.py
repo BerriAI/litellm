@@ -1,5 +1,6 @@
 import hashlib
 import json
+from itertools import chain
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
@@ -372,7 +373,8 @@ def format_chain_for_lookup_groups(config_name: str, configured: object, lookup_
         lookup_groups=tuple(lookup_groups),
     )
     if resolved is None:
-        others: Final = len(tuple(key for entry in entries for key in entry if key not in lookup_groups))
+        configured_groups: Final = frozenset(chain.from_iterable(entries))
+        others: Final = len(configured_groups.difference(lookup_groups))
         searched: Final = " -> ".join(repr(group) for group in lookup_groups)
         return f"{config_name} has no chain for {searched}" + (
             f" ({others} other model groups are configured)" if others else ""
