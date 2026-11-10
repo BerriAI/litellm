@@ -1328,12 +1328,9 @@ def normalize_request_route(route: str) -> str:
     # Format: (regex_pattern, replacement_template)
     patterns: Final = [
         # Responses API - must come before generic patterns
-        (r"^(/(?:openai/)?v1/responses)/([^/]+)(/input_items)$", r"\1/{response_id}\3"),
-        (r"^(/(?:openai/)?v1/responses)/([^/]+)(/cancel)$", r"\1/{response_id}\3"),
-        (r"^(/(?:openai/)?v1/responses)/([^/]+)$", r"\1/{response_id}"),
-        (r"^(/responses)/([^/]+)(/input_items)$", r"\1/{response_id}\3"),
-        (r"^(/responses)/([^/]+)(/cancel)$", r"\1/{response_id}\3"),
-        (r"^(/responses)/([^/]+)$", r"\1/{response_id}"),
+        (r"^(/(?:openai/)?(?:v1/)?responses)/([^/]+)(/input_items)$", r"\1/{response_id}\3"),
+        (r"^(/(?:openai/)?(?:v1/)?responses)/([^/]+)(/cancel)$", r"\1/{response_id}\3"),
+        (r"^(/(?:openai/)?(?:v1/)?responses)/([^/]+)$", r"\1/{response_id}"),
         # Threads API
         (
             r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)/([^/]+)$",

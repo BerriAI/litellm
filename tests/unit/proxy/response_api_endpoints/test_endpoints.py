@@ -5469,7 +5469,12 @@ class TestResponsesInputTokens:
         assert token_request.messages == [{"role": "user", "content": "Hello, how are you?"}]
 
     def test_every_route_alias_is_registered(self):
-        for path in ("/v1/responses/input_tokens", "/responses/input_tokens", "/openai/v1/responses/input_tokens"):
+        for path in (
+            "/v1/responses/input_tokens",
+            "/responses/input_tokens",
+            "/openai/v1/responses/input_tokens",
+            "/openai/responses/input_tokens",
+        ):
             response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, path=path)
             assert response.status_code == 200, f"{path}: {response.status_code} {response.text}"
 
@@ -5694,7 +5699,13 @@ class TestResponsesInputTokens:
         assert sent == [{"model": "gpt-4o-mini", "input": "hi"}]
 
     @pytest.mark.parametrize(
-        "path", ["/v1/responses/input_tokens", "/responses/input_tokens", "/openai/v1/responses/input_tokens"]
+        "path",
+        [
+            "/v1/responses/input_tokens",
+            "/responses/input_tokens",
+            "/openai/v1/responses/input_tokens",
+            "/openai/responses/input_tokens",
+        ],
     )
     def test_count_logs_one_line_with_the_callers_call_id_model_and_count(
         self,
@@ -6176,3 +6187,125 @@ def test_input_token_count_reads_a_compaction_item_as_its_summary():
     assert _responses_input_as_token_count_messages(_COMPACTED_INPUT, None) == (
         _responses_input_as_token_count_messages(_SUMMARY_INPUT, None)
     )
+
+
+_AZURE_SDK_RESOURCE: Final = "my-resource.openai.azure.com"
+_AZURE_SDK_RESPONSE: Final = {
+    "id": "resp_azure_sdk",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "my-deployment",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+}
+_AZURE_SDK_RESPONSE_PATHS: Final = (
+    ("GET", "/openai/responses/{id}", ""),
+    ("DELETE", "/openai/responses/{id}", ""),
+    ("GET", "/openai/responses/{id}/input_items", "/input_items"),
+    ("POST", "/openai/responses/{id}/cancel", "/cancel"),
+)
+
+
+def _azure_lifecycle_response(request: httpx.Request) -> httpx.Response:
+    if request.method == "DELETE":
+        return httpx.Response(200, json={"id": "resp_azure_sdk", "object": "response", "deleted": True})
+    if request.url.path.endswith("/input_items"):
+        return httpx.Response(200, json={"object": "list", "data": [], "has_more": False})
+    return httpx.Response(200, json=_AZURE_SDK_RESPONSE)
+
+
+@pytest.fixture
+def azure_sdk_proxy(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> TestClient:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-model",
+                    "litellm_params": {
+                        "model": "azure/my-deployment",
+                        "api_base": f"https://{_AZURE_SDK_RESOURCE}",
+                        "api_key": "azure-deployment-key",
+                        "api_version": "2025-04-01-preview",
+                    },
+                }
+            ]
+        ),
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.route(host="testserver").pass_through()
+    return TestClient(app, headers={"Authorization": f"Bearer {MASTER_KEY}"})
+
+
+def test_azure_sdk_responses_path_reaches_the_azure_deployment(
+    azure_sdk_proxy: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    azure: Final = respx_mock.post(host=_AZURE_SDK_RESOURCE, path__regex=r"/responses$").respond(
+        json=_AZURE_SDK_RESPONSE
+    )
+
+    response: Final = azure_sdk_proxy.post(
+        "/openai/responses?api-version=2025-04-01-preview", json={"model": "my-model", "input": "hi"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["output"][0]["content"][0]["text"] == "Done."
+    assert azure.call_count == 1
+    assert azure.calls[0].request.headers["api-key"] == "azure-deployment-key"
+    assert json.loads(azure.calls[0].request.content)["model"] == "my-deployment"
+
+
+@pytest.mark.parametrize(("method", "path", "azure_suffix"), _AZURE_SDK_RESPONSE_PATHS)
+def test_azure_sdk_response_lifecycle_paths_reach_the_creating_deployment(
+    azure_sdk_proxy: TestClient, respx_mock: respx.MockRouter, method: str, path: str, azure_suffix: str
+) -> None:
+    respx_mock.post(host=_AZURE_SDK_RESOURCE, path__regex=r"/responses$").respond(json=_AZURE_SDK_RESPONSE)
+    lifecycle: Final = respx_mock.route(
+        host=_AZURE_SDK_RESOURCE, path__regex=rf"/responses/resp_azure_sdk{azure_suffix}$"
+    ).mock(side_effect=_azure_lifecycle_response)
+    created: Final = azure_sdk_proxy.post("/openai/responses", json={"model": "my-model", "input": "hi"})
+    assert created.status_code == 200, created.text
+
+    response: Final = azure_sdk_proxy.request(method, path.format(id=created.json()["id"]))
+
+    assert response.status_code == 200, response.text
+    assert [call.request.method for call in lifecycle.calls] == [method]
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    (
+        ("POST", "/openai/responses"),
+        ("POST", "/openai/responses/compact"),
+        ("POST", "/openai/responses/input_tokens"),
+        *((method, path.format(id="resp_azure_sdk")) for method, path, _ in _AZURE_SDK_RESPONSE_PATHS),
+    ),
+)
+def test_azure_sdk_responses_paths_require_a_virtual_key(
+    azure_sdk_proxy: TestClient, respx_mock: respx.MockRouter, method: str, path: str
+) -> None:
+    azure: Final = respx_mock.route(host=_AZURE_SDK_RESOURCE).respond(json=_AZURE_SDK_RESPONSE)
+
+    response: Final = azure_sdk_proxy.request(
+        method, path, json={"model": "my-model", "input": "hi"}, headers={"Authorization": ""}
+    )
+
+    assert response.status_code == 401, response.text
+    assert not azure.called
