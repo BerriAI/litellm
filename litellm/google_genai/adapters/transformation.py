@@ -1,7 +1,7 @@
 import json
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate, chain, groupby
+from itertools import accumulate, chain, groupby, pairwise, repeat
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeAlias, TypeVar, cast
 
@@ -305,41 +305,92 @@ def _call_answered_by_id(response: _GenAIFunctionResponse, call_by_caller_id: Ma
     return None if caller_id is None else call_by_caller_id.get(caller_id)
 
 
-def _genai_response_ids(
-    responses: Sequence[_GenAIFunctionResponse], calls: Sequence[_GenAIRequestFunctionCall], call_ids: Sequence[str]
-) -> tuple[str, ...]:
+@dataclass(frozen=True, slots=True)
+class _OpenCall:
+    name: str
+    turn: int
+    index: int
+
+
+@dataclass(frozen=True, slots=True)
+class _UnpairedResponse:
+    name: str
+    turn: int
+    index: int
+
+
+_PairingEvent: TypeAlias = _OpenCall | _UnpairedResponse
+
+
+def _bracket_order(event: _PairingEvent) -> tuple[str, int, int]:
+    match event:
+        case _OpenCall():
+            return (event.name, event.turn, -event.index)
+        case _UnpairedResponse():
+            return (event.name, event.turn, event.index)
+
+
+def _open_calls_after(open_calls: int, event: _PairingEvent) -> int:
+    match event:
+        case _OpenCall():
+            return open_calls + 1
+        case _UnpairedResponse():
+            return max(open_calls - 1, 0)
+
+
+def _bracket_pairs(events: Sequence[_PairingEvent]) -> Iterator[tuple[int, int]]:
+    open_before: Final = tuple(accumulate(events, _open_calls_after, initial=0))
+    depths: Final = tuple(
+        open_before[index] + 1 if isinstance(event, _OpenCall) else open_before[index]
+        for index, event in enumerate(events)
+    )
+    by_depth: Final = tuple(events[index] for index in sorted(range(len(events)), key=depths.__getitem__))
+    return (
+        (later.index, earlier.index)
+        for earlier, later in pairwise(by_depth)
+        if isinstance(earlier, _OpenCall) and isinstance(later, _UnpairedResponse)
+    )
+
+
+def _turn_of_each(counts: Iterable[int]) -> tuple[int, ...]:
+    return tuple(chain.from_iterable(repeat(turn, count) for turn, count in enumerate(counts)))
+
+
+def _genai_response_ids(turns: Sequence[_GenAITurn], call_ids: Sequence[str]) -> tuple[str, ...]:
+    calls: Final = tuple(chain.from_iterable(turn.calls for turn in turns))
+    responses: Final = tuple(chain.from_iterable(turn.responses for turn in turns))
+    call_turns: Final = _turn_of_each(len(turn.calls) for turn in turns)
+    response_turns: Final = _turn_of_each(len(turn.responses) for turn in turns)
     call_by_caller_id: Final = MappingProxyType(
         {caller_id: index for index, call in reversed(tuple(enumerate(calls))) if (caller_id := _caller_id(call))}
     )
     answered_call: Final = tuple(_call_answered_by_id(response, call_by_caller_id) for response in responses)
     answered_by_id: Final = frozenset(index for index in answered_call if index is not None)
-    open_calls: Final = sorted(
-        (index for index in range(len(calls)) if index not in answered_by_id),
-        key=lambda index: _function_name(calls[index]),
+    open_calls: Final = (
+        _OpenCall(_function_name(call), call_turns[index], index)
+        for index, call in enumerate(calls)
+        if index not in answered_by_id
     )
-    open_ids_by_name: Final = MappingProxyType(
-        {
-            name: tuple(call_ids[index] for index in indexes)
-            for name, indexes in groupby(open_calls, key=lambda index: _function_name(calls[index]))
-        }
+    unpaired: Final = (
+        _UnpairedResponse(_function_name(responses[index]), response_turns[index], index)
+        for index, call_index in enumerate(answered_call)
+        if call_index is None
     )
-    unpaired: Final = sorted(
-        (index for index, call_index in enumerate(answered_call) if call_index is None),
-        key=lambda index: _function_name(responses[index]),
-    )
-    paired: Final = MappingProxyType(
+    events: Final = sorted(chain(open_calls, unpaired), key=_bracket_order)
+    paired_call: Final = MappingProxyType(
         dict(
             chain.from_iterable(
-                zip(indexes, open_ids_by_name.get(name, ()))
-                for name, indexes in groupby(unpaired, key=lambda index: _function_name(responses[index]))
+                _bracket_pairs(tuple(same_name)) for _, same_name in groupby(events, key=lambda event: event.name)
             )
         )
     )
+    resolved_call: Final = tuple(
+        call_index if call_index is not None else paired_call.get(index)
+        for index, call_index in enumerate(answered_call)
+    )
     return tuple(
-        call_ids[call_index]
-        if (call_index := answered_call[index]) is not None
-        else paired.get(index, f"call_{_function_name(response)}")
-        for index, response in enumerate(responses)
+        call_ids[call_index] if call_index is not None else f"call_{_function_name(response)}"
+        for call_index, response in zip(resolved_call, responses)
     )
 
 
@@ -375,9 +426,7 @@ def _genai_contents_messages(contents: Sequence[object]) -> tuple[AllMessageValu
     turns: Final = tuple(turn for content in contents if (turn := _genai_turn(content)) is not None)
     calls: Final = tuple(chain.from_iterable(turn.calls for turn in turns))
     call_ids: Final = _genai_call_ids(calls)
-    response_ids: Final = _genai_response_ids(
-        tuple(chain.from_iterable(turn.responses for turn in turns)), calls, call_ids
-    )
+    response_ids: Final = _genai_response_ids(turns, call_ids)
     call_starts: Final = tuple(accumulate((len(turn.calls) for turn in turns), initial=0))
     response_starts: Final = tuple(accumulate((len(turn.responses) for turn in turns), initial=0))
     return tuple(

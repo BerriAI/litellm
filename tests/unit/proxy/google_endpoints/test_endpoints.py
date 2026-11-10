@@ -153,6 +153,15 @@ def test_google_count_tokens_counts_every_google_spelling_of_a_repeated_field_li
     )
 
 
+def test_google_count_tokens_counts_an_entry_without_parts_as_an_empty_turn() -> None:
+    turn: Final = {"role": "user", "parts": [{"text": "Count this request"}]}
+
+    with_partless_entries: Final = _google_count_tokens_request("counted", {"contents": [{"role": "user"}, {}, turn]})
+    without_them: Final = _google_count_tokens_request("counted", {"contents": [turn]})
+
+    assert with_partless_entries.messages == without_them.messages
+
+
 @pytest.mark.parametrize(
     "malformed",
     (
@@ -161,9 +170,6 @@ def test_google_count_tokens_counts_every_google_spelling_of_a_repeated_field_li
         {"systemInstruction": {"parts": 7}},
         {"contents": 5},
         {"contents": ["Count this request"]},
-        {"contents": [{}]},
-        {"contents": [{"role": "user"}]},
-        {"contents": [{"role": "user", "text": "Count this request"}]},
         {"contents": [{"role": "user", "parts": 4}]},
     ),
 )

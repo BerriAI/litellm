@@ -625,6 +625,25 @@ def test_each_function_response_answers_the_call_it_was_sent_for(contents: list[
     ]
 
 
+def test_a_response_answers_the_latest_call_before_it_when_an_earlier_one_went_unanswered():
+    messages: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="gpt-6-luna",
+        contents=[
+            {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},
+            {"role": "model", "parts": [_tagged_call("get_weather", "paris")]},
+            {"role": "user", "parts": [{"text": "Actually, only Rome"}]},
+            {"role": "model", "parts": [_tagged_call("get_weather", "rome")]},
+            {"role": "user", "parts": [_tagged_response("get_weather", "rome")]},
+        ],
+    )["messages"]
+
+    call_id_by_tag: Final = {
+        json.loads(call["function"]["arguments"])["tag"]: call["id"]
+        for call in chain.from_iterable(message.get("tool_calls") or () for message in messages)
+    }
+    assert [message["tool_call_id"] for message in messages if message["role"] == "tool"] == [call_id_by_tag["rome"]]
+
+
 def _two_weather_calls(**ids: object) -> list[dict[str, object]]:
     paris: Final = {"id": ids["paris"]} if "paris" in ids else {}
     rome: Final = {"id": ids["rome"]} if "rome" in ids else {}

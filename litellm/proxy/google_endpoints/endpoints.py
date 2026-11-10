@@ -111,7 +111,7 @@ class _GoogleCountTokensTool(BaseModel):
 
 class _GoogleContentShape(BaseModel):
     model_config = ConfigDict(frozen=True)
-    parts: tuple[JsonValue, ...]
+    parts: tuple[JsonValue, ...] = ()
 
 
 _GOOGLE_CONTENTS_SHAPE: Final[TypeAdapter[tuple[_GoogleContentShape, ...]]] = TypeAdapter(
@@ -188,18 +188,19 @@ def _json_path(loc: tuple[int | str, ...]) -> str:
 
 def _google_body_error(error: ValidationError) -> ProxyException:
     detail: Final = error.errors()[0]
+    kind: Final = _EXPECTED_JSON_KIND.get(detail["type"])
+    reason: Final = f"expected {kind}" if kind else detail["msg"]
     match detail["loc"]:
-        case (int() as index, *_):
+        case (int(), *_):
             return ProxyException(
-                message=f"Invalid contents[{index}]: each entry needs a parts list",
+                message=f"Invalid {_json_path(('contents', *detail['loc']))}: {reason}",
                 type="invalid_request_error",
                 param="contents",
                 code=400,
             )
         case (field, *_):
-            kind: Final = _EXPECTED_JSON_KIND.get(detail["type"])
             return ProxyException(
-                message=f"Invalid {_json_path(detail['loc'])}: {f'expected {kind}' if kind else detail['msg']}",
+                message=f"Invalid {_json_path(detail['loc'])}: {reason}",
                 type="invalid_request_error",
                 param=str(field),
                 code=400,

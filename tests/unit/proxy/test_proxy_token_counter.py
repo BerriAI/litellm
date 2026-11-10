@@ -2208,27 +2208,33 @@ _WEATHER_CONTENTS: Final = ({"role": "user", "parts": [{"text": "What is the wea
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "deployment",
+    [pytest.param(_local_luna, id="local_count"), pytest.param(_framed_kimi_count, id="provider_count_fails")],
+)
+async def test_utils_token_counter_counts_an_entry_without_parts_as_empty(
+    monkeypatch: pytest.MonkeyPatch, deployment: Callable[[pytest.MonkeyPatch], bool]
+):
+    call_endpoint: Final = deployment(monkeypatch)
+
+    with_partless_entries: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=[*_WEATHER_CONTENTS, {"role": "user"}, {}]),
+        call_endpoint=call_endpoint,
+    )
+    without_them: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=list(_WEATHER_CONTENTS)), call_endpoint=call_endpoint
+    )
+
+    assert with_partless_entries.total_tokens == without_them.total_tokens > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("body", "field", "message"),
     [
         pytest.param(
-            {"contents": [{}]}, "contents", "Invalid contents[0]: each entry needs a parts list", id="empty_entry"
-        ),
-        pytest.param(
-            {"contents": [{"role": "user"}]},
-            "contents",
-            "Invalid contents[0]: each entry needs a parts list",
-            id="no_parts",
-        ),
-        pytest.param(
-            {"contents": [{"role": "user", "text": "Return exactly OK."}]},
-            "contents",
-            "Invalid contents[0]: each entry needs a parts list",
-            id="text_outside_parts",
-        ),
-        pytest.param(
             {"contents": [{"role": "user", "parts": [{"text": "Hi"}]}, {"role": "user", "parts": 4}]},
             "contents",
-            "Invalid contents[1]: each entry needs a parts list",
+            "Invalid contents[1].parts: expected a list",
             id="second_entry_parts_number",
         ),
         pytest.param(
