@@ -4,9 +4,12 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.auth.core.inputs import PlanFacts, PlanSettings, RequestFacts, RoutingOverride
-from litellm.proxy.auth.core.outcome import (
+from litellm.proxy.auth.core.identity import (
     AnonymousReason,
+)
+from litellm.proxy.auth.core.inputs import PlanFacts, PlanSettings, RequestFacts, RoutingOverride
+from litellm.proxy.auth.core.python_core import PythonCore
+from litellm.proxy.auth.core.validators import (
     AnonymousValidator,
     CustomValidator,
     JwtValidator,
@@ -16,7 +19,6 @@ from litellm.proxy.auth.core.outcome import (
     PremiumFeature,
     PremiumRequired,
 )
-from litellm.proxy.auth.core.python_core import PythonCore
 
 PLANNER: Final = PythonCore().plan()
 JWT: Final = "header.payload.signature"

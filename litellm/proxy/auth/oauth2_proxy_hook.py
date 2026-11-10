@@ -7,15 +7,15 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.core.inputs import OAuth2ProxySettings
-from litellm.proxy.auth.core.oauth2 import ALLOWED_OAUTH2_PROXY_FIELDS
-from litellm.proxy.auth.core.outcome import (
+from litellm.proxy.auth.core.identity import (
     DisallowedProxyMappings,
     OAuth2ProxyIdentity,
     ProxyMappingsMissing,
     TrustedProxyRangesMissing,
     UntrustedProxy,
 )
+from litellm.proxy.auth.core.inputs import OAuth2ProxySettings
+from litellm.proxy.auth.core.oauth2 import ALLOWED_OAUTH2_PROXY_FIELDS
 from litellm.proxy.auth.network import parse_trusted_proxy_ranges
 from litellm.proxy.auth.selected_core import AUTH_CORE
 from litellm.proxy.auth.trusted_proxy_utils import (

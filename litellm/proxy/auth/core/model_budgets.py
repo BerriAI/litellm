@@ -3,7 +3,9 @@ from typing import Final
 
 from litellm.proxy.auth.core.answers import FallbackTarget, ModelBudgetScope, TeamMemberModelBudgetScope
 from litellm.proxy.auth.core.host import ModelBudgetHost, TeamMemberModelBudgetHost
-from litellm.proxy.auth.core.outcome import ModelBudgetExceeded
+from litellm.proxy.auth.core.outcome import (
+    ModelBudgetExceeded,
+)
 
 
 async def check_key_and_user_model_budgets(host: ModelBudgetHost) -> ModelBudgetExceeded | None:

@@ -88,18 +88,3 @@ class Introspection:
     user_id: object
     role: object
     team_id: object
-
-
-@dataclass(frozen=True, slots=True)
-class TeamFacts:
-    blocked: bool
-    models: tuple[str, ...]
-    spend: float
-    max_budget: float | None
-
-
-@dataclass(frozen=True, slots=True)
-class OrganizationFacts:
-    models: tuple[str, ...]
-    spend: float
-    max_budget: float | None

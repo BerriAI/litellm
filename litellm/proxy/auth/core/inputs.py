@@ -43,10 +43,7 @@ class PlanSettings:
 @dataclass(frozen=True, slots=True)
 class KeySettings:
     master_key: str | None
-    allow_user_auth: bool
     has_db: bool
-    master_key_only_routes: frozenset[str]
-    proxy_max_budget: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,5 +69,7 @@ class OAuth2ProxySettings:
 
 @dataclass(frozen=True, slots=True)
 class AuthorizeSettings:
-    admin_only_routes: frozenset[str]
+    allow_user_auth: bool
+    has_db: bool
+    master_key_only_routes: frozenset[str]
     proxy_max_budget: float

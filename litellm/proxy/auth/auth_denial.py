@@ -7,19 +7,22 @@ from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER, INVALID_VIRTUAL_
 from litellm.proxy._types import Litellm_EntityType, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import key_budget_exceeded_error
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
-from litellm.proxy.auth.core.outcome import (
-    Denial,
+from litellm.proxy.auth.core.identity import (
     ExpiredKey,
     KeyBlocked,
-    KeyBudgetExceeded,
+    KeyDenial,
     KeyWithoutToken,
     MalformedKey,
-    MasterKeyOnlyRoute,
     MissingKey,
-    ModelBudgetExceeded,
     NoDatabase,
     NotAVirtualKey,
     OwnerDeactivated,
+)
+from litellm.proxy.auth.core.outcome import (
+    Denial,
+    KeyBudgetExceeded,
+    MasterKeyOnlyRoute,
+    ModelBudgetExceeded,
     TeamMemberBudgetExceeded,
     UserAuthDisabled,
 )
@@ -45,7 +48,7 @@ def _not_a_virtual_key(token: str, jwt_auth_enabled: bool) -> HTTPException:
 
 
 def denial_exception(
-    denial: Denial,
+    denial: KeyDenial | Denial,
     token: str | None,
     route: str,
     jwt_auth_enabled: bool,

@@ -81,18 +81,3 @@ pub struct Introspection {
     pub role: Value,
     pub team_id: Value,
 }
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct TeamFacts {
-    pub blocked: bool,
-    pub models: Vec<String>,
-    pub spend: f64,
-    pub max_budget: Option<f64>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct OrganizationFacts {
-    pub models: Vec<String>,
-    pub spend: f64,
-    pub max_budget: Option<f64>,
-}

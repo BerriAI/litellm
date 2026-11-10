@@ -10,7 +10,11 @@ from litellm.proxy.auth.core.answers import (
     ModelBudgetScope,
     TeamMemberModelBudgetScope,
 )
-from litellm.proxy.auth.core.outcome import ModelBudgetExceeded, ModelBudgetResult, WithinModelBudgets
+from litellm.proxy.auth.core.outcome import (
+    ModelBudgetExceeded,
+    ModelBudgetResult,
+    WithinModelBudgets,
+)
 from litellm.proxy.auth.core.python_core import PythonCore
 
 Call = tuple[str, str | None]

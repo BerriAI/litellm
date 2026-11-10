@@ -146,35 +146,48 @@ from litellm.proxy.auth.core.credential import (
     select_websocket_api_key,
 )
 from litellm.proxy.auth.core.host import ModelBudgetHost
-from litellm.proxy.auth.core.inputs import KeySettings, PlanFacts, PlanSettings, RequestFacts, RoutingOverride
-from litellm.proxy.auth.core.outcome import (
-    Allow,
+from litellm.proxy.auth.core.identity import (
     Anonymous,
     AnonymousReason,
-    AnonymousValidator,
     CachedAdminKey,
-    CredentialPlan,
     CustomAuthResult,
     CustomIdentity,
-    CustomValidator,
-    Deny,
-    Grant,
-    JwtValidator,
-    KeyValidator,
+    KeyAuthentication,
+    KeyDenial,
+    KeyIdentity,
     MasterKey,
-    ModelBudgetExceeded,
-    ModelBudgetResult,
     NoCustomIdentity,
     NoMasterKey,
-    OAuth2Mode,
-    OAuth2Validator,
-    Outcome,
-    PremiumFeature,
-    PremiumRequired,
     ReplacedKey,
     UserAuthRoute,
     VirtualKey,
+)
+from litellm.proxy.auth.core.inputs import (
+    AuthorizeSettings,
+    KeySettings,
+    PlanFacts,
+    PlanSettings,
+    RequestFacts,
+    RoutingOverride,
+)
+from litellm.proxy.auth.core.outcome import (
+    Allow,
+    Deny,
+    ModelBudgetExceeded,
+    ModelBudgetResult,
+    Outcome,
     WithinModelBudgets,
+)
+from litellm.proxy.auth.core.validators import (
+    AnonymousValidator,
+    CredentialPlan,
+    CustomValidator,
+    JwtValidator,
+    KeyValidator,
+    OAuth2Mode,
+    OAuth2Validator,
+    PremiumFeature,
+    PremiumRequired,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
@@ -2525,9 +2538,12 @@ def _proxy_model_list() -> list[object] | None:
 _MASTER_KEY_ONLY_ROUTES: Final = frozenset(LiteLLMRoutes.master_key_only_routes.value)
 
 
-def _core_settings(master_key: str | None, allow_user_auth: bool, prisma_client: PrismaClient | None) -> KeySettings:
-    return KeySettings(
-        master_key=master_key,
+def _key_settings(master_key: str | None, prisma_client: PrismaClient | None) -> KeySettings:
+    return KeySettings(master_key=master_key, has_db=prisma_client is not None)
+
+
+def _authorize_settings(allow_user_auth: bool, prisma_client: PrismaClient | None) -> AuthorizeSettings:
+    return AuthorizeSettings(
         allow_user_auth=allow_user_auth,
         has_db=prisma_client is not None,
         master_key_only_routes=_MASTER_KEY_ONLY_ROUTES,
@@ -3272,21 +3288,24 @@ async def user_api_key_auth_builder(
             proxy_logging_obj=proxy_logging_obj,
             route=route,
         )
+        key_facts: Final = RequestFacts(
+            route=route, token=api_key, is_llm_api_route=RouteChecks.is_llm_api_route(route=route)
+        )
         try:
-            outcome: Final = await _AUTH_CORE.keys().authenticate(
-                host,
-                RequestFacts(route=route, token=api_key, is_llm_api_route=RouteChecks.is_llm_api_route(route=route)),
-                _core_settings(
-                    master_key=master_key,
-                    allow_user_auth=general_settings.get("allow_user_auth", False) is True,
-                    prisma_client=prisma_client,
+            authorized: Final = await _authorize_key(
+                await _AUTH_CORE.keys().authenticate(
+                    host, key_facts, _key_settings(master_key, prisma_client), datetime.now(timezone.utc)
                 ),
-                datetime.now(timezone.utc),
+                host,
+                key_facts,
+                _authorize_settings(
+                    allow_user_auth=general_settings.get("allow_user_auth", False) is True, prisma_client=prisma_client
+                ),
             )
         finally:
             valid_token = host.resolved_key  # rebind-ok: the exception handler below reports the resolved identity
         return await _authenticated(
-            outcome,
+            authorized,
             host,
             admin_user_id=litellm_proxy_admin_name,
             route=route,
@@ -3422,27 +3441,54 @@ async def _master_key_auth(host: _KeyHost, admin_user_id: str, route: str, start
     return with_end_user
 
 
+@dataclass(frozen=True, slots=True)
+class _AuthorizedKey:
+    identity: KeyIdentity
+    outcome: Outcome
+
+
+async def _authorize_key(
+    authentication: KeyAuthentication, host: _KeyHost, facts: RequestFacts, settings: AuthorizeSettings
+) -> _AuthorizedKey | KeyDenial:
+    match authentication:
+        case NoMasterKey() | UserAuthRoute() | MasterKey() | CachedAdminKey() | VirtualKey():
+            return _AuthorizedKey(
+                authentication, await _AUTH_CORE.authorize().authorize(host, authentication, facts, settings)
+            )
+        case _:
+            return authentication
+
+
 async def _authenticated(
-    outcome: Outcome,
+    authorized: _AuthorizedKey | KeyDenial,
     host: _KeyHost,
     admin_user_id: str,
     route: str,
     start_time: datetime,
     jwt_auth_enabled: bool,
 ) -> UserAPIKeyAuth:
-    match outcome:
+    if not isinstance(authorized, _AuthorizedKey):
+        raise denial_exception(
+            authorized, token=host.token, route=route, jwt_auth_enabled=jwt_auth_enabled, key=host.resolved_key
+        )
+    match authorized.outcome:
         case Deny(denial=denial):
             raise denial_exception(
                 denial, token=host.token, route=route, jwt_auth_enabled=jwt_auth_enabled, key=host.resolved_key
             )
-        case Allow(grant=grant):
-            return await _granted(grant, host, admin_user_id, route, start_time)
+        case Allow(budget_throttle_pct=budget_throttle_pct):
+            return await _granted(authorized.identity, budget_throttle_pct, host, admin_user_id, route, start_time)
 
 
 async def _granted(
-    grant: Grant, host: _KeyHost, admin_user_id: str, route: str, start_time: datetime
+    identity: KeyIdentity,
+    budget_throttle_pct: float | None,
+    host: _KeyHost,
+    admin_user_id: str,
+    route: str,
+    start_time: datetime,
 ) -> UserAPIKeyAuth:
-    match grant:
+    match identity:
         case NoMasterKey(token=token):
             return UserAPIKeyAuth(
                 api_key=token, user_role=LitellmUserRoles.INTERNAL_USER, parent_otel_span=host.parent_otel_span
@@ -3453,10 +3499,10 @@ async def _granted(
             return await _master_key_auth(host, admin_user_id, route, start_time)
         case CachedAdminKey():
             return _with_end_user(host.key, host.end_user, host.parent_otel_span)
-        case VirtualKey(budget_throttle_pct=budget_throttle_pct):
+        case VirtualKey():
             return await _virtual_key_auth(host, budget_throttle_pct, route, start_time)
         case _:
-            assert_never(grant)
+            assert_never(identity)
 
 
 async def _virtual_key_auth(
@@ -5001,7 +5047,6 @@ async def _authorize_resolved_key(
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
-        master_key,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -5019,14 +5064,15 @@ async def _authorize_resolved_key(
         proxy_logging_obj=proxy_logging_obj,
         route=route,
     )
-    outcome: Final = await _AUTH_CORE.keys().check(
+    facts: Final = RequestFacts(route=route, token=key_hash, is_llm_api_route=RouteChecks.is_llm_api_route(route=route))
+    authorized: Final = await _authorize_key(
+        await _AUTH_CORE.keys().verify(host, facts, start_time),
         host,
-        RequestFacts(route=route, token=key_hash, is_llm_api_route=RouteChecks.is_llm_api_route(route=route)),
-        _core_settings(master_key=master_key, allow_user_auth=False, prisma_client=prisma_client),
-        start_time,
+        facts,
+        _authorize_settings(allow_user_auth=False, prisma_client=prisma_client),
     )
     return await _authenticated(
-        outcome,
+        authorized,
         host,
         admin_user_id=litellm_proxy_admin_name,
         route=route,

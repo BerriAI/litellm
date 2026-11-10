@@ -11,6 +11,21 @@ from litellm.proxy.auth.core.host import (
     OAuth2ProxyHost,
     TeamMemberModelBudgetHost,
 )
+from litellm.proxy.auth.core.identity import (
+    Anonymous,
+    AnonymousReason,
+    AuthDenial,
+    CustomAuthResult,
+    Identity,
+    KeyAuthentication,
+    KeyDenial,
+    KeyIdentity,
+    OAuth2Denial,
+    OAuth2Identity,
+    OAuth2ProxyDenial,
+    OAuth2ProxyIdentity,
+    VirtualKey,
+)
 from litellm.proxy.auth.core.inputs import (
     AuthorizeSettings,
     JwtSettings,
@@ -21,30 +36,16 @@ from litellm.proxy.auth.core.inputs import (
     PlanSettings,
     RequestFacts,
 )
-from litellm.proxy.auth.core.outcome import (
-    Anonymous,
-    AnonymousReason,
-    CredentialPlan,
-    CustomAuthResult,
-    Denial,
-    Identity,
-    KeyPlan,
-    ModelBudgetResult,
-    OAuth2Denial,
-    OAuth2Identity,
-    OAuth2ProxyDenial,
-    OAuth2ProxyIdentity,
-    Outcome,
-    Plan,
-)
+from litellm.proxy.auth.core.outcome import ModelBudgetResult, Outcome
+from litellm.proxy.auth.core.validators import CredentialPlan, KeyPlan, Plan
 
 
 class KeyCore(Protocol):
     async def authenticate(
         self, host: KeyHost, facts: RequestFacts, settings: KeySettings, now: datetime
-    ) -> Outcome: ...
+    ) -> KeyAuthentication: ...
 
-    async def check(self, host: KeyHost, facts: RequestFacts, settings: KeySettings, now: datetime) -> Outcome: ...
+    async def verify(self, host: KeyHost, facts: RequestFacts, now: datetime) -> VirtualKey | KeyDenial: ...
 
 
 class ModelBudgetCore(Protocol):
@@ -72,7 +73,7 @@ class AnonymousCore(Protocol):
 class JwtCore(Protocol):
     async def authenticate(
         self, host: JwtHost, facts: RequestFacts, settings: JwtSettings, now: datetime
-    ) -> Identity | Denial: ...
+    ) -> Identity | AuthDenial: ...
 
 
 class OAuth2Core(Protocol):
@@ -91,7 +92,7 @@ class CustomAuthCore(Protocol):
 
 class AuthorizeCore(Protocol):
     async def authorize(
-        self, host: AuthorizeHost, identity: Identity, facts: RequestFacts, settings: AuthorizeSettings
+        self, host: AuthorizeHost, identity: KeyIdentity, facts: RequestFacts, settings: AuthorizeSettings
     ) -> Outcome: ...
 
 

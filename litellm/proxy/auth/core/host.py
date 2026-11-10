@@ -1,22 +1,20 @@
-from dataclasses import dataclass
-from typing import Protocol, TypeAlias
+from typing import Protocol
 
 from litellm.proxy.auth.core.answers import (
     FallbackTarget,
     Introspection,
     KeyFacts,
     ModelBudgetScope,
-    OrganizationFacts,
     OwnerFacts,
     PresentedKey,
     SigningKey,
-    TeamFacts,
     TeamMember,
     TeamMemberBudget,
     TeamMemberModelBudgetScope,
 )
+from litellm.proxy.auth.core.identity import CustomAuthResult, JwtIdentity
 from litellm.proxy.auth.core.inputs import RequestFacts
-from litellm.proxy.auth.core.outcome import CustomAuthResult, Identity, JwtIdentity, KeyIdentity, ModelBudgetExceeded
+from litellm.proxy.auth.core.outcome import ModelBudgetExceeded
 
 
 class ModelBudgetHost(Protocol):
@@ -44,8 +42,6 @@ class TeamMemberModelBudgetHost(Protocol):
 
 
 class KeyHost(Protocol):
-    def model_budgets(self) -> ModelBudgetHost: ...
-
     async def resolve_end_user(self, prefetch_key: bool) -> None: ...
 
     async def resolve_presented_key(self, hashed_token: str) -> PresentedKey | None: ...
@@ -58,9 +54,13 @@ class KeyHost(Protocol):
 
     async def inspect_key(self) -> KeyFacts: ...
 
-    async def enforce_model_access(self) -> None: ...
-
     async def load_key_owner(self, user_id: str) -> OwnerFacts | None: ...
+
+
+class AuthorizeHost(Protocol):
+    def model_budgets(self) -> ModelBudgetHost: ...
+
+    async def enforce_model_access(self) -> None: ...
 
     async def check_budget_exemption(self) -> bool: ...
 
@@ -83,33 +83,10 @@ class KeyHost(Protocol):
     async def alert_proxy_budget(self, spend: float) -> None: ...
 
 
-@dataclass(frozen=True, slots=True)
-class KeySpend:
-    hashed_token: str
-
-
-@dataclass(frozen=True, slots=True)
-class TeamSpend:
-    team_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class OrganizationSpend:
-    org_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class TeamMemberSpend:
-    member: TeamMember
-
-
-SpendCounter: TypeAlias = KeySpend | TeamSpend | OrganizationSpend | TeamMemberSpend
-
-
 class JwtHost(Protocol):
     async def signing_keys(self, issuer: str) -> tuple[SigningKey, ...]: ...
 
-    async def mapped_key(self, identity: JwtIdentity) -> KeyIdentity | None: ...
+    async def mapped_key_hash(self, identity: JwtIdentity) -> str | None: ...
 
 
 class OAuth2IntrospectionHost(Protocol):
@@ -124,13 +101,3 @@ class OAuth2ProxyHost(Protocol):
 
 class CustomAuthHost(Protocol):
     async def custom_auth(self, facts: RequestFacts) -> CustomAuthResult: ...
-
-
-class AuthorizeHost(Protocol):
-    async def team(self, team_id: str) -> TeamFacts | None: ...
-
-    async def organization(self, org_id: str) -> OrganizationFacts | None: ...
-
-    async def allowed_models(self, identity: Identity) -> frozenset[str]: ...
-
-    async def spend(self, counter: SpendCounter) -> float: ...

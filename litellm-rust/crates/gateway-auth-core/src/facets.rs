@@ -5,15 +5,17 @@ use crate::{
         AuthorizeHost, CustomAuthHost, JwtHost, KeyHost, ModelBudgetHost, OAuth2IntrospectionHost,
         OAuth2ProxyHost, TeamMemberModelBudgetHost,
     },
+    identity::{
+        Anonymous, AnonymousReason, AuthDenial, CustomAuthResult, Identity, KeyAuthentication,
+        KeyDenial, KeyIdentity, OAuth2Denial, OAuth2Identity, OAuth2ProxyDenial,
+        OAuth2ProxyIdentity, VirtualKey,
+    },
     inputs::{
         AuthorizeSettings, JwtSettings, KeySettings, OAuth2IntrospectionSettings,
         OAuth2ProxySettings, PlanFacts, PlanSettings, RequestFacts,
     },
-    outcome::{
-        Anonymous, AnonymousReason, CredentialPlan, CustomAuthResult, Denial, Identity, KeyPlan,
-        ModelBudgetResult, OAuth2Denial, OAuth2Identity, OAuth2ProxyDenial, OAuth2ProxyIdentity,
-        Outcome, Plan,
-    },
+    outcome::{ModelBudgetResult, Outcome},
+    validators::{CredentialPlan, KeyPlan, Plan},
 };
 
 pub trait KeyCore: Sync {
@@ -23,14 +25,13 @@ pub trait KeyCore: Sync {
         facts: &RequestFacts,
         settings: &KeySettings,
         now: SystemTime,
-    ) -> impl Future<Output = Result<Outcome, H::Error>> + Send;
-    fn check<H: KeyHost>(
+    ) -> impl Future<Output = Result<KeyAuthentication, H::Error>> + Send;
+    fn verify<H: KeyHost>(
         &self,
         host: &H,
         facts: &RequestFacts,
-        settings: &KeySettings,
         now: SystemTime,
-    ) -> impl Future<Output = Result<Outcome, H::Error>> + Send;
+    ) -> impl Future<Output = Result<Result<VirtualKey, KeyDenial>, H::Error>> + Send;
 }
 
 pub trait ModelBudgetCore: Sync {
@@ -71,7 +72,7 @@ pub trait JwtCore: Sync {
         facts: &RequestFacts,
         settings: &JwtSettings,
         now: SystemTime,
-    ) -> impl Future<Output = Result<Result<Identity, Denial>, H::Error>> + Send;
+    ) -> impl Future<Output = Result<Result<Identity, AuthDenial>, H::Error>> + Send;
 }
 
 pub trait OAuth2Core: Sync {
@@ -100,7 +101,7 @@ pub trait AuthorizeCore: Sync {
     fn authorize<H: AuthorizeHost>(
         &self,
         host: &H,
-        identity: &Identity,
+        identity: &KeyIdentity,
         facts: &RequestFacts,
         settings: &AuthorizeSettings,
     ) -> impl Future<Output = Result<Outcome, H::Error>> + Send;

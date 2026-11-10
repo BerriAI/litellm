@@ -7,8 +7,7 @@ from typing import Final
 import pytest
 
 from litellm.proxy.auth.core.answers import Introspection
-from litellm.proxy.auth.core.inputs import OAuth2IntrospectionSettings, OAuth2ProxySettings
-from litellm.proxy.auth.core.outcome import (
+from litellm.proxy.auth.core.identity import (
     DisallowedProxyMappings,
     InactiveToken,
     IntrospectionNotConfigured,
@@ -18,6 +17,7 @@ from litellm.proxy.auth.core.outcome import (
     TrustedProxyRangesMissing,
     UntrustedProxy,
 )
+from litellm.proxy.auth.core.inputs import OAuth2IntrospectionSettings, OAuth2ProxySettings
 from litellm.proxy.auth.core.python_core import PythonCore
 
 CORE: Final = PythonCore()

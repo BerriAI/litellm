@@ -3,9 +3,11 @@ from fnmatch import fnmatchcase
 from typing import Final
 
 from litellm.proxy.auth.core.credential import is_jwt
-from litellm.proxy.auth.core.inputs import PlanFacts, PlanSettings, RoutingOverride
-from litellm.proxy.auth.core.outcome import (
+from litellm.proxy.auth.core.identity import (
     AnonymousReason,
+)
+from litellm.proxy.auth.core.inputs import PlanFacts, PlanSettings, RoutingOverride
+from litellm.proxy.auth.core.validators import (
     AnonymousValidator,
     CredentialPlan,
     CustomValidator,

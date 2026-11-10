@@ -12,8 +12,12 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.core.answers import Introspection
+from litellm.proxy.auth.core.identity import (
+    InactiveToken,
+    IntrospectionNotConfigured,
+    OAuth2Identity,
+)
 from litellm.proxy.auth.core.inputs import OAuth2IntrospectionSettings
-from litellm.proxy.auth.core.outcome import InactiveToken, IntrospectionNotConfigured, OAuth2Identity
 from litellm.proxy.auth.selected_core import AUTH_CORE
 
 _TOKEN_INFO_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))

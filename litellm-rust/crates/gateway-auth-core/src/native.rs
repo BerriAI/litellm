@@ -9,15 +9,17 @@ use crate::{
         AuthorizeHost, CustomAuthHost, JwtHost, KeyHost, ModelBudgetHost, OAuth2IntrospectionHost,
         OAuth2ProxyHost, TeamMemberModelBudgetHost,
     },
+    identity::{
+        Anonymous, AnonymousReason, AuthDenial, CustomAuthResult, Identity, KeyAuthentication,
+        KeyDenial, KeyIdentity, OAuth2Denial, OAuth2Identity, OAuth2ProxyDenial,
+        OAuth2ProxyIdentity, VirtualKey,
+    },
     inputs::{
         AuthorizeSettings, JwtSettings, KeySettings, OAuth2IntrospectionSettings,
         OAuth2ProxySettings, PlanFacts, PlanSettings, RequestFacts,
     },
-    outcome::{
-        Anonymous, AnonymousReason, CredentialPlan, CustomAuthResult, Denial, Identity, KeyPlan,
-        ModelBudgetResult, OAuth2Denial, OAuth2Identity, OAuth2ProxyDenial, OAuth2ProxyIdentity,
-        Outcome, Plan,
-    },
+    outcome::{ModelBudgetResult, Outcome},
+    validators::{CredentialPlan, KeyPlan, Plan},
 };
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -78,17 +80,16 @@ impl KeyCore for Unported {
         _facts: &RequestFacts,
         _settings: &KeySettings,
         _now: SystemTime,
-    ) -> Result<Outcome, H::Error> {
+    ) -> Result<KeyAuthentication, H::Error> {
         unimplemented!("{RUNS_IN_PYTHON}")
     }
 
-    async fn check<H: KeyHost>(
+    async fn verify<H: KeyHost>(
         &self,
         _host: &H,
         _facts: &RequestFacts,
-        _settings: &KeySettings,
         _now: SystemTime,
-    ) -> Result<Outcome, H::Error> {
+    ) -> Result<Result<VirtualKey, KeyDenial>, H::Error> {
         unimplemented!("{RUNS_IN_PYTHON}")
     }
 }
@@ -157,7 +158,7 @@ impl JwtCore for Unported {
         _facts: &RequestFacts,
         _settings: &JwtSettings,
         _now: SystemTime,
-    ) -> Result<Result<Identity, Denial>, H::Error> {
+    ) -> Result<Result<Identity, AuthDenial>, H::Error> {
         unimplemented!("{RUNS_IN_PYTHON}")
     }
 }
@@ -195,7 +196,7 @@ impl AuthorizeCore for Unported {
     async fn authorize<H: AuthorizeHost>(
         &self,
         _host: &H,
-        _identity: &Identity,
+        _identity: &KeyIdentity,
         _facts: &RequestFacts,
         _settings: &AuthorizeSettings,
     ) -> Result<Outcome, H::Error> {

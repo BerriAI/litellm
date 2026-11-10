@@ -1,50 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
-from enum import Enum
 from typing import TypeAlias
-
-
-@dataclass(frozen=True, slots=True)
-class NoMasterKey:
-    token: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class UserAuthRoute:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class MasterKey:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class CachedAdminKey:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class VirtualKey:
-    budget_throttle_pct: float | None
-
-
-@dataclass(frozen=True, slots=True)
-class WithinModelBudgets:
-    pass
-
-
-Grant: TypeAlias = NoMasterKey | UserAuthRoute | MasterKey | CachedAdminKey | VirtualKey
-
-
-@dataclass(frozen=True, slots=True)
-class MissingKey:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class MalformedKey:
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,35 +8,8 @@ class UserAuthDisabled:
 
 
 @dataclass(frozen=True, slots=True)
-class ExpiredKey:
-    expires: datetime
-    now: datetime
-    key_label: str
-
-
-@dataclass(frozen=True, slots=True)
 class MasterKeyOnlyRoute:
     pass
-
-
-@dataclass(frozen=True, slots=True)
-class NoDatabase:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class NotAVirtualKey:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class KeyBlocked:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class OwnerDeactivated:
-    user_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,11 +27,6 @@ class KeyBudgetExceeded:
 
 
 @dataclass(frozen=True, slots=True)
-class KeyWithoutToken:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
 class ModelBudgetExceeded:
     message: str
     current_cost: float
@@ -112,26 +35,21 @@ class ModelBudgetExceeded:
     entity_id: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class WithinModelBudgets:
+    pass
+
+
+ModelBudgetResult: TypeAlias = WithinModelBudgets | ModelBudgetExceeded
+
 Denial: TypeAlias = (
-    MissingKey
-    | MalformedKey
-    | UserAuthDisabled
-    | ExpiredKey
-    | MasterKeyOnlyRoute
-    | NoDatabase
-    | NotAVirtualKey
-    | KeyBlocked
-    | OwnerDeactivated
-    | TeamMemberBudgetExceeded
-    | KeyBudgetExceeded
-    | KeyWithoutToken
-    | ModelBudgetExceeded
+    UserAuthDisabled | MasterKeyOnlyRoute | TeamMemberBudgetExceeded | KeyBudgetExceeded | ModelBudgetExceeded
 )
 
 
 @dataclass(frozen=True, slots=True)
 class Allow:
-    grant: Grant
+    budget_throttle_pct: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,163 +58,3 @@ class Deny:
 
 
 Outcome: TypeAlias = Allow | Deny
-
-ModelBudgetResult: TypeAlias = WithinModelBudgets | ModelBudgetExceeded
-
-
-class AnonymousReason(Enum):
-    PUBLIC_ROUTE = "public_route"
-    PASS_THROUGH_AUTH_OFF = "pass_through_auth_off"
-
-
-@dataclass(frozen=True, slots=True)
-class MasterKeyIdentity:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class KeyIdentity:
-    hashed_token: str
-
-
-@dataclass(frozen=True, slots=True)
-class JwtIdentity:
-    user_id: str | None
-    team_id: str | None
-    org_id: str | None
-    end_user_id: str | None
-    role: str | None
-    scopes: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class OAuth2Identity:
-    token: str
-    user_id: object
-    role: object
-    team_id: object
-
-
-@dataclass(frozen=True, slots=True)
-class OAuth2ProxyIdentity:
-    user_id: str | None
-    user_email: str | None
-    team_id: str | None
-    team_alias: str | None
-    org_id: str | None
-    models: tuple[str, ...] | None
-
-
-@dataclass(frozen=True, slots=True)
-class CustomIdentity:
-    user_id: str | None
-    team_id: str | None
-    hashed_token: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class ReplacedKey:
-    token: str
-
-
-@dataclass(frozen=True, slots=True)
-class NoCustomIdentity:
-    pass
-
-
-CustomAuthResult: TypeAlias = CustomIdentity | ReplacedKey | NoCustomIdentity
-
-
-@dataclass(frozen=True, slots=True)
-class Anonymous:
-    reason: AnonymousReason
-
-
-@dataclass(frozen=True, slots=True)
-class InactiveToken:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class IntrospectionNotConfigured:
-    pass
-
-
-OAuth2Denial: TypeAlias = InactiveToken | IntrospectionNotConfigured
-
-
-@dataclass(frozen=True, slots=True)
-class TrustedProxyRangesMissing:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class UntrustedProxy:
-    client_ip: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class ProxyMappingsMissing:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class DisallowedProxyMappings:
-    fields: tuple[str, ...]
-
-
-OAuth2ProxyDenial: TypeAlias = (
-    TrustedProxyRangesMissing | UntrustedProxy | ProxyMappingsMissing | DisallowedProxyMappings
-)
-
-
-Identity: TypeAlias = (
-    MasterKeyIdentity | KeyIdentity | JwtIdentity | OAuth2Identity | OAuth2ProxyIdentity | CustomIdentity | Anonymous
-)
-
-
-class OAuth2Mode(Enum):
-    INTROSPECTION = "introspection"
-    PROXY = "proxy"
-
-
-@dataclass(frozen=True, slots=True)
-class KeyValidator:
-    pass_through_key: bool
-
-
-@dataclass(frozen=True, slots=True)
-class JwtValidator:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class OAuth2Validator:
-    mode: OAuth2Mode
-
-
-@dataclass(frozen=True, slots=True)
-class CustomValidator:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class AnonymousValidator:
-    reason: AnonymousReason
-
-
-class PremiumFeature(Enum):
-    OAUTH2 = "oauth2"
-    JWT = "jwt"
-
-
-@dataclass(frozen=True, slots=True)
-class PremiumRequired:
-    feature: PremiumFeature
-
-
-KeyPlan: TypeAlias = KeyValidator | AnonymousValidator
-
-CredentialPlan: TypeAlias = KeyPlan | JwtValidator | OAuth2Validator | PremiumRequired
-
-Plan: TypeAlias = CredentialPlan | CustomValidator

@@ -45,10 +45,7 @@ pub struct PlanSettings {
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeySettings {
     pub master_key: Option<SecretValue>,
-    pub allow_user_auth: bool,
     pub has_db: bool,
-    pub master_key_only_routes: BTreeSet<String>,
-    pub proxy_max_budget: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +68,8 @@ pub struct OAuth2ProxySettings {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AuthorizeSettings {
-    pub admin_only_routes: BTreeSet<String>,
+    pub allow_user_auth: bool,
+    pub has_db: bool,
+    pub master_key_only_routes: BTreeSet<String>,
     pub proxy_max_budget: f64,
 }

@@ -1,9 +1,7 @@
 from typing import Final
 
 from litellm.proxy.auth.core.host import OAuth2IntrospectionHost, OAuth2ProxyHost
-from litellm.proxy.auth.core.inputs import OAuth2IntrospectionSettings, OAuth2ProxySettings
-from litellm.proxy.auth.core.network import ip_in_networks
-from litellm.proxy.auth.core.outcome import (
+from litellm.proxy.auth.core.identity import (
     DisallowedProxyMappings,
     InactiveToken,
     IntrospectionNotConfigured,
@@ -15,6 +13,8 @@ from litellm.proxy.auth.core.outcome import (
     TrustedProxyRangesMissing,
     UntrustedProxy,
 )
+from litellm.proxy.auth.core.inputs import OAuth2IntrospectionSettings, OAuth2ProxySettings
+from litellm.proxy.auth.core.network import ip_in_networks
 
 # Header trust asserts identity only. Mapping any other UserAPIKeyAuth field (role, budgets, limits, permissions)
 # would let a caller forge its own enforcement by sending the matching header, and an allowlist stays safe as

@@ -2,12 +2,12 @@ use std::{error::Error, future::Future};
 
 use crate::{
     answers::{
-        FallbackTarget, Introspection, KeyFacts, ModelBudgetScope, OrganizationFacts, OwnerFacts,
-        PresentedKey, SigningKey, TeamFacts, TeamMember, TeamMemberBudget,
-        TeamMemberModelBudgetScope,
+        FallbackTarget, Introspection, KeyFacts, ModelBudgetScope, OwnerFacts, PresentedKey,
+        SigningKey, TeamMember, TeamMemberBudget, TeamMemberModelBudgetScope,
     },
+    identity::{CustomAuthResult, JwtIdentity},
     inputs::RequestFacts,
-    outcome::{CustomAuthResult, Identity, JwtIdentity, ModelBudgetExceeded},
+    outcome::ModelBudgetExceeded,
 };
 
 pub trait ModelBudgetHost: Sync {
@@ -60,9 +60,6 @@ pub trait TeamMemberModelBudgetHost: Sync {
 
 pub trait KeyHost: Sync {
     type Error: Error + Send + Sync + 'static;
-    type ModelBudgets: ModelBudgetHost;
-
-    fn model_budgets(&self) -> Self::ModelBudgets;
 
     fn resolve_end_user(
         &self,
@@ -82,11 +79,19 @@ pub trait KeyHost: Sync {
         loaded_from_db: bool,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
     fn inspect_key(&self) -> impl Future<Output = Result<KeyFacts, Self::Error>> + Send;
-    fn enforce_model_access(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
     fn load_key_owner(
         &self,
         user_id: &str,
     ) -> impl Future<Output = Result<Option<OwnerFacts>, Self::Error>> + Send;
+}
+
+pub trait AuthorizeHost: Sync {
+    type Error: Error + Send + Sync + 'static;
+    type ModelBudgets: ModelBudgetHost;
+
+    fn model_budgets(&self) -> Self::ModelBudgets;
+
+    fn enforce_model_access(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
     fn check_budget_exemption(&self) -> impl Future<Output = Result<bool, Self::Error>> + Send;
     fn read_team_member_budget(
         &self,
@@ -112,14 +117,6 @@ pub trait KeyHost: Sync {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SpendCounter {
-    Key { hashed_token: String },
-    Team { team_id: String },
-    Organization { org_id: String },
-    TeamMember(TeamMember),
-}
-
 pub trait JwtHost: Sync {
     type Error: Error + Send + Sync + 'static;
 
@@ -127,7 +124,7 @@ pub trait JwtHost: Sync {
         &self,
         issuer: &str,
     ) -> impl Future<Output = Result<Vec<SigningKey>, Self::Error>> + Send;
-    fn mapped_key(
+    fn mapped_key_hash(
         &self,
         identity: &JwtIdentity,
     ) -> impl Future<Output = Result<Option<String>, Self::Error>> + Send;
@@ -154,25 +151,4 @@ pub trait CustomAuthHost: Sync {
         &self,
         facts: &RequestFacts,
     ) -> impl Future<Output = Result<CustomAuthResult, Self::Error>> + Send;
-}
-
-pub trait AuthorizeHost: Sync {
-    type Error: Error + Send + Sync + 'static;
-
-    fn team(
-        &self,
-        team_id: &str,
-    ) -> impl Future<Output = Result<Option<TeamFacts>, Self::Error>> + Send;
-    fn organization(
-        &self,
-        org_id: &str,
-    ) -> impl Future<Output = Result<Option<OrganizationFacts>, Self::Error>> + Send;
-    fn allowed_models(
-        &self,
-        identity: &Identity,
-    ) -> impl Future<Output = Result<Vec<String>, Self::Error>> + Send;
-    fn spend(
-        &self,
-        counter: &SpendCounter,
-    ) -> impl Future<Output = Result<f64, Self::Error>> + Send;
 }

@@ -18,6 +18,7 @@ from litellm.proxy.auth.core.core import (
     OAuth2Core,
 )
 from litellm.proxy.auth.core.host import (
+    AuthorizeHost,
     CustomAuthHost,
     KeyHost,
     ModelBudgetHost,
@@ -25,7 +26,33 @@ from litellm.proxy.auth.core.host import (
     OAuth2ProxyHost,
     TeamMemberModelBudgetHost,
 )
+from litellm.proxy.auth.core.identity import (
+    Anonymous,
+    AnonymousReason,
+    CachedAdminKey,
+    CustomAuthResult,
+    ExpiredKey,
+    KeyAuthentication,
+    KeyBlocked,
+    KeyDenial,
+    KeyIdentity,
+    KeyWithoutToken,
+    MalformedKey,
+    MasterKey,
+    MissingKey,
+    NoDatabase,
+    NoMasterKey,
+    NotAVirtualKey,
+    OAuth2Denial,
+    OAuth2Identity,
+    OAuth2ProxyDenial,
+    OAuth2ProxyIdentity,
+    OwnerDeactivated,
+    UserAuthRoute,
+    VirtualKey,
+)
 from litellm.proxy.auth.core.inputs import (
+    AuthorizeSettings,
     KeySettings,
     OAuth2IntrospectionSettings,
     OAuth2ProxySettings,
@@ -41,50 +68,20 @@ from litellm.proxy.auth.core.model_budgets import (
 )
 from litellm.proxy.auth.core.outcome import (
     Allow,
-    Anonymous,
-    AnonymousReason,
-    CachedAdminKey,
-    CredentialPlan,
-    CustomAuthResult,
     Deny,
-    ExpiredKey,
-    KeyBlocked,
     KeyBudgetExceeded,
-    KeyPlan,
-    KeyWithoutToken,
-    MalformedKey,
-    MasterKey,
     MasterKeyOnlyRoute,
-    MissingKey,
     ModelBudgetExceeded,
     ModelBudgetResult,
-    NoDatabase,
-    NoMasterKey,
-    NotAVirtualKey,
-    OAuth2Denial,
-    OAuth2Identity,
-    OAuth2ProxyDenial,
-    OAuth2ProxyIdentity,
     Outcome,
-    OwnerDeactivated,
-    Plan,
     TeamMemberBudgetExceeded,
     UserAuthDisabled,
-    UserAuthRoute,
-    VirtualKey,
     WithinModelBudgets,
 )
+from litellm.proxy.auth.core.validators import CredentialPlan, KeyPlan, Plan
 
 _USER_AUTH_ROUTE: Final = "/user/auth"
 _VIRTUAL_KEY_PREFIX: Final = "sk-"
-
-
-@dataclass(frozen=True, slots=True)
-class _KeyCheck:
-    settings: KeySettings
-    now: datetime
-    is_llm_api_route: bool
-    key_label: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +112,7 @@ class PythonCore(AuthCore):
         return PythonCustomAuthCore()
 
     def authorize(self) -> AuthorizeCore:
-        raise NotImplementedError
+        return PythonAuthorizeCore()
 
 
 class PythonAuthPlanner(AuthPlanner):
@@ -153,24 +150,39 @@ class PythonCustomAuthCore(CustomAuthCore):
 
 
 class PythonKeyCore(KeyCore):
-    async def authenticate(self, host: KeyHost, facts: RequestFacts, settings: KeySettings, now: datetime) -> Outcome:
+    async def authenticate(
+        self, host: KeyHost, facts: RequestFacts, settings: KeySettings, now: datetime
+    ) -> KeyAuthentication:
         token: Final = facts.token
         if settings.master_key is None:
-            return Allow(NoMasterKey(token=token))
+            return NoMasterKey(token=token)
         if token is None:
-            return Deny(MissingKey())
+            return MissingKey()
         if token == "":
-            return Deny(MalformedKey())
+            return MalformedKey()
         if facts.route == _USER_AUTH_ROUTE:
-            return Allow(UserAuthRoute()) if settings.allow_user_auth else Deny(UserAuthDisabled())
+            return UserAuthRoute()
         if is_master_key(token, settings.master_key):
             await host.resolve_end_user(prefetch_key=False)
-            return Allow(MasterKey())
+            return MasterKey()
         await host.resolve_end_user(prefetch_key=True)
-        return await _presented_key(host, token, facts, settings, now)
+        return await _presented_key(host, token, settings, now)
 
-    async def check(self, host: KeyHost, facts: RequestFacts, settings: KeySettings, now: datetime) -> Outcome:
-        return await _check_key(host, _KeyCheck(settings, now, facts.is_llm_api_route, key_label=facts.token or ""))
+    async def verify(self, host: KeyHost, facts: RequestFacts, now: datetime) -> VirtualKey | KeyDenial:
+        return await _verify_key(host, now, key_label=facts.token or "")
+
+
+class PythonAuthorizeCore(AuthorizeCore):
+    async def authorize(
+        self, host: AuthorizeHost, identity: KeyIdentity, facts: RequestFacts, settings: AuthorizeSettings
+    ) -> Outcome:
+        match identity:
+            case UserAuthRoute():
+                return Allow(budget_throttle_pct=None) if settings.allow_user_auth else Deny(UserAuthDisabled())
+            case NoMasterKey() | MasterKey() | CachedAdminKey():
+                return Allow(budget_throttle_pct=None)
+            case VirtualKey(key=key):
+                return await _authorize_virtual_key(host, key, facts, settings)
 
 
 class PythonModelBudgetCore(ModelBudgetCore):
@@ -188,56 +200,37 @@ def _within_model_budgets(exceeded: ModelBudgetExceeded | None) -> ModelBudgetRe
     return WithinModelBudgets() if exceeded is None else exceeded
 
 
-async def _presented_key(
-    host: KeyHost, token: str, facts: RequestFacts, settings: KeySettings, now: datetime
-) -> Outcome:
+async def _presented_key(host: KeyHost, token: str, settings: KeySettings, now: datetime) -> KeyAuthentication:
     hashed_token: Final = hash_token(token)
     presented: Final = await host.resolve_presented_key(hashed_token)
     if isinstance(presented, AdminKey):
         if presented.expires is None or presented.expires >= now:
-            return Allow(CachedAdminKey())
+            return CachedAdminKey()
         await host.evict_presented_key(hashed_token)
-        return Deny(ExpiredKey(expires=presented.expires, now=now, key_label=token))
-    if facts.route in settings.master_key_only_routes:
-        return Deny(MasterKeyOnlyRoute())
+        return ExpiredKey(expires=presented.expires, now=now, key_label=token)
     if not settings.has_db:
-        return Deny(NoDatabase())
+        return NoDatabase()
     if presented is not None:
         await host.prepare_key(loaded_from_db=False)
-        return await _check_key(host, _KeyCheck(settings, now, facts.is_llm_api_route, key_label=token))
+        return await _verify_key(host, now, key_label=token)
     if not token.startswith(_VIRTUAL_KEY_PREFIX):
-        return Deny(NotAVirtualKey())
+        return NotAVirtualKey()
     await host.load_key(hashed_token)
     await host.prepare_key(loaded_from_db=True)
-    return await _check_key(host, _KeyCheck(settings, now, facts.is_llm_api_route, key_label=hashed_token))
+    return await _verify_key(host, now, key_label=hashed_token)
 
 
-async def _check_key(host: KeyHost, check: _KeyCheck) -> Outcome:
+async def _verify_key(host: KeyHost, now: datetime, key_label: str) -> VirtualKey | KeyDenial:
     key: Final = await host.inspect_key()
     if key.blocked:
-        return Deny(KeyBlocked())
-    await host.enforce_model_access()
+        return KeyBlocked()
     if key.user_id is not None and await _owner_deactivated(host, key.user_id):
-        return Deny(OwnerDeactivated(user_id=key.user_id))
-    exempt: Final = await host.check_budget_exemption()
-    if not exempt and check.settings.has_db and key.team_member is not None:
-        team_member_exceeded: Final = await _check_team_member_budget(host, key.team_member)
-        if team_member_exceeded is not None:
-            return Deny(team_member_exceeded)
-    if key.expires is not None and key.expires < check.now:
-        return Deny(ExpiredKey(expires=key.expires, now=check.now, key_label=check.key_label))
-    if exempt:
-        return await _grant(host, check, key, budget_throttle_pct=None)
-    await host.send_key_budget_alerts()
-    key_budget: Final = await _check_key_budget(host, check, key)
-    if isinstance(key_budget, KeyBudgetExceeded):
-        return Deny(key_budget)
-    if key.soft_budget and key.spend >= key.soft_budget:
-        await host.alert_key_soft_budget()
-    model_budget_exceeded: Final = await check_key_and_user_model_budgets(host.model_budgets())
-    if model_budget_exceeded is not None:
-        return Deny(model_budget_exceeded)
-    return await _grant(host, check, key, budget_throttle_pct=key_budget.budget_throttle_pct)
+        return OwnerDeactivated(user_id=key.user_id)
+    if key.expires is not None and key.expires < now:
+        return ExpiredKey(expires=key.expires, now=now, key_label=key_label)
+    if not key.has_token:
+        return KeyWithoutToken()
+    return VirtualKey(key=key)
 
 
 async def _owner_deactivated(host: KeyHost, user_id: str) -> bool:
@@ -245,7 +238,32 @@ async def _owner_deactivated(host: KeyHost, user_id: str) -> bool:
     return owner is not None and owner.deactivated
 
 
-async def _check_team_member_budget(host: KeyHost, member: TeamMember) -> TeamMemberBudgetExceeded | None:
+async def _authorize_virtual_key(
+    host: AuthorizeHost, key: KeyFacts, facts: RequestFacts, settings: AuthorizeSettings
+) -> Outcome:
+    if facts.route in settings.master_key_only_routes:
+        return Deny(MasterKeyOnlyRoute())
+    await host.enforce_model_access()
+    exempt: Final = await host.check_budget_exemption()
+    if not exempt and settings.has_db and key.team_member is not None:
+        team_member_exceeded: Final = await _check_team_member_budget(host, key.team_member)
+        if team_member_exceeded is not None:
+            return Deny(team_member_exceeded)
+    if exempt:
+        return await _grant(host, settings, budget_throttle_pct=None)
+    await host.send_key_budget_alerts()
+    key_budget: Final = await _check_key_budget(host, key, is_llm_api_route=facts.is_llm_api_route)
+    if isinstance(key_budget, KeyBudgetExceeded):
+        return Deny(key_budget)
+    if key.soft_budget and key.spend >= key.soft_budget:
+        await host.alert_key_soft_budget()
+    model_budget_exceeded: Final = await check_key_and_user_model_budgets(host.model_budgets())
+    if model_budget_exceeded is not None:
+        return Deny(model_budget_exceeded)
+    return await _grant(host, settings, budget_throttle_pct=key_budget.budget_throttle_pct)
+
+
+async def _check_team_member_budget(host: AuthorizeHost, member: TeamMember) -> TeamMemberBudgetExceeded | None:
     budget: Final = await host.read_team_member_budget(member)
     if budget is None or budget.spend < budget.max_budget:
         return None
@@ -255,9 +273,11 @@ async def _check_team_member_budget(host: KeyHost, member: TeamMember) -> TeamMe
     )
 
 
-async def _check_key_budget(host: KeyHost, check: _KeyCheck, key: KeyFacts) -> _WithinKeyBudget | KeyBudgetExceeded:
+async def _check_key_budget(
+    host: AuthorizeHost, key: KeyFacts, *, is_llm_api_route: bool
+) -> _WithinKeyBudget | KeyBudgetExceeded:
     max_budget: Final = key.max_budget
-    if not check.is_llm_api_route or max_budget is None:
+    if not is_llm_api_route or max_budget is None:
         return _WithinKeyBudget(budget_throttle_pct=None)
     spend: Final = await host.read_key_spend(max_budget)
     await host.alert_key_budget(spend)
@@ -269,12 +289,10 @@ async def _check_key_budget(host: KeyHost, check: _KeyCheck, key: KeyFacts) -> _
     return KeyBudgetExceeded(spend=spend, max_budget=max_budget)
 
 
-async def _grant(host: KeyHost, check: _KeyCheck, key: KeyFacts, budget_throttle_pct: float | None) -> Outcome:
+async def _grant(host: AuthorizeHost, settings: AuthorizeSettings, budget_throttle_pct: float | None) -> Outcome:
     await host.load_key_context()
-    if check.settings.proxy_max_budget > 0 and check.settings.has_db:
+    if settings.proxy_max_budget > 0 and settings.has_db:
         proxy_spend: Final = await host.read_proxy_spend()
         if proxy_spend is not None:
             await host.alert_proxy_budget(proxy_spend)
-    if not key.has_token:
-        return Deny(KeyWithoutToken())
-    return Allow(VirtualKey(budget_throttle_pct=budget_throttle_pct))
+    return Allow(budget_throttle_pct=budget_throttle_pct)
