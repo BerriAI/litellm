@@ -14,18 +14,7 @@ Signals detected
 Both OpenAI-format messages (``tool_calls`` on assistant turns) and
 Anthropic-format messages (``tool_use`` content blocks) are handled.
 
-Usage — SDK
------------
-::
-
-    import litellm
-    from litellm.proxy.guardrails.guardrail_hooks.agent_loop_detector import (
-        AgentLoopDetector,
-    )
-
-    litellm.callbacks = [AgentLoopDetector(fingerprint_threshold=3, window_size=20)]
-
-Usage — Proxy config.yaml
+Usage — Proxy config.yaml (recommended)
 --------------------------
 ::
 
@@ -36,6 +25,28 @@ Usage — Proxy config.yaml
           mode: pre_call
           fingerprint_threshold: 3
           window_size: 20
+
+Usage — SDK
+-----------
+SDK dispatch calls ``async_pre_call_deployment_hook`` (not ``async_pre_call_hook``)
+unless the request carries an explicit ``guardrails`` list. Register the detector
+by name and pass ``guardrails=[...]`` on every ``acompletion`` call::
+
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.agent_loop_detector import (
+        AgentLoopDetector,
+    )
+
+    litellm.add_guardrail(
+        guardrail_name="agent-loop-detector",
+        guardrail=AgentLoopDetector(fingerprint_threshold=3, window_size=20),
+    )
+
+    response = await litellm.acompletion(
+        model="claude-sonnet-4-6",
+        messages=messages,
+        guardrails=["agent-loop-detector"],
+    )
 """
 
 from __future__ import annotations
@@ -45,6 +56,7 @@ import json
 from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -85,6 +97,11 @@ class AgentLoopDetector(CustomGuardrail):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sanitize(name: str) -> str:
+        """Replace control characters in tool names to prevent log injection."""
+        return "".join(c if c.isprintable() else f"\\x{ord(c):02x}" for c in name)
 
     @staticmethod
     def _fingerprint(tool_name: str, args: Any) -> str:
@@ -150,7 +167,7 @@ class AgentLoopDetector(CustomGuardrail):
             counts[fp] = (prev_name, count)
             if count >= self.fingerprint_threshold:
                 return (
-                    f"tool '{name}' called with identical arguments "
+                    f"tool '{self._sanitize(name)}' called with identical arguments "
                     f"{count} times in the last {len(pairs)} assistant turns"
                 )
         return None
@@ -176,7 +193,7 @@ class AgentLoopDetector(CustomGuardrail):
                     else:
                         break
                 if reps >= 2:
-                    readable = " -> ".join(seq)
+                    readable = " -> ".join(self._sanitize(s) for s in seq)
                     return (
                         f"tool sequence [{readable}] repeated "
                         f"{reps} times consecutively in the last {n} turns"
@@ -214,14 +231,18 @@ class AgentLoopDetector(CustomGuardrail):
 
         if reason is not None:
             verbose_proxy_logger.warning(
-                "AgentLoopDetector: loop detected -- %s. Halting session.", reason
+                "AgentLoopDetector: loop detected — %s. Halting session.", reason
             )
-            raise ValueError(
-                f"AgentLoopDetector: loop detected -- {reason}. "
-                "The agent session has been halted to prevent runaway costs. "
-                "Inspect your agent's tool-calling logic or raise "
-                "`fingerprint_threshold` / `window_size` if this is a "
-                "false positive."
+            raise GuardrailRaisedException(
+                guardrail_name="AgentLoopDetector",
+                message=(
+                    f"loop detected — {reason}. "
+                    "The agent session has been halted to prevent runaway costs. "
+                    "Inspect your agent's tool-calling logic or raise "
+                    "`fingerprint_threshold` / `window_size` if this is a "
+                    "false positive."
+                ),
+                blocked_content=True,
             )
 
         return data
