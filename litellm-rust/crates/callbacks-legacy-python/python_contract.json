@@ -43,6 +43,12 @@
     "headers",
     "body"
   ],
+  "retried_request": [
+    "logger",
+    "logged_body",
+    "body",
+    "reasons"
+  ],
   "record_api_window": [
     "logger",
     "start",

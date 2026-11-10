@@ -22,6 +22,7 @@ use support::*;
 mod host;
 mod request;
 mod response;
+mod retry;
 mod secrets;
 mod stream;
 mod tencent;

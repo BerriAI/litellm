@@ -32,8 +32,6 @@ MAPPED_FILE: Final = {
 }
 MAPPED_FILE_INPUT: Final = [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-file"}]}]
 CACHED_TEXT: Final = {"type": "input_text", "text": "hi", "cache_control": {"type": "ephemeral"}}
-THINKING_TURN: Final = {"role": "assistant", "content": [{"type": "thinking", "thinking": "x", "signature": "s"}]}
-REDACTED: Final = {"type": "redacted_thinking", "data": "x"}
 STRICT_TOOL: Final = {"name": "b", "input_schema": {"type": "object"}, "strict": True}
 TOOL_SEARCH_TYPE: Final = sorted(ANTHROPIC_TOOL_SEARCH_TOOL_TYPES)[0]
 
@@ -195,18 +193,6 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.cache_control_injection, {"enable_prompt_caching": True}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": [{"location": "message"}]}, True),
         (detectors.cache_control_injection, {"cache_control_injection_points": []}, False),
-        (messages_detectors.thinking_signature_retry, {"messages": [THINKING_TURN]}, True),
-        (
-            messages_detectors.thinking_signature_retry,
-            {"messages": [{"role": "assistant", "content": [REDACTED]}]},
-            True,
-        ),
-        (messages_detectors.thinking_signature_retry, {"messages": [{"role": "assistant", "content": "done"}]}, False),
-        (
-            messages_detectors.thinking_signature_retry,
-            {"messages": [{"role": "user", "content": [{"type": "text"}]}]},
-            False,
-        ),
         (messages_detectors.strict_tools_retry, {"drop_params": True, "tools": [{"name": "a"}, STRICT_TOOL]}, True),
         (
             messages_detectors.strict_tools_retry,

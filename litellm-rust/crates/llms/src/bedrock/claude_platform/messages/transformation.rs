@@ -1,3 +1,5 @@
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use litellm_host::interceptors::RetriedRequest;
 use std::sync::LazyLock;
 
 use litellm_auth::{AwsParams, CredentialPlacement, ParamKind, ParamSpec};
@@ -54,6 +56,16 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
         crate::base_llm::messages::tools::ToolCustomField::Rewrite {
             hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
         }
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 
     fn shape_request(
