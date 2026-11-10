@@ -2,11 +2,13 @@ import asyncio
 import hashlib
 import json
 import re
+import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeVar
 from uuid import uuid4
@@ -162,53 +164,102 @@ def _bedrock_base_model(model: str) -> str:
     return get_bedrock_base_model(model.rsplit("/", 1)[-1])
 
 
-@lru_cache(maxsize=8)
-def _bedrock_base_models_of(models: tuple[str, ...]) -> frozenset[str]:
+@dataclass(frozen=True, slots=True)
+class _RouterRevision:
+    router: LitellmRouter
+    version: int
+
+
+def _models_a_deployment_serves(deployment: object) -> tuple[str, ...]:
+    entry: Final = as_str_mapping(deployment) or {}
+    litellm_params: Final = as_str_mapping(entry.get("litellm_params")) or {}
+    model_info: Final = as_str_mapping(entry.get("model_info")) or {}
+    named: Final = (litellm_params.get("model"), litellm_params.get("base_model"), model_info.get("base_model"))
+    return tuple(model for model in named if isinstance(model, str))
+
+
+@lru_cache(maxsize=4)
+def _bedrock_base_models_served_at(revision: _RouterRevision) -> frozenset[str]:
+    deployments: Final = as_object_list(revision.router.registry().deployments()) or ()
+    models: Final = chain.from_iterable(map(_models_a_deployment_serves, deployments))
     return frozenset(_bedrock_base_model(model) for model in models)
 
 
 def _a_deployment_serves_bedrock_model(llm_router: LitellmRouter | None, model_id: str) -> bool:
     if llm_router is None:
         return False
-    deployment_models: Final = as_object_list(llm_router.registry().names(kind="deployment_names")) or ()
-    models: Final = tuple(model for model in deployment_models if isinstance(model, str))
-    return _bedrock_base_model(model_id) in _bedrock_base_models_of(models)
+    revision: Final = _RouterRevision(router=llm_router, version=llm_router.registry().version)
+    return _bedrock_base_model(model_id) in _bedrock_base_models_served_at(revision)
 
 
-def _cost_map_lists_bedrock_model(model_id: str) -> bool:
+def _cost_map_lists_bedrock_chat_model(model_id: str) -> bool:
     try:
-        litellm.get_model_info(model=model_id, custom_llm_provider="bedrock")
+        model_info: Final = litellm.get_model_info(model=model_id, custom_llm_provider="bedrock")
     except ModelNotMappedError:
         return False
-    return True
+    return model_info.get("mode") == "chat"
 
 
 def _may_call_bedrock_directly_for(llm_router: LitellmRouter | None, model_id: str) -> bool:
     return (
-        _cost_map_lists_bedrock_model(model_id)
+        _cost_map_lists_bedrock_chat_model(model_id)
         and (llm_router is None or llm_router.registry().plugins("budget_limiter") is None)
         and not _a_deployment_serves_bedrock_model(llm_router, model_id)
     )
 
 
 _BedrockAnswerT: Final = TypeVar("_BedrockAnswerT")
+BEDROCK_DIRECT_CALL_CREDENTIALS_RETRY_SECONDS: Final = 60.0
 
 
-async def _bedrock_answer_or_original_error(
-    direct_call: Awaitable[_BedrockAnswerT], original_error: Exception
-) -> _BedrockAnswerT:
-    from botocore.exceptions import NoCredentialsError
+class BedrockDirectCalls:
+    __slots__ = ("_clock", "_credentials_found", "_first_call", "_missing_credentials_until", "_retry_after_seconds")
 
-    try:
-        return await direct_call
-    except BedrockError as error:
-        if isinstance(error.__context__, NoCredentialsError):
+    def __init__(
+        self,
+        retry_after_seconds: float = BEDROCK_DIRECT_CALL_CREDENTIALS_RETRY_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._retry_after_seconds = retry_after_seconds
+        self._clock = clock
+        self._first_call = asyncio.Lock()
+        self._credentials_found = False
+        self._missing_credentials_until = float("-inf")
+
+    def _credentials_known_missing(self) -> bool:
+        return self._clock() < self._missing_credentials_until
+
+    async def answer_or_original_error(
+        self, direct_call: Callable[[], Awaitable[_BedrockAnswerT]], original_error: Exception
+    ) -> _BedrockAnswerT:
+        async with self._first_call:
+            if self._credentials_known_missing():
+                raise original_error
+            if not self._credentials_found:
+                return await self._answer(direct_call, original_error)
+        return await self._answer(direct_call, original_error)
+
+    async def _answer(
+        self, direct_call: Callable[[], Awaitable[_BedrockAnswerT]], original_error: Exception
+    ) -> _BedrockAnswerT:
+        from botocore.exceptions import NoCredentialsError
+
+        try:
+            return await direct_call()
+        except BedrockError as error:
+            if not isinstance(error.__context__, NoCredentialsError):
+                raise
+            self._missing_credentials_until = self._clock() + self._retry_after_seconds
             raise original_error from error
-        raise
-    except httpx.HTTPStatusError as error:
-        if error.response.status_code == status.HTTP_403_FORBIDDEN:
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code != status.HTTP_403_FORBIDDEN:
+                raise
             raise original_error from error
-        raise
+        finally:
+            self._credentials_found = not self._credentials_known_missing()
+
+
+bedrock_direct_calls: Final = BedrockDirectCalls()
 
 
 def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object, team_id: str | None) -> None:
@@ -944,17 +995,28 @@ async def route_request(
             and _may_call_bedrock_directly_for(proxy_server.llm_router, requested_model)
         ):
             raise
-        retried_call: Final = await _route_request_single_attempt(
-            data=data,
-            llm_router=proxy_server.llm_router if loaded_by_read_through else None,
-            user_model=user_model,
-            route_type=route_type,
-            router_only_settings_from_override=router_only_settings_from_override,
-            user_api_key_dict=user_api_key_dict,
-        )
         if loaded_by_read_through:
-            return retried_call
-        return _bedrock_answer_or_original_error(retried_call, e)
+            return await _route_request_single_attempt(
+                data=data,
+                llm_router=proxy_server.llm_router,
+                user_model=user_model,
+                route_type=route_type,
+                router_only_settings_from_override=router_only_settings_from_override,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        async def call_bedrock_directly():  # noqa: ANN202  # the provider answer's inferred union keeps route_request's callers typed
+            direct_call: Final = await _route_request_single_attempt(
+                data=data,
+                llm_router=None,
+                user_model=user_model,
+                route_type=route_type,
+                router_only_settings_from_override=router_only_settings_from_override,
+                user_api_key_dict=user_api_key_dict,
+            )
+            return await direct_call
+
+        return bedrock_direct_calls.answer_or_original_error(call_bedrock_directly, e)
 
 
 async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited provider coroutines; the inferred union keeps route_request's callers typed

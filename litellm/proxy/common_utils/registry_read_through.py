@@ -51,6 +51,7 @@ _MISSED_AT: Final = TypeAdapter[float | None](float | None)
 
 class RegistryReadThrough:
     __slots__ = (
+        "_clock",
         "_confirmed_miss_ttl_seconds",
         "_is_loaded",
         "_lock",
@@ -71,6 +72,7 @@ class RegistryReadThrough:
         max_resyncs_per_window: int = READ_THROUGH_MAX_RESYNCS_PER_WINDOW,
         resync_window_seconds: float = READ_THROUGH_RESYNC_WINDOW_SECONDS,
         confirmed_miss_ttl_seconds: float = READ_THROUGH_CONFIRMED_MISS_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._resync = resync
         self._is_loaded = is_loaded
@@ -78,13 +80,14 @@ class RegistryReadThrough:
         self._max_resyncs_per_window = max_resyncs_per_window
         self._resync_window_seconds = resync_window_seconds
         self._confirmed_miss_ttl_seconds = confirmed_miss_ttl_seconds
+        self._clock = clock
         self._lock = asyncio.Lock()
         self._misses = InMemoryCache(max_size_in_memory=1000)
         self._window_started_at = float("-inf")
         self._window_resyncs = 0
 
     def _consume_resync_budget(self) -> bool:
-        now: Final = time.monotonic()
+        now: Final = self._clock()
         if now - self._window_started_at >= self._resync_window_seconds:
             self._window_started_at = now
             self._window_resyncs = 0
@@ -95,7 +98,7 @@ class RegistryReadThrough:
 
     def _missed_within(self, key: str, seconds: float) -> bool:
         missed_at: Final = _MISSED_AT.validate_python(self._misses.get_cache(key))
-        return missed_at is not None and time.monotonic() - missed_at < seconds
+        return missed_at is not None and self._clock() - missed_at < seconds
 
     def confirmed_missing(self, key: str) -> bool:
         return self._missed_within(key, self._confirmed_miss_ttl_seconds)
@@ -126,7 +129,7 @@ class RegistryReadThrough:
                 self._misses.delete_cache(key)
                 return True
             self._misses.set_cache(
-                key, time.monotonic(), ttl=max(self._miss_ttl_seconds, self._confirmed_miss_ttl_seconds)
+                key, self._clock(), ttl=max(self._miss_ttl_seconds, self._confirmed_miss_ttl_seconds)
             )
             return False
 

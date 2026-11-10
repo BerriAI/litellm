@@ -173,24 +173,34 @@ async def test_resync_budget_replenishes_after_window():
     assert spy.calls == ["model-a", "model-b"]
 
 
+class ManualClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 @pytest.mark.asyncio
 async def test_a_confirmed_miss_outlives_the_retry_window_until_a_lookup_finds_the_key():
     spy: Final = ResyncSpy(found=False)
+    clock: Final = ManualClock()
     read_through: Final = RegistryReadThrough(
         resync=spy,
         is_loaded=nothing_loaded,
-        miss_ttl_seconds=0.05,
+        miss_ttl_seconds=2,
         max_resyncs_per_window=1,
-        resync_window_seconds=0.3,
+        resync_window_seconds=5,
+        clock=clock,
     )
 
     assert await read_through.attempt("ghost-model") is False
-    await asyncio.sleep(0.1)
+    clock.now = 3
     assert await read_through.attempt("ghost-model") is False
     assert read_through.confirmed_missing("ghost-model") is True
 
     spy.found = True
-    await asyncio.sleep(0.3)
+    clock.now = 6
     assert await read_through.attempt("ghost-model") is True
     assert read_through.confirmed_missing("ghost-model") is False
     assert spy.calls == ["ghost-model", "ghost-model"]

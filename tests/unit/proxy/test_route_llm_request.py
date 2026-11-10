@@ -28,8 +28,10 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils import registry_read_through
 from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_deployment
+from litellm.proxy import route_llm_request
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
+    BedrockDirectCalls,
     ProxyModelNotFoundError,
     UserConfigRouters,
     endpoint_unsupported_by_model,
@@ -3576,6 +3578,11 @@ def test_fallback_probe_skips_only_a_loaded_model_that_refuses_the_route() -> No
 
 
 _BEDROCK_MODEL_ID: Final = "us.anthropic.claude-haiku-5-5"
+_BEDROCK_EMBEDDING_MODEL_ID: Final = next(
+    name
+    for name, info in litellm.model_cost.items()
+    if info.get("litellm_provider") == "bedrock" and info.get("mode") == "embedding" and "/" not in name
+)
 _BEDROCK_CONVERSE_BODY: Final = MappingProxyType(
     {"messages": [{"role": "user", "content": [{"text": "Hello"}]}], "inferenceConfig": {"maxTokens": 16}}
 )
@@ -3613,6 +3620,7 @@ def proxy_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDPROXYENV")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "proxy-env-secret")
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    monkeypatch.setattr(route_llm_request, "bedrock_direct_calls", BedrockDirectCalls())
 
 
 @pytest.mark.parametrize(
@@ -3667,6 +3675,10 @@ async def test_route_request_sends_a_bedrock_model_id_missing_from_the_config_to
         pytest.param(
             {"model": "acme.brand-new-model-v1:0", "endpoint": "model/acme.brand-new-model-v1:0/converse"},
             id="model-missing-from-the-cost-map",
+        ),
+        pytest.param(
+            {"model": _BEDROCK_EMBEDDING_MODEL_ID, "endpoint": f"model/{_BEDROCK_EMBEDDING_MODEL_ID}/invoke"},
+            id="priced-model-that-is-not-a-chat-model",
         ),
     ],
 )
@@ -3760,6 +3772,112 @@ async def test_route_request_keeps_the_invalid_model_error_when_the_proxy_has_no
             await direct_call
 
     assert not upstream.called
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _BedrockCallWithoutCredentials:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self) -> str:
+        from botocore.exceptions import NoCredentialsError
+
+        self.calls += 1
+        await asyncio.sleep(0.01)
+        try:
+            raise NoCredentialsError()
+        except NoCredentialsError:
+            raise BedrockError(status_code=500, message="Unable to locate credentials") from None
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_without_aws_credentials_looks_them_up_once_per_window_even_under_concurrency() -> None:
+    clock: Final = _ManualClock()
+    direct_calls: Final = BedrockDirectCalls(retry_after_seconds=60, clock=clock)
+    call_bedrock: Final = _BedrockCallWithoutCredentials()
+    invalid_model: Final = LookupError("Invalid model name")
+
+    async def burst() -> tuple[BaseException | str, ...]:
+        return tuple(
+            await asyncio.gather(
+                *(direct_calls.answer_or_original_error(call_bedrock, invalid_model) for _ in range(8)),
+                return_exceptions=True,
+            )
+        )
+
+    first_burst: Final = await burst()
+    clock.now = 59
+    burst_within_the_window: Final = await burst()
+    calls_within_the_window: Final = call_bedrock.calls
+    clock.now = 61
+    burst_after_the_window: Final = await burst()
+
+    assert {*first_burst, *burst_within_the_window, *burst_after_the_window} == {invalid_model}
+    assert calls_within_the_window == 1
+    assert call_bedrock.calls == 2
+
+
+class _BedrockCallsThatWaitForEachOther:
+    def __init__(self, expected_calls: int) -> None:
+        self.expected_calls = expected_calls
+        self.started = 0
+        self.all_started = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def __call__(self) -> str:
+        self.started += 1
+        if self.started == self.expected_calls:
+            self.all_started.set()
+        await self.released.wait()
+        return "ok"
+
+
+async def _bedrock_answers_at_once() -> str:
+    return "ok"
+
+
+@pytest.mark.asyncio
+async def test_direct_bedrock_calls_run_concurrently_once_the_proxy_credentials_worked() -> None:
+    direct_calls: Final = BedrockDirectCalls()
+    waiting_calls: Final = _BedrockCallsThatWaitForEachOther(expected_calls=3)
+
+    first: Final = await direct_calls.answer_or_original_error(_bedrock_answers_at_once, LookupError())
+    pending: Final = tuple(
+        asyncio.create_task(direct_calls.answer_or_original_error(waiting_calls, LookupError())) for _ in range(3)
+    )
+    await asyncio.wait_for(waiting_calls.all_started.wait(), timeout=5)
+    waiting_calls.released.set()
+
+    assert (first, *await asyncio.gather(*pending)) == ("ok", "ok", "ok", "ok")
+
+
+class _BedrockDeniesTheModel:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self) -> str:
+        self.calls += 1
+        request: Final = httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com")
+        raise httpx.HTTPStatusError("denied", request=request, response=httpx.Response(403, request=request))
+
+
+@pytest.mark.asyncio
+async def test_a_bedrock_403_does_not_stop_the_next_direct_call() -> None:
+    direct_calls: Final = BedrockDirectCalls()
+    call_bedrock: Final = _BedrockDeniesTheModel()
+
+    for _ in range(2):
+        with pytest.raises(LookupError):
+            await direct_calls.answer_or_original_error(call_bedrock, LookupError("Invalid model name"))
+
+    assert call_bedrock.calls == 2
 
 
 @pytest.mark.asyncio
@@ -3883,26 +4001,38 @@ async def test_route_request_keeps_a_bedrock_model_the_router_routes_on_its_depl
     )
 
 
+_APPLICATION_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:111122223333:application-inference-profile/abc123"
+
+
 @pytest.mark.parametrize(
-    "served_as",
+    ("served_as", "model_info"),
     [
-        pytest.param({"model": f"bedrock/{_BEDROCK_MODEL_ID}"}, id="bedrock-prefix"),
-        pytest.param({"model": f"bedrock/converse/{_BEDROCK_MODEL_ID}"}, id="converse-route-prefix"),
-        pytest.param({"model": f"bedrock/us-west-2/{_BEDROCK_MODEL_ID}"}, id="region-path"),
+        pytest.param({"model": f"bedrock/{_BEDROCK_MODEL_ID}"}, {}, id="bedrock-prefix"),
+        pytest.param({"model": f"bedrock/converse/{_BEDROCK_MODEL_ID}"}, {}, id="converse-route-prefix"),
+        pytest.param({"model": f"bedrock/us-west-2/{_BEDROCK_MODEL_ID}"}, {}, id="region-path"),
         pytest.param(
-            {
-                "model": f"bedrock/{_BEDROCK_MODEL_ID.removeprefix('us.')}",
-                "model_id": "arn:aws:bedrock:us-east-1:111122223333:application-inference-profile/abc123",
-            },
+            {"model": f"bedrock/{_BEDROCK_MODEL_ID.removeprefix('us.')}", "model_id": _APPLICATION_PROFILE_ARN},
+            {},
             id="application-profile-of-the-base-model",
         ),
-        pytest.param({"model": f"bedrock/eu.{_BEDROCK_MODEL_ID.removeprefix('us.')}"}, id="another-region-profile"),
+        pytest.param(
+            {"model": f"bedrock/{_APPLICATION_PROFILE_ARN}", "base_model": f"bedrock/{_BEDROCK_MODEL_ID}"},
+            {},
+            id="application-profile-arn-with-a-base-model",
+        ),
+        pytest.param(
+            {"model": f"bedrock/{_APPLICATION_PROFILE_ARN}"},
+            {"base_model": f"bedrock/{_BEDROCK_MODEL_ID}"},
+            id="application-profile-arn-with-a-model-info-base-model",
+        ),
+        pytest.param({"model": f"bedrock/eu.{_BEDROCK_MODEL_ID.removeprefix('us.')}"}, {}, id="another-region-profile"),
     ],
 )
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_aws_env")
 async def test_route_request_does_not_call_bedrock_directly_for_a_model_id_a_configured_deployment_serves(
     served_as: Mapping[str, str],
+    model_info: Mapping[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import litellm.proxy.proxy_server as proxy_server
@@ -3917,6 +4047,7 @@ async def test_route_request_does_not_call_bedrock_directly_for_a_model_id_a_con
                     "aws_secret_access_key": "deployment-secret",
                     "aws_region_name": "us-east-1",
                 },
+                "model_info": dict(model_info),
             }
         ]
     )
@@ -3930,6 +4061,36 @@ async def test_route_request_does_not_call_bedrock_directly_for_a_model_id_a_con
             await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
 
     assert not upstream.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_stops_calling_bedrock_directly_once_a_deployment_for_the_model_is_added(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = litellm.Router(model_list=[])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route(host__regex=r"bedrock-runtime\..*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        before_the_deployment: Final = await (
+            await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
+        )
+        router.add_deployment(
+            litellm.types.router.Deployment(
+                model_name="claude-profile",
+                litellm_params={"model": f"bedrock/{_APPLICATION_PROFILE_ARN}", "base_model": f"bedrock/{_BEDROCK_MODEL_ID}"},
+            )
+        )
+        with pytest.raises(ProxyModelNotFoundError):
+            await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
+
+    assert before_the_deployment.status_code == 200
+    assert upstream.call_count == 1
 
 
 @pytest.mark.parametrize(
