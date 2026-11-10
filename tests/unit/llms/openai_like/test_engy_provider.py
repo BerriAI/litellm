@@ -256,14 +256,24 @@ def test_engy_chat_completion_cost_bills_cached_tokens_at_cache_read_rate():
 
 def test_engy_models_are_registered_in_the_cost_map():
     catalog: Final = {name for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "engy"}
-    assert len(catalog) == 9
+    assert len(catalog) == 10
     assert "engy/deepseek-v4.1-flash" in catalog
     assert "engy/deepseek-v4.1-flash-1017" in catalog
+    assert "engy/kimi-k3.1-pro" in catalog
     assert all(name.startswith("engy/") for name in catalog)
 
     info: Final = litellm.get_model_info(model=ENGY_MODEL)
     assert info["litellm_provider"] == "engy"
     assert info["mode"] == "chat"
+
+
+def test_engy_kimi_k31_pro_is_multimodal_with_cache_read_pricing():
+    info: Final = litellm.get_model_info(model="engy/kimi-k3.1-pro")
+    assert info["litellm_provider"] == "engy"
+    assert info["mode"] == "chat"
+    assert info["supports_vision"] is True
+    assert info["supports_prompt_caching"] is True
+    assert info["cache_read_input_token_cost"] < info["input_cost_per_token"]
 
 
 def test_engy_cost_map_backup_mirrors_main():

@@ -78807,6 +78807,28 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "engy/kimi-k3.1-pro": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "engy",
+        "max_input_tokens": 1113088,
+        "max_tokens": 1113088,
+        "mode": "chat",
+        "output_cost_per_token": 7e-06,
+        "source": "https://api.engy.ai/v1/models",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "engy/qwen3.6-35b-a3b": {
         "cache_read_input_token_cost": 1.5e-08,
         "input_cost_per_token": 4.5e-08,
