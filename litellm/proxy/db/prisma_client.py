@@ -397,7 +397,23 @@ class PrismaWrapper:
     def _retirement_finished(self, retirement_task: asyncio.Task[None]) -> None:
         self._retirement_tasks = self._retirement_tasks.difference((retirement_task,))
 
+    def _refresh_inherited_token(self) -> None:
+        # A respawned worker inherits the URL the CLI minted at container start. The reader
+        # mints its own in PrismaClient.__init__, so only the writer's URL can be stale here.
+        if self._recreate_uses_datasource or self._token_refresh_not_needed(os.getenv(self._db_url_env_var)):
+            return
+        try:
+            self.get_rds_iam_token()
+        except Exception as e:  # noqa: BLE001 - the inherited URL may still work, and the fallback refresh covers it
+            verbose_proxy_logger.warning(
+                "%sCould not mint a %s before connecting, using the inherited URL: %s",
+                self._log_prefix,
+                self.token_label,
+                e,
+            )
+
     async def connect(self, timeout: int | timedelta | None = None) -> None:
+        self._refresh_inherited_token()
         if timeout is None:
             await self._original_prisma.connect()
         else:
