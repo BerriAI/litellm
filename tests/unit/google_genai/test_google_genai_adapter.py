@@ -522,6 +522,23 @@ def _ids_answered_right_after(messages: list[dict[str, object]], index: int) -> 
             frozenset({"paris", "rome"}),
             id="parallel_call_left_out_of_the_answers",
         ),
+        pytest.param(
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        _tagged_call("get_weather", "paris"),
+                        _tagged_call("get_weather", "rome"),
+                        _tagged_call("get_weather", "oslo"),
+                    ],
+                },
+                {"role": "user", "parts": [_tagged_response("get_weather", "paris")]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "rome")]},
+                {"role": "model", "parts": [{"text": "Oslo did not answer"}]},
+            ],
+            frozenset({"paris", "rome"}),
+            id="answers_split_across_user_turns",
+        ),
     ],
 )
 def test_a_call_a_later_turn_left_unanswered_gets_one_skipped_result_and_the_others_keep_their_answers(
