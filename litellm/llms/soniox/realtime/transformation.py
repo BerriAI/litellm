@@ -4,7 +4,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from itertools import chain, groupby
 from types import MappingProxyType, TracebackType
-from typing import Final
+from typing import Final, Literal
 from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
@@ -78,6 +78,7 @@ class SonioxRealtimeOptions(BaseModel):
     max_endpoint_delay_ms: int | None = None
     endpoint_sensitivity: float | None = None
     endpoint_latency_adjustment_level: int | None = None
+    enable_agent_text_input: bool | None = None
 
 
 class SonioxStartRequest(SonioxRealtimeOptions):
@@ -86,6 +87,14 @@ class SonioxStartRequest(SonioxRealtimeOptions):
     sample_rate: int
     num_channels: int
     enable_endpoint_detection: bool
+
+
+class SonioxAgentText(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
+
+    type: Literal["agent_text"]
+    text: str = ""
+    end_of_segment: bool = False
 
 
 class SonioxSpeechLabels(TypedDict, total=False):
@@ -523,8 +532,21 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
             return () if self._start_request is None else self._finalize(model, discards_turn=True)
         if event_type == "input_audio_buffer.end":
             return (*self._start(model, None), _END_STREAM)
+        if event_type == "agent_text":
+            return self._agent_text(model, message)
         verbose_logger.debug("Soniox realtime: dropping unsupported client event %s", event_type)
         return ()
+
+    def _agent_text(self, model: str, message: str) -> tuple[str, ...]:
+        if not self._options.enable_agent_text_input:
+            raise SonioxProtocolError(
+                "Soniox agent_text needs enable_agent_text_input in the deployment litellm_params"
+            )
+        try:
+            agent_text: Final = SonioxAgentText.model_validate_json(message)
+        except ValidationError:
+            raise SonioxProtocolError("Soniox agent_text takes a string text and a boolean end_of_segment") from None
+        return (*self._start(model, None), agent_text.model_dump_json())
 
     def _finalize(self, model: str, *, discards_turn: bool) -> tuple[str, ...]:
         start: Final = self._start(model, None)

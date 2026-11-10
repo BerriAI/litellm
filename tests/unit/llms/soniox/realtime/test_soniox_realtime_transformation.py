@@ -21,7 +21,7 @@ from litellm.types.realtime import RealtimeResponseTransformInput
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
-MODEL: Final = "stt-rt-v5"
+MODEL: Final = "stt-rt-v6"
 EMPTY_TRANSFORM_INPUT: Final[RealtimeResponseTransformInput] = {
     "session_configuration_request": None,
     "current_output_item_id": None,
@@ -111,7 +111,7 @@ def test_a_soniox_native_config_frame_is_rejected_without_starting_the_stream():
     config = SonioxRealtimeConfig()
 
     with pytest.raises(SonioxProtocolError):
-        config.transform_realtime_request(json.dumps({"model": "stt-rt-v5", "audio_format": "auto"}), MODEL)
+        config.transform_realtime_request(json.dumps({"model": "stt-rt-v6", "audio_format": "auto"}), MODEL)
     assert _start_request(config.transform_realtime_request(_append(), MODEL))["sample_rate"] == 24_000
 
 
@@ -151,6 +151,41 @@ def test_events_with_nothing_to_send_upstream_are_dropped_without_starting_the_s
     config = SonioxRealtimeConfig()
 
     assert config.transform_realtime_request(_event(event_type), MODEL) == ()
+    assert _start_request(config.transform_realtime_request(_append(), MODEL))["model"] == MODEL
+
+
+def test_agent_text_starts_an_agent_text_stream_and_forwards_only_the_soniox_fields():
+    config = SonioxRealtimeConfig(options=SonioxRealtimeOptions(enable_agent_text_input=True))
+
+    frames = config.transform_realtime_request(
+        _event("agent_text", text="There are ", end_of_segment=True, event_id="evt_1"), MODEL
+    )
+
+    assert _start_request(frames)["enable_agent_text_input"] is True
+    assert json.loads(frames[1]) == {"type": "agent_text", "text": "There are ", "end_of_segment": True}
+    assert json.loads(config.transform_realtime_request(_event("agent_text", text="two"), MODEL)[0]) == {
+        "type": "agent_text",
+        "text": "two",
+        "end_of_segment": False,
+    }
+
+
+@pytest.mark.parametrize(
+    ("options", "event"),
+    [
+        (SonioxRealtimeOptions(), _event("agent_text", text="hi")),
+        (SonioxRealtimeOptions(enable_agent_text_input=False), _event("agent_text", text="hi")),
+        (SonioxRealtimeOptions(enable_agent_text_input=True), _event("agent_text", text=["hi"])),
+        (SonioxRealtimeOptions(enable_agent_text_input=True), _event("agent_text", end_of_segment="yes")),
+    ],
+)
+def test_agent_text_is_rejected_without_starting_the_stream_when_disabled_or_malformed(
+    options: SonioxRealtimeOptions, event: str
+):
+    config = SonioxRealtimeConfig(options=options)
+
+    with pytest.raises(SonioxProtocolError, match="agent_text"):
+        config.transform_realtime_request(event, MODEL)
     assert _start_request(config.transform_realtime_request(_append(), MODEL))["model"] == MODEL
 
 
@@ -614,7 +649,7 @@ def test_provider_config_manager_passes_only_soniox_options_from_deployment_para
         LlmProviders.SONIOX,
         litellm_params={
             "api_key": "secret",
-            "model": "soniox/stt-rt-v5",
+            "model": "soniox/stt-rt-v6",
             "audio_format": "mulaw",
             "language_hints": ["pl"],
             "context": {"terms": ["LiteLLM"]},
@@ -741,7 +776,7 @@ async def test_backend_announces_the_session_once_the_start_request_is_sent_whil
         await backend.send('{"type":"keepalive"}')
         await asyncio.sleep(0)
         assert not pending.done()
-        await backend.send('{"model":"stt-rt-v5"}')
+        await backend.send('{"model":"stt-rt-v6"}')
         assert await pending == SESSION_STARTED_FRAME
         await backend.send('{"model":"ignored-second-config"}')
         await inner.upstream.put('{"tokens":[]}')
@@ -781,7 +816,7 @@ async def test_closing_the_backend_cancels_pending_reads_and_closes_upstream():
     backend = SonioxRealtimeBackend(inner)
     await backend.__aenter__()
     pending = asyncio.create_task(backend.recv())
-    await backend.send('{"model":"stt-rt-v5"}')
+    await backend.send('{"model":"stt-rt-v6"}')
     assert await pending == SESSION_STARTED_FRAME
 
     await backend.close()
