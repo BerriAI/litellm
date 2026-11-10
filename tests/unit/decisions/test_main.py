@@ -24,6 +24,7 @@ from respx.models import Call
 
 import litellm
 from litellm.constants import AWS_SIGNING_MAX_THREADS
+from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded, refetch_model_cost_map
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -1812,7 +1813,7 @@ async def test_openrouter_decisions_uses_provider_reported_cost_without_cost_map
     )
 
     assert route.called
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(cost)
+    assert get_response_cost_from_hidden_params(response.hidden_params) == cost
 
 
 _SAFETY_IDENTIFIER: Final = "end-user-7"
@@ -5025,7 +5026,7 @@ async def test_vercel_ai_gateway_decisions_bill_the_charge_the_gateway_reports(
     )
 
     assert response.answers[0].probability == 0.9
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(billed)
+    assert get_response_cost_from_hidden_params(response.hidden_params) == pytest.approx(billed)
 
 
 @pytest.mark.asyncio
@@ -5047,26 +5048,6 @@ async def test_vercel_ai_gateway_decisions_price_an_unreadable_charge_from_the_c
     assert litellm.completion_cost(completion_response=response) == pytest.approx(
         _INPUT_TOKENS * float(luna["input_cost_per_token"])
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("vercel_gateway_key")
-async def test_vercel_ai_gateway_decisions_apply_the_operator_discount_and_margin_to_the_gateway_charge(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-) -> None:
-    monkeypatch.setattr(litellm, "cost_discount_config", {"vercel_ai_gateway": 0.5})
-    monkeypatch.setattr(litellm, "cost_margin_config", {"vercel_ai_gateway": 0.1})
-    respx_mock.post(_VERCEL_DECISIONS_URL).respond(
-        json=_vercel_response("openai/gpt-6-luna-decisions", {"gateway": {"cost": "0.00005722"}})
-    )
-
-    response: Final = await litellm.adecisions(
-        model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
-        input="The package arrived broken.",
-        questions=_PREDICATE_QUESTIONS,
-    )
-
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(5.722e-05 * 0.5 * 1.1)
 
 
 @pytest.mark.asyncio
@@ -5153,36 +5134,65 @@ async def test_vercel_ai_gateway_jev_sends_box_questions(
     assert response.answers[0].confidence == 0.8
 
 
+_UPSTREAM_SPLIT: Final[Mapping[str, int]] = {"cached_tokens": _INPUT_TOKENS - 20, "cache_write_tokens": 20}
+_TOP_LEVEL_SPLIT: Final[Mapping[str, int]] = {"cached_tokens": 300, "cache_write_tokens": 7}
+
+
+def _upstream_usage(input_tokens: int, details: Mapping[str, int] | None) -> Mapping[str, object]:
+    return {
+        "usage": {
+            "input_tokens": input_tokens,
+            **({} if details is None else {"input_tokens_details": details}),
+            "output_tokens": 0,
+            "total_tokens": input_tokens,
+        }
+    }
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
 @pytest.mark.parametrize(
-    ("upstream_input_tokens", "cached_tokens", "cache_write_tokens"),
-    ((_INPUT_TOKENS, _INPUT_TOKENS - 20, 20), (_INPUT_TOKENS + 1, 0, 0)),
-    ids=("upstream_reports_this_call", "upstream_count_disagrees"),
+    ("top_level_split", "served_by", "upstream", "expected_split"),
+    (
+        (None, "openai", _upstream_usage(_INPUT_TOKENS, _UPSTREAM_SPLIT), _UPSTREAM_SPLIT),
+        (None, "openai", _upstream_usage(_INPUT_TOKENS + 1, _UPSTREAM_SPLIT), {"cached_tokens": 0, "cache_write_tokens": 0}),
+        (_TOP_LEVEL_SPLIT, "openai", _upstream_usage(_INPUT_TOKENS, None), _TOP_LEVEL_SPLIT),
+        (None, "anthropic", _upstream_usage(_INPUT_TOKENS, _UPSTREAM_SPLIT), {"cached_tokens": 0, "cache_write_tokens": 0}),
+    ),
+    ids=(
+        "serving_provider_reports_this_call",
+        "upstream_count_disagrees",
+        "upstream_omits_the_split",
+        "report_from_a_provider_that_did_not_serve",
+    ),
 )
 async def test_vercel_ai_gateway_decisions_report_the_upstream_cache_split(
-    upstream_input_tokens: int,
-    cached_tokens: int,
-    cache_write_tokens: int,
-    monkeypatch: pytest.MonkeyPatch,
+    top_level_split: Mapping[str, int] | None,
+    served_by: str,
+    upstream: Mapping[str, object],
+    expected_split: Mapping[str, int],
     respx_mock: respx.MockRouter,
 ) -> None:
-    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
-    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
-    respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+    respx_mock.post(_VERCEL_DECISIONS_URL).respond(
         json={
             "model": "openai/gpt-6-luna-decisions",
             "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
-            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                **({} if top_level_split is None else {"input_tokens_details": top_level_split}),
+                "output_tokens": 0,
+                "total_tokens": _INPUT_TOKENS,
+            },
             "provider_metadata": {
-                "openai": {
-                    "usage": {
-                        "input_tokens": upstream_input_tokens,
-                        "input_tokens_details": {"cached_tokens": _INPUT_TOKENS - 20, "cache_write_tokens": 20},
-                        "output_tokens": 0,
-                        "total_tokens": upstream_input_tokens,
-                    }
+                "openai": upstream,
+                "gateway": {
+                    "cost": "0.00005722",
+                    "routing": {
+                        "modelAttempts": [
+                            {"providerAttempts": [{"provider": served_by, "credentialType": "system", "success": True}]}
+                        ]
+                    },
                 },
-                "gateway": {"cost": "0.00005722"},
             },
         }
     )
@@ -5190,9 +5200,9 @@ async def test_vercel_ai_gateway_decisions_report_the_upstream_cache_split(
     response: Final = await litellm.adecisions(
         model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
         input="The package arrived broken.",
-        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        questions=_PREDICATE_QUESTIONS,
     )
 
-    assert response.usage.input_tokens_details.cached_tokens == cached_tokens
-    assert response.usage.input_tokens_details.cache_write_tokens == cache_write_tokens
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(5.722e-05)
+    assert response.usage.input_tokens_details.cached_tokens == expected_split["cached_tokens"]
+    assert response.usage.input_tokens_details.cache_write_tokens == expected_split["cache_write_tokens"]
+    assert get_response_cost_from_hidden_params(response.hidden_params) == pytest.approx(5.722e-05)

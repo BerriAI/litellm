@@ -12,7 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.cost_calculator import cost_map_key_prices_anything
-from litellm.litellm_core_utils.core_helpers import UPSTREAM_USAGE_COST, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
 from litellm.litellm_core_utils.decisions_pricing import QUERY_PRICED_DECISIONS_PROVIDERS
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -768,7 +768,7 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
             "provider_response_model": _pricing_model(response, call),
-            **({UPSTREAM_USAGE_COST: provider_cost} if provider_cost is not None else {}),
+            **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )
     return formatted

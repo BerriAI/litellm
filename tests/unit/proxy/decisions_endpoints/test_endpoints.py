@@ -1943,3 +1943,46 @@ def test_proxy_decisions_dispatches_vercel_ai_gateway_deployment(
     )
     assert expected_cost > 0
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("gateway_cost", ("0.00005722", "0"), ids=("paid_call", "free_call"))
+def test_proxy_decisions_report_the_billed_gateway_charge_in_the_header_and_body(
+    gateway_cost: str,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    monkeypatch.setattr(litellm, "cost_margin_config", {"vercel_ai_gateway": 0.5})
+    deployment_router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gateway-decider",
+                "litellm_params": {"model": "vercel_ai_gateway/example/unpriced-decider"},
+                "model_info": {"mode": "evaluation"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", deployment_router)
+    respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": "example/unpriced-decider",
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+            "provider_metadata": {"gateway": {"cost": gateway_cost}},
+        }
+    )
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={
+            "model": "gateway-decider",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(response.json()["usage"]["cost"])
+    assert response.json()["usage"]["cost"] == pytest.approx(float(gateway_cost))
