@@ -1,0 +1,76 @@
+suite: Test Hook Image Configuration
+templates:
+  - tests/test-connection.yaml
+  - tests/test-env-vars.yaml
+set:
+  envVars:
+    DD_ENV: dev_helm
+    DD_SERVICE: litellm
+    USE_DDTRACE: "true"
+tests:
+  - it: preserves the default test image
+    template: tests/test-connection.yaml
+    asserts:
+      - equal:
+          path: spec.containers[0].image
+          value: busybox
+  - it: uses a custom registry and tag for both test hooks
+    set:
+      test.image.repository: registry.example.test/mirror/busybox
+      test.image.tag: "1.37"
+    template: tests/test-connection.yaml
+    asserts:
+      - equal:
+          path: spec.containers[0].image
+          value: registry.example.test/mirror/busybox:1.37
+  - it: accepts a repository without adding an empty tag
+    set:
+      test.image.repository: registry.example.test/mirror/busybox@sha256:abc123
+    template: tests/test-connection.yaml
+    asserts:
+      - equal:
+          path: spec.containers[0].image
+          value: registry.example.test/mirror/busybox@sha256:abc123
+  - it: uses registry credentials in test-connection.yaml
+    template: tests/test-connection.yaml
+    set:
+      imagePullSecrets:
+        - name: mirror-credentials
+    asserts:
+      - equal:
+          path: spec.imagePullSecrets
+          value:
+            - name: mirror-credentials
+  - it: preserves the default test image
+    template: tests/test-env-vars.yaml
+    asserts:
+      - equal:
+          path: spec.containers[0].image
+          value: busybox
+  - it: uses a custom registry and tag for both test hooks
+    set:
+      test.image.repository: registry.example.test/mirror/busybox
+      test.image.tag: "1.37"
+    template: tests/test-env-vars.yaml
+    asserts:
+      - equal:
+          path: spec.containers[0].image
+          value: registry.example.test/mirror/busybox:1.37
+  - it: accepts a repository without adding an empty tag
+    set:
+      test.image.repository: registry.example.test/mirror/busybox@sha256:abc123
+    template: tests/test-env-vars.yaml
+    asserts:
+      - equal:
+          path: spec.containers[0].image
+          value: registry.example.test/mirror/busybox@sha256:abc123
+  - it: uses registry credentials in test-env-vars.yaml
+    template: tests/test-env-vars.yaml
+    set:
+      imagePullSecrets:
+        - name: mirror-credentials
+    asserts:
+      - equal:
+          path: spec.imagePullSecrets
+          value:
+            - name: mirror-credentials
