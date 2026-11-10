@@ -6,8 +6,7 @@ from collections.abc import Mapping
 from typing import Final, Literal
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
-from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
-from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
+from litellm.llms.vertex_ai.common_utils import vertex_top_level_request_fields
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -46,12 +45,7 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         request_fields: Mapping[str, object] | None,
         litellm_params: GenericLiteLLMParams,
     ) -> Mapping[str, object] | None:
-        if not vertex_request_label_fields():
-            return request_fields
-        fields: Final = request_fields or {}
-        unlabelled: Final = {name: value for name, value in fields.items() if name != "labels"}
-        labels: Final = pop_vertex_request_labels({"labels": fields.get("labels")}, dict(litellm_params))
-        return {**unlabelled, "labels": labels} if labels else unlabelled
+        return vertex_top_level_request_fields(request_fields, litellm_params)
 
     def _camel_to_snake(self, camel_str: str) -> str:
         """Convert camelCase to snake_case"""

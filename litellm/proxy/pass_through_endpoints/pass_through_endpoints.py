@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain, count, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -1191,6 +1191,28 @@ def _unfiltered_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     return headers
 
 
+UpstreamRequest: TypeAlias = tuple[Mapping[str, str], Mapping[str, object] | None]
+UpstreamRequestFilter: TypeAlias = Callable[
+    [Mapping[str, str], Mapping[str, object] | None, Mapping[str, object]], UpstreamRequest
+]
+
+
+def _unfiltered_request(
+    headers: Mapping[str, str], body: Mapping[str, object] | None, litellm_params: Mapping[str, object]
+) -> UpstreamRequest:
+    return headers, body
+
+
+def _filtered_upstream_request(
+    upstream_request_filter: UpstreamRequestFilter,
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> tuple[dict[str, str], Mapping[str, object] | None]:  # mutable-ok: the relay helpers take a dict of headers
+    filtered_headers, filtered_body = upstream_request_filter(headers, body, litellm_params)
+    return dict(filtered_headers), filtered_body
+
+
 def _json_object(value: object) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
 
@@ -1247,6 +1269,7 @@ async def pass_through_request(
     guardrails_config: dict | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
 ):
     """
@@ -1269,6 +1292,8 @@ async def pass_through_request(
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
         upstream_headers_filter: Optional last rewrite of the headers sent upstream, after x-pass- expansion
+        upstream_request_filter: Optional last rewrite of the headers and JSON body sent upstream, given the
+            litellm_params the request is logged with
         operation: Optional GenAI operation the route reports, unless the upstream names its own
     """
     from litellm.exceptions import ModifyResponseException
@@ -1629,14 +1654,19 @@ async def pass_through_request(
                 logging_url = str(url) + "?" + requested_query_params_str
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
-        upstream_body: Final = _with_anthropic_user_id(outgoing_body, client_user_id)
+        outbound_headers, upstream_body = _filtered_upstream_request(
+            upstream_request_filter,
+            upstream_headers,
+            _with_anthropic_user_id(outgoing_body, client_user_id),
+            _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
+        )
         logging_obj.pre_call(
             input=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             api_key="",
             additional_args={
                 "complete_input_dict": upstream_body,
                 "api_base": str(logging_url),
-                "headers": redact_credential_headers(upstream_headers),
+                "headers": redact_credential_headers(outbound_headers),
             },
         )
         stream = HttpPassThroughEndpointHelpers.update_stream_param_based_on_request_body(
@@ -1653,7 +1683,7 @@ async def pass_through_request(
                     request=request,
                     async_client=async_client,
                     url=url,
-                    headers=upstream_headers,
+                    headers=outbound_headers,
                     requested_query_params=requested_query_params,
                     stream=True,
                 )
@@ -1665,7 +1695,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
+                        headers=outbound_headers,
                         content=state_raw_body,
                     )
                     if state_raw_body is not None
@@ -1673,7 +1703,7 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
+                        headers=outbound_headers,
                         json=upstream_body,
                     )
                 )
@@ -1761,7 +1791,7 @@ async def pass_through_request(
             raw_body_request: Final = async_client.build_request(
                 request.method,
                 url,
-                headers=upstream_headers,
+                headers=outbound_headers,
                 params=requested_query_params,
                 content=state_raw_body,
             )
@@ -1771,7 +1801,7 @@ async def pass_through_request(
                 request=request,
                 async_client=async_client,
                 url=url,
-                headers=upstream_headers,
+                headers=outbound_headers,
                 requested_query_params=requested_query_params,
                 _parsed_body=upstream_body,
                 forward_multipart=is_multipart,
@@ -2312,6 +2342,7 @@ def create_pass_through_route(
     config_file_path: str | None = None,
     timeout: float | None = None,
     upstream_headers_filter: Callable[[Mapping[str, str]], Mapping[str, str]] = _unfiltered_headers,
+    upstream_request_filter: UpstreamRequestFilter = _unfiltered_request,
     operation: GenAIOperation | None = None,
 ):
     # check if target is an adapter.py or a url
@@ -2461,6 +2492,7 @@ def create_pass_through_route(
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
                         upstream_headers_filter=upstream_headers_filter,
+                        upstream_request_filter=upstream_request_filter,
                         operation=operation,
                     )
                 finally:
