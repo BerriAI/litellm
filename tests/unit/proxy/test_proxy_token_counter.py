@@ -4958,7 +4958,7 @@ async def test_framed_stand_in_counts_a_prompt_like_the_same_text_sent_as_a_user
 @pytest.mark.parametrize(
     "model", ["fireworks_ai/accounts/fireworks/models/glm-5", "deepseek/deepseek-v4-flash"], ids=["plain", "framed"]
 )
-async def test_call_endpoint_counts_a_prompt_locally_on_a_provider_without_a_count_api_like_a_user_message(
+async def test_call_endpoint_counts_a_prompt_on_a_provider_without_a_count_api_as_raw_text(
     model: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4976,7 +4976,7 @@ async def test_call_endpoint_counts_a_prompt_locally_on_a_provider_without_a_cou
 
     assert sent == []
     assert (from_prompt.count_source, from_prompt.error) == ("local_estimate", False)
-    assert from_prompt.total_tokens == from_message.total_tokens > local_prompt.total_tokens
+    assert from_prompt.total_tokens == local_prompt.total_tokens < from_message.total_tokens
 
 
 @pytest.mark.asyncio
@@ -5016,6 +5016,41 @@ async def test_call_endpoint_counts_a_prompt_on_a_non_chat_deployment_as_raw_tex
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["chat", "responses"])
+async def test_call_endpoint_sends_a_prompt_on_a_chat_mode_deployment_to_the_provider(
+    mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "provider-counted",
+                    "litellm_params": {
+                        "model": "openai/gpt-5.6",
+                        "api_key": "test-key",
+                        "api_base": "https://count-tokens.test/v1",
+                    },
+                    "model_info": {"mode": mode},
+                }
+            ]
+        ),
+    )
+    sent: Final[list[httpx.Request]] = []  # mutable-ok: collects what the mock peer receives
+
+    def count_api(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 41}, request=request)
+
+    with _count_apis_answering(count_api):
+        from_prompt: Final = await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+
+    assert (from_prompt.total_tokens, from_prompt.error) == (41, False)
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
 async def test_call_endpoint_counts_a_prompt_for_a_model_without_a_deployment_as_raw_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5038,9 +5073,17 @@ async def test_call_endpoint_counts_a_prompt_for_a_model_without_a_deployment_as
     [("anthropic/claude-sonnet-5-5", ""), ("azure_ai/claude-sonnet-5-5", ""), ("openai/gpt-5.6", "/v1")],
     ids=["anthropic", "azure_ai", "openai"],
 )
-@pytest.mark.parametrize("timeout_setting", ["deployment", "router_settings"])
-async def test_call_endpoint_answers_a_timeout_when_a_stalled_count_api_outlasts_the_configured_timeout(
-    model: str, path: str, timeout_setting: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("row_timeout", "router_timeout"),
+    [({"timeout": 0.5}, None), ({"request_timeout": 0.5}, 30.0), ({}, 0.5)],
+    ids=["deployment timeout", "deployment request_timeout", "router_settings timeout"],
+)
+async def test_call_endpoint_answers_a_timeout_when_a_stalled_count_api_outlasts_the_chat_timeout(
+    model: str,
+    path: str,
+    row_timeout: dict[str, JsonValue],
+    router_timeout: float | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     with socket.create_server(("127.0.0.1", 0)) as never_answers:
         port: Final = never_answers.getsockname()[1]
@@ -5051,17 +5094,42 @@ async def test_call_endpoint_answers_a_timeout_when_a_stalled_count_api_outlasts
         }
         deployment: Final[dict[str, JsonValue]] = {
             "model_name": "provider-counted",
-            "litellm_params": {**litellm_params, "timeout": 0.5} if timeout_setting == "deployment" else litellm_params,
+            "litellm_params": {**litellm_params, **row_timeout},
         }
         monkeypatch.setattr(
-            litellm.proxy.proxy_server,
-            "llm_router",
-            Router(model_list=[deployment], timeout=0.5 if timeout_setting == "router_settings" else None),
+            litellm.proxy.proxy_server, "llm_router", Router(model_list=[deployment], timeout=router_timeout)
         )
 
         with pytest.raises(ProxyException) as error:
             async with asyncio.timeout(10):
                 await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+
+    assert error.value.code == "408"
+
+
+@pytest.mark.asyncio
+async def test_responses_count_answers_a_timeout_when_a_stalled_count_api_outlasts_the_deployment_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with socket.create_server(("127.0.0.1", 0)) as never_answers:
+        port: Final = never_answers.getsockname()[1]
+        _route_to_one_deployment(
+            {
+                "model": "openai/gpt-5.6",
+                "api_key": "test-key",
+                "api_base": f"http://127.0.0.1:{port}/v1",
+                "timeout": 0.5,
+            },
+            monkeypatch,
+        )
+
+        with pytest.raises(ProxyException) as error:
+            async with asyncio.timeout(10):
+                await count_request_tokens(
+                    request=_FOX_AS_MESSAGE,
+                    call_endpoint=True,
+                    responses_request={"model": "provider-counted", "input": _FOX},
+                )
 
     assert error.value.code == "408"
 

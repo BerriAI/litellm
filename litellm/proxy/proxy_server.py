@@ -16110,11 +16110,10 @@ async def _routed_count_deployment(
         return None
 
 
-def _with_router_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-    router_timeout: Final = None if llm_router is None else llm_router.timeout
-    if router_timeout is None or litellm_params.get("timeout") is not None:
+def _with_chat_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    if llm_router is None:
         return litellm_params
-    return {**litellm_params, "timeout": router_timeout}
+    return {**litellm_params, "timeout": llm_router.deployment_call_timeout(litellm_params)}
 
 
 async def _count_request_tokens(
@@ -16141,7 +16140,7 @@ async def _count_request_tokens(
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
-            "litellm_params": _with_router_timeout(
+            "litellm_params": _with_chat_timeout(
                 with_named_credential(_LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})))
             ),
         }
@@ -16184,7 +16183,10 @@ async def _count_request_tokens(
         )
     prompt_only: Final = bool(prompt) and conversation_empty
     prompt_as_turn: Final = (
-        prompt_only and call_endpoint is True and deployment is not None and _serves_chat(deployment_view, cost_map_row)
+        prompt_only
+        and provider_counter is not None
+        and provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider)
+        and _serves_chat(deployment_view, cost_map_row)
     )
     prompt_as_message: Final = prompt_as_turn or (
         prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
