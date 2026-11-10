@@ -4,6 +4,7 @@ import gc
 import json
 import os
 import threading
+import time
 import weakref
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from datetime import datetime
@@ -35,6 +36,7 @@ from litellm.proxy.route_llm_request import (
     ProxyModelNotFoundError,
     UserConfigRouters,
     endpoint_unsupported_by_model,
+    proxy_has_bedrock_credentials,
     route_request,
     user_config_routers,
 )
@@ -3774,12 +3776,64 @@ async def test_route_request_keeps_the_invalid_model_error_when_the_proxy_has_no
     assert not upstream.called
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_without_aws_credentials")
+async def test_route_request_calls_bedrock_directly_with_only_the_proxy_bedrock_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "proxy-bedrock-api-key")
+    router: Final = litellm.Router(model_list=[])
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post(url__regex=r"https://bedrock-runtime\..*/converse").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        response: Final = await (
+            await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
+        )
+
+    assert response.json() == dict(_BEDROCK_CONVERSE_ANSWER)
+    assert upstream.calls.last.request.headers["authorization"] == "Bearer proxy-bedrock-api-key"
+
+
+@pytest.mark.parametrize(
+    "proxy_env, has_credentials",
+    [
+        pytest.param({}, False, id="nothing-configured"),
+        pytest.param({"AWS_BEARER_TOKEN_BEDROCK": "proxy-bedrock-api-key"}, True, id="bedrock-api-key"),
+        pytest.param(
+            {"AWS_ACCESS_KEY_ID": "AKIDPROXYENV", "AWS_SECRET_ACCESS_KEY": "proxy-env-secret"}, True, id="access-keys"
+        ),
+        pytest.param({"AWS_ACCESS_KEY_ID": "AKIDPROXYENV"}, True, id="broken-setup-the-direct-call-reports"),
+    ],
+)
+@pytest.mark.usefixtures("proxy_without_aws_credentials")
+def test_proxy_has_bedrock_credentials_follows_the_proxy_aws_setup(
+    monkeypatch: pytest.MonkeyPatch, proxy_env: dict[str, str], has_credentials: bool
+) -> None:
+    for name, value in proxy_env.items():
+        monkeypatch.setenv(name, value)
+
+    assert proxy_has_bedrock_credentials() is has_credentials
+
+
 class _ManualClock:
     def __init__(self) -> None:
         self.now = 0.0
 
     def __call__(self) -> float:
         return self.now
+
+
+class _CredentialsLookup:
+    def __init__(self, found: bool) -> None:
+        self.found = found
+        self.lookups = 0
+
+    def __call__(self) -> bool:
+        self.lookups += 1
+        time.sleep(0.01)
+        return self.found
 
 
 class _BedrockCallWithoutCredentials:
@@ -3790,38 +3844,69 @@ class _BedrockCallWithoutCredentials:
         from botocore.exceptions import NoCredentialsError
 
         self.calls += 1
-        await asyncio.sleep(0.01)
         try:
             raise NoCredentialsError()
         except NoCredentialsError:
             raise BedrockError(status_code=500, message="Unable to locate credentials") from None
 
 
+async def _bedrock_answers_at_once() -> str:
+    return "ok"
+
+
+async def _burst(
+    direct_calls: BedrockDirectCalls, direct_call: Callable[[], Awaitable[str]], original_error: Exception
+) -> tuple[BaseException | str, ...]:
+    return tuple(
+        await asyncio.gather(
+            *(direct_calls.answer_or_original_error(direct_call, original_error) for _ in range(8)),
+            return_exceptions=True,
+        )
+    )
+
+
 @pytest.mark.asyncio
 async def test_a_proxy_without_aws_credentials_looks_them_up_once_per_window_even_under_concurrency() -> None:
     clock: Final = _ManualClock()
-    direct_calls: Final = BedrockDirectCalls(retry_after_seconds=60, clock=clock)
+    lookup: Final = _CredentialsLookup(found=False)
+    direct_calls: Final = BedrockDirectCalls(credentials_lookup=lookup, retry_after_seconds=60, clock=clock)
     call_bedrock: Final = _BedrockCallWithoutCredentials()
     invalid_model: Final = LookupError("Invalid model name")
 
-    async def burst() -> tuple[BaseException | str, ...]:
-        return tuple(
-            await asyncio.gather(
-                *(direct_calls.answer_or_original_error(call_bedrock, invalid_model) for _ in range(8)),
-                return_exceptions=True,
-            )
-        )
-
-    first_burst: Final = await burst()
+    first_burst: Final = await _burst(direct_calls, call_bedrock, invalid_model)
     clock.now = 59
-    burst_within_the_window: Final = await burst()
-    calls_within_the_window: Final = call_bedrock.calls
+    burst_within_the_window: Final = await _burst(direct_calls, call_bedrock, invalid_model)
+    lookups_within_the_window: Final = lookup.lookups
     clock.now = 61
-    burst_after_the_window: Final = await burst()
+    burst_after_the_window: Final = await _burst(direct_calls, call_bedrock, invalid_model)
 
     assert {*first_burst, *burst_within_the_window, *burst_after_the_window} == {invalid_model}
+    assert lookups_within_the_window == 1
+    assert lookup.lookups == 2
+    assert call_bedrock.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_a_direct_call_that_finds_no_aws_credentials_stops_direct_calls_for_the_window() -> None:
+    clock: Final = _ManualClock()
+    lookup: Final = _CredentialsLookup(found=True)
+    direct_calls: Final = BedrockDirectCalls(credentials_lookup=lookup, retry_after_seconds=60, clock=clock)
+    call_bedrock: Final = _BedrockCallWithoutCredentials()
+    invalid_model: Final = LookupError("Invalid model name")
+
+    with pytest.raises(LookupError):
+        await direct_calls.answer_or_original_error(call_bedrock, invalid_model)
+    clock.now = 59
+    burst_within_the_window: Final = await _burst(direct_calls, call_bedrock, invalid_model)
+    calls_within_the_window: Final = call_bedrock.calls
+    clock.now = 61
+    lookup.found = False
+    burst_after_the_window: Final = await _burst(direct_calls, call_bedrock, invalid_model)
+
+    assert {*burst_within_the_window, *burst_after_the_window} == {invalid_model}
     assert calls_within_the_window == 1
-    assert call_bedrock.calls == 2
+    assert call_bedrock.calls == 1
+    assert lookup.lookups == 2
 
 
 class _BedrockCallsThatWaitForEachOther:
@@ -3839,23 +3924,21 @@ class _BedrockCallsThatWaitForEachOther:
         return "ok"
 
 
-async def _bedrock_answers_at_once() -> str:
-    return "ok"
-
-
 @pytest.mark.asyncio
-async def test_direct_bedrock_calls_run_concurrently_once_the_proxy_credentials_worked() -> None:
-    direct_calls: Final = BedrockDirectCalls()
+async def test_direct_bedrock_calls_run_concurrently_from_the_first_call_once_credentials_are_found() -> None:
+    lookup: Final = _CredentialsLookup(found=True)
+    direct_calls: Final = BedrockDirectCalls(credentials_lookup=lookup)
     waiting_calls: Final = _BedrockCallsThatWaitForEachOther(expected_calls=3)
 
-    first: Final = await direct_calls.answer_or_original_error(_bedrock_answers_at_once, LookupError())
     pending: Final = tuple(
         asyncio.create_task(direct_calls.answer_or_original_error(waiting_calls, LookupError())) for _ in range(3)
     )
     await asyncio.wait_for(waiting_calls.all_started.wait(), timeout=5)
     waiting_calls.released.set()
+    later: Final = await direct_calls.answer_or_original_error(_bedrock_answers_at_once, LookupError())
 
-    assert (first, *await asyncio.gather(*pending)) == ("ok", "ok", "ok", "ok")
+    assert (*await asyncio.gather(*pending), later) == ("ok", "ok", "ok", "ok")
+    assert lookup.lookups == 1
 
 
 class _BedrockDeniesTheModel:
@@ -3870,7 +3953,7 @@ class _BedrockDeniesTheModel:
 
 @pytest.mark.asyncio
 async def test_a_bedrock_403_does_not_stop_the_next_direct_call() -> None:
-    direct_calls: Final = BedrockDirectCalls()
+    direct_calls: Final = BedrockDirectCalls(credentials_lookup=_CredentialsLookup(found=True))
     call_bedrock: Final = _BedrockDeniesTheModel()
 
     for _ in range(2):

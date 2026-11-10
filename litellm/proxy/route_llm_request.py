@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mappi
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -212,31 +213,54 @@ _BedrockAnswerT: Final = TypeVar("_BedrockAnswerT")
 BEDROCK_DIRECT_CALL_CREDENTIALS_RETRY_SECONDS: Final = 60.0
 
 
+def proxy_has_bedrock_credentials() -> bool:
+    try:
+        return bedrock_bearer_token(None) is not None or bool(BaseAWSLLM().get_credentials())
+    except Exception:  # noqa: BLE001  # a broken AWS setup is reported by the direct call itself
+        return True
+
+
 class BedrockDirectCalls:
-    __slots__ = ("_clock", "_credentials_found", "_first_call", "_missing_credentials_until", "_retry_after_seconds")
+    __slots__ = (
+        "_clock",
+        "_credentials_found",
+        "_credentials_lookup",
+        "_lookup",
+        "_missing_credentials_until",
+        "_retry_after_seconds",
+    )
 
     def __init__(
         self,
+        credentials_lookup: Callable[[], bool] = proxy_has_bedrock_credentials,
         retry_after_seconds: float = BEDROCK_DIRECT_CALL_CREDENTIALS_RETRY_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        self._credentials_lookup = credentials_lookup
         self._retry_after_seconds = retry_after_seconds
         self._clock = clock
-        self._first_call = asyncio.Lock()
+        self._lookup = asyncio.Lock()
         self._credentials_found = False
         self._missing_credentials_until = float("-inf")
 
-    def _credentials_known_missing(self) -> bool:
-        return self._clock() < self._missing_credentials_until
+    def _remember(self, credentials_found: bool) -> None:
+        self._credentials_found = credentials_found
+        if not credentials_found:
+            self._missing_credentials_until = self._clock() + self._retry_after_seconds
+
+    async def _proxy_has_credentials(self) -> bool:
+        if self._credentials_found:
+            return True
+        async with self._lookup:
+            if not self._credentials_found and self._clock() >= self._missing_credentials_until:
+                self._remember(await asyncio.to_thread(self._credentials_lookup))
+            return self._credentials_found
 
     async def answer_or_original_error(
         self, direct_call: Callable[[], Awaitable[_BedrockAnswerT]], original_error: Exception
     ) -> _BedrockAnswerT:
-        async with self._first_call:
-            if self._credentials_known_missing():
-                raise original_error
-            if not self._credentials_found:
-                return await self._answer(direct_call, original_error)
+        if not await self._proxy_has_credentials():
+            raise original_error
         return await self._answer(direct_call, original_error)
 
     async def _answer(
@@ -249,14 +273,12 @@ class BedrockDirectCalls:
         except BedrockError as error:
             if not isinstance(error.__context__, NoCredentialsError):
                 raise
-            self._missing_credentials_until = self._clock() + self._retry_after_seconds
+            self._remember(credentials_found=False)
             raise original_error from error
         except httpx.HTTPStatusError as error:
             if error.response.status_code != status.HTTP_403_FORBIDDEN:
                 raise
             raise original_error from error
-        finally:
-            self._credentials_found = not self._credentials_known_missing()
 
 
 bedrock_direct_calls: Final = BedrockDirectCalls()
