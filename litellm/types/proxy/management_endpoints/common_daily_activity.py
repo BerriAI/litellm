@@ -33,7 +33,8 @@ class SpendMetrics(LiteLLMBaseModel):
     autorouter_savings_spend: float = Field(default=0.0)
     guardrail_spend: float = Field(
         default=0.0,
-        description="Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend",
+        description="Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. "
+        "Rows recorded before this field existed report 0 even when their spend includes guardrail cost",
     )
     total_tokens: int = Field(default=0)
     successful_requests: int = Field(default=0)

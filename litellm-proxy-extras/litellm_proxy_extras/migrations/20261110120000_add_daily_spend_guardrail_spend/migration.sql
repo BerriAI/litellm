@@ -1,3 +1,5 @@
+SET LOCAL lock_timeout = '10s';
+
 -- AlterTable
 ALTER TABLE "LiteLLM_DailyUserSpend" ADD COLUMN IF NOT EXISTS "guardrail_spend" DOUBLE PRECISION NOT NULL DEFAULT 0.0;
 

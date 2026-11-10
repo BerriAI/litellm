@@ -74,7 +74,7 @@ def build_accounting_payload(
         **{key: _accounting_metadata_field(key, value) for key, value in metadata.items() if key in _METADATA_FIELDS},
         "accounting_entities": entities,
         "accounting_savings": savings._asdict(),
-        "accounting_guardrail_spend": guardrail_share_of_spend(metadata.get("cost_breakdown"), payload["spend"]),
+        "accounting_guardrail_spend": guardrail_share_of_spend(metadata, payload["spend"]),
         "accounting_model_access_groups": model_access_groups,
         "accounting_windows": windows,
     }

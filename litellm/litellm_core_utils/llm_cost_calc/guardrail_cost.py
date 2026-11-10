@@ -311,26 +311,10 @@ def guardrail_information_cost(guardrail_information: object) -> float:
     return _validated_entry_cost(guardrail_information)
 
 
-class _BilledGuardrailCost(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    guardrail_cost: Annotated[float, Field(allow_inf_nan=False)] = 0.0
-
-
-_BILLED_GUARDRAIL_COST_ADAPTER: Final[TypeAdapter[_BilledGuardrailCost]] = TypeAdapter(_BilledGuardrailCost)
-
-
-def guardrail_share_of_spend(cost_breakdown: object, spend: float) -> float:
-    """The part of a spend row's ``spend`` billed for its guardrails, capped at the row's spend, since an allowance
-    discount or a repeat job poll can charge less than the guardrail cost its breakdown records."""
-    if not isinstance(cost_breakdown, Mapping):
-        return 0.0
-    try:
-        guardrail_cost: Final = _BILLED_GUARDRAIL_COST_ADAPTER.validate_python(cost_breakdown).guardrail_cost
-    except ValidationError as e:
-        verbose_logger.warning("Ignoring malformed cost_breakdown guardrail_cost: %s", e)
-        return 0.0
-    return min(max(guardrail_cost, 0.0), max(spend, 0.0))
+def guardrail_share_of_spend(spend_log_metadata: Mapping[str, object], spend: float) -> float:
+    """The part of a spend row's ``spend`` billed for its guardrails, priced the way success and failure rows add
+    it to spend and capped at the row's spend, since an allowance discount or a repeat job poll can charge less."""
+    return min(guardrail_information_cost(spend_log_metadata.get("guardrail_information")), max(spend, 0.0))
 
 
 def cost_breakdown_with_guardrail(cost_breakdown: CostBreakdown | None, guardrail_cost: float) -> CostBreakdown | None:

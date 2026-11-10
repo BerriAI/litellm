@@ -4884,7 +4884,7 @@
             },
             "guardrail_spend": {
               "default": 0.0,
-              "description": "Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend",
+              "description": "Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost",
               "title": "Guardrail Spend",
               "type": "number"
             },

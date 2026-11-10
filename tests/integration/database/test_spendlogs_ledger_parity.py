@@ -417,7 +417,6 @@ async def _assert_legacy_database_parity(
                     "model_id": "deployment",
                     "response_cost": cost,
                     "autorouter_savings": 0.125,
-                    "cost_breakdown": {"guardrail_cost": 0.02},
                     "guardrail_information": [
                         {
                             "guardrail_id": "guard",
@@ -425,6 +424,7 @@ async def _assert_legacy_database_parity(
                             "guardrail_status": "success",
                             "guardrail_usage": {"text": 2},
                             "guardrail_cost_by_unit": {"text": 0.02},
+                            "guardrail_cost": 0.02,
                             "guardrail_cost_in_spend": True,
                         }
                     ],

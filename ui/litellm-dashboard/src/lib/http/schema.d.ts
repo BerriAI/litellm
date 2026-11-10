@@ -47697,7 +47697,7 @@ export interface components {
             gateway_injected_caching_savings_spend: number;
             /**
              * Guardrail Spend
-             * @description Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend
+             * @description Guardrail spend in USD, already included in spend, so model spend is spend - guardrail_spend. Rows recorded before this field existed report 0 even when their spend includes guardrail cost
              * @default 0
              */
             guardrail_spend: number;
