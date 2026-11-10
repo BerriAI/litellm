@@ -3,6 +3,7 @@ mod constants;
 mod handler;
 pub mod route;
 mod types;
+mod workload_identity;
 
 use futures_util::FutureExt;
 use litellm_auth::AuthServices;
@@ -20,6 +21,7 @@ pub use types::{
     MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
     litellm_params, messages_body,
 };
+pub use workload_identity::WorkloadIdentity;
 
 #[derive(Clone)]
 pub struct MessagesRoute {
@@ -27,6 +29,7 @@ pub struct MessagesRoute {
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
     cache: Option<litellm_cache_response::ScopedCache>,
+    workload_identity: Option<Arc<dyn WorkloadIdentity>>,
 }
 
 impl MessagesRoute {
@@ -40,6 +43,15 @@ impl MessagesRoute {
             auth,
             secrets,
             cache: None,
+            workload_identity: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_workload_identity(self, workload_identity: Arc<dyn WorkloadIdentity>) -> Self {
+        Self {
+            workload_identity: Some(workload_identity),
+            ..self
         }
     }
 

@@ -90,6 +90,9 @@ pub(crate) fn route_failure(
     if let Some(raised) = crate::secrets::python_error(py, &error) {
         return Ok(raised);
     }
+    if let Some(raised) = crate::routes::messages::workload_identity::python_error(py, &error) {
+        return Ok(raised);
+    }
     if let Some((status, body)) = error.upstream_response() {
         let headers = error
             .upstream_headers()

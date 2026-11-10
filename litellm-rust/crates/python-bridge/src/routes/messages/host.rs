@@ -14,6 +14,7 @@ use pyo3::{
     exceptions::PyException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
+    sync::PyOnceLock,
     types::{PyBytes, PyDict},
 };
 use serde_json::{Map, Value};
@@ -41,6 +42,19 @@ fn merge_headers(
     (!merged.is_empty()).then_some(merged)
 }
 
+const FEDERATING_PROVIDER: &str = "anthropic";
+
+fn workload_identity_fields(py: Python<'_>) -> PyResult<&'static [String]> {
+    static FIELDS: PyOnceLock<Vec<String>> = PyOnceLock::new();
+    FIELDS
+        .get_or_try_init(py, || {
+            py.import(ROUTE_HOST_MODULE)?
+                .getattr("WORKLOAD_IDENTITY_FIELDS")?
+                .extract()
+        })
+        .map(Vec::as_slice)
+}
+
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
     PythonSettings::ProviderDefaults
         .read_or_unset(py)?
@@ -50,11 +64,17 @@ fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py,
 /// The caller's litellm params, read from the kwargs by the names the typed params declare,
 /// so a key the configs do not read is never converted; a spec whose spellings the call all
 /// leaves out falls back to the module global it names, which stays the host's concern.
-fn project_litellm_params<'py>(
+fn project_litellm_params<'a, 'py>(
+    names: impl IntoIterator<Item = &'a str>,
     argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
     global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
 ) -> PyResult<Result<LitellmParams, Error>> {
-    let fields = project_optional_fields(LitellmParams::fields(), &argument)?;
+    let fields = project_optional_fields(
+        LitellmParams::fields()
+            .map(|name| -> &'a str { name })
+            .chain(names),
+        &argument,
+    )?;
     let globals = LitellmParams::specs()
         .filter(|spec| !spec.wire.iter().any(|name| fields.contains_key(*name)))
         .filter_map(|spec| spec.module_global);
@@ -170,7 +190,15 @@ impl MessagesPythonHost {
             None => self.merged_headers(py, arguments)?,
         };
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
-        let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
+        let federation_fields: &[String] = match custom_llm_provider.as_deref() {
+            Some(FEDERATING_PROVIDER) => workload_identity_fields(py)?,
+            _ => &[],
+        };
+        let litellm_params = project_litellm_params(
+            federation_fields.iter().map(String::as_str),
+            argument,
+            |name| module_global(py, name),
+        )?;
         Ok(messages_body(body).and_then(|body| {
             Ok(MessagesCall {
                 body,
@@ -477,7 +505,40 @@ mod tests {
         assert_projection(kwargs, globals, expected);
     }
 
+    #[rstest]
+    #[case::named_fields_are_projected(
+        json!({"model": "m", "anthropic_federation_rule_id": "fdrl_1", "anthropic_issuer_ttl_seconds": 60}),
+        Ok(json!({"model": "m", "anthropic_federation_rule_id": "fdrl_1", "anthropic_issuer_ttl_seconds": 60})),
+    )]
+    #[case::unnamed_fields_are_not(
+        json!({"model": "m", "anthropic_unrelated": "x"}),
+        Ok(json!({"model": "m"})),
+    )]
+    fn workload_identity_fields_are_projected_by_the_names_the_host_lists(
+        #[case] kwargs: Value,
+        #[case] expected: Result<Value, ()>,
+    ) {
+        assert_projection_of(
+            &[
+                "anthropic_federation_rule_id",
+                "anthropic_issuer_ttl_seconds",
+            ],
+            kwargs,
+            json!({}),
+            expected,
+        );
+    }
+
     fn assert_projection(kwargs: Value, globals: Value, expected: Result<Value, ()>) {
+        assert_projection_of(&[], kwargs, globals, expected);
+    }
+
+    fn assert_projection_of(
+        names: &[&str],
+        kwargs: Value,
+        globals: Value,
+        expected: Result<Value, ()>,
+    ) {
         Python::initialize();
         Python::attach(|py| {
             let dict = |value: &Value| {
@@ -491,6 +552,7 @@ mod tests {
             let globals = dict(&globals);
             let bound = PyDict::new(py);
             let projected = project_litellm_params(
+                names.iter().copied(),
                 |name| present(&kwargs, &bound, name),
                 |name| present(&globals, &bound, name),
             )

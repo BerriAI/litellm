@@ -651,3 +651,39 @@ def test_modify_max_tokens_clamps_the_keyword_view_as_the_client_wrapper_does(
     messages_host.modify_max_tokens(model, args, view)
 
     assert view["max_tokens"] == expected
+
+
+def test_workload_identity_token_mints_with_the_params_python_validates(monkeypatch: pytest.MonkeyPatch) -> None:
+    minted: Final[list[tuple[dict[str, object], str | None, str]]] = []
+
+    def mint(litellm_params: dict[str, object], api_base: str | None, model: str) -> str:
+        federation = {name: value for name, value in litellm_params.items() if name.startswith("anthropic_")}
+        minted.append(({name: value for name, value in federation.items() if value is not None}, api_base, model))
+        return "sk-ant-oat01-minted"
+
+    monkeypatch.setattr(messages_host, "get_anthropic_wif_token", mint)
+
+    token: Final = messages_host.workload_identity_token(
+        {"anthropic_federation_rule_id": "fdrl_1", "anthropic_issuer_ttl_seconds": "60"},
+        "https://gateway.test",
+    )
+
+    assert (token, minted) == (
+        "sk-ant-oat01-minted",
+        [({"anthropic_federation_rule_id": "fdrl_1", "anthropic_issuer_ttl_seconds": 60}, "https://gateway.test", "")],
+    )
+
+
+def test_workload_identity_token_is_none_without_a_federation_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID", "ANTHROPIC_IDENTITY_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert messages_host.workload_identity_token({}, None) is None
+
+
+def test_workload_identity_fields_are_the_federation_litellm_params() -> None:
+    assert set(messages_host.WORKLOAD_IDENTITY_FIELDS) >= {
+        "anthropic_federation_rule_id",
+        "anthropic_organization_id",
+        "anthropic_disable_workload_identity_federation",
+    }
