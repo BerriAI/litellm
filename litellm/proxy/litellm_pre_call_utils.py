@@ -2129,12 +2129,9 @@ class LiteLLMProxyRequestSetup:
             data["cache"] = {}  # rebind-ok: data is an out-param
         elif "cache" in key_metadata:
             request_cache: Final = _DECODED_JSON.validate_python(data["cache"]) if "cache" in data else None
-            key_cache_controls: Final = {
-                k: v
-                for k, v in _request_fields(_DECODED_JSON.validate_python(key_metadata["cache"])).items()
-                if k in SupportedCacheControls
-            }
-            key_opts_out: Final = key_cache_controls.get("no-cache") is True
+            key_cache: Final = _request_fields(_DECODED_JSON.validate_python(key_metadata["cache"]))
+            key_cache_controls: Final = {k: v for k, v in key_cache.items() if k in SupportedCacheControls}
+            key_opts_out: Final = key_cache.get("no-cache") is True or key_cache.get("use-cache", True) is not True
             data["cache"] = {  # rebind-ok: data is an out-param
                 **{k: v for k, v in _request_fields(request_cache).items() if not (key_opts_out and k == "use-cache")},
                 **key_cache_controls,

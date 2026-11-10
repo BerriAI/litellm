@@ -7955,6 +7955,20 @@ async def test_key_level_callback_vars_survive_the_strip():
             False,
             id="key-no-cache-keeps-the-key-out-of-opt-in-caching",
         ),
+        pytest.param(
+            {"use-cache": False},
+            {"use-cache": True, "ttl": 60},
+            {"ttl": 60},
+            False,
+            id="key-use-cache-false-keeps-the-key-out-of-opt-in-caching",
+        ),
+        pytest.param(
+            {"use-cache": True},
+            {"use-cache": True},
+            {"use-cache": True},
+            True,
+            id="key-use-cache-true-leaves-the-request-opt-in",
+        ),
     ],
 )
 async def test_key_cache_controls_merge_into_request_cache_controls(
