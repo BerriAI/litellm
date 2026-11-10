@@ -27,6 +27,26 @@ COHERE_CHAT_RESPONSE: Final = {
     "usage": {"billed_units": {"input_tokens": 1, "output_tokens": 1}},
 }
 
+ANTHROPIC_MESSAGE_RESPONSE: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-sonnet-5-5",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+OPENAI_CHAT_RESPONSE: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
 
 def _check_additional_properties(schema):
     if isinstance(schema, dict):
@@ -2241,3 +2261,58 @@ def test_turning_reasoning_off_for_a_catalog_non_reasoning_model_drops_it_silent
 
     assert "reasoning_effort" not in optional_params
     assert not [record for record in caplog.records if "Dropping" in record.getMessage()]
+
+
+@pytest.mark.parametrize(
+    "vector_store_params",
+    ({"vector_store_ids": []}, {"vector_store_ids": ["vs_abc"]}, {"vector_store_id": "vs_abc"}),
+)
+@pytest.mark.parametrize(
+    ("model", "provider_url", "provider_response"),
+    (
+        ("anthropic/claude-sonnet-5-5", "https://api.anthropic.com/v1/messages", ANTHROPIC_MESSAGE_RESPONSE),
+        ("openai/gpt-5.6", "https://api.openai.com/v1/chat/completions", OPENAI_CHAT_RESPONSE),
+        (
+            "fireworks_ai/accounts/fireworks/models/qwen3p8-max",
+            "https://api.fireworks.ai/inference/v1/chat/completions",
+            OPENAI_CHAT_RESPONSE,
+        ),
+    ),
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_keeps_vector_store_params_out_of_provider_request(
+    respx_mock: respx.MockRouter,
+    model: str,
+    provider_url: str,
+    provider_response: dict[str, object],
+    vector_store_params: dict[str, object],
+) -> None:
+    route: Final = respx_mock.post(provider_url)
+    route.return_value = httpx.Response(200, json=provider_response)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-api-key",
+        **vector_store_params,
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body.keys().isdisjoint(vector_store_params)
+    assert request_body["messages"][0]["role"] == "user"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_forwards_vector_store_ids_to_litellm_proxy(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("http://litellm-proxy.test/chat/completions")
+    route.return_value = httpx.Response(200, json=OPENAI_CHAT_RESPONSE)
+
+    litellm.completion(
+        model="litellm_proxy/gpt-5.6",
+        messages=[{"role": "user", "content": "hello"}],
+        api_base="http://litellm-proxy.test",
+        api_key="test-api-key",
+        vector_store_ids=["vs_abc"],
+    )
+
+    assert json.loads(route.calls[0].request.content)["vector_store_ids"] == ["vs_abc"]

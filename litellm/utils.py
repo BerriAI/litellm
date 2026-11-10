@@ -6153,7 +6153,8 @@ def get_optional_params(
 EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model"})
 
 
-LITELLM_ONLY_PARAMS: Final = frozenset(("cache_control_injection_points",))
+VECTOR_STORE_HOOK_PARAMS: Final = frozenset(("vector_store_ids", "vector_store_id"))
+LITELLM_ONLY_PARAMS: Final = frozenset(("cache_control_injection_points",)) | VECTOR_STORE_HOOK_PARAMS
 
 
 def header_auth_params(custom_llm_provider: str) -> frozenset[str]:
@@ -6209,7 +6210,7 @@ def add_provider_specific_params_to_optional_params(
             )
     else:
         for k in passed_params:
-            if k not in openai_params and passed_params[k] is not None:
+            if k not in openai_params and k not in VECTOR_STORE_HOOK_PARAMS and passed_params[k] is not None:
                 if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
                     continue
                 optional_params[k] = passed_params[k]
