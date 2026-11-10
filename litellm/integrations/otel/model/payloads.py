@@ -788,7 +788,7 @@ _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 
 def _message_dict(message: object) -> Mapping[str, object] | None:
     if isinstance(message, BaseModel):
-        return message.model_dump(mode="json")
+        return message.model_dump(mode="json", fallback=str)
     return as_str_mapping(message)
 
 

@@ -710,6 +710,7 @@ def test_langfuse_mapper_keeps_chat_output_when_no_embedding_summary():
 
 
 LITELLM_USER_MESSAGE: Final = Message(role="user", content="weather in sf?")
+NOT_JSON_ENCODABLE: Final = object()
 
 
 @pytest.mark.parametrize(
@@ -717,8 +718,12 @@ LITELLM_USER_MESSAGE: Final = Message(role="user", content="weather in sf?")
     [
         ({"role": "user", "content": "weather in sf?"}, {"role": "user", "content": "weather in sf?"}),
         (LITELLM_USER_MESSAGE, LITELLM_USER_MESSAGE.model_dump(mode="json")),
+        (
+            Message(role="user", content="weather in sf?", trace_handle=NOT_JSON_ENCODABLE),
+            {**LITELLM_USER_MESSAGE.model_dump(mode="json"), "trace_handle": str(NOT_JSON_ENCODABLE)},
+        ),
     ],
-    ids=["dict_message", "litellm_message_object"],
+    ids=["dict_message", "litellm_message_object", "litellm_message_with_value_json_cannot_encode"],
 )
 def test_vendor_mappers_keep_the_prompt_of_litellm_message_objects(
     message: Mapping[str, object] | Message, expected_prompt: Mapping[str, object]

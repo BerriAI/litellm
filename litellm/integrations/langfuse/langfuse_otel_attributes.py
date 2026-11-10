@@ -7,6 +7,7 @@ Relevant Issue: https://github.com/BerriAI/litellm/issues/13764
 import json
 from collections.abc import Mapping
 from datetime import datetime
+from functools import partial
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel
@@ -104,7 +105,9 @@ class LangfuseLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
             prompt["tools"] = tools
 
         input: Final = prompt
-        safe_set_attribute(span, "langfuse.observation.input", json.dumps(input, default=to_jsonable_python))
+        safe_set_attribute(
+            span, "langfuse.observation.input", json.dumps(input, default=partial(to_jsonable_python, fallback=str))
+        )
 
     @staticmethod
     @override

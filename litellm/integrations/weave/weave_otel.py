@@ -4,6 +4,7 @@ import base64
 import json
 import os
 from collections.abc import Mapping
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -76,7 +77,9 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
         if tools is not None:
             prompt["tools"] = tools
         safe_set_attribute(
-            span, OpenInferenceSpanAttributes.INPUT_VALUE, json.dumps(prompt, default=to_jsonable_python)
+            span,
+            OpenInferenceSpanAttributes.INPUT_VALUE,
+            json.dumps(prompt, default=partial(to_jsonable_python, fallback=str)),
         )
 
 

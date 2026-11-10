@@ -208,9 +208,21 @@ def test_weave_output_value_is_the_dumped_model_response() -> None:
     assert output["choices"][0]["message"]["content"] == "Sunny."
 
 
-def test_weave_span_keeps_input_and_token_usage_when_messages_are_litellm_messages() -> None:
+NOT_JSON_ENCODABLE: Final = object()
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        (Message(role="user", content="weather in SF?"), Message(role="assistant", content="Sunny.")),
+        (Message(role="user", content="weather in SF?", trace_handle=NOT_JSON_ENCODABLE),),
+    ],
+    ids=["litellm_messages", "litellm_message_with_value_json_cannot_encode"],
+)
+def test_weave_span_keeps_input_and_token_usage_when_messages_are_litellm_messages(
+    messages: tuple[Message, ...],
+) -> None:
     span: Final = _TRACER.start_span("litellm_request")
-    messages: Final = (Message(role="user", content="weather in SF?"), Message(role="assistant", content="Sunny."))
     response: Final = ModelResponse(
         model="gpt-4o",
         choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Still sunny."}}],
@@ -221,7 +233,7 @@ def test_weave_span_keeps_input_and_token_usage_when_messages_are_litellm_messag
 
     attributes: Final = span.attributes or {}
     assert json.loads(str(attributes[OpenInferenceSpanAttributes.INPUT_VALUE])) == {
-        "messages": [message.model_dump() for message in messages]
+        "messages": [message.model_dump(fallback=str) for message in messages]
     }
     assert {
         key: attributes.get(key)

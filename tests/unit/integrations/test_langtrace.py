@@ -13,6 +13,7 @@ CHAT_MESSAGE_DICTS: Final = ({"role": "user", "content": "weather in SF?"}, {"ro
 CHAT_MESSAGE_OBJECTS: Final = tuple(
     Message(role=message["role"], content=message["content"]) for message in CHAT_MESSAGE_DICTS
 )
+NOT_JSON_ENCODABLE: Final = object()
 
 
 @pytest.mark.parametrize(
@@ -24,8 +25,17 @@ CHAT_MESSAGE_OBJECTS: Final = tuple(
             ({"role": "user", "content": "before\x00after", "metadata": {1: "one"}},),
             [{"role": "user", "content": "before\x00after", "metadata": {"1": "one"}}],
         ),
+        (
+            (Message(role="user", content="weather in SF?", trace_handle=NOT_JSON_ENCODABLE),),
+            [{**CHAT_MESSAGE_OBJECTS[0].model_dump(), "trace_handle": str(NOT_JSON_ENCODABLE)}],
+        ),
     ],
-    ids=["dict_messages", "litellm_message_objects", "dict_message_with_nul_and_int_key"],
+    ids=[
+        "dict_messages",
+        "litellm_message_objects",
+        "dict_message_with_nul_and_int_key",
+        "litellm_message_with_value_json_cannot_encode",
+    ],
 )
 def test_langtrace_span_keeps_prompt_and_token_usage(
     messages: Sequence[object], expected_prompts: Sequence[object]

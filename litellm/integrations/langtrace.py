@@ -1,4 +1,5 @@
 import json
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic_core import to_jsonable_python
@@ -62,7 +63,11 @@ class LangtraceAttributes:
         if prompts:
             span.add_event(
                 name="gen_ai.content.prompt",
-                attributes={SpanAttributes.LLM_PROMPTS.value: json.dumps(prompts, default=to_jsonable_python)},
+                attributes={
+                    SpanAttributes.LLM_PROMPTS.value: json.dumps(
+                        prompts, default=partial(to_jsonable_python, fallback=str)
+                    )
+                },
             )
 
         self.set_span_attributes(span, span_attributes)
