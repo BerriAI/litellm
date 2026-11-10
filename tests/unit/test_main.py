@@ -4471,8 +4471,12 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
 class _RecordedLoggedCall:
     hook: str
     response: object
-    logged_id: object
-    litellm_call_id: object
+    logged_id: str | None
+    litellm_call_id: str | None
+
+
+def _text_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _record_logged_call(hook: str, kwargs: dict[str, object], response_obj: object) -> _RecordedLoggedCall:
@@ -4480,8 +4484,8 @@ def _record_logged_call(hook: str, kwargs: dict[str, object], response_obj: obje
     return _RecordedLoggedCall(
         hook=hook,
         response=response_obj,
-        logged_id=logging_payload.get("id") if isinstance(logging_payload, dict) else None,
-        litellm_call_id=kwargs.get("litellm_call_id"),
+        logged_id=_text_or_none(logging_payload.get("id")) if isinstance(logging_payload, dict) else None,
+        litellm_call_id=_text_or_none(kwargs.get("litellm_call_id")),
     )
 
 
@@ -4501,6 +4505,25 @@ class _LoggedCallRecorder(CustomLogger):
         self.events.append(_record_logged_call("async", kwargs, response_obj))
 
 
+async def _logged_calls_of_next_request(
+    recorder: _LoggedCallRecorder, request: Awaitable[object]
+) -> tuple[_RecordedLoggedCall, ...]:
+    already_logged: Final = len(recorder.events)
+    await request
+    for _ in range(100):
+        if any(event.hook == "async" for event in recorder.events[already_logged:]):
+            await asyncio.sleep(0.2)
+            return tuple(recorder.events[already_logged:])
+        await asyncio.sleep(0.05)
+    pytest.fail(f"no async success event; got {recorder.events[already_logged:]}")
+
+
+def _assert_logged_once_as_speech(events: tuple[_RecordedLoggedCall, ...]) -> None:
+    assert [(event.hook, type(event.response)) for event in events] == [("async", HttpxBinaryResponseContent)]
+    assert isinstance(events[0].litellm_call_id, str)
+    assert events[0].logged_id == events[0].litellm_call_id
+
+
 @pytest.mark.asyncio
 async def test_aspeech_gemini_bridge_logs_only_the_speech_call_under_its_call_id(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
@@ -4514,19 +4537,40 @@ async def test_aspeech_gemini_bridge_logs_only_the_speech_call_under_its_call_id
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
     ).mock(return_value=httpx.Response(200, json={**_gemini_tts_generate_content_response(), "responseId": "gemini-id"}))
 
-    await litellm.aspeech(
-        model="gemini/gemini-2.5-flash-preview-tts", input="logged once", voice="Kore", api_key="fake-gemini-key"
+    events: Final = await _logged_calls_of_next_request(
+        recorder,
+        litellm.aspeech(
+            model="gemini/gemini-2.5-flash-preview-tts", input="logged once", voice="Kore", api_key="fake-gemini-key"
+        ),
     )
 
-    for _ in range(100):
-        if any(event.hook == "async" for event in recorder.events):
-            break
-        await asyncio.sleep(0.05)
-    await asyncio.sleep(0.2)
-    assert [(event.hook, type(event.response)) for event in recorder.events] == [
-        ("async", HttpxBinaryResponseContent)
-    ]
-    assert recorder.events[0].logged_id == recorder.events[0].litellm_call_id
+    _assert_logged_once_as_speech(events)
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_logs_a_cached_reply_only_as_the_speech_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    recorder: Final = _LoggedCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    mock_route: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json={**_gemini_tts_generate_content_response(), "responseId": "gemini-id"}))
+
+    def same_speech_request() -> Awaitable[object]:
+        return litellm.aspeech(
+            model="gemini/gemini-2.5-flash-preview-tts", input="logged once from the cache", voice="Kore", api_key="k"
+        )
+
+    await _logged_calls_of_next_request(recorder, same_speech_request())
+    cached_events: Final = await _logged_calls_of_next_request(recorder, same_speech_request())
+
+    assert mock_route.call_count == 1
+    _assert_logged_once_as_speech(cached_events)
 
 
 def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:

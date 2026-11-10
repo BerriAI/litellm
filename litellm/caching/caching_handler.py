@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 from pydantic import ConfigDict, SkipValidation, TypeAdapter, ValidationError
 
 import litellm
-from litellm._internal_context import post_response_phase
+from litellm._internal_context import is_internal_call, post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache, response_cache_phase
@@ -511,7 +511,9 @@ class LLMCachingHandler:
                         custom_llm_provider=custom_llm_provider,
                     )
 
-                    if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
+                    if not is_internal_call.get() and not _should_defer_streaming_cache_hit_callbacks(
+                        cached_result=cached_result
+                    ):
                         logging_obj.handle_sync_cache_hit_success_callbacks(
                             result=cached_result,
                             start_time=start_time,
