@@ -6,7 +6,7 @@ use litellm_host::{
     interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
     lifecycle::CallEvent,
 };
-use litellm_inference_messages::{MessagesCallResponse, route::Messages};
+use litellm_inference_messages::{MessagesBody, MessagesCallResponse, route::Messages};
 use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use litellm_llms::base_llm::messages::context::{
     MessagesModelCapabilities as AnthropicModelCapabilities, SupportedEffortTiers,
@@ -340,7 +340,10 @@ async fn response_mode_follows_the_intercepted_request(
                 }
                 MessagesCallResponse::Complete(message) => {
                     assert_eq!(expected_stream, Some(false));
-                    assert_eq!(*message, serde_json::from_value(message_body()).unwrap());
+                    assert_eq!(
+                        message,
+                        MessagesBody::Message(serde_json::from_value(message_body()).unwrap())
+                    );
                 }
             }
             Ok::<_, Error>(())

@@ -285,6 +285,23 @@ async def test_pre_call_deployment_rejection_logs_failure_without_provider_io(se
 
 
 @pytest.mark.asyncio
+async def test_non_string_header_is_a_bad_request_refused_before_the_provider_call(server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [recorder]):
+        with pytest.raises(
+            litellm.BadRequestError, match=r"invalid extra_headers: header x-org must be a string, got int"
+        ) as raised:
+            await call(server, extra_headers={"x-org": 12345})
+        failures: Final = await recorder.wait_for_async("async_log_failure_event")
+
+    assert raised.value.status_code == 400
+    assert not server.requests
+    assert "log_pre_api_call" not in recorder.names
+    assert _OBJECT.validate_python(failures[0].kwargs)["exception"] is raised.value
+
+
+@pytest.mark.asyncio
 async def test_pre_call_deployment_hook_can_delete_keywords(server: RecordingServer) -> None:
     class DropKeywords(CustomLogger):
         async def async_pre_call_deployment_hook(
