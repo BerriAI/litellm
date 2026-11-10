@@ -1872,6 +1872,19 @@ async def test_a_denied_toolset_beside_a_granted_one_adds_nothing_to_the_scoped_
 
 
 @pytest.mark.asyncio
+async def test_a_server_the_key_does_not_hold_named_beside_a_granted_toolset_adds_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    listed: Final = await _tools_listed_through_the_gateway(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        ("litellm_proxy/mcp/team-toolset", "litellm_proxy/mcp/docs"),
+        _team_grants("ts-granted"),
+    )
+    assert listed == ["calc-add"]
+
+
+@pytest.mark.asyncio
 async def test_a_whole_gateway_entry_beside_an_ungranted_toolset_still_lists_the_keys_own_servers(
     monkeypatch: pytest.MonkeyPatch,
 ):

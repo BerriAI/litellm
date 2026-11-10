@@ -78,6 +78,25 @@ def test_aiand_completion_request(respx_mock: respx.MockRouter):
     assert request_body["messages"] == messages
 
 
+def test_aiand_completion_does_not_send_the_openai_key(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("AIAND_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setattr(litellm, "openai_key", "openai-global-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    route: Final = respx_mock.post(f"{AIAND_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json={})
+    )
+
+    with pytest.raises(litellm.AuthenticationError, match="AIAND_API_KEY"):
+        litellm.completion(
+            model="aiand/openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": "Hello"}],
+            num_retries=0,
+        )
+
+    assert not route.called
+
+
 def test_aiand_responses_provider():
     config = ProviderConfigManager.get_provider_responses_api_config(
         provider="aiand",

@@ -1127,6 +1127,15 @@ async def get_file_content(
                 user_api_key_dict=user_api_key_dict,
                 check_file_id_encoding=True,
             )
+            if (
+                original_file_id is not None
+                and is_managed_cloud_storage_uri(original_file_id)
+                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Raw cloud storage file ids can only be retrieved by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
+                )
 
             if not should_route:
                 apply_team_provider_credentials(
@@ -1557,6 +1566,15 @@ async def delete_file(
             user_api_key_dict=user_api_key_dict,
             check_file_id_encoding=True,
         )
+        if (
+            original_file_id is not None
+            and is_managed_cloud_storage_uri(original_file_id)
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Raw cloud storage file ids can only be deleted by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
+            )
 
         if should_route and credentials is not None:
             # Use model-based routing with credentials from config

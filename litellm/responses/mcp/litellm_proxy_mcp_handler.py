@@ -268,6 +268,22 @@ class LiteLLM_Proxy_MCP_Handler:
         return ("denied_toolset", name)
 
     @staticmethod
+    async def _servers_granted_to_key(
+        server_names: Sequence[str], user_api_key_auth: "UserAPIKeyAuth"
+    ) -> tuple[str, ...]:
+        from litellm.proxy.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        allowed_ids: Final = frozenset(await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth))
+        return tuple(
+            name
+            for name in server_names
+            if (server := global_mcp_server_manager.get_mcp_server_by_name(name)) is not None
+            and server.server_id in allowed_ids
+        )
+
+    @staticmethod
     async def _holds_access_group_named(name: str, user_api_key_auth: "UserAPIKeyAuth | None") -> bool:
         from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
@@ -332,8 +348,13 @@ class LiteLLM_Proxy_MCP_Handler:
                 for name in mcp_servers
             ]
         )
-        resolved_mcp_servers: Final = tuple(value for kind, value in resolutions if kind == "server")
+        named_mcp_servers: Final = tuple(value for kind, value in resolutions if kind == "server")
         resolved_toolset_ids: Final = tuple(value for kind, value in resolutions if kind == "toolset")
+        resolved_mcp_servers: Final = (
+            await LiteLLM_Proxy_MCP_Handler._servers_granted_to_key(named_mcp_servers, user_api_key_auth)
+            if resolved_toolset_ids and user_api_key_auth is not None
+            else named_mcp_servers
+        )
         denied_toolset_names: Final = tuple(value for kind, value in resolutions if kind == "denied_toolset")
 
         # Apply all resolved toolsets at once (union), avoiding permission overwrite.

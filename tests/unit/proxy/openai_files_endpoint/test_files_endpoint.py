@@ -5642,6 +5642,57 @@ def test_delete_file_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
     afile_delete.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("method", "path_suffix", "sdk_call"),
+    (("get", "/content", "afile_content"), ("delete", "", "afile_delete")),
+)
+@pytest.mark.parametrize(
+    ("raw_file_id", "model_name"),
+    ((RAW_S3_FILE_ID, "bedrock-claude"), (RAW_GCS_FILE_ID, "vertex-gemini")),
+)
+def test_model_encoded_raw_cloud_id_answers_403_for_a_non_admin_key(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    path_suffix: str,
+    sdk_call: str,
+    raw_file_id: str,
+    model_name: str,
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    cloud_router: Final = _cloud_files_router()
+    proxy_logging_obj: Final = setup_proxy_logging_object(monkeypatch, cloud_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", cloud_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    provider_call: Final = mocker.AsyncMock()
+    monkeypatch.setattr(litellm, sdk_call, provider_call)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        models=["bedrock-claude", "vertex-gemini"],
+    )
+    encoded_file_id: Final = encode_file_id_with_model(raw_file_id, model_name)
+
+    try:
+        response: Final = client.request(
+            method.upper(),
+            f"/v1/files/{encoded_file_id}{path_suffix}",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 403, response.text
+    assert "proxy admin" in response.json()["error"]["message"]
+    provider_call.assert_not_called()
+
+
 def test_delete_file_forwards_a_raw_cloud_id_from_a_proxy_admin_key(mocker: MockerFixture, monkeypatch):
     from urllib.parse import quote
 
