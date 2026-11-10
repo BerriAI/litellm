@@ -4838,6 +4838,38 @@ def test_speech_gemini_tts_without_a_timeout_waits_as_long_as_the_same_chat_comp
     assert speech_call.request.extensions["timeout"] == chat_call.request.extensions["timeout"]
 
 
+@pytest.mark.parametrize(
+    ("first_controls", "second_controls", "expected_upstream_calls"),
+    [
+        ({}, {}, 1),
+        ({}, {"cache": {"no-cache": True}}, 2),
+        ({"cache": {"no-store": True}}, {}, 2),
+    ],
+)
+def test_speech_gemini_tts_honors_the_request_cache_controls(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    first_controls: Mapping[str, Mapping[str, bool]],
+    second_controls: Mapping[str, Mapping[str, bool]],
+    expected_upstream_calls: int,
+):
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+    speech_kwargs: Final = {
+        "model": f"gemini/{GEMINI_TTS_MODEL}",
+        "input": "hello",
+        "voice": "Kore",
+        "api_key": "fake-gemini-key",
+    }
+
+    litellm.speech(**speech_kwargs, **first_controls)
+    litellm.speech(**speech_kwargs, **second_controls)
+
+    assert route.call_count == expected_upstream_calls
+
+
 FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"
 
 
