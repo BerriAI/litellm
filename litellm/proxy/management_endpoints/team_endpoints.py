@@ -133,7 +133,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
 )
 from litellm.proxy.common_utils.callback_config_validation import (
     raise_on_logging_metadata_env_reference,
-    raise_on_stored_team_metadata_env_reference,
+    raise_on_team_metadata_env_reference,
 )
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
@@ -2603,8 +2603,7 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
-        _requested_team_metadata: Final[object] = getattr(data, "metadata", None)
-        raise_on_logging_metadata_env_reference(_requested_team_metadata)
+        raise_on_team_metadata_env_reference(data.team_id, getattr(data, "metadata", None), _existing_team_metadata)
 
         check_passthrough_routes_caller_permission(
             data,
@@ -2978,9 +2977,7 @@ async def patch_team(
                     detail={"error": f"Team not found, passed team_id={team_id}"},
                 )
             existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-            merged_metadata: Final = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
-            raise_on_stored_team_metadata_env_reference(team_id, patch_fields["metadata"], merged_metadata)
-            patch_fields["metadata"] = merged_metadata
+            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, patch_fields["metadata"])
 
         update_request: Final = UpdateTeamRequest.model_validate({"team_id": team_id, **patch_fields})
 
