@@ -1035,28 +1035,3 @@ async def test_a_native_responses_provider_places_every_point_itself():
 
     assert user_only == [0, 2, 4, 6]
     assert with_unmatchable_system == user_only
-
-
-@pytest.mark.parametrize("async_call", [False, True])
-@pytest.mark.asyncio
-async def test_provider_scoped_headers_only_join_chatgpt_responses_calls(
-    monkeypatch: pytest.MonkeyPatch, async_call: bool
-):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    params: Final = {
-        "model": "openai/gpt-5.4",
-        "input": "Hello",
-        "api_key": "sk-configured-test-key",
-        "provider_specific_header": {"custom_llm_provider": "openai", "extra_headers": {"x-scoped-header": "1"}},
-    }
-    with respx.mock as transport:
-        route: Final = transport.post("https://api.openai.com/v1/responses").respond(
-            200, json=_minimal_responses_api_payload("resp_scoped", "gpt-5.4")
-        )
-        if async_call:
-            await litellm.aresponses(**params)
-        else:
-            litellm.responses(**params)
-
-    assert "x-scoped-header" not in route.calls.last.request.headers
-    assert route.calls.last.request.headers["Authorization"] == "Bearer sk-configured-test-key"

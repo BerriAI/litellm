@@ -61,7 +61,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders, all_litellm_params
+from litellm.types.utils import all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -1303,14 +1303,10 @@ def responses(
         )
 
         litellm_params: Final = GenericLiteLLMParams(extra_headers=extra_headers, **kwargs)
-        provider_headers: Final = (
-            ResponsesAPIRequestUtils.merge_provider_specific_headers(
-                extra_headers=extra_headers,
-                provider_specific_header=getattr(litellm_params, "provider_specific_header", None),
-                custom_llm_provider=custom_llm_provider,
-            )
-            if custom_llm_provider == LlmProviders.CHATGPT.value
-            else extra_headers
+        provider_headers: Final = ResponsesAPIRequestUtils.merge_provider_specific_headers(
+            extra_headers=extra_headers,
+            provider_specific_header=getattr(litellm_params, "provider_specific_header", None),
+            custom_llm_provider=custom_llm_provider,
         )
         local_vars["extra_headers"] = provider_headers
         try:

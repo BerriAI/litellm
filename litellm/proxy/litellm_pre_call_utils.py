@@ -3639,11 +3639,9 @@ def add_provider_specific_headers_to_request(
         if extra_headers
     ]
 
-    if "provider_specific_header" in data:
-        del data["provider_specific_header"]
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers)
+    return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

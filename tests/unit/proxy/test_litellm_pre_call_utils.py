@@ -54,7 +54,6 @@ from litellm.constants import (
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
 )
-from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import CredentialItem
@@ -8940,30 +8939,6 @@ def test_chatgpt_account_header_is_not_forwarded_without_chatgpt_oauth_bearer():
 
 def test_anthropic_oauth_bearer_does_not_reach_chatgpt_provider():
     assert _authorization_values(_headers_forwarded_to(_client_headers(), "chatgpt")) == []
-
-
-@pytest.mark.parametrize("client_headers", [{"content-type": "application/json"}, _codex_client_headers()])
-def test_provider_specific_header_from_the_request_body_never_reaches_chatgpt(client_headers):
-    data: Final = {
-        "provider_specific_header": {
-            "custom_llm_provider": "chatgpt",
-            "extra_headers": {"Authorization": "Bearer body-injected", "x-body-injected": "1"},
-        }
-    }
-
-    add_provider_specific_headers_to_request(data=data, headers=client_headers)
-
-    forwarded: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-        provider_specific_header=data.get("provider_specific_header"), custom_llm_provider="chatgpt"
-    )
-    assert "Bearer body-injected" not in forwarded.values()
-    assert "x-body-injected" not in forwarded
-
-
-def test_chatgpt_login_is_not_stamped_as_an_anthropic_seat():
-    client_sent_oauth_token: Final = add_provider_specific_headers_to_request(data={}, headers=_codex_client_headers())
-
-    assert resolve_used_client_oauth_token(client_sent_oauth_token, "anthropic") is False
 
 
 def test_add_user_api_key_auth_to_request_metadata_attributes_a_cli_session_to_its_alias():

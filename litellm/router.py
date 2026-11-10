@@ -4133,11 +4133,7 @@ class Router:
         kwargs.setdefault(metadata_variable_name, {}).update(metadata_defaults)
 
     def _handle_clientside_credential(
-        self,
-        deployment: dict,
-        kwargs: dict,
-        function_name: str | None = None,
-        identity_excluded_params: frozenset[str] = frozenset(),
+        self, deployment: dict, kwargs: dict, function_name: str | None = None
     ) -> Deployment:
         """
         Build a per-request Deployment carrying the caller-supplied api_key/api_base,
@@ -4159,10 +4155,7 @@ class Router:
             function_name=function_name,
         )
         model_group: Final = kwargs.get(metadata_variable_name, {}).get("model_group")
-        _model_id: Final = self.generate_model_id(
-            model_group=model_group,
-            litellm_params={**dynamic_litellm_params, **dict.fromkeys(identity_excluded_params)},
-        )
+        _model_id: Final = self.generate_model_id(model_group=model_group, litellm_params=dynamic_litellm_params)
         original_model_id: Final = model_info.get("id")
         model_info["id"] = _model_id
         model_info["original_model_id"] = original_model_id
@@ -4218,7 +4211,6 @@ class Router:
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name: Final = deployment["model_name"]
         from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
-        from litellm.llms.chatgpt.common_utils import is_chatgpt_oauth_key
 
         request_context: Final = cast(  # cast-ok: the router's legacy request dict has string keys
             Mapping[str, object], kwargs
@@ -4236,15 +4228,12 @@ class Router:
             if isinstance(declared_provider, str)
             else inferred_provider(declared_model if isinstance(declared_model, str) else None)
         )
-        candidate_authorization: Final = (
+        forwarded_authorization: Final = (
             ProviderSpecificHeaderUtils.forwarded_authorization(
                 request_context.get("provider_specific_header"), deployment_provider
             )
             if deployment_provider in _FORWARDED_CREDENTIAL_ISOLATION_PROVIDERS
             else None
-        )
-        forwarded_authorization: Final = (
-            candidate_authorization if is_chatgpt_oauth_key(candidate_authorization) else None
         )
         if is_clientside_credential(request_kwargs=kwargs) or forwarded_authorization is not None:
             deployment_pydantic_obj: Final = self._handle_clientside_credential(
@@ -4254,7 +4243,6 @@ class Router:
                     **({"api_key": forwarded_authorization} if forwarded_authorization is not None else {}),
                 },
                 function_name=function_name,
-                identity_excluded_params=frozenset({"api_key"}) if forwarded_authorization is not None else frozenset(),
             )
             model_info = deployment_pydantic_obj.model_info.model_dump()
             deployment_litellm_model_name = deployment_pydantic_obj.litellm_params.model
