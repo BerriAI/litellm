@@ -2591,23 +2591,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             await self._scan_document_texts(attachments.document_texts, request_data=data, event_type=event_type)
         if not images:
             return
-        bedrock_request_data: Final = {
-            "source": "INPUT",
-            **_allowed_dynamic_body_params(
-                self.get_guardrail_dynamic_request_body_params(request_data=data)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # the base helper returns an untyped dict
-            ),
-        }
-        api_key: Final = data.get("api_key")
         try:
             for start in range(0, len(images), _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES):
-                await self._apply_guardrail_to_content(
-                    content=images[start : start + _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES],
-                    bedrock_request_data=bedrock_request_data,
-                    api_key=api_key if isinstance(api_key, str) else None,
+                await self.async_scan_images(
+                    images[start : start + _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES],
                     request_data=data,
+                    source="INPUT",
                     event_type=event_type,
-                    start_time=datetime.now(timezone.utc),
-                    allow_chunking=False,
                 )
         except (HTTPException, ModifyResponseException):
             raise
@@ -2616,6 +2606,29 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 raise
             verbose_proxy_logger.error("Bedrock Guardrail: Failed to scan attachments: %s", str(e))
             raise Exception(f"Bedrock guardrail failed: {e}") from e  # noqa: TRY002  # same error the text scan raises
+
+    async def async_scan_images(
+        self,
+        images: Sequence[BedrockContentItem],
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
+        source: Literal["INPUT", "OUTPUT"],
+        event_type: GuardrailEventHooks,
+    ) -> BedrockGuardrailResponse:
+        api_key: Final = request_data.get("api_key")
+        return await self._apply_guardrail_to_content(
+            content=images,
+            bedrock_request_data={
+                "source": source,
+                **_allowed_dynamic_body_params(
+                    self.get_guardrail_dynamic_request_body_params(request_data=request_data)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # the base helper returns an untyped dict
+                ),
+            },
+            api_key=api_key if isinstance(api_key, str) else None,
+            request_data=request_data,
+            event_type=event_type,
+            start_time=datetime.now(timezone.utc),
+            allow_chunking=False,
+        )
 
     async def _scan_document_texts(
         self,

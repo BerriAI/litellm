@@ -9,7 +9,7 @@ import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType, UnionType
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, Union, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -30,6 +30,7 @@ from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PRE
 from litellm.proxy.common_utils.openai_error_payload import status_typed_proxy_exception
 from litellm.proxy.common_utils.path_utils import is_within, safe_join
 from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
+from litellm.proxy.guardrails.endpoint_image_scan import scan_images
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
     ExecutionTimeoutError,
     await_with_timeout,
@@ -86,6 +87,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.hide_secrets import (
     HideSecretsGuardrailConfigModel,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from types import CodeType
@@ -2406,6 +2408,23 @@ async def _guardrail_response_after_success_hook(
     return response
 
 
+async def _run_guardrail(
+    active_guardrail: CustomGuardrail,
+    request: ApplyGuardrailRequest,
+    request_data: dict[str, object],  # mutable-ok: the guardrail records its verdict on the request dict
+    input_type: Literal["request", "response"],
+) -> GenericGuardrailAPIInputs:
+    if request.images:
+        await scan_images(active_guardrail, request.images, request_data, input_type)
+        if not request.text and not request.messages:
+            return {"texts": []}
+    return await active_guardrail.apply_guardrail(
+        inputs={"texts": [request.text]},
+        request_data=request_data,
+        input_type=input_type,
+    )
+
+
 def _record_verdict_for_logging(
     request_data: dict[str, object],  # mutable-ok: the logging bridge takes the request dict itself
     data: dict[str, object],  # mutable-ok: the logged request receives the guardrail's verdict
@@ -2527,11 +2546,7 @@ async def apply_guardrail(
         request_data: Final = dict(response_handler.prepare_request_data(request))
         input_type: Final = response_handler.resolve_input_type(request, active_guardrail)
         try:
-            guardrailed_inputs: Final = await active_guardrail.apply_guardrail(
-                inputs={"texts": [request.text]},
-                request_data=request_data,
-                input_type=input_type,
-            )
+            guardrailed_inputs: Final = await _run_guardrail(active_guardrail, request, request_data, input_type)
         finally:
             _record_verdict_for_logging(request_data, data, litellm_logging_obj)
         response: Final = response_handler.build_response(request, guardrailed_inputs, request_data)

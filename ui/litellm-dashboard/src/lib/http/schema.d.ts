@@ -27203,6 +27203,11 @@ export interface components {
             /** Guardrail Name */
             guardrail_name: string;
             /**
+             * Images
+             * @description One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.
+             */
+            images?: string[] | null;
+            /**
              * Input Type
              * @default request
              */
@@ -27219,7 +27224,10 @@ export interface components {
             } | null;
             /** @default standard */
             response_format: components["schemas"]["GuardrailResponseFormat"];
-            /** Text */
+            /**
+             * Text
+             * @default
+             */
             text: string;
         };
         /** ApplyGuardrailResponse */

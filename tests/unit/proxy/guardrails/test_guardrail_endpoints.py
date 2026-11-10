@@ -3929,7 +3929,12 @@ async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_wo
 
 
 _GUARDRAIL_RECORDS: Final = "standard_logging_guardrail_information"
+_PNG_BASE64: Final = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+_PNG: Final = f"data:image/png;base64,{_PNG_BASE64}"
 _BEDROCK_TEXT_ALLOWED: Final = {"action": "NONE", "outputs": [], "assessments": []}
+_BEDROCK_IMAGE_ALLOWED: Final = {**_BEDROCK_TEXT_ALLOWED, "guardrailCoverage": {"images": {"guarded": 1, "total": 1}}}
 _BEDROCK_BLOCKED: Final = {
     "action": "GUARDRAIL_INTERVENED",
     "outputs": [{"text": "blocked"}],
@@ -4023,6 +4028,10 @@ def _logged_verdicts(call: _BedrockGuardrailCall) -> list[tuple[object, object]]
     return [(record["guardrail_name"], record["guardrail_status"]) for record in call.logged["guardrail_information"]]
 
 
+def _scanned_content(call: _BedrockGuardrailCall) -> list[list[str]]:
+    return [[next(iter(item)) for item in payload["content"]] for payload in call.bedrock_payloads]
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_logs_a_blocked_request_with_the_guardrail_verdict(mocker: MockerFixture) -> None:
     call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_BLOCKED,), {"text": "hello"})
@@ -4053,3 +4062,115 @@ async def test_apply_guardrail_never_logs_a_verdict_the_caller_supplied(mocker: 
     )
 
     assert _logged_verdicts(call) == [("bedrock-guard", "success")]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_an_image_sent_without_text(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_IMAGE_ALLOWED,), {"images": [_PNG]})
+
+    assert call.response.status_code == 200
+    assert call.response.json() == {"response_text": ""}
+    assert _scanned_content(call) == [["image"]]
+    assert _logged_verdicts(call) == [("bedrock-guard", "success")]
+    assert _PNG_BASE64 not in json.dumps(call.logged, default=str)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_an_image_and_its_text_separately(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED, _BEDROCK_TEXT_ALLOWED), {"text": "hello", "images": [_PNG]}
+    )
+
+    assert call.response.json() == {"response_text": "hello"}
+    assert _scanned_content(call) == [["image"], ["text"]]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_stops_at_a_blocked_image(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_BLOCKED, _BEDROCK_TEXT_ALLOWED), {"text": "hello", "images": [_PNG]}
+    )
+
+    assert call.response.status_code == 400
+    assert _scanned_content(call) == [["image"]]
+    assert _logged_verdicts(call) == [("bedrock-guard", "guardrail_intervened")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"text": "hello", "images": [_PNG, _PNG]},
+        {},
+        {"text": "hello", "images": [f"data:image/webp;base64,{_PNG_BASE64}"]},
+    ],
+    ids=["two-images", "neither-text-nor-image", "unreadable-image"],
+)
+async def test_apply_guardrail_rejects_a_request_it_cannot_judge_without_calling_the_guardrail(
+    mocker: MockerFixture, body: Mapping[str, object]
+) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_IMAGE_ALLOWED,), body)
+
+    assert call.response.status_code == 422
+    assert call.bedrock_payloads == ()
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_native_response_returns_the_image_findings(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED,), {"images": [_PNG], "response_format": "native"}
+    )
+
+    assert call.response.status_code == 200
+    assert call.response.json() == _BEDROCK_IMAGE_ALLOWED
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_a_response_image_as_model_output(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED,), {"images": [_PNG], "input_type": "response"}
+    )
+
+    assert call.response.status_code == 200
+    assert [payload["source"] for payload in call.bedrock_payloads] == ["OUTPUT"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_text_sent_with_an_allowed_image(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (_BEDROCK_IMAGE_ALLOWED, _BEDROCK_BLOCKED), {"text": "hello", "images": [_PNG]}
+    )
+
+    assert call.response.status_code == 400
+    assert _logged_verdicts(call) == [("bedrock-guard", "success"), ("bedrock-guard", "guardrail_intervened")]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_still_scans_message_text_sent_with_an_image(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker,
+        (_BEDROCK_IMAGE_ALLOWED, _BEDROCK_BLOCKED),
+        {"images": [_PNG], "messages": [{"role": "user", "content": "hello"}]},
+        guardrail=lambda handler: _bedrock_guard(handler, latest_user_message_only=True),
+    )
+
+    assert call.response.status_code == 400
+    assert _scanned_content(call) == [["image"], ["text"]]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_refuses_an_image_for_a_guardrail_that_cannot_scan_it(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(
+        mocker, (), {"text": "hello", "images": [_PNG]}, guardrail=lambda handler: _NativeFindingGuardrail(({"ok": 1},))
+    )
+
+    assert call.response.status_code == 422
+    assert call.logged.get("guardrail_information") in (None, [])
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_still_accepts_an_explicitly_empty_text(mocker: MockerFixture) -> None:
+    call: Final = await _apply_bedrock_guardrail_over_http(mocker, (_BEDROCK_TEXT_ALLOWED,), {"text": ""})
+
+    assert call.response.status_code == 200
+    assert call.response.json() == {"response_text": ""}
