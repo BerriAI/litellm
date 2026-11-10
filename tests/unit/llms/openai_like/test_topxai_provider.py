@@ -190,11 +190,11 @@ class TestTopxAIProviderConfig:
 
 
 class TestTopxAIModelMetadata:
-    # Catalog and capabilities: https://ai.topxea.com/api/pricing (verified 2026-11-08)
+    # Catalog and capabilities: https://ai.topxea.com/api/pricing (verified 2026-11-10)
     TOPXAI_MODELS: Final = (
         "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
-        "topxai/claude-fable-5-1",
+        "topxai/claude-fable-5-2",
         "topxai/gpt-6.1-sol",
         "topxai/gpt-6.1-terra",
         "topxai/gpt-6-astra",
@@ -211,7 +211,7 @@ class TestTopxAIModelMetadata:
     CACHE_WRITE_MODELS: Final = (
         "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
-        "topxai/claude-fable-5-1",
+        "topxai/claude-fable-5-2",
         "topxai/gpt-6.1-sol",
         "topxai/gpt-6.1-terra",
         "topxai/gpt-6-astra",
