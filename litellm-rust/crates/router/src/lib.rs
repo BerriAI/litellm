@@ -4,7 +4,8 @@ use std::collections::HashMap;
 
 use litellm_config::{Config, Spelled};
 use litellm_core_utils::{serde_compat::parse_pydantic_bool, settings::Lookup};
-use litellm_inference_messages::{MessagesSettings, MessagesShaping, anthropic_model_capabilities};
+use litellm_inference_messages::{MessagesSettings, MessagesShaping};
+use litellm_llms::anthropic::model_capabilities::anthropic_model_capabilities;
 use litellm_model_catalog::Catalog;
 
 pub use deployment::Deployment;
@@ -54,6 +55,11 @@ impl Router {
                                 catalog,
                                 &model.litellm_params.model,
                                 model.litellm_params.custom_llm_provider.as_deref(),
+                                model
+                                    .litellm_params
+                                    .extra
+                                    .get("base_model")
+                                    .and_then(|value| value.as_str()),
                             ),
                         },
                         ..Deployment::default()

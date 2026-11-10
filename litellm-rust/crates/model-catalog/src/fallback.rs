@@ -68,10 +68,7 @@ impl CapabilityRule {
             None => Vec::new(),
         };
         Some(Self {
-            pattern: RegexBuilder::new(&rule.pattern)
-                .case_insensitive(true)
-                .build()
-                .ok()?,
+            pattern: pattern(rule).ok()?,
             model_info: model_info.clone(),
             fill_missing_for_providers,
         })
@@ -88,9 +85,37 @@ impl CapabilityRule {
     }
 }
 
+fn pattern(rule: &FallbackRule) -> Result<Regex, fancy_regex::Error> {
+    RegexBuilder::new(&rule.pattern)
+        .case_insensitive(true)
+        .build()
+}
+
 fn merged<'a>(rules: impl IntoIterator<Item = &'a CapabilityRule>) -> Fields {
     rules
         .into_iter()
         .flat_map(|rule| rule.model_info.clone())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::pattern;
+    use crate::{BUNDLED_REGISTRY, Catalog};
+
+    #[rstest]
+    fn every_bundled_fallback_pattern_compiles() {
+        let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
+        let broken: Vec<&str> = catalog
+            .fallback_rules()
+            .unwrap_or_default()
+            .iter()
+            .filter(|rule| pattern(rule).is_err())
+            .map(|rule| rule.name.as_str())
+            .collect();
+
+        assert_eq!(broken, Vec::<&str>::new());
+    }
 }

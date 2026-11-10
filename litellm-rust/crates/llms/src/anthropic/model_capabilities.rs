@@ -1,10 +1,12 @@
 use std::sync::LazyLock;
 
+use crate::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
+use crate::bedrock::common_utils::{
+    bedrock_base_model, is_bedrock_application_inference_profile_arn, without_routing_prefixes,
+};
 use fancy_regex::Regex;
 use litellm_auth_aws::is_bedrock_region;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
-use litellm_llms::bedrock::common_utils::{bedrock_base_model, without_routing_prefixes};
 use litellm_model_catalog::{Catalog, wire::Fields};
 
 const SAMPLING_RESTRICTED_NAMES: [&str; 9] = [
@@ -35,11 +37,20 @@ pub fn anthropic_model_capabilities(
     catalog: &Catalog,
     model: &str,
     custom_llm_provider: Option<&str>,
+    base_model: Option<&str>,
 ) -> MessagesModelCapabilities {
-    let (name, provider) = get_custom_llm_provider(model, custom_llm_provider)
+    let (resolved, provider) = get_custom_llm_provider(model, custom_llm_provider)
         .map_or((model, "anthropic"), |resolved| {
             (resolved.model, resolved.custom_llm_provider)
         });
+    let (model, name) = match base_model.map(without_routing_prefixes) {
+        Some(base)
+            if is_bedrock(provider) && is_bedrock_application_inference_profile_arn(resolved) =>
+        {
+            (base, base)
+        }
+        _ => (model, resolved),
+    };
     let probe = Probe {
         catalog,
         fallbacks: backstop_candidates(model),
@@ -302,7 +313,7 @@ mod tests {
         #[case] custom_llm_provider: Option<&str>,
         #[case] expected: (bool, bool, bool, bool),
     ) {
-        let capabilities = anthropic_model_capabilities(&catalog, model, custom_llm_provider);
+        let capabilities = anthropic_model_capabilities(&catalog, model, custom_llm_provider, None);
 
         assert_eq!(
             (
@@ -325,20 +336,44 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(
-            anthropic_model_capabilities(&catalog, model, None).thinking_on_by_default,
+            anthropic_model_capabilities(&catalog, model, None, None).thinking_on_by_default,
             expected
         );
     }
 
     #[rstest]
     fn effort_tiers_follow_the_row(catalog: Catalog) {
-        let tiers =
-            anthropic_model_capabilities(&catalog, "anthropic/claude-test-5", None).effort_tiers;
+        let tiers = anthropic_model_capabilities(&catalog, "anthropic/claude-test-5", None, None)
+            .effort_tiers;
 
         assert_eq!((tiers.xhigh, tiers.low), (true, false));
     }
 
-    #[test]
+    const PROFILE_ARN: &str =
+        "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123";
+
+    #[rstest]
+    #[case::base_model_names_the_profile(PROFILE_ARN, Some("anthropic.claude-test-5-v1:0"), true)]
+    #[case::prefixed_base_model(PROFILE_ARN, Some("bedrock/anthropic.claude-test-5-v1:0"), true)]
+    #[case::profile_without_base_model(PROFILE_ARN, None, false)]
+    #[case::named_model_keeps_its_own_row(
+        "bedrock/anthropic.claude-test-5-v1:0",
+        Some("anthropic.claude-slow-5"),
+        true
+    )]
+    fn application_inference_profile_reads_its_base_model(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] base_model: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            anthropic_model_capabilities(&catalog, model, None, base_model).supports_reasoning,
+            expected
+        );
+    }
+
+    #[rstest]
     fn every_bundled_anthropic_row_shapes_with_its_own_flags() {
         let catalog = Catalog::parse(BUNDLED_REGISTRY).unwrap().value;
         let mismatches: Vec<String> = catalog
@@ -348,8 +383,12 @@ mod tests {
                     && fields.get("litellm_provider").and_then(Value::as_str) == Some("anthropic")
             })
             .flat_map(|(name, fields)| {
-                let capabilities =
-                    anthropic_model_capabilities(&catalog, &format!("anthropic/{name}"), None);
+                let capabilities = anthropic_model_capabilities(
+                    &catalog,
+                    &format!("anthropic/{name}"),
+                    None,
+                    None,
+                );
                 [
                     ("supports_reasoning", capabilities.supports_reasoning),
                     (
@@ -365,6 +404,31 @@ mod tests {
                         capabilities.supports_sampling_params,
                     ),
                     ("supports_speed", capabilities.supports_speed),
+                    (
+                        "supports_legacy_thinking",
+                        capabilities.supports_legacy_thinking,
+                    ),
+                    ("thinking_always_on", capabilities.thinking_always_on),
+                    (
+                        "thinking_on_by_default",
+                        capabilities.thinking_on_by_default,
+                    ),
+                    (
+                        "supports_minimal_reasoning_effort",
+                        capabilities.effort_tiers.minimal,
+                    ),
+                    (
+                        "supports_low_reasoning_effort",
+                        capabilities.effort_tiers.low,
+                    ),
+                    (
+                        "supports_medium_reasoning_effort",
+                        capabilities.effort_tiers.medium,
+                    ),
+                    (
+                        "supports_high_reasoning_effort",
+                        capabilities.effort_tiers.high,
+                    ),
                     (
                         "supports_mid_conversation_system",
                         capabilities.supports_mid_conversation_system,

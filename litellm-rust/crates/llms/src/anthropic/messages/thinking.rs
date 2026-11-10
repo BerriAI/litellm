@@ -452,9 +452,12 @@ fn drop_incompatible_temperature_for_thinking(
         known_thinking(&request),
         Some(ThinkingConfig::Enabled(_) | ThinkingConfig::Adaptive(_))
     );
-    let effort_on_budget_model =
-        !context.capabilities.supports_adaptive_thinking && known_effort(&request).is_some();
-    if !pinned || !(thinking_on || effort_on_budget_model) {
+    let droppable = if context.capabilities.supports_adaptive_thinking {
+        context.drop_params && thinking_on
+    } else {
+        thinking_on || known_effort(&request).is_some()
+    };
+    if !pinned || !droppable {
         return request;
     }
     MessagesRequest {
@@ -507,6 +510,17 @@ mod tests {
         fields: Value,
     ) -> Result<MessagesRequest, Error> {
         translate_thinking(request(fields), &context(capabilities))
+    }
+
+    fn translate_dropping_params(
+        capabilities: MessagesModelCapabilities,
+        fields: Value,
+    ) -> Result<MessagesRequest, Error> {
+        let context = ThinkingContext {
+            drop_params: true,
+            ..context(capabilities)
+        };
+        translate_thinking(request(fields), &context)
     }
 
     fn overridden_budgets(overrides: &[(&str, &str)]) -> ThinkingBudgets {
@@ -1284,14 +1298,14 @@ mod tests {
             "output_config": {"effort": "high"}
         })
     )]
-    fn pinned_temperature_is_dropped_when_thinking_survives_on_adaptive_model(
+    fn pinned_temperature_is_dropped_under_drop_params_when_thinking_survives_on_adaptive_model(
         #[case] capabilities: MessagesModelCapabilities,
         #[case] input: Value,
         #[case] temperature: f64,
         #[case] expected: Value,
     ) {
         assert_eq!(
-            translate(capabilities, with_temperature(input, temperature)),
+            translate_dropping_params(capabilities, with_temperature(input, temperature)),
             Ok(request(expected))
         );
     }
@@ -1327,6 +1341,24 @@ mod tests {
         serde_json::json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}}),
         0.0,
         serde_json::json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}})
+    )]
+    #[case::claude_code_payload_on_adaptive_model_without_drop_params(
+        opus_4_7(),
+        claude_code_payload("medium", 8192),
+        0.0,
+        claude_code_payload("medium", 8192)
+    )]
+    #[case::adaptive_thinking_without_drop_params(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+    )]
+    #[case::legacy_thinking_on_adaptive_model_without_drop_params(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}}),
+        0.0,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     #[case::effort_without_thinking_on_adaptive_model(
         sonnet_4_6(),

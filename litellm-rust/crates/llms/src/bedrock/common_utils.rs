@@ -39,6 +39,10 @@ pub fn bedrock_base_model(model: &str) -> &str {
     }
 }
 
+pub fn is_bedrock_application_inference_profile_arn(model: &str) -> bool {
+    model.contains(":application-inference-profile/")
+}
+
 pub fn without_routing_prefixes(model: &str) -> &str {
     ROUTING_PREFIXES.into_iter().fold(model, |model, prefix| {
         model.strip_prefix(prefix).unwrap_or(model)
