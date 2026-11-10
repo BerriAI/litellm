@@ -17,6 +17,7 @@ import responses
 from pydantic import ValidationError
 
 import litellm
+from litellm.caching.caching import Cache
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import OPENAI_TO_GEMINI_TTS_VOICES
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
@@ -1724,6 +1725,28 @@ async def test_aspeech_vertex_ai_gemini_tts_routes_to_configured_api_base(
     assert gateway_route.call_count == 1
     assert gateway_route.calls.last.request.headers["authorization"] == "Bearer minted-google-token"
     assert _PCM_AUDIO in response.content
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_no_cache_request_reaches_vertex(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    vertex_route: Final = respx_mock.post(
+        url__regex=r"https://aiplatform\.googleapis\.com/.*/models/gemini-3\.8-flash-tts:generateContent$"
+    ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
+    speech_kwargs: Final = {
+        "model": "vertex_ai/gemini-3.8-flash-tts",
+        "input": "Say hello",
+        "voice": "Kore",
+        "vertex_credentials": _AUTHORIZED_USER,
+        "vertex_location": "global",
+    }
+
+    await litellm.aspeech(**speech_kwargs)
+    await litellm.aspeech(**speech_kwargs, cache={"no-cache": True})
+
+    assert vertex_route.call_count == 2
 
 
 @pytest.mark.asyncio

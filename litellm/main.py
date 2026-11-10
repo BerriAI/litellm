@@ -156,6 +156,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BaseUrlRoutingHint,
+    CacheControlsHint,
     CustomPricingLiteLLMParams,
     ModelResponseStream,
     ProviderRoutingHints,
@@ -4234,6 +4235,7 @@ _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
+_CACHE_CONTROLS_HINT: Final = TypeAdapter(CacheControlsHint)
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 
 
@@ -8939,6 +8941,7 @@ def speech(
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 timeout=timeout,
+                cache=_CACHE_CONTROLS_HINT.validate_python(kwargs).get("cache"),
             )
 
         # Vertex AI Text-to-Speech (Google Cloud TTS)
@@ -8992,6 +8995,7 @@ def speech(
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             timeout=timeout,
+            cache=_CACHE_CONTROLS_HINT.validate_python(kwargs).get("cache"),
         )
     elif custom_llm_provider == "runwayml":
         from litellm.llms.runwayml.text_to_speech.transformation import (

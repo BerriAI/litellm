@@ -5017,3 +5017,7 @@ class ProviderRoutingHints(TypedDict, total=False):
 
 class BaseUrlRoutingHint(TypedDict, total=False):
     base_url: ReadOnly[str | None]
+
+
+class CacheControlsHint(TypedDict, total=False):
+    cache: ReadOnly[Mapping[str, object] | None]
