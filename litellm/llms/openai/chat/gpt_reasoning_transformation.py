@@ -1,7 +1,7 @@
 """Support for OpenAI gpt-5 model family."""
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import ClassVar, Final
 
@@ -46,9 +46,11 @@ class DeferredReasoningDropWarnings:
     def warning(self, msg: str, /, *args: object) -> None:
         self.held = (*self.held, (msg, args))
 
-    def log_unless_effort_sent(self, sent_reasoning_effort: object) -> None:
-        match sent_reasoning_effort:
-            case str() | {"effort": str()}:
+    def log_unless_effort_sent(self, sent_params: Mapping[str, object]) -> None:
+        match sent_params:
+            case {"reasoning_effort": str() | {"effort": str()}} | {
+                "extra_body": {"reasoning_effort": str() | {"effort": str()}}
+            }:
                 return
             case _:
                 for msg, args in self.held:

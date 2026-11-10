@@ -6377,7 +6377,7 @@ def completion(
         )
         if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
-            reasoning_drop_warnings.log_unless_effort_sent(optional_params.get("reasoning_effort"))
+            reasoning_drop_warnings.log_unless_effort_sent(optional_params)
             return mock_completion(
                 model,
                 messages,
@@ -6438,7 +6438,7 @@ def completion(
                 drop_params=drop_unsupported_reasoning,
                 additional_drop_params=routing_kwargs.get("additional_drop_params"),
             )
-            reasoning_drop_warnings.log_unless_effort_sent(bridge_optional_params.get("reasoning_effort"))
+            reasoning_drop_warnings.log_unless_effort_sent(bridge_optional_params)
             return responses_api_bridge.completion(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 model=model,
                 messages=messages,
@@ -6458,7 +6458,7 @@ def completion(
                 cache=kwargs.get("cache"),
             )
 
-        reasoning_drop_warnings.log_unless_effort_sent(optional_params.get("reasoning_effort"))
+        reasoning_drop_warnings.log_unless_effort_sent(optional_params)
         if (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)

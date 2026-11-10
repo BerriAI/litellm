@@ -2377,6 +2377,25 @@ def azure_upstream_routes(
         pytest.param({"reasoning_effort": "none"}, None, id="chat"),
         pytest.param({"reasoning_effort": "none", "tools": [_FUNCTION_TOOL]}, None, id="bridged-without-summary"),
         pytest.param({"reasoning_effort": {"effort": "none", "summary": "auto"}}, None, id="dict-with-summary-on-chat"),
+        pytest.param(
+            {"reasoning_effort": "none", "extra_body": {"reasoning_effort": "none"}},
+            "none",
+            id="effort-in-extra-body",
+        ),
+        pytest.param(
+            {"reasoning_effort": "none", "tools": [_FUNCTION_TOOL], "extra_body": {"reasoning_effort": "none"}},
+            "none",
+            id="effort-in-extra-body-bridged",
+        ),
+        pytest.param(
+            {
+                "reasoning_effort": "none",
+                "tools": [_FUNCTION_TOOL],
+                "extra_body": {"reasoning_effort": {"effort": "none", "summary": "auto"}},
+            },
+            "none",
+            id="effort-dict-in-extra-body-bridged",
+        ),
     ],
 )
 def test_reasoning_effort_drop_warning_fires_only_when_the_provider_gets_no_effort(
@@ -2401,6 +2420,50 @@ def test_reasoning_effort_drop_warning_fires_only_when_the_provider_gets_no_effo
     assert sent_effort == expected_sent_effort
     assert len(drop_warnings) == (1 if sent_effort is None else 0)
 
+
+
+@pytest.mark.parametrize(
+    ("model", "api_base", "refused_effort", "model_info"),
+    [
+        pytest.param("openai/gpt-5.6-litellm-unlisted", "https://api.openai.com/v1", "xhigh", None, id="openai"),
+        pytest.param(
+            "azure_ai/gpt-5.6-litellm-unlisted",
+            "https://example.services.ai.azure.com/openai/v1",
+            "xhigh",
+            None,
+            id="azure_ai",
+        ),
+        pytest.param(
+            "chatgpt/gpt-5.5",
+            "https://chatgpt.example.com/backend-api/codex",
+            "minimal",
+            {"reasoning_effort_levels": ["minimal", "low", "medium", "high"]},
+            id="chatgpt-declared-level",
+        ),
+    ],
+)
+def test_reasoning_effort_drop_warning_stays_quiet_when_the_summary_alias_restores_the_effort(
+    model: str,
+    api_base: str,
+    refused_effort: str,
+    model_info: dict[str, object] | None,
+    azure_upstream_routes: AzureUpstreamRoutes,
+    caplog: pytest.LogCaptureFixture,
+):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            api_base=api_base,
+            api_key="fake-key",
+            drop_params=True,
+            reasoning_effort=refused_effort,
+            reasoningSummary="auto",
+            model_info=model_info,
+        )
+
+    assert azure_upstream_routes.sent_reasoning_effort() == refused_effort
+    assert not [r for r in caplog.records if "Dropping reasoning_effort" in r.getMessage()]
 
 def test_mock_response_keeps_the_reasoning_effort_drop_warning(
     local_model_cost_map: None, caplog: pytest.LogCaptureFixture
