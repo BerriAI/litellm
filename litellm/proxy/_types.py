@@ -713,6 +713,7 @@ class LiteLLMRoutes(enum.Enum):
             # model
             "/model/new",
             "/model/update",
+            "/model/{model_id}/update",
             "/model/delete",
             "/model/info",
             "/model/{model_id}/kubernetes_pods",
