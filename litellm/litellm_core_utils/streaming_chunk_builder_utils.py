@@ -775,6 +775,19 @@ class ChunkProcessor:
                 content = delta.get(delta_key, "")
                 if content is None:
                     continue  # openai v1.0.0 sets content = None for chunks
+                if delta_key == "reasoning_content" and isinstance(content, list):
+                    # Some providers stream structured reasoning blocks rather than text.
+                    # Extract only readable text; never include signatures in the output.
+                    for block in content:
+                        if isinstance(block, str):
+                            content_list.append(block)
+                        elif isinstance(block, dict):
+                            for key in ("thinking", "content", "text"):
+                                text = block.get(key)
+                                if isinstance(text, str):
+                                    content_list.append(text)
+                                    break
+                    continue
                 content_list.append(content)
 
         # Combine the "content" strings into a single string || combine the 'function' strings into a single string
