@@ -6420,7 +6420,11 @@ def _router_with_two_teams_sharing_a_public_model_name() -> Router:
             *(
                 {
                     "model_name": f"model_name_{team_id}_4f2a",
-                    "litellm_params": {"model": "openai/gpt-4o", "api_key": f"{team_id}-key"},
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": f"{team_id}-key",
+                        "drop_params": team_id == "team-a",
+                    },
                     "model_info": {"id": f"{team_id}-gpt-id", "team_id": team_id, "team_public_model_name": "team-gpt"},
                 }
                 for team_id in ("team-a", "team-b")
@@ -6471,30 +6475,13 @@ def test_require_managed_files_lists_the_callers_files_on_its_team_model_by_publ
 
 
 
-@pytest.mark.parametrize("team_id", ["team-a", "team-b"])
-@pytest.mark.parametrize(
-    ("litellm_fn", "send"),
-    [
-        (
-            "acreate_file",
-            lambda headers: client.post(
-                "/v1/files",
-                files={"file": ("notes.txt", b"hello", "text/plain")},
-                data={"purpose": "assistants"},
-                headers=headers,
-            ),
-        ),
-        ("afile_retrieve", lambda headers: client.get("/v1/files/file-raw", headers=headers)),
-    ],
-    ids=["upload", "retrieve"],
-)
-def test_a_team_model_public_name_routes_file_calls_with_the_caller_team_credentials(
+def _send_file_call_as_team_with_team_model_hint(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
     team_id: str,
     litellm_fn: str,
     send: Callable[[dict[str, str]], httpx.Response],
-) -> None:
+) -> AsyncMock:
     import litellm.proxy.proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -6525,7 +6512,48 @@ def test_a_team_model_public_name_routes_file_calls_with_the_caller_team_credent
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
     assert response.status_code == 200, response.text
+    return upstream
+
+
+def _upload_notes(headers: dict[str, str]) -> httpx.Response:
+    return client.post(
+        "/v1/files",
+        files={"file": ("notes.txt", b"hello", "text/plain")},
+        data={"purpose": "assistants"},
+        headers=headers,
+    )
+
+
+@pytest.mark.parametrize("team_id", ["team-a", "team-b"])
+@pytest.mark.parametrize(
+    ("litellm_fn", "send"),
+    [
+        ("acreate_file", _upload_notes),
+        ("afile_retrieve", lambda headers: client.get("/v1/files/file-raw", headers=headers)),
+    ],
+    ids=["upload", "retrieve"],
+)
+def test_a_team_model_public_name_routes_file_calls_with_the_caller_team_credentials(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    team_id: str,
+    litellm_fn: str,
+    send: Callable[[dict[str, str]], httpx.Response],
+) -> None:
+    upstream: Final = _send_file_call_as_team_with_team_model_hint(mocker, monkeypatch, team_id, litellm_fn, send)
+
     assert upstream.await_args.kwargs["api_key"] == f"{team_id}-key"
+
+
+@pytest.mark.parametrize("team_id", ["team-a", "team-b"])
+def test_a_team_model_upload_carries_the_caller_team_deployment_drop_params(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, team_id: str
+) -> None:
+    upstream: Final = _send_file_call_as_team_with_team_model_hint(
+        mocker, monkeypatch, team_id, "acreate_file", _upload_notes
+    )
+
+    assert upstream.await_args.kwargs["drop_params"] is (team_id == "team-a")
 
 
 def _router_with_wildcard_and_unprefixed_anthropic_deployments() -> Router:

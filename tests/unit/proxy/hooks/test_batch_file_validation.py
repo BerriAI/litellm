@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
@@ -2288,9 +2289,7 @@ async def test_disable_flag_still_skips_batch_processing_with_enqueued_limits():
     afile_content_mock.assert_not_awaited()
 
 
-def _team_a_vllm_router():
-    from litellm import Router
-
+def _team_a_vllm_router() -> Router:
     return Router(
         model_list=[
             {
@@ -2327,7 +2326,7 @@ def _model_encoded_file_id(model: str) -> str:
     [("team-a", "hosted_vllm", "http://team-a-vllm:8000/v1"), ("team-b", "openai", None)],
 )
 def test_resolve_fetch_params_reads_a_team_model_with_the_caller_team_credentials(
-    file_id, data, team_id, expected_provider, expected_api_base
+    file_id: str, data: dict[str, str], team_id: str, expected_provider: str, expected_api_base: str | None
 ):
     rate_limiter = _make_rate_limiter()
     with patch("litellm.proxy.proxy_server.llm_router", _team_a_vllm_router()):
@@ -2345,7 +2344,7 @@ def test_resolve_fetch_params_reads_a_team_model_with_the_caller_team_credential
 
 
 @pytest.mark.parametrize("team_id, should_skip", [("team-a", True), ("team-b", False)])
-def test_skip_listed_provider_of_a_team_model_is_skipped_only_for_its_team(team_id, should_skip):
+def test_skip_listed_provider_of_a_team_model_is_skipped_only_for_its_team(team_id: str, should_skip: bool):
     rate_limiter = _make_rate_limiter()
     rate_limiter.parallel_request_limiter.create_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 100}}

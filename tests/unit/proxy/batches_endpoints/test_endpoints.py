@@ -1720,6 +1720,34 @@ async def test_retrieve__model_encoded_id__stamps_deployment_model_info_for_cost
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("team_id", ["team-a", "team-b"])
+async def test_retrieve__team_model_encoded_id__prices_the_batch_by_the_caller_team_deployment(
+    retrieve_harness: RetrieveHarness, team_id: str
+) -> None:
+    team_router: Final = Router(
+        model_list=[
+            {
+                "model_name": f"model_name_{team}_4f2a",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": f"{team}-key"},
+                "model_info": {"id": f"{team}-gpt-id", "team_id": team, "team_public_model_name": "team-gpt"},
+            }
+            for team in ("team-a", "team-b")
+        ]
+    )
+
+    with patch.object(proxy_server, "llm_router", team_router):
+        await call_retrieve(
+            retrieve_harness,
+            encode_file_id_with_model("batch_orig123", "team-gpt", id_type="batch"),
+            user=UserAPIKeyAuth(api_key="sk-test", team_id=team_id),
+        )
+
+    forwarded: Final = retrieve_harness.aretrieve_kwargs()
+    assert forwarded["api_key"] == f"{team_id}-key"
+    assert forwarded["litellm_metadata"]["model_info"]["id"] == f"{team_id}-gpt-id"
+
+
+@pytest.mark.asyncio
 async def test_retrieve__model_encoded_id__forwards_decoded_model_not_deployment(
     retrieve_harness,
 ):
