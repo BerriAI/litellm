@@ -20,13 +20,13 @@ pub(crate) struct NativeCostMapSource {
 
 #[pymethods]
 impl NativeCostMapSource {
-    /// `http_settings` is `litellm.rust_bridge.host.settings.http_settings()`, or `None` for the environment alone
+    /// `use_http_settings` layers the configured HTTP settings over the environment, which alone applies otherwise
     #[new]
-    #[pyo3(signature = (url, *, http_settings))]
-    fn new(py: Python<'_>, url: String, http_settings: Option<Bound<'_, PyAny>>) -> PyResult<Self> {
+    #[pyo3(signature = (url, *, use_http_settings))]
+    fn new(py: Python<'_>, url: String, use_http_settings: bool) -> PyResult<Self> {
         Ok(Self {
             url,
-            http: crate::http::settings_config(py, http_settings.as_ref())?,
+            http: crate::http::settings_config(py, use_http_settings)?,
         })
     }
 
@@ -226,7 +226,7 @@ mod tests {
         });
         Python::initialize();
         Python::attach(|py| {
-            let source = NativeCostMapSource::new(py, url, None).unwrap();
+            let source = NativeCostMapSource::new(py, url, false).unwrap();
             let policy =
                 Bound::new(py, NativeFetchPolicy::new(3, 30.0, 5.0, 2.0).unwrap()).unwrap();
             let outcome = source.fetch_blocking(py, policy.borrow(), None).unwrap();

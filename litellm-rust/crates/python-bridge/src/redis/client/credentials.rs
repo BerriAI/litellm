@@ -5,8 +5,6 @@ use litellm_redis_connect::{CredentialSource, CredentialStage, Error, Expiring, 
 use litellm_secret_value::SecretValue;
 use pyo3::prelude::*;
 
-const MODULE: &str = "litellm.rust_bridge.host.redis_credentials";
-
 /// A redis-py `CredentialProvider` the SDK caller passed in `cache_kwargs`, asked through the host
 /// module the way redis-py's async connection asks it.
 pub(crate) struct PythonCredentialSource {
@@ -29,7 +27,7 @@ impl CredentialSource for PythonCredentialSource {
         let context = self.context.clone();
         Box::pin(async move {
             let (username, password) = attach_blocking(context, move |py| {
-                py.import(MODULE)?
+                py.import(super::CREDENTIALS_MODULE)?
                     .getattr("credentials")?
                     .call1((provider.bind(py),))?
                     .extract::<(Option<String>, String)>()

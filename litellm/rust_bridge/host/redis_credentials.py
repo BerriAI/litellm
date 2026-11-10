@@ -4,6 +4,8 @@ redis-py's async connection asks it."""
 from __future__ import annotations
 
 import asyncio
+import os
+from collections.abc import Mapping
 from typing import Protocol
 
 
@@ -17,3 +19,7 @@ def credentials(provider: CredentialProvider) -> tuple[str | None, str]:
             return None, password
         case (username, password):
             return username, password
+
+
+def environment() -> Mapping[str, str]:
+    return os.environ

@@ -12,8 +12,6 @@ use pyo3::{exceptions::PyAttributeError, prelude::*, types::PyDict};
 use super::ManagerError;
 use crate::execution::{run_async_value, run_sync_value};
 
-const SECRET_MANAGER_MODULE: &str = "litellm.rust_bridge.host.secret_manager";
-
 #[derive(Clone, PartialEq)]
 struct Configuration {
     system: KeyManagementSystem,
@@ -98,7 +96,7 @@ impl NativeSecretManager {
             return Ok(Some(native));
         }
         let config = py
-            .import(SECRET_MANAGER_MODULE)?
+            .import(super::SECRET_MANAGER_MODULE)?
             .getattr("native_secret_manager_config")?
             .call1((client,))?;
         if config.is_none() {

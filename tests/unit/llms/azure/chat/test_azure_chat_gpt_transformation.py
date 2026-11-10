@@ -27,7 +27,7 @@ from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from litellm.router import Router
 from litellm.utils import get_optional_params
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 _MAPPED_PARAMS: Final = TypeAdapter(dict[str, object])

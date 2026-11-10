@@ -28,7 +28,7 @@ from litellm.llms.custom_httpx.http_handler import(
     HTTPHandler,
 )
 from litellm.types.utils import LlmProviders
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.caching._event_loop_reuse import runs_until_a_loop_address_repeats
 

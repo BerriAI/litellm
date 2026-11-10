@@ -26,9 +26,14 @@ pub(crate) struct Snapshot<'py> {
     value: Bound<'py, PyAny>,
 }
 
-impl Snapshot<'_> {
+impl<'py> Snapshot<'py> {
     pub(crate) fn read<T>(&self, spec: &FieldSpec<T>) -> Result<T, ProjectionError> {
         spec.read(&self.value, self.group.into())
+    }
+
+    pub(crate) fn attribute(&self, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let value = self.value.getattr(name)?;
+        Ok((!value.is_none()).then_some(value))
     }
 }
 
@@ -56,7 +61,7 @@ impl PythonSettings {
         }
     }
 
-    /// A snapshot of a value Python handed in, read with the same field rules as the accessor's
+    #[cfg(test)]
     pub(crate) fn snapshot(self, value: Bound<'_, PyAny>) -> Snapshot<'_> {
         Snapshot { group: self, value }
     }

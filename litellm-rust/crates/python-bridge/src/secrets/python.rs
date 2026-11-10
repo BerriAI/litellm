@@ -9,8 +9,6 @@ use pyo3::prelude::*;
 
 use super::error::external_error;
 
-const SECRET_MANAGER_MODULE: &str = "litellm.rust_bridge.host.secret_manager";
-
 /// Reads each secret through the host module's `read_secret_str`, so the configured manager, the key
 /// management settings and the environment fallback behave exactly as they do in Python.
 pub(super) struct PythonSecrets {
@@ -21,7 +19,7 @@ pub(super) struct PythonSecrets {
 impl PythonSecrets {
     pub(super) fn new(py: Python<'_>) -> PyResult<Self> {
         Ok(Self::reading_with(
-            py.import(SECRET_MANAGER_MODULE)?
+            py.import(super::SECRET_MANAGER_MODULE)?
                 .getattr("read_secret_str")?
                 .unbind(),
             PythonContext::capture(py)?,

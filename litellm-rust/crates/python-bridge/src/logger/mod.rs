@@ -7,7 +7,7 @@ use litellm_tracing::{DiagnosticInput, Level, Logger, Metadata, Policy, Processo
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-const MODULE: &str = "litellm.rust_bridge.logger";
+const MODULE: &str = "litellm.rust_bridge.host.logger";
 type NativeDiagnosticOutput = (String, Option<String>, Option<String>, Vec<String>, bool);
 
 #[pyclass]

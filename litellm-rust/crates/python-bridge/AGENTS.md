@@ -81,6 +81,7 @@ GIL handling to `litellm-host-python`.
 
 ## Bridge Shape
 
+- Reach Python only through `litellm/rust_bridge/host/` and the `litellm.rust_bridge.execution` driver. Never import another LiteLLM module or read a `litellm` global. `litellm/rust_bridge/host/AGENTS.md` lists what may be imported directly
 - Prefer one stable method per top-level LiteLLM route, for example
   `messages(...)`, calling the matching `litellm-inference-<fmt>` entrypoint.
 - Do not add one exported PyO3 function per provider helper unless there is a

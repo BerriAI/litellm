@@ -11,7 +11,7 @@ import traceback
 from typing import Dict, Final, Iterator
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 from unittest.mock import patch

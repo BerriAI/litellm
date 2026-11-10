@@ -28,7 +28,7 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     model_cost_inputs,
 )
 from litellm.rust_bridge._native import NativeTableSwapped
-from litellm.rust_bridge.host.model_cost import publish
+from litellm.litellm_core_utils.model_cost_table import publish
 from litellm.types.utils import (
     Choices,
     CompletionTokensDetailsWrapper,
@@ -258,7 +258,7 @@ def test_register_model_inherits_builtin_cache_pricing_for_unmapped_key(monkeypa
         litellm.model_cost.pop(registered_key, None)
         litellm.model_cost = original_model_cost
         os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-        from litellm.rust_bridge.host.model_cost import publish
+        from litellm.litellm_core_utils.model_cost_table import publish
 
         publish(litellm.model_cost)
 

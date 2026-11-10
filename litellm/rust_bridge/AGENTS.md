@@ -9,7 +9,7 @@
   - provider execution, which is Rust core
   - CPython runtime mechanics, which is `litellm-host-python`
   - legacy callback sharing and dispatch policy, which is `callbacks-legacy-python`
-- `host/` holds the modules Rust imports by name to read Python-owned state. `host/AGENTS.md` states that contract
+- `host/` holds the modules Rust imports by name to reach Python-owned state and behavior. Only Rust calls them, and Rust reaches Python nowhere else. `host/AGENTS.md` states that contract
 
 # Routing
 

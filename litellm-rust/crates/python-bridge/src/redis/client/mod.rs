@@ -19,6 +19,8 @@ use pyo3::{
 use self::credentials::PythonCredentialSource;
 use crate::redis::{breaker::BreakerSettings, events::ServiceLoggingEvents, hosts};
 
+const CREDENTIALS_MODULE: &str = "litellm.rust_bridge.host.redis_credentials";
+
 pyo3::import_exception!(redis.exceptions, RedisClusterException);
 
 /// The kwargs `_merge_redis_kwargs` returns for a `RedisCache`, which the resolver reads the way
@@ -189,7 +191,11 @@ fn resolve_spec(
         .credential_provider
         .as_ref()
         .map(|provider| ProviderHandle::new(provider.as_ptr() as usize as u64));
-    resolve(&spec.kwargs, handle, &py.import("os")?.getattr("environ")?)
+    let environ = py
+        .import(CREDENTIALS_MODULE)?
+        .getattr("environment")?
+        .call0()?;
+    resolve(&spec.kwargs, handle, &environ)
 }
 
 /// What redis-py makes of the kwargs, with `REDIS_USERNAME` read from `environ` the way Python's Azure AD auth
