@@ -2131,6 +2131,8 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
          *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model, shared by everything on this budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
          */
         post: operations["new_budget_budget_new_post"];
@@ -2188,6 +2190,8 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
          *     - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
          *     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model, shared by everything on this budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model, shared by everything on this budget. Example: {"gpt-4o": 200}
          *     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
          */
         post: operations["update_budget_budget_update_post"];
@@ -4551,6 +4555,8 @@ export interface paths {
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
          *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model for this customer, shared across every key the customer is sent on. Stored on the customer's budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model for this customer. Stored on the customer's budget. Example: {"gpt-4o": 200}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
          *     - spend: Optional[float] - Specify initial spend for a given customer.
@@ -5229,6 +5235,8 @@ export interface paths {
          *     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
          *     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+         *     - model_tpm_limit: Optional[dict] - Max tokens per minute per model for this customer, shared across every key the customer is sent on. Stored on the customer's budget. Example: {"gpt-4o": 400000}
+         *     - model_rpm_limit: Optional[dict] - Max requests per minute per model for this customer. Stored on the customer's budget. Example: {"gpt-4o": 200}
          *     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
          *     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
          *     - spend: Optional[float] - Specify initial spend for a given customer.
@@ -28875,6 +28883,20 @@ export interface components {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
             /**
+             * Model Rpm Limit
+             * @description Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})
+             */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Model Tpm Limit
+             * @description Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})
+             */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
              * Rpm Limit
              * @description Max requests per minute, allowed for this budget id.
              */
@@ -35519,6 +35541,14 @@ export interface components {
             model_max_budget?: {
                 [key: string]: unknown;
             } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -35557,6 +35587,14 @@ export interface components {
             /** Model Max Budget */
             model_max_budget?: {
                 [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
             } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
@@ -40179,6 +40217,20 @@ export interface components {
              */
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
+             * Model Rpm Limit
+             * @description Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})
+             */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /**
+             * Model Tpm Limit
+             * @description Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})
+             */
+            model_tpm_limit?: {
+                [key: string]: number;
             } | null;
             /** Models */
             models?: string[] | null;
@@ -51370,6 +51422,14 @@ export interface components {
             /** End User Model Max Budget */
             end_user_model_max_budget?: {
                 [key: string]: unknown;
+            } | null;
+            /** End User Model Rpm Limit */
+            end_user_model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** End User Model Tpm Limit */
+            end_user_model_tpm_limit?: {
+                [key: string]: number;
             } | null;
             end_user_object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** End User Rpm Limit */
