@@ -478,12 +478,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
         (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
         (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
         (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
-        (
-            Feature.WORKLOAD_IDENTITY,
-            "anthropic/claude-sonnet-4-5",
-            {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"},
-            {},
-        ),
     ),
 )
 def test_each_detected_feature_reaches_its_rule(
@@ -847,3 +841,26 @@ async def test_interceptor_feature_follows_the_resolved_provider() -> None:
         rules=rules,
     )
     assert result is native_result
+
+
+def test_a_federated_request_stays_native(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.WORKLOAD_IDENTITY})),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    native_result: Final = response()
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("Rust mints the federation token itself")
+
+    served: Final = _DISPATCH.run(
+        (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
+        {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"},
+        python=python,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, call_args, native_kwargs: hook(request),
+        rules=rules,
+    )
+    assert served is native_result

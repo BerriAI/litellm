@@ -14,24 +14,6 @@ def streamed_mock_response(request: NativeCall) -> bool:
     return present(request, "mock_response") and request.resolved.get("stream") is True
 
 
-def anthropic_workload_identity(request: NativeCall) -> bool:
-    """Python mints an Anthropic federation token when no static credential is configured."""
-    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-    from litellm.secret_managers.main import get_secret_str
-
-    def configured(param: str, env: str) -> bool:
-        return present(request, param) or get_secret_str(env) is not None
-
-    return (
-        AnthropicModelInfo.get_api_key(optional_str(request.resolved.get("api_key"))) is None
-        and AnthropicModelInfo.get_auth_token() is None
-        and configured("anthropic_federation_rule_id", "ANTHROPIC_FEDERATION_RULE_ID")
-        and configured("anthropic_organization_id", "ANTHROPIC_ORGANIZATION_ID")
-    )
-
-
-
-
 def strict_tools_retry(request: NativeCall) -> bool:
     tools: Final = optional_sequence(request.resolved.get("tools")) or ()
     return drops_unsupported_params(request.resolved.get("drop_params")) and any(
