@@ -294,15 +294,12 @@ def _unsupported_params(
     custom_llm_provider: str,
     headers: Mapping[str, str],
     supports_box_questions: bool,
-    supports_images: bool,
 ) -> tuple[str, ...]:
     refuses_safety_identifier: Final = (
         ir_request.safety_identifier is not None and not provider_config.supports_safety_identifier
     )
     refused_image_param: Final = (
-        None
-        if supports_images and provider_config.supports_images_in(ir_request.input, headers)
-        else image_param(ir_request.input)
+        None if provider_config.supports_images_in(ir_request.input, headers) else image_param(ir_request.input)
     )
     refuses_assets: Final = bool(ir_request.assets) and not provider_config.supports_assets(headers)
     refuses_box_questions: Final = _has_box_question(ir_request.questions) and not supports_box_questions
@@ -335,13 +332,12 @@ def _without_unsupported_params(
     provider_config: BaseDecisionsConfig,
     headers: Mapping[str, str],
     supports_box_questions: bool,
-    supports_images: bool,
 ) -> DecisionsIRRequest:
     return replace(
         ir_request,
         input=(
             ir_request.input
-            if supports_images and provider_config.supports_images_in(ir_request.input, headers)
+            if provider_config.supports_images_in(ir_request.input, headers)
             else with_images_where(ir_request.input, _no_image)
         ),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
@@ -395,17 +391,14 @@ def _provider_ir_request(
     supports_box_questions: Final = provider_config.supports_box_questions(
         model, custom_llm_provider, headers, _deployment_supports_box_questions(kwargs)
     )
-    supports_images: Final = provider_config.supports_image_input(model, custom_llm_provider)
     unsupported: Final = _unsupported_params(
-        ir_request, provider_config, model, custom_llm_provider, headers, supports_box_questions, supports_images
+        ir_request, provider_config, model, custom_llm_provider, headers, supports_box_questions
     )
     if not unsupported:
         return ir_request
     if not _drops_params(kwargs):
         return _UnsupportedParams(names=unsupported)
-    supported: Final = _without_unsupported_params(
-        ir_request, provider_config, headers, supports_box_questions, supports_images
-    )
+    supported: Final = _without_unsupported_params(ir_request, provider_config, headers, supports_box_questions)
     if _leaves_no_input(supported.input):
         return _NothingLeftAfterDrop(names=unsupported, missing="input to decide on")
     if not supported.questions:
@@ -690,7 +683,7 @@ def _request_body(call: DecisionsCall) -> Mapping[str, object]:
             model=call.requested_model,
             llm_provider=call.custom_llm_provider,
         )
-    return {**body, **call.provider_config.provider_request_fields(call.litellm_params)}
+    return body
 
 
 def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
