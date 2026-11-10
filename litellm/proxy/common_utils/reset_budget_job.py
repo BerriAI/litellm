@@ -83,7 +83,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.unit_of_work import (
-    LinkedSpendResetWrites,
+    EndUserSpendResetWrites,
     SpendResetWrites,
     budget_cascade_unit_of_work,
     enduser_spend_reset_unit_of_work,
@@ -290,7 +290,7 @@ def _enduser_ids_by_tier(rows: Sequence[_EndUserRow]) -> Mapping[str | None, tup
 
 
 def _queue_enduser_page_resets(
-    writes: LinkedSpendResetWrites, rows: Sequence[_EndUserRow], cascade: "_BudgetCascade"
+    writes: EndUserSpendResetWrites, rows: Sequence[_EndUserRow], cascade: "_BudgetCascade"
 ) -> None:
     """The statements of ``_queue_budget_linked_resets`` for one page of end
     users, keyed by their user ids so each statement touches at most one page.
@@ -302,16 +302,24 @@ def _queue_enduser_page_resets(
     and the spend predicates still classify each row at write time.
     """
     for tier, user_ids in _enduser_ids_by_tier(rows).items():
-        _queue_enduser_tier_resets(writes, user_ids, cap=cascade.rollover_caps.get(tier) if tier is not None else None)
+        if tier is None or tier not in cascade.windows:
+            continue
+        _queue_enduser_tier_resets(writes, user_ids, cap=cascade.rollover_caps.get(tier), window=cascade.windows[tier])
 
 
-def _queue_enduser_tier_resets(writes: LinkedSpendResetWrites, user_ids: Sequence[str], cap: float | None) -> None:
+def _queue_enduser_tier_resets(
+    writes: EndUserSpendResetWrites, user_ids: Sequence[str], cap: float | None, window: datetime
+) -> None:
     page: Final = {"user_id": {"in": list(user_ids)}}  # bounded-ok: one page of RESET_BUDGET_JOB_BATCH_SIZE ids
     if cap is None:
-        writes.queue_spend_zero(where={**page, **_SPENT_ROWS_WHERE})
+        writes.queue_spend_zero(where={**page, **_SPENT_ROWS_WHERE}, window=window)
         return
-    writes.queue_spend_zero(where={**page, "spend": {"gt": 0, "lte": cap}})
-    writes.queue_spend_decrement(where={**page, "spend": {"gt": cap}}, amount=cap)
+    writes.queue_spend_zero(where={**page, "spend": {"gt": 0, "lte": cap}}, window=window)
+    writes.queue_spend_decrement(where={**page, "spend": {"gt": cap}}, amount=cap, window=window)
+
+
+def _closing_window(budget: LiteLLM_BudgetTableFull) -> datetime:
+    return budget.budget_reset_at if budget.budget_reset_at is not None else budget.created_at
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +332,7 @@ class _BudgetCascade:
     counter_resets: tuple[tuple[str, float], ...] = ()
     cache_keys: tuple[str, ...] = ()
     rollover_caps: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
+    windows: Mapping[str, datetime] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -849,6 +858,9 @@ class ResetBudgetJob:
                 *((_project_counter_key(row), _row_carried_spend(row, rollover_caps)) for row in projects),
             ),
             rollover_caps=rollover_caps,
+            windows=MappingProxyType(
+                {b.budget_id: _closing_window(b) for b in budgets_to_reset if b.budget_id is not None}
+            ),
             cache_keys=(
                 *(key for row in team_memberships for key in _team_membership_cache_keys(row)),
                 *(key for row in keys for key in _key_cache_keys(row)),

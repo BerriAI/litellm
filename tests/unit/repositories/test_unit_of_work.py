@@ -128,23 +128,29 @@ async def test_enduser_page_commits_on_its_own_batch():
     """One tier can gate millions of end users, so a page of them lands in its
     own transaction instead of riding the cascade's."""
     batch = FakeBatch()
+    window = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    not_reset_in_window = {"OR": [{"spend_reset_window": None}, {"spend_reset_window": {"not": window}}]}
 
     async with enduser_spend_reset_unit_of_work(lambda: batch) as writes:
-        writes.queue_spend_zero(where={"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}})
-        writes.queue_spend_decrement(where={"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}}, amount=5.0)
+        writes.queue_spend_zero(
+            where={"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}}, window=window
+        )
+        writes.queue_spend_decrement(
+            where={"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}}, amount=5.0, window=window
+        )
         assert batch.commit_count == 0
 
     assert batch.commit_count == 1
     assert batch.calls == [
         (
             "litellm_endusertable.update_many",
-            {"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}},
-            {"spend": 0},
+            {"AND": [{"user_id": {"in": ["enduser-1", "enduser-2"]}, "spend": {"gt": 0}}, not_reset_in_window]},
+            {"spend": 0, "spend_reset_window": window},
         ),
         (
             "litellm_endusertable.update_many",
-            {"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}},
-            {"spend": {"decrement": 5.0}},
+            {"AND": [{"user_id": {"in": ["enduser-3"]}, "spend": {"gt": 5.0}}, not_reset_in_window]},
+            {"spend": {"decrement": 5.0}, "spend_reset_window": window},
         ),
     ]
 

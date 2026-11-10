@@ -5,7 +5,7 @@ import types
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
-from typing import Any, Dict, Final, List, Optional
+from typing import Any, Dict, Final, List, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -287,6 +287,21 @@ def _budget_row(
     )
 
 
+def _without_window_guard(write: dict[str, Any]) -> dict[str, Any]:
+    """An end-user reset write as its page statement, without the window guard
+    and stamp that ``test_retried_budget_reset_never_resets_an_end_user_twice_in_one_window`` covers."""
+    page_where, _ = write["where"]["AND"]
+    return {
+        **write,
+        "where": page_where,
+        "data": {column: value for column, value in write["data"].items() if column != "spend_reset_window"},
+    }
+
+
+def _enduser_writes(mock_prisma_client) -> list[dict[str, Any]]:
+    return [_without_window_guard(write) for write in _batch_writes(mock_prisma_client, "enduser")]
+
+
 def _batch_writes(mock_prisma_client, table: str, op: str | None = None) -> List[Dict[str, Any]]:
     """Writes that were committed to the DB, optionally narrowed to one op."""
     return [
@@ -488,7 +503,7 @@ def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    assert _batch_writes(mock_prisma_client, "enduser") == [
+    assert _enduser_writes(mock_prisma_client) == [
         {
             "table": "enduser",
             "op": "update_many",
@@ -528,15 +543,16 @@ def test_enduser_reset_commits_in_pages_before_the_window_advances(reset_budget_
     assert [batcher.committed for batcher in batchers] == [True, True, True, True]
     pages: Final = batchers[:3]
     assert [[call["table"] for call in page.calls] for page in pages] == [["enduser"]] * 3
-    assert [len(page.calls[0]["where"]["user_id"]["in"]) for page in pages] == [
+    statements: Final = [_without_window_guard(page.calls[0]) for page in pages]
+    assert [len(statement["where"]["user_id"]["in"]) for statement in statements] == [
         RESET_BUDGET_JOB_BATCH_SIZE,
         RESET_BUDGET_JOB_BATCH_SIZE,
         3,
     ]
-    assert [page.calls[0]["where"]["spend"] for page in pages] == [{"gt": 0}] * 3
-    assert [page.calls[0]["data"] for page in pages] == [{"spend": 0}] * 3
-    assert pages[0].calls[0]["where"]["user_id"]["in"][0] == "cust-000000"
-    assert pages[2].calls[0]["where"]["user_id"]["in"] == ["cust-001000", "cust-001001", "cust-001002"]
+    assert [statement["where"]["spend"] for statement in statements] == [{"gt": 0}] * 3
+    assert [statement["data"] for statement in statements] == [{"spend": 0}] * 3
+    assert statements[0]["where"]["user_id"]["in"][0] == "cust-000000"
+    assert statements[2]["where"]["user_id"]["in"] == ["cust-001000", "cust-001001", "cust-001002"]
     cascade: Final = batchers[3]
     assert "enduser" not in {call["table"] for call in cascade.calls}
     assert [call["where"] for call in cascade.calls if call["table"] == "budget"] == [{"budget_id": "shared-tier"}]
@@ -544,8 +560,7 @@ def test_enduser_reset_commits_in_pages_before_the_window_advances(reset_budget_
 
 def test_enduser_page_failure_leaves_the_tier_due(reset_budget_job, mock_prisma_client):
     """A page that fails after earlier pages committed must not advance the
-    window: the committed pages are at spend 0 and drop out of the next tick's
-    ``spend > 0`` read, so the next tick resumes where this one stopped."""
+    window, so the tier stays due and the next tick finishes the walk."""
     mock_prisma_client.data["budget"] = [_budget_row(budget_id="shared-tier", budget_duration="1d")]
     endusers: Final = mock_prisma_client.db.litellm_endusertable
     endusers.set_find_many_results(
@@ -559,7 +574,7 @@ def test_enduser_page_failure_leaves_the_tier_due(reset_budget_job, mock_prisma_
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
     assert _batch_writes(mock_prisma_client, "budget") == []
-    enduser_writes: Final = _batch_writes(mock_prisma_client, "enduser")
+    enduser_writes: Final = _enduser_writes(mock_prisma_client)
     assert len(enduser_writes) == 1
     assert len(enduser_writes[0]["where"]["user_id"]["in"]) == RESET_BUDGET_JOB_BATCH_SIZE
 
@@ -585,7 +600,7 @@ def test_enduser_page_keeps_each_tier_s_rollover_statements_to_its_own_users(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    assert _batch_writes(mock_prisma_client, "enduser") == [
+    assert _enduser_writes(mock_prisma_client) == [
         {
             "table": "enduser",
             "op": "update_many",
@@ -703,7 +718,7 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         assert set(writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
 
     # The budget tier's cascade rides the same batch machinery.
-    assert _batch_writes(mock_prisma_client, "enduser") == [
+    assert _enduser_writes(mock_prisma_client) == [
         {
             "table": "enduser",
             "op": "update_many",
@@ -788,7 +803,7 @@ def test_enduser_reset_bind_count_does_not_scale_with_population(reset_budget_jo
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    writes = _batch_writes(mock_prisma_client, "enduser")
+    writes = _enduser_writes(mock_prisma_client)
     assert max(_bind_count(write["where"]) for write in writes) <= RESET_BUDGET_JOB_BATCH_SIZE + 1
     assert RESET_BUDGET_JOB_BATCH_SIZE + 1 < _POSTGRES_MAX_BIND_VARIABLES
     assert sorted(user_id for write in writes for user_id in write["where"]["user_id"]["in"]) == [
@@ -965,7 +980,7 @@ def test_reset_budget_resets_endusers_with_null_budget_id(reset_budget_job, mock
     # Both end users are zeroed in one page: the linked row on the tier's
     # budget_id and the implicit one whose NULL budget_id stands in for the
     # default tier.
-    assert _batch_writes(mock_prisma_client, "enduser") == [
+    assert _enduser_writes(mock_prisma_client) == [
         {
             "table": "enduser",
             "op": "update_many",
@@ -3490,7 +3505,7 @@ def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    enduser_writes = _batch_writes(mock_prisma_client, "enduser")
+    enduser_writes = _enduser_writes(mock_prisma_client)
     assert {
         "table": "enduser",
         "op": "update_many",
@@ -3574,10 +3589,182 @@ def test_cascade_rollover_writes_survive_sequential_execution(
 
     asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
 
-    writes = _batch_writes(mock_prisma_client, table)
+    writes = _enduser_writes(mock_prisma_client) if table == "enduser" else _batch_writes(mock_prisma_client, table)
     assert _replay_spend_writes(writes, 15.0) == 5.0
     assert _replay_spend_writes(writes, 8.0) == 0
     assert _replay_spend_writes(writes, 25.0) == 15.0
+
+
+_CLOSED_WINDOW: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+_Cell = float | str | datetime | None
+
+
+def _compare(value: _Cell, op: str, arg: object) -> bool:
+    if value is None:
+        return False
+    match op:
+        case "in":
+            return value in cast(list[_Cell], arg)
+        case "gt":
+            return cast(float, value) > cast(float, arg)
+        case "lte":
+            return cast(float, value) <= cast(float, arg)
+        case "not":
+            return value != arg
+        case _:
+            raise AssertionError(f"filter {op!r} is not modelled")
+
+
+def _row_matches(row: dict[str, _Cell], where: dict[str, object]) -> bool:
+    """Prisma's where, with SQL NULL semantics: a comparison against NULL never matches."""
+    return all(_field_matches(row, field, condition) for field, condition in where.items())
+
+
+def _field_matches(row: dict[str, _Cell], field: str, condition: object) -> bool:
+    match field, condition:
+        case "AND", list():
+            return all(_row_matches(row, clause) for clause in condition)
+        case "OR", list():
+            return any(_row_matches(row, clause) for clause in condition)
+        case _, dict():
+            return all(_compare(row.get(field), op, arg) for op, arg in condition.items())
+        case _:
+            return row.get(field) == condition
+
+
+class _EndUserLedger:
+    """The end-user and budget tables a budget-tier reset reads and writes.
+
+    Each batch commits atomically, and ``fail_commit`` names the one commit
+    (1-based) that raises instead, like a lock timeout."""
+
+    def __init__(self, budgets: dict[str, float | None], endusers: dict[str, tuple[str, float, datetime | None]]):
+        self.budgets = {
+            budget_id: types.SimpleNamespace(
+                budget_id=budget_id,
+                max_budget=max_budget,
+                budget_duration="1d",
+                budget_reset_at=_CLOSED_WINDOW,
+                created_at=_CLOSED_WINDOW - timedelta(days=30),
+            )
+            for budget_id, max_budget in budgets.items()
+        }
+        self.rows: dict[str, dict[str, _Cell]] = {
+            user_id: {"user_id": user_id, "budget_id": budget_id, "spend": spend, "spend_reset_window": stamp}
+            for user_id, (budget_id, spend, stamp) in endusers.items()
+        }
+        self.fail_commit: int | None = None
+        self.commits = 0
+        self.client = MockPrismaClient()
+        self.client.db.litellm_endusertable = self
+        self.client.db.batch_ = self._batch
+        self.client.get_data = self._due_budgets
+
+    def spend(self) -> dict[str, _Cell]:
+        return {user_id: row["spend"] for user_id, row in self.rows.items()}
+
+    def window_ends(self) -> dict[str, datetime]:
+        return {budget_id: budget.budget_reset_at for budget_id, budget in self.budgets.items()}
+
+    def add_spend(self, user_id: str, amount: float) -> None:
+        self.rows[user_id]["spend"] = cast(float, self.rows[user_id]["spend"]) + amount
+
+    async def _due_budgets(self, table_name: str, query_type: str, reset_at: datetime, limit: int):
+        return [budget for budget in self.budgets.values() if budget.budget_reset_at < reset_at]
+
+    async def find_many(self, where: dict[str, object], order: dict[str, str], take: int):
+        matching = sorted(
+            (row for row in self.rows.values() if _row_matches(row, where)), key=lambda row: str(row["user_id"])
+        )
+        return [types.SimpleNamespace(**row) for row in matching[:take]]
+
+    def _batch(self) -> MockBatcher:
+        batcher = MockBatcher()
+
+        async def _commit():
+            self.commits += 1
+            if self.commits == self.fail_commit:
+                raise RuntimeError("lock timeout")
+            for call in batcher.calls:
+                self._apply(call)
+            batcher.committed = True
+
+        batcher.commit = _commit
+        return batcher
+
+    def _apply(self, call: dict[str, Any]) -> None:
+        if call["table"] == "budget":
+            self.budgets[call["where"]["budget_id"]].budget_reset_at = call["data"]["budget_reset_at"]
+            return
+        if call["table"] != "enduser":
+            return
+        for row in self.rows.values():
+            if not _row_matches(row, call["where"]):
+                continue
+            for column, value in call["data"].items():
+                row[column] = row[column] - value["decrement"] if isinstance(value, dict) else value
+
+
+@pytest.mark.parametrize(
+    "failing_commit, spend_after_failure",
+    [
+        (3, {"capless": 0, "double-cap": 15.0, "over-cap": 5.0, "under-cap": 0}),
+        (2, {"capless": 0, "double-cap": 15.0, "over-cap": 15.0, "under-cap": 8.0}),
+    ],
+    ids=["window-advance-fails", "second-page-fails"],
+)
+def test_retried_budget_reset_never_resets_an_end_user_twice_in_one_window(
+    rollover_enabled, monkeypatch, failing_commit, spend_after_failure
+):
+    """#50898: end-user pages commit before the window advance. When a later
+    commit fails the tier stays due, and the retry must leave the rows an
+    earlier page already reset alone: re-running the cap predicate would
+    zero the carried overage, and re-zeroing would refund spend accrued since."""
+    _make_counter_invalidation_job(monkeypatch)
+    monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
+    ledger: Final = _EndUserLedger(
+        budgets={"capped": 10.0, "uncapped": None},
+        endusers={
+            "capless": ("uncapped", 4.0, None),
+            "double-cap": ("capped", 25.0, None),
+            "over-cap": ("capped", 15.0, None),
+            "under-cap": ("capped", 8.0, None),
+        },
+    )
+    ledger.fail_commit = failing_commit
+    job: Final = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=ledger.client)
+
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+    assert ledger.window_ends() == {"capped": _CLOSED_WINDOW, "uncapped": _CLOSED_WINDOW}, (
+        "the failed tick must leave both tiers due"
+    )
+    assert ledger.spend() == spend_after_failure
+
+    ledger.add_spend("capless", 3.0)
+    ledger.add_spend("double-cap", 3.0)
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+
+    assert all(window_end > _CLOSED_WINDOW for window_end in ledger.window_ends().values()), ledger.window_ends()
+    assert ledger.spend() == {"capless": 3.0, "double-cap": 18.0, "over-cap": 5.0, "under-cap": 0}
+
+
+@pytest.mark.parametrize(
+    "last_reset_window",
+    [None, _CLOSED_WINDOW - timedelta(days=1), _CLOSED_WINDOW + timedelta(days=1)],
+    ids=["never-reset", "previous-window", "window-moved-back-by-an-admin"],
+)
+def test_budget_reset_resets_end_users_last_reset_for_another_window(rollover_enabled, monkeypatch, last_reset_window):
+    _make_counter_invalidation_job(monkeypatch)
+    ledger: Final = _EndUserLedger(
+        budgets={"capped": 10.0},
+        endusers={"over-cap": ("capped", 15.0, last_reset_window), "under-cap": ("capped", 8.0, last_reset_window)},
+    )
+    job: Final = ResetBudgetJob(proxy_logging_obj=MockProxyLogging(), prisma_client=ledger.client)
+
+    asyncio.run(job.reset_budget_for_litellm_budget_table())
+
+    assert ledger.spend() == {"over-cap": 5.0, "under-cap": 0}
 
 
 def test_budget_cascade_zeroes_everything_when_rollover_disabled(reset_budget_job, mock_prisma_client, monkeypatch):
@@ -4217,7 +4404,7 @@ async def test_reset_budget_endusers_are_zeroed_with_the_budget_window_advance(f
 
     assert prisma_client.db.batch_.call_count == 2, "one end-user page, then the cascade in one transaction"
 
-    enduser_writes: Final = [c for c in batch_calls if c["table"] == "enduser"]
+    enduser_writes: Final = [_without_window_guard(c) for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
     assert enduser_writes[0]["where"] == {
         "user_id": {"in": ["user1", "user2", "user3", "user4", "user5", "user6"]},
@@ -4294,7 +4481,7 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
     prisma_client.update_data.assert_not_awaited()
 
     assert len([c for c in batch_calls if c["table"] == "team_membership"]) == 1
-    enduser_writes: Final = [c for c in batch_calls if c["table"] == "enduser"]
+    enduser_writes: Final = [_without_window_guard(c) for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
     assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1"]}, "spend": {"gt": 0}}
     assert enduser_writes[0]["data"] == {"spend": 0}
@@ -4765,7 +4952,7 @@ async def test_service_logger_endusers_success():
         await asyncio.sleep(0.1)
         mock_verbose_exc.assert_not_called()
 
-    enduser_writes = [c for c in batch_calls if c["table"] == "enduser"]
+    enduser_writes = [_without_window_guard(c) for c in batch_calls if c["table"] == "enduser"]
     assert len(enduser_writes) == 1
     assert enduser_writes[0]["where"] == {"user_id": {"in": ["user1", "user2"]}, "spend": {"gt": 0}}
 

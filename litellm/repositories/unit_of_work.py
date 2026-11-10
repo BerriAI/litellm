@@ -188,6 +188,34 @@ class LinkedSpendResetWrites:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class EndUserSpendResetWrites:
+    """End-user pages commit ahead of the window advance, so a failed advance
+    replays them. Each reset stamps the tier window it closes and skips rows
+    already stamped with it: replaying the cap predicate would zero a carried
+    overage, and replaying the zero would erase spend accrued since."""
+
+    table: BatchTable
+
+    def queue_spend_zero(self, where: Mapping[str, object], window: datetime) -> None:
+        self.table.update_many(where=_not_reset_in(window, where), data={"spend": 0, "spend_reset_window": window})
+
+    def queue_spend_decrement(self, where: Mapping[str, object], amount: float, window: datetime) -> None:
+        self.table.update_many(
+            where=_not_reset_in(window, where),
+            data={"spend": {"decrement": amount}, "spend_reset_window": window},
+        )
+
+
+def _not_reset_in(window: datetime, where: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "AND": [
+            {**where},
+            {"OR": [{"spend_reset_window": None}, {"spend_reset_window": {"not": window}}]},
+        ]
+    }
+
+
 # Membership rows written before total_spend existed (migration 20260421135425, default 0) hold their
 # history only in spend. Zeroing spend would erase it, so the floor lands in the same batch, ahead of the reset.
 _TEAM_MEMBERSHIP_TOTAL_SPEND_REPAIR_SQL: Final = """
@@ -324,9 +352,9 @@ async def budget_cascade_unit_of_work(
 @asynccontextmanager
 async def enduser_spend_reset_unit_of_work(
     new_batch: Callable[[], PrismaBatch],
-) -> AsyncGenerator[LinkedSpendResetWrites, None]:
+) -> AsyncGenerator[EndUserSpendResetWrites, None]:
     """One page of end-user spend resets, committed on its own so a statement
     never grows with the end-user population."""
     batch: Final = new_batch()
-    yield LinkedSpendResetWrites(table=batch.litellm_endusertable)
+    yield EndUserSpendResetWrites(table=batch.litellm_endusertable)
     await batch.commit()
