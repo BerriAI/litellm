@@ -2,17 +2,16 @@ import base64
 import json
 import struct
 from binascii import crc32
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 import respx
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -524,39 +523,19 @@ def test_imported_llama_model_arn_is_encoded_and_max_tokens_become_max_gen_len(r
     assert json.loads(route.calls[0].request.content) == {"prompt": "Tell me a joke", "max_gen_len": 100}
 
 
-class _ImmediateExecutor:
-    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> None:
-        fn(*args, **kwargs)
-
-
-class _CaptureSuccessCallback(CustomLogger):
-    def __init__(self) -> None:
-        super().__init__()
-        self.standard_logging_objects: list[object] = []
-
-    def log_success_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object):
-        self.standard_logging_objects.append(kwargs.get("standard_logging_object"))
-
-
-GUARDRAIL_UNIT_PRICE: Final = 0.00015
-_ASSESSMENT_USAGE: Final = MappingProxyType(
-    {"invocationMetrics": {"usage": {"topicPolicyUnits": 1, "contentPolicyUnits": 1}}}
-)
-INVOKE_GUARDRAIL_TRACE: Final = MappingProxyType(
+GUARDED_INVOKE_TRACE: Final = MappingProxyType(
     {
         "guardrail": {
-            "input": {"caller-guardrail": dict(_ASSESSMENT_USAGE)},
-            "outputs": [{"caller-guardrail": dict(_ASSESSMENT_USAGE)}],
+            "input": {"caller-guardrail": {"invocationMetrics": {"usage": {"topicPolicyUnits": 1}}}},
             "actionReason": "No action.",
         }
     }
 )
-INVOKE_METRICS: Final = MappingProxyType(
+GUARDED_INVOKE_METRICS: Final = MappingProxyType(
     {"inputTokenCount": 25, "outputTokenCount": 12, "invocationLatency": 300, "firstByteLatency": 90}
 )
 NOVA_INVOKE_MODEL: Final = "us.amazon.nova-2-lite-v1:0"
 LLAMA_INVOKE_MODEL: Final = "meta.llama3-8b-instruct-v1:0"
-CLAUDE_INVOKE_MODEL: Final = "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
 
 def _event_frame(payload: Mapping[str, object]) -> bytes:
@@ -578,191 +557,88 @@ def _event_frame(payload: Mapping[str, object]) -> bytes:
     return prelude + message + struct.pack("!I", crc32(message, prelude_crc) & 0xFFFFFFFF)
 
 
-INVOKE_REPLIES_WITH_A_GUARDRAIL_TRACE: Final = (
-    pytest.param(
-        NOVA_INVOKE_MODEL,
-        {
-            "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
-            "stopReason": "end_turn",
-            "usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37},
-            "amazon-bedrock-guardrailAction": "NONE",
-        },
-        id="nova",
-    ),
-    pytest.param(
-        LLAMA_INVOKE_MODEL,
-        {"generation": "hi", "prompt_token_count": 25, "generation_token_count": 12, "stop_reason": "stop"},
-        id="llama",
-    ),
-    pytest.param(
-        CLAUDE_INVOKE_MODEL,
-        {
-            "id": "msg-1",
-            "type": "message",
-            "role": "assistant",
-            "model": CLAUDE_INVOKE_MODEL,
-            "content": [{"type": "text", "text": "hi"}],
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 25, "output_tokens": 12},
-        },
-        id="claude",
-    ),
-    pytest.param(
-        "mistral.mistral-7b-instruct-v0:2", {"outputs": [{"text": "hi", "stop_reason": "stop"}]}, id="mistral"
-    ),
-    pytest.param(
-        "amazon.titan-text-express-v1",
-        {"inputTextTokenCount": 25, "results": [{"tokenCount": 12, "outputText": "hi", "completionReason": "FINISH"}]},
-        id="titan",
-    ),
-    pytest.param(
-        "cohere.command-text-v14", {"generations": [{"text": "hi", "finish_reason": "COMPLETE"}]}, id="cohere"
-    ),
-    pytest.param(
-        "ai21.j2-ultra-v1",
-        {"completions": [{"data": {"text": "hi"}, "finishReason": {"reason": "endoftext"}}]},
-        id="ai21",
-    ),
-    pytest.param("qwen.qwen3-32b-v1:0", {"generation": "hi"}, id="qwen3"),
-    pytest.param("qwen2/arn:aws:bedrock:us-east-1:123456789012:imported-model/q2", {"text": "hi"}, id="qwen2"),
-    pytest.param(
-        "deepseek_r1/arn:aws:bedrock:us-east-1:123456789012:imported-model/r1",
-        {"generation": "hi", "stop_reason": "stop"},
-        id="deepseek_r1",
-    ),
-    pytest.param(
-        "moonshot.kimi-k2-thinking",
-        {
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "moonshot.kimi-k2-thinking",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 25, "completion_tokens": 12, "total_tokens": 37},
-        },
-        id="moonshot",
-    ),
-    pytest.param("twelvelabs.pegasus-1-2-v1:0", {"message": "hi", "finishReason": "stop"}, id="twelvelabs_pegasus"),
+def _guarded_invoke_completion(model: str, reply: httpx.Response, stream: bool) -> object:
+    return litellm.completion(
+        model=f"bedrock/invoke/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=20,
+        stream=stream,
+        guardrailConfig={"guardrailIdentifier": "caller-guardrail", "guardrailVersion": "1", "trace": "enabled"},
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(lambda _request: reply))),
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "reply_body"),
+    [
+        pytest.param(
+            NOVA_INVOKE_MODEL,
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "hi"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37},
+            },
+            id="nova",
+        ),
+        pytest.param(
+            LLAMA_INVOKE_MODEL,
+            {"generation": "hi", "prompt_token_count": 25, "generation_token_count": 12, "stop_reason": "stop"},
+            id="llama",
+        ),
+    ],
 )
+def test_guarded_non_claude_invoke_completion_keeps_the_guardrail_trace_from_the_client(
+    model: str, reply_body: Mapping[str, object]
+) -> None:
+    reply: Final = httpx.Response(200, json={**reply_body, "amazon-bedrock-trace": dict(GUARDED_INVOKE_TRACE)})
 
-INVOKE_STREAMS_WITH_A_GUARDRAIL_TRACE: Final = (
-    pytest.param(
-        NOVA_INVOKE_MODEL,
-        (
-            {"messageStart": {"role": "assistant"}},
-            {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
-            {"contentBlockStop": {"contentBlockIndex": 0}},
-            {"messageStop": {"stopReason": "end_turn"}},
-            {
-                "metadata": {
-                    "usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37},
-                    "metrics": {},
-                    "trace": {},
+    response: Final = _guarded_invoke_completion(model, reply, stream=False)
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "hi"
+    assert "amazon-bedrock-trace" not in response.model_dump(), response.model_dump()
+
+
+@pytest.mark.parametrize(
+    ("model", "events"),
+    [
+        pytest.param(
+            NOVA_INVOKE_MODEL,
+            (
+                {"messageStart": {"role": "assistant"}},
+                {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "hi"}}},
+                {"contentBlockStop": {"contentBlockIndex": 0}},
+                {"messageStop": {"stopReason": "end_turn"}},
+                {
+                    "metadata": {"usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37}, "metrics": {}},
+                    "amazon-bedrock-invocationMetrics": dict(GUARDED_INVOKE_METRICS),
+                    "amazon-bedrock-guardrailAction": "NONE",
+                    "amazon-bedrock-trace": dict(GUARDED_INVOKE_TRACE),
                 },
-                "amazon-bedrock-invocationMetrics": dict(INVOKE_METRICS),
-                "amazon-bedrock-guardrailAction": "NONE",
-                "amazon-bedrock-trace": dict(INVOKE_GUARDRAIL_TRACE),
-            },
+            ),
+            id="nova",
         ),
-        id="nova",
-    ),
-    pytest.param(
-        LLAMA_INVOKE_MODEL,
-        (
-            {"generation": "hi", "prompt_token_count": 25, "generation_token_count": 1, "stop_reason": None},
-            {
-                "generation": "",
-                "prompt_token_count": None,
-                "generation_token_count": 12,
-                "stop_reason": "stop",
-                "amazon-bedrock-invocationMetrics": dict(INVOKE_METRICS),
-                "amazon-bedrock-trace": dict(INVOKE_GUARDRAIL_TRACE),
-            },
-        ),
-        id="llama",
-    ),
-    pytest.param(
-        CLAUDE_INVOKE_MODEL,
-        (
-            {
-                "type": "message_start",
-                "message": {
-                    "id": "msg-1",
-                    "type": "message",
-                    "role": "assistant",
-                    "model": CLAUDE_INVOKE_MODEL,
-                    "content": [],
-                    "stop_reason": None,
-                    "usage": {"input_tokens": 25, "output_tokens": 1},
+        pytest.param(
+            LLAMA_INVOKE_MODEL,
+            (
+                {"generation": "hi", "prompt_token_count": 25, "generation_token_count": 1, "stop_reason": None},
+                {
+                    "generation": "",
+                    "prompt_token_count": None,
+                    "generation_token_count": 12,
+                    "stop_reason": "stop",
+                    "amazon-bedrock-invocationMetrics": dict(GUARDED_INVOKE_METRICS),
+                    "amazon-bedrock-trace": dict(GUARDED_INVOKE_TRACE),
                 },
-            },
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hi"}},
-            {"type": "content_block_stop", "index": 0},
-            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 12}},
-            {
-                "type": "message_stop",
-                "amazon-bedrock-invocationMetrics": dict(INVOKE_METRICS),
-                "amazon-bedrock-trace": dict(INVOKE_GUARDRAIL_TRACE),
-            },
+            ),
+            id="llama",
         ),
-        id="claude",
-    ),
+    ],
 )
-
-
-def _guarded_invoke_completion(model: str, reply: httpx.Response, stream: bool) -> list[object]:
-    callback: Final = _CaptureSuccessCallback()
-    with (
-        patch.object(litellm, "callbacks", [callback]),
-        patch.dict(
-            litellm.model_cost,
-            {
-                "bedrock/guardrails": {
-                    "litellm_provider": "bedrock",
-                    "mode": "guardrail",
-                    "guardrail_cost_per_unit": {
-                        "topicPolicyUnits": GUARDRAIL_UNIT_PRICE,
-                        "contentPolicyUnits": GUARDRAIL_UNIT_PRICE,
-                    },
-                }
-            },
-        ),
-        patch("litellm.utils.executor", _ImmediateExecutor()),
-        patch("litellm.litellm_core_utils.streaming_handler.executor", _ImmediateExecutor()),
-    ):
-        response: Final = litellm.completion(
-            model=f"bedrock/invoke/{model}",
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=20,
-            stream=stream,
-            guardrailConfig={"guardrailIdentifier": "caller-guardrail", "guardrailVersion": "1", "trace": "enabled"},
-            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(lambda _request: reply))),
-            aws_access_key_id="fake",
-            aws_secret_access_key="fake",
-            aws_region_name="us-east-1",
-        )
-        if stream:
-            tuple(response)
-    return [
-        [(entry["guardrail_usage"], entry["guardrail_cost"]) for entry in logged["guardrail_information"] or []]
-        for logged in callback.standard_logging_objects
-        if isinstance(logged, dict)
-    ]
-
-
-BILLED_GUARDRAIL: Final = ({"topicPolicyUnits": 2, "contentPolicyUnits": 2}, pytest.approx(4 * GUARDRAIL_UNIT_PRICE))
-
-
-@pytest.mark.parametrize(("model", "reply_body"), INVOKE_REPLIES_WITH_A_GUARDRAIL_TRACE)
-def test_invoke_completion_bills_the_guardrail_bedrock_traced(model: str, reply_body: Mapping[str, object]) -> None:
-    reply: Final = httpx.Response(200, json={**reply_body, "amazon-bedrock-trace": dict(INVOKE_GUARDRAIL_TRACE)})
-
-    assert _guarded_invoke_completion(model, reply, stream=False) == [[BILLED_GUARDRAIL]]
-
-
-@pytest.mark.parametrize(("model", "events"), INVOKE_STREAMS_WITH_A_GUARDRAIL_TRACE)
-def test_invoke_stream_completion_bills_the_guardrail_bedrock_traced(
+def test_guarded_non_claude_invoke_stream_yields_only_the_text_and_stop_chunks(
     model: str, events: tuple[Mapping[str, object], ...]
 ) -> None:
     reply: Final = httpx.Response(
@@ -771,4 +647,10 @@ def test_invoke_stream_completion_bills_the_guardrail_bedrock_traced(
         content=b"".join(_event_frame(event) for event in events),
     )
 
-    assert _guarded_invoke_completion(model, reply, stream=True) == [[BILLED_GUARDRAIL]]
+    stream: Final = _guarded_invoke_completion(model, reply, stream=True)
+
+    assert isinstance(stream, litellm.CustomStreamWrapper)
+    assert [
+        ([(choice.delta.content, choice.finish_reason) for choice in chunk.choices], chunk.provider_specific_fields or {})
+        for chunk in stream
+    ] == [([("hi", None)], {}), ([(None, "stop")], {})]

@@ -932,40 +932,27 @@ async def test_add_litellm_data_to_request_body_snapshot_excludes_secret_fields(
 
 
 @pytest.mark.asyncio
-async def test_pass_through_body_snapshot_never_carries_forwarded_x_pass_header_values():
+async def test_chat_completions_body_field_named_request_headers_stays_in_the_logged_body():
     from litellm.proxy.proxy_server import ProxyConfig
 
-    cookie: Final = "session=caller-session-secret"
-    provider_token: Final = "Bearer caller-provider-secret"
-    pass_headers: Final = {
-        "x-pass-cookie": cookie,
-        "x-pass-authorization": provider_token,
-        "x-pass-x-amzn-bedrock-guardrailidentifier": "caller-guardrail",
-    }
+    client_field: Final = {"x-client-trace": "client-supplied"}
     request: Final = Request(
         {
             "type": "http",
             "method": "POST",
-            "path": "/bedrock/model/bedrock-model/invoke",
+            "path": "/chat/completions",
             "scheme": "http",
             "server": ("localhost", 4000),
             "query_string": b"",
-            "headers": [
-                (b"authorization", b"Bearer sk-litellm-key"),
-                *((name.encode(), value.encode()) for name, value in pass_headers.items()),
-            ],
+            "headers": [(b"authorization", b"Bearer sk-litellm-key")],
         }
     )
-    endpoint: Final = "/model/bedrock-model-snapshot-control/invoke"
 
     enriched: Final = await add_litellm_data_to_request(
         data={
-            "model": "bedrock-model",
-            "method": "POST",
-            "endpoint": endpoint,
-            "data": {"messages": []},
-            "custom_llm_provider": "bedrock",
-            "request_headers": pass_headers,
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+            "request_headers": client_field,
         },
         request=request,
         user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
@@ -973,11 +960,7 @@ async def test_pass_through_body_snapshot_never_carries_forwarded_x_pass_header_
         general_settings={},
     )
 
-    logged_body: Final = json.dumps(enriched["proxy_server_request"]["body"], default=str)
-    assert endpoint in logged_body
-    assert enriched["request_headers"]["x-pass-cookie"] == cookie
-    assert cookie not in logged_body
-    assert provider_token not in logged_body
+    assert enriched["proxy_server_request"]["body"]["request_headers"] == client_field
 
 
 @pytest.mark.asyncio

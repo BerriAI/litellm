@@ -28,6 +28,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_INVOKE_TRACE_FIELD,
     BedrockModelInfo,
     apply_bedrock_invoke_structured_output,
     bedrock_capability_model,
@@ -501,7 +502,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         optional_params["tools"] = normalized_tools
         return optional_params
 
-    def _transform_invoke_response(
+    def transform_response(
         self,
         model: str,
         raw_response: httpx.Response,
@@ -515,7 +516,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        return AnthropicConfig.transform_response(
+        response: Final = AnthropicConfig.transform_response(
             self,
             model=model,
             raw_response=raw_response,
@@ -529,3 +530,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             api_key=api_key,
             json_mode=json_mode,
         )
+        body: Final = object_mapping(raw_response.json()) or {}
+        trace: Final = object_mapping(body.get(BEDROCK_INVOKE_TRACE_FIELD))
+        if trace is not None:
+            setattr(response, BEDROCK_INVOKE_TRACE_FIELD, trace)
+            logging_obj.record_native_bedrock_guardrail(response)
+        return response

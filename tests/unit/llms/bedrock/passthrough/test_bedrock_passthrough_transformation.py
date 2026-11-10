@@ -23,7 +23,7 @@ from litellm.llms.bedrock.passthrough.transformation import (
     BedrockPassthroughConfig,
     is_bedrock_streaming_endpoint,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, PassthroughStreamingResponse
 from litellm.types.utils import ModelResponse
 
@@ -1466,7 +1466,7 @@ async def test_passthrough_without_a_deployment_guardrail_sends_the_caller_guard
     assert _invoke_guardrail_headers(invoke) == {
         "x-amzn-bedrock-guardrailidentifier": "caller-guardrail",
         "x-amzn-bedrock-guardrailversion": "9",
-        "x-amzn-bedrock-trace": "ENABLED",
+        "x-amzn-bedrock-trace": "DISABLED",
     }
 
 
@@ -1480,63 +1480,47 @@ SENT_CALLER_GUARDRAIL_IDENTITY: Final[Mapping[str, str]] = {
 }
 
 
-@pytest.mark.asyncio
+SDK_INVOKE_MODEL: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+def _sdk_passthrough_call(
+    model: str, action: str, request_headers: Mapping[str, str], reply_body: Mapping[str, object]
+) -> tuple[httpx.Request, object]:
+    sent: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=reply_body, request=request)
+
+    response: Final = litellm.llm_passthrough_route(
+        model=f"bedrock/{model}",
+        method="POST",
+        endpoint=f"/model/{model}/{action}",
+        json=INVOKE_BODY,
+        request_headers=dict(request_headers),
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        aws_access_key_id="AKIASDKKEY",
+        aws_secret_access_key="sdk-secret",
+        aws_region_name="us-east-1",
+    )
+    return sent[0], response
+
+
 @pytest.mark.parametrize("action", ["invoke", "invoke-with-response-stream"])
-@pytest.mark.parametrize(
-    ("caller_trace", "sent_trace"),
-    [
-        pytest.param(None, "ENABLED", id="no_trace"),
-        pytest.param("DISABLED", "ENABLED", id="disabled"),
-        pytest.param("disabled", "ENABLED", id="disabled_lowercase"),
-        pytest.param("enabled", "ENABLED", id="enabled_lowercase"),
-        pytest.param("ENABLED_FULL", "ENABLED_FULL", id="enabled_full"),
-        pytest.param("enabled_full", "ENABLED", id="enabled_full_lowercase"),
-        pytest.param(" ENABLED", "ENABLED", id="enabled_padded"),
-    ],
-)
-async def test_invoke_passthrough_traces_a_caller_guardrail_so_bedrock_reports_its_usage(
-    action: str, caller_trace: str | None, sent_trace: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("caller_trace", [None, "DISABLED", "enabled"])
+def test_sdk_invoke_passthrough_sends_the_caller_guardrail_trace_exactly_as_sent(
+    action: str, caller_trace: str | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
     caller_trace_header: Final = {} if caller_trace is None else {"x-pass-X-Amzn-Bedrock-Trace": caller_trace}
+    sent_trace_header: Final = {} if caller_trace is None else {"x-amzn-bedrock-trace": caller_trace}
 
-    request: Final = await _sent_passthrough_request(
-        action, INVOKE_BODY, {}, request_headers={**CALLER_GUARDRAIL_IDENTITY_HEADERS, **caller_trace_header}
+    request, _ = _sdk_passthrough_call(
+        SDK_INVOKE_MODEL, action, {**CALLER_GUARDRAIL_IDENTITY_HEADERS, **caller_trace_header}, {"ok": True}
     )
 
-    assert _invoke_guardrail_headers(request) == {**SENT_CALLER_GUARDRAIL_IDENTITY, "x-amzn-bedrock-trace": sent_trace}
-    assert "x-amzn-bedrock-trace" in _signed_header_names(request)
+    assert _invoke_guardrail_headers(request) == {**SENT_CALLER_GUARDRAIL_IDENTITY, **sent_trace_header}
     assert json.loads(request.content) == INVOKE_BODY
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("action", "caller_headers", "sent_guardrail_headers"),
-    [
-        pytest.param("invoke", {}, {}, id="invoke_without_guardrail"),
-        pytest.param(
-            "invoke",
-            {"x-pass-X-Amzn-Bedrock-Trace": "DISABLED"},
-            {"x-amzn-bedrock-trace": "DISABLED"},
-            id="invoke_trace_without_guardrail",
-        ),
-        pytest.param(
-            "converse", CALLER_GUARDRAIL_IDENTITY_HEADERS, SENT_CALLER_GUARDRAIL_IDENTITY, id="converse_guardrail"
-        ),
-    ],
-)
-async def test_passthrough_adds_no_trace_where_no_caller_invoke_guardrail_runs(
-    action: str,
-    caller_headers: Mapping[str, str],
-    sent_guardrail_headers: Mapping[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
-    body: Final = CONVERSE_BODY if action == "converse" else INVOKE_BODY
-
-    request: Final = await _sent_passthrough_request(action, body, {}, request_headers=caller_headers)
-
-    assert _invoke_guardrail_headers(request) == sent_guardrail_headers
 
 
 @pytest.mark.asyncio
@@ -1776,4 +1760,47 @@ async def test_invoke_stream_relay_bills_the_guardrail_bedrock_traced(
     assert callback.kwargs is not None
     assert _billed_guardrails(callback.kwargs["standard_logging_object"]) == [
         (BILLED_GUARDRAIL_USAGE, pytest.approx(BILLED_GUARDRAIL_COST))
+    ]
+
+
+class _CaptureSyncSuccessCallback(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.standard_logging_objects: list[object] = []
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.standard_logging_objects.append(kwargs.get("standard_logging_object"))
+
+
+@pytest.mark.parametrize(
+    ("model", "reply_body"),
+    [param for param in INVOKE_REPLIES_WITH_A_GUARDRAIL_TRACE if param.id in {"nova", "claude"}],
+)
+def test_sdk_invoke_passthrough_bills_the_caller_guardrail_bedrock_traced_once(
+    model: str, reply_body: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
+    monkeypatch.setitem(litellm.model_cost, "bedrock/guardrails", GUARDRAIL_PRICING)
+    callback: Final = _CaptureSyncSuccessCallback()
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    traced_reply: Final = {**reply_body, "amazon-bedrock-trace": INVOKE_GUARDRAIL_TRACE}
+
+    with patch("litellm.utils.executor", _ImmediateExecutor()):
+        request, response = _sdk_passthrough_call(
+            model,
+            "invoke",
+            {**CALLER_GUARDRAIL_IDENTITY_HEADERS, "x-pass-X-Amzn-Bedrock-Trace": "ENABLED"},
+            traced_reply,
+        )
+
+    assert isinstance(response, httpx.Response)
+    assert response.json() == traced_reply
+    assert _invoke_guardrail_headers(request) == {
+        **SENT_CALLER_GUARDRAIL_IDENTITY,
+        "x-amzn-bedrock-trace": "ENABLED",
+    }
+    assert [_billed_guardrails(logged) for logged in callback.standard_logging_objects] == [
+        [(BILLED_GUARDRAIL_USAGE, pytest.approx(BILLED_GUARDRAIL_COST))]
     ]

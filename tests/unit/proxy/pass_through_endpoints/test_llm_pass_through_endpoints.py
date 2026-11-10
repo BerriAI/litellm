@@ -1350,6 +1350,17 @@ async def test_mistral_passthrough_accepts_multipart_without_json_parsing():
     assert captured_kwargs["custom_headers"] == {"Authorization": "Bearer mistral-test-key"}
 
 
+BEDROCK_PROXY_MODEL: Final = "anthropic.claude-sonnet-5-5"
+BEDROCK_PROXY_CALLER_BEARER: Final = "sk-caller-virtual-key"
+BEDROCK_PROXY_ROUTES: Final = pytest.mark.parametrize(
+    ("path_model", "uses_router"),
+    [
+        pytest.param("bedrock-sonnet", True, id="router_model"),
+        pytest.param(BEDROCK_PROXY_MODEL, False, id="direct_model"),
+    ],
+)
+
+
 class TestBedrockLLMProxyRoute:
     @pytest.mark.asyncio
     async def test_bedrock_llm_proxy_route_application_inference_profile(self):
@@ -1519,82 +1530,90 @@ class TestBedrockLLMProxyRoute:
         processing_data: Final = processor_constructor.call_args.kwargs["data"]
         _assert_bedrock_processing_data_classification(processing_data, is_streaming)
 
-    @pytest.mark.parametrize(
-        ("path_model", "uses_router"),
-        [
-            pytest.param("bedrock-sonnet", True, id="router_model"),
-            pytest.param("anthropic.claude-sonnet-5-5", False, id="direct_model"),
-        ],
-    )
+    @BEDROCK_PROXY_ROUTES
     def test_invoke_signs_the_caller_x_pass_header_and_sends_no_caller_credential(
         self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None, path_model: str, uses_router: bool
     ) -> None:
-        from litellm.proxy import proxy_server
-
-        model: Final = "anthropic.claude-sonnet-5-5"
-        caller_bearer: Final = "sk-caller-virtual-key"
         caller_cookie: Final = "proxy_session=caller-secret"
-        for ambient in (
-            *TestBedrockAgentRuntimePassthroughVirtualKeyLeak.AMBIENT_AWS_ENV,
-            "AWS_BEDROCK_RUNTIME_ENDPOINT",
-        ):
-            monkeypatch.delenv(ambient, raising=False)
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
-        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
-        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
-        router: Final = (
-            litellm.Router(
-                model_list=[
-                    {
-                        "model_name": "bedrock-sonnet",
-                        "litellm_params": {"model": f"bedrock/{model}", "aws_region_name": "us-east-1"},
-                    }
-                ]
-            )
-            if uses_router
-            else None
-        )
-        monkeypatch.setattr(proxy_server, "llm_router", router)
-        monkeypatch.setitem(
-            proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key=caller_bearer)
+
+        sent, _ = _bedrock_invoke_through_proxy(
+            monkeypatch,
+            path_model,
+            uses_router,
+            {
+                "x-pass-X-Amzn-Bedrock-Service-Tier": "priority",
+                "Authorization": f"Bearer {BEDROCK_PROXY_CALLER_BEARER}",
+                "Cookie": caller_cookie,
+            },
         )
 
-        with respx.mock(assert_all_called=True) as upstream:
-            invoke: Final = upstream.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/invoke").mock(
-                return_value=httpx.Response(
-                    200,
-                    json={
-                        "id": "msg_bedrock",
-                        "type": "message",
-                        "role": "assistant",
-                        "model": model,
-                        "content": [{"type": "text", "text": "ok"}],
-                        "stop_reason": "end_turn",
-                        "usage": {"input_tokens": 5, "output_tokens": 1},
-                    },
-                )
-            )
-            response: Final = TestClient(proxy_server.app).post(
-                f"/bedrock/model/{path_model}/invoke",
-                json={
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 16,
-                    "messages": [{"role": "user", "content": "hi"}],
-                },
-                headers={
-                    "x-pass-X-Amzn-Bedrock-Service-Tier": "priority",
-                    "Authorization": f"Bearer {caller_bearer}",
-                    "Cookie": caller_cookie,
-                },
-            )
-
-        assert response.status_code == 200, response.text
-        sent: Final = invoke.calls.last.request
         signed_headers: Final = sent.headers["authorization"].split("SignedHeaders=")[1].split(",")[0].split(";")
         assert sent.headers["x-amzn-bedrock-service-tier"] == "priority"
         assert "x-amzn-bedrock-service-tier" in signed_headers
         assert [name for name in sent.headers if name.startswith("x-pass-") or name == "cookie"] == []
-        assert [value for value in sent.headers.values() if caller_bearer in value or caller_cookie in value] == []
+        assert [
+            value for value in sent.headers.values() if BEDROCK_PROXY_CALLER_BEARER in value or caller_cookie in value
+        ] == []
+
+    @BEDROCK_PROXY_ROUTES
+    @pytest.mark.parametrize("caller_trace", [None, "DISABLED", "enabled"])
+    def test_invoke_sends_the_caller_guardrail_trace_exactly_as_sent(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        httpx_transport: None,
+        path_model: str,
+        uses_router: bool,
+        caller_trace: str | None,
+    ) -> None:
+        trace_header: Final = {} if caller_trace is None else {"x-pass-X-Amzn-Bedrock-Trace": caller_trace}
+
+        sent, _ = _bedrock_invoke_through_proxy(
+            monkeypatch,
+            path_model,
+            uses_router,
+            {
+                "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+                "x-pass-X-Amzn-Bedrock-GuardrailVersion": "9",
+                **trace_header,
+            },
+        )
+
+        assert (
+            sent.headers["x-amzn-bedrock-guardrailidentifier"],
+            sent.headers["x-amzn-bedrock-guardrailversion"],
+            sent.headers.get("x-amzn-bedrock-trace"),
+        ) == ("caller-guardrail", "9", caller_trace)
+
+    @BEDROCK_PROXY_ROUTES
+    def test_invoke_keeps_protected_x_pass_values_from_bedrock_guardrails_and_the_logged_body(
+        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None, path_model: str, uses_router: bool
+    ) -> None:
+        protected_values: Final = (
+            "Bearer upstream-secret",
+            "upstream-api-key",
+            "forged-session-token",
+            "session=upstream-cookie",
+            "Basic upstream-proxy-secret",
+        )
+
+        sent, guardrail_data = _bedrock_invoke_through_proxy(
+            monkeypatch,
+            path_model,
+            uses_router,
+            {
+                "x-pass-authorization": protected_values[0],
+                "x-pass-x-api-key": protected_values[1],
+                "x-pass-X-Amz-Security-Token": protected_values[2],
+                "x-pass-cookie": protected_values[3],
+                "x-pass-proxy-authorization": protected_values[4],
+                "x-pass-X-Amzn-Bedrock-GuardrailIdentifier": "caller-guardrail",
+            },
+        )
+
+        logged_body: Final = json.dumps(guardrail_data["proxy_server_request"]["body"], default=str)
+        assert sent.headers["x-amzn-bedrock-guardrailidentifier"] == "caller-guardrail"
+        assert guardrail_data["request_headers"] == {"x-pass-x-amzn-bedrock-guardrailidentifier": "caller-guardrail"}
+        assert [value for value in protected_values if value in str(sent.headers.raw) or value in logged_body] == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1946,6 +1965,84 @@ class TestBedrockLLMProxyRoute:
 
         assert exc_info.value.status_code == 400
         assert "Blocked by guardrail" in str(exc_info.value.detail)
+
+
+class _RequestDataCaptureGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="request-data-capture", default_on=True, event_hook="pre_call")
+        self.data: dict[str, object] = {}
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
+        self.data = data
+        return data
+
+
+def _bedrock_invoke_through_proxy(
+    monkeypatch: pytest.MonkeyPatch, path_model: str, uses_router: bool, headers: Mapping[str, str]
+) -> tuple[httpx.Request, dict[str, object]]:
+    from litellm.proxy import proxy_server
+
+    for ambient in (*TestBedrockAgentRuntimePassthroughVirtualKeyLeak.AMBIENT_AWS_ENV, "AWS_BEDROCK_RUNTIME_ENDPOINT"):
+        monkeypatch.delenv(ambient, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    router: Final = (
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "bedrock-sonnet",
+                    "litellm_params": {"model": f"bedrock/{BEDROCK_PROXY_MODEL}", "aws_region_name": "us-east-1"},
+                }
+            ]
+        )
+        if uses_router
+        else None
+    )
+    guardrail: Final = _RequestDataCaptureGuardrail()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key=BEDROCK_PROXY_CALLER_BEARER),
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        invoke: Final = upstream.post(
+            f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{BEDROCK_PROXY_MODEL}/invoke"
+        ).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "msg_bedrock",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": BEDROCK_PROXY_MODEL,
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 5, "output_tokens": 1},
+                },
+            )
+        )
+        response: Final = TestClient(proxy_server.app).post(
+            f"/bedrock/model/{path_model}/invoke",
+            json={
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            headers=dict(headers),
+        )
+
+    assert response.status_code == 200, response.text
+    return invoke.calls.last.request, guardrail.data
 
 
 _THROTTLE_TYPE: Final = "ThrottlingException:http://internal.amazon.com/coral/com.amazon.bedrock/"

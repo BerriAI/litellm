@@ -12,7 +12,12 @@ from pydantic import BaseModel, TypeAdapter
 from litellm._logging import verbose_logger
 from litellm.constants import AWS_ERROR_TYPE_HEADER
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
+from litellm.llms.base_llm.passthrough.transformation import (
+    BasePassthroughConfig,
+    PassthroughStreamCollector,
+    relayed_json_object,
+)
 from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_object
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     bedrock_invoke_guardrail_headers,
@@ -21,7 +26,12 @@ from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletio
 from litellm.types.utils import ModelResponseStream
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, BedrockEventStreamDecoderBase, BedrockModelInfo
+from ..common_utils import (
+    BEDROCK_INVOKE_TRACE_FIELD,
+    BedrockError,
+    BedrockEventStreamDecoderBase,
+    BedrockModelInfo,
+)
 from ..request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
     BedrockRequestMetadataViolation,
@@ -46,12 +56,9 @@ if TYPE_CHECKING:
 BEDROCK_STREAMING_ACTIONS: Final = frozenset({"invoke-with-response-stream", "converse-stream"})
 _BEDROCK_CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _BEDROCK_INVOKE_ACTIONS: Final = frozenset({"invoke", "invoke-with-response-stream"})
-_BEDROCK_GUARDRAIL_IDENTIFIER_HEADER: Final = "x-amzn-bedrock-guardrailidentifier"
-_BEDROCK_TRACE_HEADER: Final = "x-amzn-bedrock-trace"
 _BEDROCK_INVOKE_GUARDRAIL_HEADERS: Final = frozenset(
-    {_BEDROCK_GUARDRAIL_IDENTIFIER_HEADER, "x-amzn-bedrock-guardrailversion", _BEDROCK_TRACE_HEADER}
+    {"x-amzn-bedrock-guardrailidentifier", "x-amzn-bedrock-guardrailversion", "x-amzn-bedrock-trace"}
 )
-_BEDROCK_GUARDRAIL_USAGE_TRACES: Final = frozenset({"ENABLED", "ENABLED_FULL"})
 _BEDROCK_SERVICE_TIER_HEADER: Final = "x-amzn-bedrock-service-tier"
 _NO_RESPONSE_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 _TieredResponse: Final = TypeVar("_TieredResponse", bound=BaseModel)
@@ -149,23 +156,6 @@ def _without_invoke_guardrail_headers(headers: Mapping[str, str]) -> Mapping[str
     return {name: value for name, value in headers.items() if name.lower() not in _BEDROCK_INVOKE_GUARDRAIL_HEADERS}
 
 
-def _reports_guardrail_usage(headers: Mapping[str, str]) -> bool:
-    traces: Final = tuple(value for name, value in headers.items() if name.lower() == _BEDROCK_TRACE_HEADER)
-    return bool(traces) and all(trace in _BEDROCK_GUARDRAIL_USAGE_TRACES for trace in traces)
-
-
-def _with_caller_guardrail_trace(action: str, headers: Mapping[str, str]) -> Mapping[str, str]:
-    if action not in _BEDROCK_INVOKE_ACTIONS:
-        return headers
-    if not any(name.lower() == _BEDROCK_GUARDRAIL_IDENTIFIER_HEADER for name in headers):
-        return headers
-    if _reports_guardrail_usage(headers):
-        return headers
-    return merge_bedrock_invoke_headers(
-        dict(headers), (), (("X-Amzn-Bedrock-Trace", "ENABLED"),), frozenset({_BEDROCK_TRACE_HEADER})
-    )
-
-
 def _with_deployment_guardrail(
     action: str,
     headers: Mapping[str, str],
@@ -173,7 +163,7 @@ def _with_deployment_guardrail(
     guardrail_config: object,
 ) -> tuple[Mapping[str, str], Mapping[str, object]]:
     if guardrail_config is None:
-        return _with_caller_guardrail_trace(action, headers), body
+        return headers, body
     if action in _BEDROCK_CONVERSE_ACTIONS:
         return _without_invoke_guardrail_headers(headers), {
             **body,
@@ -298,6 +288,19 @@ class _CoalescedChunks:
         return self._chunks
 
 
+_BEDROCK_EVENT: Final = TypeAdapter(dict[str, object])
+
+
+def _with_invoke_trace(chunk: ModelResponseStream, trace: Mapping[str, object] | None) -> ModelResponseStream:
+    if trace is None:
+        return chunk
+    return chunk.model_copy(
+        update={
+            "provider_specific_fields": {**(chunk.provider_specific_fields or {}), BEDROCK_INVOKE_TRACE_FIELD: trace}
+        }
+    )
+
+
 def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelResponseStream | None:
     from litellm.litellm_core_utils.streaming_handler import (
         convert_generic_chunk_to_model_response_stream,
@@ -305,11 +308,15 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
     )
     from litellm.types.utils import GenericStreamingChunk
 
-    translated_chunk: Final = decoder.chunk_parser(chunk_data=json.loads(message))
+    event: Final = _BEDROCK_EVENT.validate_json(message)
+    trace: Final = object_mapping(event.get(BEDROCK_INVOKE_TRACE_FIELD))
+    translated_chunk: Final = decoder.chunk_parser(chunk_data=event)
     if isinstance(translated_chunk, ModelResponseStream):
-        return translated_chunk
-    if generic_chunk_has_all_required_fields(translated_chunk):
-        return convert_generic_chunk_to_model_response_stream(cast(GenericStreamingChunk, translated_chunk))
+        return _with_invoke_trace(translated_chunk, trace)
+    if generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
+        return _with_invoke_trace(
+            convert_generic_chunk_to_model_response_stream(cast(GenericStreamingChunk, translated_chunk)), trace
+        )
     return None
 
 
@@ -362,6 +369,11 @@ def _count_prompt_tokens(model: str, request_body: object) -> int:
         *map(_chat_message, _JSON_OBJECTS.validate_python(body["messages"])),
     )
     return token_counter(model=model, messages=messages)
+
+
+def _invoke_guardrail_trace(httpx_response: Response) -> Mapping[str, object]:
+    reply: Final = relayed_json_object(httpx_response) or {}
+    return {BEDROCK_INVOKE_TRACE_FIELD: reply.get(BEDROCK_INVOKE_TRACE_FIELD)}
 
 
 def _served_service_tier(response_headers: Mapping[str, str]) -> str | None:
@@ -589,6 +601,8 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             request_data=request_data,
             encoding=encoding,
         )
+        if "invoke" in endpoint:
+            logging_obj.record_native_bedrock_guardrail(_invoke_guardrail_trace(httpx_response))
 
         return _with_served_service_tier(litellm_model_response, _served_service_tier(httpx_response.headers))
 

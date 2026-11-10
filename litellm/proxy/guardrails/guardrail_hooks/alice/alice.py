@@ -70,7 +70,7 @@ _MAX_ITEMS: Final = 5000
 # than what the proxy already refuses to persist in its own audit trail — so none of them leave
 # the process.
 _CREDENTIAL_KEYS_TO_STRIP: Final = frozenset(
-    {"secret_fields", "api_key", "raw_headers", "headers", "request_headers", "provider_specific_header"}
+    {"secret_fields", "api_key", "raw_headers", "headers", "provider_specific_header"}
 )
 
 

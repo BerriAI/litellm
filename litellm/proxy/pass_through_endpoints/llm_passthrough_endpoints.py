@@ -1423,6 +1423,12 @@ async def bedrock_passthrough_error_response(
         raise
 
 
+def _bedrock_pass_through_headers(request: Request) -> Mapping[str, str]:
+    from litellm.proxy.litellm_pre_call_utils import without_credential_headers
+
+    return without_credential_headers(BasePassthroughUtils.pass_through_prefixed_headers(request.headers))
+
+
 async def handle_bedrock_passthrough_router_model(
     model: str,
     endpoint: str,
@@ -1478,7 +1484,7 @@ async def handle_bedrock_passthrough_router_model(
         "endpoint": endpoint,
         "data": request_body,
         "custom_llm_provider": "bedrock",
-        "request_headers": BasePassthroughUtils.pass_through_prefixed_headers(request.headers),
+        "request_headers": _bedrock_pass_through_headers(request),
     }
     data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
         MappingProxyType(bedrock_payload),
@@ -1685,7 +1691,7 @@ async def bedrock_llm_proxy_route(
         "endpoint": endpoint,
         "data": request_body,
         "custom_llm_provider": "bedrock",
-        "request_headers": BasePassthroughUtils.pass_through_prefixed_headers(request.headers),
+        "request_headers": _bedrock_pass_through_headers(request),
     }
     data: Final[dict[str, object]] = guardrail_request_data_with_streaming(
         MappingProxyType(passthrough_payload),

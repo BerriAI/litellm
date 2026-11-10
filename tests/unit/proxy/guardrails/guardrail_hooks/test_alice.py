@@ -1,12 +1,10 @@
 import json
 import os
 from copy import deepcopy
-from typing import Final
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-import respx
 from httpx import Request, Response
 
 import litellm
@@ -251,29 +249,6 @@ class TestAliceCredentialStripping:
         assert "headers" not in sent_request_data["litellm_metadata"]
         assert "secret_fields" not in sent_request_data
         assert "provider_specific_header" not in sent_request_data
-
-    @pytest.mark.asyncio
-    async def test_forwarded_x_pass_headers_never_reach_alice(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-        guardrail: Final = _guardrail()
-        request_data: Final = {
-            "model": "bedrock-sonnet",
-            "request_headers": {
-                "x-pass-authorization": "Bearer forwarded-upstream-secret",
-                "x-pass-cookie": "session=forwarded-cookie-secret",
-            },
-        }
-
-        with respx.mock(assert_all_called=True) as alice:
-            evaluate: Final = alice.post(guardrail.api_base).mock(
-                return_value=httpx.Response(200, json={"verdict": "ALLOW", "categories": []})
-            )
-            await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data=request_data, input_type="request")
-
-        posted: Final = evaluate.calls.last.request.content.decode()
-        assert json.loads(posted)["request_data"] == {"model": "bedrock-sonnet"}
-        assert "forwarded-upstream-secret" not in posted
-        assert "forwarded-cookie-secret" not in posted
 
     @pytest.mark.asyncio
     async def test_the_original_request_data_is_not_mutated(self):

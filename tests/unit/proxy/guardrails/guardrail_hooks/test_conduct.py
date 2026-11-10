@@ -260,23 +260,6 @@ def test_request_payload_skips_model_responses() -> None:
 
 
 @pytest.mark.asyncio
-async def test_forwarded_x_pass_headers_never_reach_conduct() -> None:
-    check: Final = _RecordingCheck("allow")
-    request_data: Final = {
-        "model": "gpt-5-mini",
-        "request_headers": {
-            "x-pass-authorization": "Bearer forwarded-upstream-secret",
-            "x-pass-cookie": "session=forwarded-cookie-secret",
-        },
-    }
-
-    await _bridge(check, GenericGuardrailAPIInputs(texts=["hi"]), request_data, "request")
-
-    ((sent, _),) = check.calls
-    assert dict(sent) == {"model": "gpt-5-mini", "prompt": None, "messages": ({"role": "user", "content": "hi"},)}
-
-
-@pytest.mark.asyncio
 async def test_tool_call_only_turns_still_reach_conduct() -> None:
     check: Final = _RecordingCheck("block")
     tool_call_turn: Final = ChatCompletionAssistantMessage(

@@ -54,8 +54,7 @@ def request_payload(
     messages: Final = inputs.get("structured_messages") or tuple(
         ChatCompletionUserMessage(role="user", content=text) for text in inputs.get("texts") or ()
     )
-    forwarded_fields: Final = {key: value for key, value in request_data.items() if key != "request_headers"}
-    return MappingProxyType({**forwarded_fields, "prompt": None, "messages": messages})
+    return MappingProxyType({**request_data, "prompt": None, "messages": messages})
 
 
 def decision_status(decision: ConductDecision) -> GuardrailStatus:

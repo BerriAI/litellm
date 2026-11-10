@@ -258,15 +258,6 @@ def test_chunk_parser_usage_transformation():
     assert parsed["usage"]["output_tokens"] == 5
 
 
-def test_chunk_parser_hands_a_messages_client_the_guardrail_trace_as_bedrock_sent_it() -> None:
-    decoder: Final = AmazonAnthropicClaudeMessagesStreamDecoder(model="bedrock/invoke/anthropic.claude-sonnet-4-6")
-    trace: Final = {"guardrail": {"input": {"gid": {"invocationMetrics": {"usage": {"topicPolicyUnits": 1}}}}}}
-
-    parsed: Final = decoder.chunk_parser({"type": "message_stop", "amazon-bedrock-trace": trace})
-
-    assert parsed == {"type": "message_stop", "amazon-bedrock-trace": trace}
-
-
 def test_chunk_parser_preserves_cache_usage_fields_with_invocation_metrics():
     """Cache usage fields on the chunk must survive invocationMetrics conversion.
 

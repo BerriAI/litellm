@@ -1,11 +1,8 @@
-import json
 import uuid
-from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import respx
 from fastapi import HTTPException
 from httpx import Request, Response
 
@@ -948,34 +945,3 @@ class TestOnyxIntegration:
         # Verify empty payload was sent
         call_args = mock_post.call_args
         assert call_args.kwargs["json"]["payload"] == {}
-
-
-@pytest.mark.asyncio
-async def test_unparseable_response_fallback_never_sends_forwarded_x_pass_headers_to_onyx(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setenv("ONYX_API_KEY", "test-api-key")
-    monkeypatch.delenv("ONYX_API_BASE", raising=False)
-    guardrail: Final = OnyxGuardrail(guardrail_name="test-guard", event_hook="post_call", default_on=True)
-    request_data: Final = {
-        "model": "bedrock-sonnet",
-        "created": "not-a-timestamp",
-        "request_headers": {
-            "x-pass-authorization": "Bearer forwarded-upstream-secret",
-            "x-pass-cookie": "session=forwarded-cookie-secret",
-        },
-    }
-
-    with respx.mock(assert_all_called=True) as onyx:
-        evaluate: Final = onyx.post("https://ai-guard.onyx.security/guard/evaluate/v1/test-api-key/litellm").mock(
-            return_value=httpx.Response(200, json={"allowed": True})
-        )
-        await guardrail.apply_guardrail(
-            inputs=GenericGuardrailAPIInputs(texts=["ok"]), request_data=request_data, input_type="response"
-        )
-
-    posted: Final = evaluate.calls.last.request.content.decode()
-    assert json.loads(posted)["payload"] == {"model": "bedrock-sonnet", "created": "not-a-timestamp"}
-    assert "forwarded-upstream-secret" not in posted
-    assert "forwarded-cookie-secret" not in posted

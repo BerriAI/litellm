@@ -165,7 +165,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
 
         return "\n".join(prompt_parts)
 
-    def _transform_invoke_response(
+    def transform_response(
         self,
         model: str,
         raw_response: httpx.Response,

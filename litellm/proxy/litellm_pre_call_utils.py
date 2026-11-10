@@ -1644,6 +1644,10 @@ def redact_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
     }
 
 
+def without_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {header: value for header, value in headers.items() if not _is_credential_header(header)}
+
+
 class TenantLoggingMetadata(TypedDict):
     user_api_key_metadata: ReadOnly[Mapping[str, object] | None]
     user_api_key_team_metadata: ReadOnly[Mapping[str, object] | None]
@@ -2612,7 +2616,6 @@ def refresh_proxy_server_request_body_snapshot(
         frozenset(
             {
                 "secret_fields",
-                "request_headers",
                 "proxy_server_request",
                 "litellm_logging_obj",
                 VECTOR_STORE_CALLER_METADATA_KWARG,

@@ -29,16 +29,16 @@ if TYPE_CHECKING:
 
 
 class AmazonDeepSeekR1Config(AmazonLlamaConfig):
-    def _transform_invoke_response(
+    def transform_response(
         self,
         model: str,
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict[str, object],
+        request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -46,7 +46,7 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
         """
         Extract the reasoning content, and return it as a separate field in the response.
         """
-        response: Final = super()._transform_invoke_response(
+        response: Final = super().transform_response(
             model,
             raw_response,
             model_response,

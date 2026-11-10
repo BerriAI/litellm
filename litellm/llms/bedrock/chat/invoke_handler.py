@@ -19,7 +19,6 @@ from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     native_redacted_thinking_data,
 )
-from litellm.litellm_core_utils.streaming_handler import generic_chunk_has_all_required_fields
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -782,7 +781,7 @@ class AWSEventStreamDecoder:
         except Exception as e:
             raise Exception(f"Received streaming error - {e}")
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict[str, object]:
+    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         text = ""
         is_finished = False
         finish_reason = ""
@@ -841,30 +840,7 @@ class AWSEventStreamDecoder:
         self,
         chunk_data: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> GChunk | ModelResponseStream | dict[str, object]:  # mutable-ok: mirrors override contract
-        parsed: Final = self._chunk_parser(chunk_data)
-        trace: Final = (
-            object_mapping(chunk_data[BEDROCK_INVOKE_TRACE_FIELD]) if BEDROCK_INVOKE_TRACE_FIELD in chunk_data else None
-        )
-        if trace is None:
-            return parsed
-        if isinstance(parsed, ModelResponseStream):
-            return parsed.model_copy(
-                update={
-                    "provider_specific_fields": {
-                        **(parsed.provider_specific_fields or {}),
-                        BEDROCK_INVOKE_TRACE_FIELD: trace,
-                    }
-                }
-            )
-        if not generic_chunk_has_all_required_fields(parsed):
-            return parsed
-        return {
-            **parsed,
-            "provider_specific_fields": {
-                **(object_mapping(parsed.get("provider_specific_fields")) or {}),
-                BEDROCK_INVOKE_TRACE_FIELD: trace,
-            },
-        }
+        return self._chunk_parser(chunk_data)
 
     def iter_bytes(
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
@@ -994,7 +970,18 @@ class AmazonAnthropicClaudeStreamDecoder(AWSEventStreamDecoder):
         )
 
     def _chunk_parser(self, chunk_data: dict[str, object]) -> ModelResponseStream:
-        return self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
+        parsed: Final = self.anthropic_model_response_iterator.chunk_parser(chunk=chunk_data)
+        trace: Final = object_mapping(chunk_data.get(BEDROCK_INVOKE_TRACE_FIELD))
+        if trace is None:
+            return parsed
+        return parsed.model_copy(
+            update={
+                "provider_specific_fields": {
+                    **(parsed.provider_specific_fields or {}),
+                    BEDROCK_INVOKE_TRACE_FIELD: trace,
+                }
+            }
+        )
 
     def _stream_end_chunk(self) -> ModelResponseStream | None:
         return self.anthropic_model_response_iterator.cut_stream_chunk()
