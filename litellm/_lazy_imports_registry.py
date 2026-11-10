@@ -131,6 +131,10 @@ LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         "BespokeDecisionsConfig": (".llms.bespoke.decisions.transformation", "BespokeDecisionsConfig"),
         "EmpirioLabsDecisionsConfig": (".llms.empiriolabs.decisions.transformation", "EmpirioLabsDecisionsConfig"),
         "EuJevDecisionsConfig": (".llms.eu_jev.decisions.transformation", "EuJevDecisionsConfig"),
+        "DecisionModelsDecisionsConfig": (
+            ".llms.decision_models.decisions.transformation",
+            "DecisionModelsDecisionsConfig",
+        ),
         "OpenAIDecisionsConfig": (".llms.openai.decisions.transformation", "OpenAIDecisionsConfig"),
         "AzureDecisionsConfig": (".llms.azure.decisions.transformation", "AzureDecisionsConfig"),
         "AzureAIDecisionsConfig": (".llms.azure_ai.decisions.transformation", "AzureAIDecisionsConfig"),

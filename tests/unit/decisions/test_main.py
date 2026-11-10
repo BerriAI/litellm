@@ -135,6 +135,7 @@ _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
         "typesafe/jev-1.13",
     ),
     ("empiriolabs", "empiriolabs/aplomb-1", "https://api.empiriolabs.ai/v1/decisions", "aplomb-1"),
+    ("decision_models", "decision_models/s1-fast", "https://api.decisionmodels.io/v1/systemone", "s1-fast"),
 )
 
 _OPENAI_RESPONSE: Final[Mapping[str, object]] = {
@@ -3623,6 +3624,176 @@ def test_empiriolabs_upstream_errors_keep_their_status_and_message(
             model=_EMPIRIOLABS_MODEL,
             state=_EMPIRIOLABS_STATE,
             questions=_EMPIRIOLABS_QUESTIONS,
+            api_key="caller-key",
+            num_retries=0,
+        )
+
+    assert getattr(caught.value, "status_code") == status
+    assert route.call_count == 1
+
+
+_DECISION_MODELS_MODEL: Final = "decision_models/s1-fast"
+_DECISION_MODELS_DEFAULT_URL: Final = "https://api.decisionmodels.io/v1/systemone"
+_DECISION_MODELS_STATE: Final = "Printer on floor 2 is offline again."
+_DECISION_MODELS_QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
+    {"is_urgent": {"type": "noul", "instructions": "Does this convey urgency?"}}
+)
+_DECISION_MODELS_RESPONSE: Final[Mapping[str, object]] = {
+    "id": "dec_example",
+    "model": "s1-fast",
+    "answers": {"is_urgent": {"type": "noul", "noul": 0.97}},
+    "usage": {"input_tokens": 24, "output_tokens": 0, "decisions": 1},
+    "tier": "global",
+}
+
+
+@pytest.mark.parametrize(
+    ("api_base", "environment_api_base", "url"),
+    (
+        (None, None, _DECISION_MODELS_DEFAULT_URL),
+        (None, "https://environment-gateway.example/v1", "https://environment-gateway.example/v1/systemone"),
+        (
+            "https://gateway.example/v1/",
+            "https://environment-gateway.example/v1",
+            "https://gateway.example/v1/systemone",
+        ),
+        ("https://gateway.example", None, "https://gateway.example/v1/systemone"),
+    ),
+    ids=("default_base", "environment_base", "explicit_base_over_environment", "explicit_base_without_v1"),
+)
+def test_decision_models_posts_the_systemone_body_to_v1_systemone_on_the_resolved_base(
+    api_base: str | None,
+    environment_api_base: str | None,
+    url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DECISION_MODELS_API_BASE", raising=False)
+    if environment_api_base is not None:
+        monkeypatch.setenv("DECISION_MODELS_API_BASE", environment_api_base)
+    route: Final = respx_mock.post(url).respond(json=_DECISION_MODELS_RESPONSE)
+
+    response: Final = litellm.systemone(
+        model=_DECISION_MODELS_MODEL,
+        state=_DECISION_MODELS_STATE,
+        questions=_DECISION_MODELS_QUESTIONS,
+        api_base=api_base,
+        api_key="caller-key",
+    )
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "s1-fast",
+        "state": _DECISION_MODELS_STATE,
+        "questions": {"is_urgent": {"type": "noul", "instructions": "Does this convey urgency?"}},
+    }
+    assert response.answers["is_urgent"] == NoulAnswer(type="noul", noul=0.97)
+    assert response._hidden_params["custom_llm_provider"] == "decision_models"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_key", "authorization"),
+    ((None, "Bearer environment-key"), ("caller-key", "Bearer caller-key")),
+    ids=("environment_key", "caller_key_over_environment"),
+)
+async def test_decision_models_sends_the_caller_key_or_else_the_environment_key(
+    api_key: str | None,
+    authorization: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DECISION_MODELS_API_BASE", raising=False)
+    monkeypatch.setenv("DECISION_MODELS_API_KEY", "environment-key")
+    route: Final = respx_mock.post(_DECISION_MODELS_DEFAULT_URL).respond(json=_DECISION_MODELS_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model=_DECISION_MODELS_MODEL,
+        input=_DECISION_MODELS_STATE,
+        questions=[{"type": "predicate", "name": "is_urgent", "instructions": "Does this convey urgency?"}],
+        api_key=api_key,
+    )
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["authorization"] == authorization
+    assert isinstance(response, OpenAIDecisionResponse)
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        {"type": "predicate", "name": "is_urgent", "probability": 0.97}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_decision_models_forwards_the_region_header_without_changing_the_body(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DECISION_MODELS_API_BASE", raising=False)
+    route: Final = respx_mock.post(_DECISION_MODELS_DEFAULT_URL).respond(
+        json={**_DECISION_MODELS_RESPONSE, "tier": "eu"}
+    )
+
+    await litellm.adecisions(
+        model=_DECISION_MODELS_MODEL,
+        input=_DECISION_MODELS_STATE,
+        questions=[{"type": "predicate", "name": "is_urgent", "instructions": "Does this convey urgency?"}],
+        api_key="caller-key",
+        extra_headers={"S1-Region": "eu"},
+    )
+
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["s1-region"] == "eu"
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "s1-fast",
+        "state": _DECISION_MODELS_STATE,
+        "questions": {"is_urgent": {"type": "noul", "instructions": "Does this convey urgency?"}},
+    }
+
+
+def test_decision_models_without_a_key_is_refused_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DECISION_MODELS_API_KEY", raising=False)
+    monkeypatch.delenv("DECISION_MODELS_API_BASE", raising=False)
+
+    with pytest.raises(litellm.AuthenticationError, match="Missing API key for Decisions provider 'decision_models'"):
+        litellm.systemone(
+            model=_DECISION_MODELS_MODEL, state=_DECISION_MODELS_STATE, questions=_DECISION_MODELS_QUESTIONS
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "exception"),
+    (
+        (401, litellm.AuthenticationError),
+        (402, litellm.PaymentRequiredError),
+        (404, litellm.NotFoundError),
+        (422, litellm.BadRequestError),
+        (429, litellm.RateLimitError),
+        (503, litellm.ServiceUnavailableError),
+    ),
+)
+def test_decision_models_upstream_errors_keep_their_status_and_message(
+    status: int,
+    exception: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DECISION_MODELS_API_BASE", raising=False)
+    message: Final = f"upstream refused the decision with status {status}"
+    route: Final = respx_mock.post(_DECISION_MODELS_DEFAULT_URL).respond(
+        status,
+        json={"error": {"code": "synthetic", "message": message, "request_id": "dec_example", "retryable": False}},
+        headers={"retry-after": "1"},
+    )
+
+    with pytest.raises(exception, match=message) as caught:
+        litellm.systemone(
+            model=_DECISION_MODELS_MODEL,
+            state=_DECISION_MODELS_STATE,
+            questions=_DECISION_MODELS_QUESTIONS,
             api_key="caller-key",
             num_retries=0,
         )

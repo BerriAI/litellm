@@ -140,6 +140,15 @@ _PROVIDERS: Final = (
         "databricks/databricks-openjev-qwen35-4b",
     ),
     _Provider("empiriolabs", "empiriolabs/aplomb-test", "/v1/decisions", "aplomb-test", _API_KEY, False, None),
+    _Provider(
+        "decision_models",
+        "decision_models/s1-fast",
+        "/v1/systemone",
+        "s1-fast",
+        _API_KEY,
+        False,
+        "decision_models/s1-fast",
+    ),
 )
 _LOCAL_PROVIDERS: Final = (
     pytest.param(

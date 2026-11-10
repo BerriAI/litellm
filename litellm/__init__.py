@@ -1782,6 +1782,9 @@ if TYPE_CHECKING:
     from .llms.eu_jev.decisions.transformation import (
         EuJevDecisionsConfig as EuJevDecisionsConfig,
     )
+    from .llms.decision_models.decisions.transformation import (
+        DecisionModelsDecisionsConfig as DecisionModelsDecisionsConfig,
+    )
     from .llms.openai.decisions.transformation import (
         OpenAIDecisionsConfig as OpenAIDecisionsConfig,
     )
