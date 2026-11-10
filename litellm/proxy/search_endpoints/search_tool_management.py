@@ -72,7 +72,7 @@ def _with_loaded_tools_where_undecryptable(db_search_tools: Sequence[dict[str, o
     from litellm.proxy.proxy_server import llm_router
 
     kept_search_tools: Final = keep_loaded_search_tools_that_do_not_decrypt(
-        db_search_tools, loaded_search_tools=llm_router.search_tools if llm_router is not None else ()
+        db_search_tools, loaded_search_tools=llm_router.settings().search_tools if llm_router is not None else ()
     )
     return [
         {**db_tool, "litellm_params": kept_tool.get("litellm_params")}

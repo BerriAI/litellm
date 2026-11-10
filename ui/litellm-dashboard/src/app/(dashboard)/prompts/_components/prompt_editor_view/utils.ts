@@ -1,3 +1,4 @@
+import i18n from "@/i18n/i18n";
 import { PromptType, Message, Tool } from "./types";
 
 export const extractVariables = (prompt: PromptType): string[] => {
@@ -117,7 +118,7 @@ const parseToolsFromFrontmatter = (lines: string[]): Tool[] => {
     try {
       const toolObj = JSON.parse(rawJson);
       tools.push({
-        name: toolObj?.function?.name || "Unnamed Tool",
+        name: toolObj?.function?.name || i18n.t("prompts.editor.unnamedTool"),
         description: toolObj?.function?.description || "",
         json: JSON.stringify(toolObj, null, 2),
       });
