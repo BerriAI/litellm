@@ -5638,6 +5638,12 @@ class BaseLLMHTTPHandler:
         return not stream and api_surface == "anthropic_messages"
 
     @staticmethod
+    def _unreplaceable_refusal(error: AgenticLoopSafetyError, stream: bool, model: str) -> Exception:
+        if stream or not isinstance(error, AgenticLoopToolChoiceError):
+            return error
+        return litellm.BadRequestError(message=str(error), model=model, llm_provider="")
+
+    @staticmethod
     def _finalize_refused_agentic_response(response: object, tool_calls: object) -> object:
         """
         Turn the response into a terminal turn after a safety rail refused the rerun.
@@ -6063,7 +6069,7 @@ class BaseLLMHTTPHandler:
                 )
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
-                    raise
+                    raise self._unreplaceable_refusal(e, stream, model)
                 verbose_logger.warning(
                     "LiteLLM.AgenticLoopRefused: ending turn [call_id=%s model=%s]: %s",
                     logging_obj.litellm_call_id,

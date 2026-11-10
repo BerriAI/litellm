@@ -62,7 +62,6 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
 )
-from litellm.types.integrations.custom_logger import AgenticLoopToolChoiceError
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
@@ -530,10 +529,10 @@ def test_response_api_handler_runs_a_hook_call_the_allowed_tools_choice_lists():
     assert len(response.output) == 1
 
 
-def test_response_api_handler_never_runs_a_hook_call_the_allowed_tools_choice_excludes():
+def test_response_api_handler_refuses_a_hook_call_the_allowed_tools_choice_excludes_with_a_400():
     hook: Final = _LookupLoop()
 
-    with pytest.raises(AgenticLoopToolChoiceError):
+    with pytest.raises(litellm.BadRequestError) as refused:
         BaseLLMHTTPHandler().response_api_handler(
             model="gpt-4o",
             input="what time is it?",
@@ -557,6 +556,7 @@ def test_response_api_handler_never_runs_a_hook_call_the_allowed_tools_choice_ex
             client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_a_lookup_call))),
         )
 
+    assert refused.value.status_code == 400
     assert hook.runs == 0
 
 
