@@ -18,6 +18,8 @@
 --   * Test on a staging copy first and take a backup.
 --   * Postgres cannot convert a populated table to partitioned in place, so this
 --     renames the old table aside and creates a fresh partitioned table.
+--   * Dependent views are repointed to the new table within the transaction.
+--     Drop directly dependent materialized views first and recreate afterwards.
 --   * The partition key ("startTime") must be part of the primary key, so the
 --     PK becomes composite ("request_id", "startTime"). LiteLLM's write path uses
 --     INSERT ... ON CONFLICT DO NOTHING, which is compatible with this.
@@ -90,12 +92,38 @@ CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx"
 CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogs_pdefault"
     PARTITION OF "LiteLLM_SpendLogs" DEFAULT;
 
+-- Preserve view OIDs so views of these views keep working without recreation.
+-- Materialized views require an explicit rebuild by the operator instead.
+DO $$
+DECLARE
+    v record;
+BEGIN
+    FOR v IN
+        SELECT DISTINCT view_class.oid::regclass AS view_name, view_class.relkind, view_class.reloptions
+        FROM pg_depend dep
+        JOIN pg_rewrite rule ON rule.oid = dep.objid
+        JOIN pg_class view_class ON view_class.oid = rule.ev_class
+        WHERE dep.refobjid = '"LiteLLM_SpendLogs_legacy"'::regclass
+          AND view_class.relkind IN ('v', 'm')
+    LOOP
+        IF v.relkind = 'm' THEN
+            RAISE EXCEPTION 'Materialized view % depends on LiteLLM_SpendLogs_legacy. Drop it before running this script and recreate it afterwards.', v.view_name;
+        END IF;
+        EXECUTE format('CREATE OR REPLACE VIEW %s %s AS %s', v.view_name,
+            CASE WHEN v.reloptions IS NULL THEN ''
+                ELSE format('WITH (%s)', array_to_string(v.reloptions, ', '))
+            END,
+            replace(pg_get_viewdef(v.view_name), '"LiteLLM_SpendLogs_legacy"', '"LiteLLM_SpendLogs"'));
+    END LOOP;
+END $$;
+
 COMMIT;
 
 -- Backfill (optional). Rows route to the correct partition automatically.
 -- For large legacy tables, copy in time-bounded batches during a low-traffic
 -- window instead of one statement, or simply keep "LiteLLM_SpendLogs_legacy"
 -- read-only until its data ages past your retention, then DROP it.
+-- Views now read the new table, so legacy rows appear only after backfilling.
 --
 -- Backfilled rows land in the DEFAULT partition until explicit partitions
 -- cover their dates. Postgres refuses to create a partition whose range
