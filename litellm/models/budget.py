@@ -75,6 +75,4 @@ class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
     model_config = ConfigDict(protected_namespaces=())
 
 
-# Organizations, teams and projects keep model_tpm_limit / model_rpm_limit in their own metadata,
-# which is where the rate limiter reads them. Only customers store the maps on the budget row.
 CUSTOMER_ONLY_BUDGET_FIELDS: Final = frozenset({"model_tpm_limit", "model_rpm_limit"})

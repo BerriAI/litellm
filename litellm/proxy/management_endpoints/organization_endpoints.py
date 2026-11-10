@@ -364,7 +364,7 @@ def handle_nested_budget_structure_in_organization_update_request(
         budget_data: Final = transformed_data.pop("litellm_budget_table", {})
         if budget_data:
             # Extract valid budget fields and merge into top level
-            budget_fields: Final = LiteLLM_BudgetTable.model_fields.keys() - CUSTOMER_ONLY_BUDGET_FIELDS
+            budget_fields: Final = LiteLLM_BudgetTable.model_fields.keys()
             for key, value in budget_data.items():
                 if key in budget_fields:
                     transformed_data[key] = value
@@ -818,7 +818,7 @@ async def update_organization(
         )
 
     # Remove budget fields from organization update data
-    for field in _BUDGET_SETTABLE_FIELDS:
+    for field in LiteLLM_BudgetTable.model_fields:
         updated_organization_row.pop(field, None)
 
     response: Final = await _table(OrganizationRepository(prisma_client)).update(
