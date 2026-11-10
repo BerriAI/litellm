@@ -4,7 +4,7 @@ This package decides who a request comes from and whether it may proceed. It hol
 
 ## The core is pure
 
-Modules here import only the standard library and each other. `tests/code_coverage_tests/check_auth_core_is_pure.py` enforces it in CI, so a third-party or other `litellm` import fails the build. A core does no IO itself, reads no globals and keeps no state between calls, so the same inputs and the same host answers always give the same result.
+Modules here import only the standard library and each other. A core does no IO itself, reads no globals and keeps no state between calls, so the same inputs and the same host answers always give the same result.
 
 ## Facets
 
