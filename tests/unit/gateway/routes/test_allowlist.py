@@ -32,7 +32,7 @@ _GATEWAY_ONLY_PREFIXES: Final = sorted(
     frozenset(prefix for prefix in GATEWAY_PATH_PREFIXES if not _backend_keeps(prefix))
     - _PREFIXES_AN_INGRESS_CANNOT_ROUTE
 )
-_GATEWAY_ONLY_EXACT_PATHS: Final = sorted(path for path in GATEWAY_EXACT_PATHS if not _backend_keeps(path))
+_GATEWAY_ONLY_EXACT_PATHS: Final = sorted(GATEWAY_EXACT_PATHS - BACKEND_EXACT_PATHS)
 
 
 def _routed_to_gateway_by_chart_prefix(path: str) -> bool:
