@@ -137,6 +137,9 @@ def main(
                     "litellm/proxy-extras/",
                     "litellm/rust/",
                     "litellm/packaging/",
+                    "litellm/scripts/",
+                    "litellm/runtime/",
+                    "litellm/schema.prisma",
                 )
             )
             or any(part.endswith(".dSYM") for part in PurePosixPath(member.filename).parts)

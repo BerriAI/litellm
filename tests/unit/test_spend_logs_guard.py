@@ -7,7 +7,7 @@ from typing import Final
 
 import pytest
 
-_SCRIPT: Final = Path(__file__).resolve().parents[2] / "scripts" / "ci_cd" / "spend_logs_guard.py"
+_SCRIPT: Final = Path(__file__).resolve().parents[2] / "litellm/scripts" / "ci_cd" / "spend_logs_guard.py"
 _SPEC: Final = importlib.util.spec_from_file_location("spend_logs_guard", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
 guard: Final = importlib.util.module_from_spec(_SPEC)
@@ -56,6 +56,20 @@ def _blocks(path: str, base: str = SCHEMA, head: str = SCHEMA) -> dict[str, guar
 def _with_line(schema: str, after: int, line: str) -> str:
     lines: Final = schema.splitlines(keepends=True)
     return "".join(lines[:after]) + f"{line}\n" + "".join(lines[after:])
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "schema.prisma",
+        "litellm/schema.prisma",
+        "litellm/proxy/schema.prisma",
+        "litellm/proxy-extras/litellm_proxy_extras/schema.prisma",
+    ),
+)
+def test_spend_log_changes_in_every_schema_copy_require_review(path: str) -> None:
+    assert guard.watched(path)
+    assert guard.spend_log_hits(_added(path, "  tokens Int", start=11), _blocks(path)) == (f"{path}: +tokens Int",)
 
 
 class TestModelBlock:

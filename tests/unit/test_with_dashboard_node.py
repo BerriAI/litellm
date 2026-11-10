@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "with_dashboard_node.sh"
+SCRIPT = ROOT / "litellm/scripts" / "with_dashboard_node.sh"
 
 
 def _floor() -> str:

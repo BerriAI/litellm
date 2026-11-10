@@ -19,11 +19,11 @@ Saved quickstart scripts need a one-time URL override after the source layout mi
 
 ```bash
 LITELLM_COMPOSE_URL=https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/deploy/docker/docker-compose.quickstart.yml \
-LITELLM_SCRIPT_URL=https://raw.githubusercontent.com/BerriAI/litellm/main/scripts/quickstart.sh \
+LITELLM_SCRIPT_URL=https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/scripts/quickstart.sh \
 litellm-gateway update
 ```
 
-In PowerShell, set the same environment variables, with `LITELLM_SCRIPT_URL` ending in `scripts/quickstart.ps1`, before running `litellm-gateway update`. Remove the overrides after the saved script refreshes.
+In PowerShell, set the same environment variables, with `LITELLM_SCRIPT_URL` ending in `litellm/scripts/quickstart.ps1`, before running `litellm-gateway update`. Remove the overrides after the saved script refreshes.
 
 ## Prerequisites
 
@@ -42,9 +42,9 @@ Every LiteLLM container runs the same image. The first word of the container com
 |--------------|-----------------------------------------------------|------|
 | `proxy`      | `litellm ...` (everything in one process, default)  | 4000 |
 | `gateway`    | `python -m gateway.launch ...` (inference routes)   | 4000 |
-| `backend`    | `uvicorn backend.main:app ...` (management routes)  | 4001 |
+| `backend`    | `uvicorn litellm.runtime.backend.main:app ...` (management routes)  | 4001 |
 | `ui`         | nginx serving the static admin UI                   | 3000 |
-| `migrations` | `python migrations/run.py`, `prisma migrate deploy` then exit | |
+| `migrations` | `python -m litellm.runtime.migrations.run`, `prisma migrate deploy` then exit | |
 | `metrics`    | `python -m litellm.proxy.prometheus_metrics_server ...` | `--port` |
 | `collector`  | `python -m litellm.proxy.collector ...`             | |
 

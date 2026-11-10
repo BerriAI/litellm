@@ -12,7 +12,7 @@ import pytest
 from tests._process_helpers import process_is_gone
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "pre_commit_lint.sh"
+SCRIPT = ROOT / "litellm/scripts" / "pre_commit_lint.sh"
 WHOLE_TREE_RUFF = "run --no-sync ruff check --config .github/linters/ruff-tests.toml tests"
 TEST_TREE_RAN = "ran:     test-tree lint (.github/linters/ruff-tests.toml + test-quality gate)"
 TEST_TREE_SKIPPED = (
@@ -468,11 +468,11 @@ def test_frontend_python_helpers_do_not_trigger_sdk_checks(tmp_path: Path) -> No
 def test_staged_files_matching_no_check_print_an_explicit_noop_note_and_nonempty_log(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
-    _stage_file(repo, "scripts/tool.py", "def main() -> None: ...\n")
+    _stage_file(repo, "litellm/scripts/tool.py", "def main() -> None: ...\n")
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "no gating lint check matches the files in scope, so nothing ran" in proc.stdout
-    assert "scripts/tool.py" in proc.stdout
+    assert "litellm/scripts/tool.py" in proc.stdout
     assert "a no-op, not a lint verdict" in proc.stdout
     assert "check: PASS" in proc.stdout
     assert "linting Python" not in proc.stdout
@@ -508,8 +508,8 @@ def test_tests_only_change_runs_the_whole_test_tree_ruff_and_the_quality_gate(tm
     "changed",
     [
         ".github/linters/ruff-tests.toml",
-        "scripts/check_test_quality.py",
-        "scripts/test_quality_gate.py",
+        "litellm/scripts/check_test_quality.py",
+        "litellm/scripts/test_quality_gate.py",
         "tests/e2e/test_x.py",
     ],
 )
@@ -631,11 +631,11 @@ def test_run_under_a_held_slot_skips_reacquiring_the_gate_lock(tmp_path: Path) -
 
 def test_hook_symlink_install_still_resolves_the_slot_lock_helper(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
-    scripts_dir = repo / "scripts"
+    scripts_dir = repo / "litellm/scripts"
     scripts_dir.mkdir()
     shutil.copy(SCRIPT, scripts_dir / "pre_commit_lint.sh")
     shutil.copy(SCRIPT.parent / "gate_slot_lock.py", scripts_dir / "gate_slot_lock.py")
-    (repo / ".git" / "hooks" / "pre-commit").symlink_to(Path("../../scripts/pre_commit_lint.sh"))
+    (repo / ".git" / "hooks" / "pre-commit").symlink_to(Path("../../litellm/scripts/pre_commit_lint.sh"))
     lock_dir = tmp_path / "gate-locks"
     proc = subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "hooked"],

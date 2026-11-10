@@ -90,7 +90,7 @@
 {{- $uiPaths = append $uiPaths (dict "path" "/*.txt" "pathType" "ImplementationSpecific") }}
 {{- end }}
 {{/*
-  Gateway data-plane prefixes — must mirror gateway/routes/allowlist.py.
+  Gateway data-plane prefixes — must mirror litellm/runtime/gateway/routes/allowlist.py.
   Versioned paths are listed explicitly to avoid routing management routes
   (e.g. /v1/access_group, /v2/key/info, /v1/tool/*, /v1/agents, /v1/workflows,
   /v2/user/info, /v2/team/list, /v2/model/info, /v2/login, /v2/guardrails/*,

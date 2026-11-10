@@ -517,7 +517,7 @@ UI_API_TYPES_DETECT: Final[str] = next(
     for step in yaml.safe_load(WORKFLOW.read_text())["jobs"]["ui-api-types"]["steps"]
     if step.get("id") == "changes"
 )
-PRE_COMMIT_LINT: Final = WORKFLOW.parents[2] / "scripts" / "pre_commit_lint.sh"
+PRE_COMMIT_LINT: Final = WORKFLOW.parents[2] / "litellm/scripts" / "pre_commit_lint.sh"
 TERRAFORM_PROVIDER_WORKFLOW: Final = WORKFLOW.with_name("test-terraform-provider.yml")
 
 
