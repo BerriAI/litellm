@@ -2264,6 +2264,12 @@ def _model_priced_image_cost_calculator(
             )
 
             return dashscope_image_cost_calculator
+        case litellm.LlmProviders.MINIMAX.value:
+            from litellm.llms.openai.image_generation.cost_calculator import (
+                cost_calculator as openai_gpt_image_cost_calculator,
+            )
+
+            return openai_gpt_image_cost_calculator
         case _:
             return None
 

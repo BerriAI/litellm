@@ -1,0 +1,68 @@
+from typing import Final
+
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
+from litellm.llms.openai.image_generation.gpt_transformation import (
+    GPTImageGenerationConfig,
+)
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    OpenAIImageGenerationOptionalParams,
+)
+
+
+class MinimaxImageGenerationConfig(GPTImageGenerationConfig):
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[OpenAIImageGenerationOptionalParams]:
+        return [
+            "n",
+            "response_format",
+            "size",
+            "aspect_ratio",
+            "area",
+        ]
+
+    def validate_environment(
+        self,
+        headers: dict,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        resolved_key: Final = MinimaxChatConfig.get_api_key(api_key=api_key)
+        if not resolved_key:
+            raise ValueError(
+                "Missing MiniMax API Key - set MINIMAX_API_KEY or pass api_key"
+            )
+        headers["Authorization"] = f"Bearer {resolved_key}"
+        return headers
+
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: bool | None = None,
+    ) -> str:
+        base_url: Final = MinimaxChatConfig.get_api_base(api_base=api_base).rstrip("/")
+        if base_url.endswith("/images/generations"):
+            return base_url
+        if base_url.endswith("/v1"):
+            return join_api_base(base_url, "images/generations")
+        return join_api_base(base_url, "v1/images/generations")
+
+    def transform_image_generation_request(
+        self,
+        model: str,
+        prompt: str,
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        return {"model": model, "prompt": prompt, **optional_params}
