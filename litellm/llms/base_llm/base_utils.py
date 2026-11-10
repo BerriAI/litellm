@@ -519,16 +519,15 @@ def type_to_response_format_param(
     }
 
 
-def _missing_content_error(index: int) -> BadRequestError:
-    return BadRequestError(
-        message=f"Missing required parameter: 'messages[{index}].content'.", model="", llm_provider=""
+def _first_developer_message_without_content(messages: Sequence[AllMessageValues]) -> int | None:
+    return next(
+        (
+            index
+            for index, message in enumerate(messages)
+            if message["role"] == "developer" and "content" not in message
+        ),
+        None,
     )
-
-
-def _require_developer_message_content(messages: Sequence[AllMessageValues]) -> None:
-    for index, message in enumerate(messages):
-        if message["role"] == "developer" and "content" not in message:
-            raise _missing_content_error(index)
 
 
 def map_developer_role_to_system_role(
@@ -537,7 +536,13 @@ def map_developer_role_to_system_role(
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    _require_developer_message_content(messages)
+    missing_content_index: Final = _first_developer_message_without_content(messages)
+    if missing_content_index is not None:
+        raise BadRequestError(
+            message=f"Missing required parameter: 'messages[{missing_content_index}].content'.",
+            model="",
+            llm_provider="",
+        )
     new_messages: Final[list[AllMessageValues]] = []
     for m in messages:
         if m["role"] == "developer":
