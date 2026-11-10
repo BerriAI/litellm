@@ -32,8 +32,9 @@ AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
 )
 
 PROVIDER_AFFINITY_HEADER_KWARG_KEY: Final = "provider_affinity_header"
+AGENTIC_LOOP_TOOL_CHOICE_KEY: Final = "_agentic_loop_tool_choice"
 AGENTIC_LOOP_CONTROL_KWARGS_KEYS: Final = frozenset(
-    {"_agentic_loop_depth", "_agentic_loop_fingerprints", "max_agentic_loops"}
+    {"_agentic_loop_depth", "_agentic_loop_fingerprints", "max_agentic_loops", AGENTIC_LOOP_TOOL_CHOICE_KEY}
 )
 OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS: Final = frozenset(
     {
