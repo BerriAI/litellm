@@ -41,7 +41,14 @@ class WithinModelBudgets:
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class BudgetsSkipped:
+    pass
+
+
 ModelBudgetResult: TypeAlias = WithinModelBudgets | ModelBudgetExceeded
+
+ModelBudgetProof: TypeAlias = WithinModelBudgets | BudgetsSkipped
 
 Denial: TypeAlias = (
     UserAuthDisabled | MasterKeyOnlyRoute | TeamMemberBudgetExceeded | KeyBudgetExceeded | ModelBudgetExceeded

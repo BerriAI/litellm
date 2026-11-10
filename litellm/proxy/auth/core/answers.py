@@ -37,8 +37,21 @@ class KeyFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class UserModelBudgets:
+    limits: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class OwnerFacts:
     deactivated: bool
+    model_budgets: UserModelBudgets | None
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetExemption:
+    route_skips_budgets: bool
+    mcp_discovery: bool
+    model_is_free: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +134,7 @@ class JwtPolicy:
     is_proxy_admin: bool
     user_id: str | None
     owner_deactivated: bool
+    user_model_budgets: UserModelBudgets | None
 
 
 @dataclass(frozen=True, slots=True)

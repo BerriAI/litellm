@@ -2,9 +2,9 @@ use std::{error::Error, future::Future};
 
 use crate::{
     answers::{
-        AutoRegistration, EndUserScope, FallbackTarget, Introspection, JwtPolicy, KeyFacts,
-        KeyMapping, ModelBudgetScope, OwnerFacts, PresentedKey, TeamMember, TeamMemberBudget,
-        TeamMemberModelBudgetScope, TokenRole,
+        AutoRegistration, BudgetExemption, EndUserScope, FallbackTarget, Introspection, JwtPolicy,
+        KeyFacts, KeyMapping, ModelBudgetScope, OwnerFacts, PresentedKey, TeamMember,
+        TeamMemberBudget, TeamMemberModelBudgetScope, TokenRole, UserModelBudgets,
     },
     identity::CustomAuthResult,
     inputs::RequestFacts,
@@ -84,6 +84,7 @@ pub trait KeyHost: Sync {
         &self,
         user_id: &str,
     ) -> impl Future<Output = Result<Option<OwnerFacts>, Self::Error>> + Send;
+    fn attach_user_model_budgets(&self, budgets: Option<&UserModelBudgets>);
 }
 
 pub trait AuthorizeHost: Sync {
@@ -93,7 +94,9 @@ pub trait AuthorizeHost: Sync {
     fn model_budgets(&self) -> Self::ModelBudgets;
 
     fn enforce_model_access(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
-    fn check_budget_exemption(&self) -> impl Future<Output = Result<bool, Self::Error>> + Send;
+    fn read_budget_exemption(
+        &self,
+    ) -> impl Future<Output = Result<BudgetExemption, Self::Error>> + Send;
     fn read_team_member_budget(
         &self,
         member: &TeamMember,
@@ -120,6 +123,7 @@ pub trait AuthorizeHost: Sync {
 
 pub trait JwtHost: Sync {
     type Error: Error + Send + Sync + 'static;
+    type ModelBudgets: ModelBudgetHost;
 
     fn decode_claims(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
     fn is_managed_agent(&self) -> impl Future<Output = Result<bool, Self::Error>> + Send;
@@ -128,9 +132,12 @@ pub trait JwtHost: Sync {
     fn run_jwt_policy(&self) -> impl Future<Output = Result<JwtPolicy, Self::Error>> + Send;
     fn remember_proxy_admin(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
     fn auto_register(&self) -> impl Future<Output = Result<AutoRegistration, Self::Error>> + Send;
-    fn skips_budget_checks(&self) -> bool;
+    fn attach_user_model_budgets(&self, budgets: Option<&UserModelBudgets>);
+    fn read_budget_exemption(
+        &self,
+    ) -> impl Future<Output = Result<BudgetExemption, Self::Error>> + Send;
     fn load_project(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
-    fn check_user_model_budgets(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn model_budgets(&self) -> Self::ModelBudgets;
 }
 
 pub trait OAuth2IntrospectionHost: Sync {
@@ -172,7 +179,9 @@ pub trait RequestCheckHost: Sync {
         &self,
         assign: bool,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send;
-    fn skips_budget_checks(&self) -> bool;
+    fn read_budget_exemption(
+        &self,
+    ) -> impl Future<Output = Result<BudgetExemption, Self::Error>> + Send;
     fn load_team_member_default_model_budget(
         &self,
         skip_budget_checks: bool,

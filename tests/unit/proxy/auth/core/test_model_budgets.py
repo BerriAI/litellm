@@ -5,6 +5,7 @@ from typing import Final
 import pytest
 
 from litellm.proxy.auth.core.answers import (
+    BudgetExemption,
     FallbackTarget,
     KeyModelBudgets,
     ModelBudgetScope,
@@ -15,6 +16,7 @@ from litellm.proxy.auth.core.outcome import (
     ModelBudgetResult,
     WithinModelBudgets,
 )
+from litellm.proxy.auth.core.model_budgets import skips_model_budgets, within_model_budgets
 from litellm.proxy.auth.core.python_core import PythonCore
 
 Call = tuple[str, str | None]
@@ -25,7 +27,7 @@ SCOPE: Final = ModelBudgetScope(
     key=KeyModelBudgets(fallbacks={"gpt-4o": ("gpt-4o-mini", "haiku")}),
     user_has_model_budgets=True,
 )
-ALLOWED: Final = WithinModelBudgets()
+ALLOWED: Final = within_model_budgets(None)
 
 
 def _exceeded(entity_type: str, model: str) -> ModelBudgetExceeded:
@@ -298,3 +300,21 @@ async def test_a_team_member_naming_thousands_of_models_checks_every_one():
     )
     assert outcome == ALLOWED
     assert tuple(model for name, model in calls if name == "member") == models
+
+
+@pytest.mark.parametrize(
+    ("route_skips_budgets", "mcp_discovery", "model_is_free", "skips"),
+    [
+        (False, False, False, False),
+        (True, False, False, True),
+        (False, True, False, True),
+        (False, False, True, True),
+    ],
+)
+def test_model_budgets_are_skipped_for_budget_free_routes_mcp_discovery_and_free_models(
+    route_skips_budgets: bool, mcp_discovery: bool, model_is_free: bool, skips: bool
+) -> None:
+    exemption: Final = BudgetExemption(
+        route_skips_budgets=route_skips_budgets, mcp_discovery=mcp_discovery, model_is_free=model_is_free
+    )
+    assert skips_model_budgets(exemption) is skips

@@ -39,3 +39,5 @@ Nothing here knows about `UserAPIKeyAuth`, HTTP status codes or the proxy's exce
 ## Tests
 
 `tests/unit/proxy/auth/core` runs a core against a host that answers from a script and records each call. Tests assert both the result and the host calls in order, never core internals.
+
+Invariants are enforced by types plus behavior tests, never by tests that parse source (`ast`, `inspect.getsource`), and they must hold for the Python and the Rust host alike. A result that proves a check ran is its own type: `JwtUser` carries a `WithinModelBudgets` or `BudgetsSkipped`, which only `core/model_budgets.py` builds (`tests/code_coverage_tests/check_core_proof_constructors.py` flags any other construction), so a JWT path that skips the budget check does not type-check. Data every path must carry, like the user's model budget, is a host answer handed to one projection method that takes it as a required argument.

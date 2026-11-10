@@ -28,9 +28,22 @@ pub struct KeyFacts {
     pub budget_throttle_pct: Option<f64>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UserModelBudgets {
+    pub limits: serde_json::Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnerFacts {
     pub deactivated: bool,
+    pub model_budgets: Option<UserModelBudgets>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BudgetExemption {
+    pub route_skips_budgets: bool,
+    pub mcp_discovery: bool,
+    pub model_is_free: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -104,6 +117,7 @@ pub struct JwtPolicy {
     pub is_proxy_admin: bool,
     pub user_id: Option<String>,
     pub owner_deactivated: bool,
+    pub user_model_budgets: Option<UserModelBudgets>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

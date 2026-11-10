@@ -79,6 +79,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_object,
     get_user_object,
     get_user_role,
+    is_mcp_discovery_request,
     is_model_cost_zero,
     is_user_proxy_admin,
     is_valid_fallback_model,
@@ -86,7 +87,6 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     key_access_group_grants_model,
     key_model_aliases_for_auth_check,
     model_max_budget_of,
-    request_skips_budget_checks,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
     route_skips_budget_checks,
@@ -126,6 +126,7 @@ from litellm.proxy.auth.budget_throttle import budget_throttle_percentage, shoul
 from litellm.proxy.auth.core.answers import (
     AdminKey,
     AutoRegistration,
+    BudgetExemption,
     EndUserScope,
     FallbackTarget,
     JwtPolicy,
@@ -146,6 +147,7 @@ from litellm.proxy.auth.core.answers import (
     TeamMemberBudget,
     TeamMemberModelBudgetScope,
     TokenRole,
+    UserModelBudgets,
 )
 from litellm.proxy.auth.core.credential import (
     PresentedKeys,
@@ -163,11 +165,14 @@ from litellm.proxy.auth.core.identity import (
     CustomAuthResult,
     CustomIdentity,
     JwtKey,
+    JwtKeyMappingFailed,
+    JwtOwnerDeactivated,
     JwtProxyAdmin,
     JwtUser,
     KeyAuthentication,
     KeyDenial,
     KeyIdentity,
+    ManagedAgentNeedsDirectJwt,
     MasterKey,
     NoCustomIdentity,
     NoMasterKey,
@@ -2427,6 +2432,7 @@ class _JwtHost:
             owner_deactivated=user_object is not None
             and isinstance(user_object.metadata, dict)
             and user_object.metadata.get("scim_active") is False,
+            user_model_budgets=_user_model_budgets(user_object.model_max_budget) if user_object is not None else None,
         )
 
     async def remember_proxy_admin(self) -> None:
@@ -2464,12 +2470,8 @@ class _JwtHost:
             return RegistrationFailed(reason=auto_registered.value)
         if auto_registered is None:
             return NotRegistered()
-        user_object: Final = result["user_object"]
         auto_registered.jwt_claims = self._claims
         auto_registered.user_email = result["user_email"]
-        # The auto-registered token is built from the new key's columns, which carry no user budget. Carry over
-        # the already-loaded user row rather than re-reading it, or the budget check has nothing to enforce.
-        auto_registered.user_model_max_budget = user_object.model_max_budget if user_object is not None else None
         self._valid_token = auto_registered
         self.api_key = auto_registered.token or ""
         return Registered(
@@ -2477,17 +2479,13 @@ class _JwtHost:
             or pending.behavior == UnregisteredJWTClientBehavior.LINK_ONLY
         )
 
-    def skips_budget_checks(self) -> bool:
-        model: Final = _get_model_from_request_context(
-            request_data=self._request_data,
-            route=self._route,
-            request=self._request,
-            llm_router=self._llm_router,
-            team_id=self.token().team_id,
-        )
-        return request_skips_budget_checks(
-            route=self._route, model=model, llm_router=self._llm_router, request_body=self._request_data
-        )
+    def attach_user_model_budgets(self, budgets: UserModelBudgets | None) -> None:
+        # An auto-registered token is built from the new key's columns, which carry no user budget, so the
+        # already-loaded user row's budget is carried over instead of re-reading it.
+        self.token().user_model_max_budget = _model_max_budget(budgets)
+
+    async def read_budget_exemption(self) -> BudgetExemption:
+        return _budget_exemption(self._request_data, self._route, self._request, self._llm_router, self.token().team_id)
 
     async def load_project(self) -> None:
         valid_token: Final = self.token()
@@ -2503,18 +2501,15 @@ class _JwtHost:
             valid_token.project_metadata = project.metadata
             valid_token.project_alias = project.project_alias
 
-    async def check_user_model_budgets(self) -> None:
-        await _enforce_model_budgets(
-            _AUTH_CORE.model_budgets().check_user,
-            _ModelBudgetHost(
-                request=self._request,
-                request_data=self._request_data,
-                valid_token=self.token(),
-                route=self._route,
-                limiter=self._limiter,
-                llm_router=self._llm_router,
-                llm_model_list=_proxy_model_list(),
-            ),
+    def model_budgets(self) -> _ModelBudgetHost:
+        return _ModelBudgetHost(
+            request=self._request,
+            request_data=self._request_data,
+            valid_token=self.token(),
+            route=self._route,
+            limiter=self._limiter,
+            llm_router=self._llm_router,
+            llm_model_list=_proxy_model_list(),
         )
 
 
@@ -2781,6 +2776,31 @@ def _proxy_model_list() -> list[object] | None:
 _MASTER_KEY_ONLY_ROUTES: Final = frozenset(LiteLLMRoutes.master_key_only_routes.value)
 
 
+def _budget_exemption(
+    request_data: dict[str, object],
+    route: str,
+    request: Request | None,
+    llm_router: litellm.Router | None,
+    team_id: str | None,
+) -> BudgetExemption:
+    model: Final = _get_model_from_request_context(
+        request_data=request_data, route=route, request=request, llm_router=llm_router, team_id=team_id
+    )
+    return BudgetExemption(
+        route_skips_budgets=route_skips_budget_checks(route=route),
+        mcp_discovery=is_mcp_discovery_request(route=route, request_body=request_data),
+        model_is_free=is_model_cost_zero(model=model, llm_router=llm_router),
+    )
+
+
+def _user_model_budgets(model_max_budget: Mapping[str, object] | None) -> UserModelBudgets | None:
+    return None if model_max_budget is None else UserModelBudgets(limits=model_max_budget)
+
+
+def _model_max_budget(budgets: UserModelBudgets | None) -> dict[str, object] | None:
+    return None if budgets is None else dict(budgets.limits)
+
+
 def _key_settings(master_key: str | None, prisma_client: PrismaClient | None) -> KeySettings:
     return KeySettings(master_key=master_key, has_db=prisma_client is not None)
 
@@ -3043,25 +3063,20 @@ class _KeyHost:
         self.owner = owner
         if owner is None:
             return None
-        key: Final = self.key
-        # The joint verification-token view carries the key's columns only, so the user's own per-model budget
-        # reaches enforcement and the post-call increment through the row fetched here.
-        key.user_model_max_budget = owner.model_max_budget
-        return OwnerFacts(deactivated=isinstance(owner.metadata, dict) and owner.metadata.get("scim_active") is False)
+        return OwnerFacts(
+            deactivated=isinstance(owner.metadata, dict) and owner.metadata.get("scim_active") is False,
+            model_budgets=_user_model_budgets(owner.model_max_budget),
+        )
 
-    async def check_budget_exemption(self) -> bool:
+    def attach_user_model_budgets(self, budgets: UserModelBudgets | None) -> None:
+        # The joint verification-token view carries the key's columns only, so the user's own per-model budget
+        # reaches enforcement and the post-call increment through the owner row.
+        self.key.user_model_max_budget = _model_max_budget(budgets)
+
+    async def read_budget_exemption(self) -> BudgetExemption:
         from litellm.proxy.proxy_server import llm_router
 
-        model: Final = _get_model_from_request_context(
-            request_data=self._request_data,
-            route=self._route,
-            request=self._request,
-            llm_router=llm_router,
-            team_id=self.key.team_id,
-        )
-        return request_skips_budget_checks(
-            route=self._route, model=model, llm_router=llm_router, request_body=self._request_data
-        )
+        return _budget_exemption(self._request_data, self._route, self._request, llm_router, self.key.team_id)
 
     async def read_team_member_budget(self, member: TeamMember) -> TeamMemberBudget | None:
         from litellm.proxy.proxy_server import get_current_spend
@@ -3304,8 +3319,18 @@ async def user_api_key_auth_builder(
                 case JwtKey():
                     valid_token = jwt_host.token()
                     api_key = jwt_host.api_key
-                case jwt_denial:
+                case ModelBudgetExceeded() as exceeded:
+                    raise denial_exception(
+                        exceeded,
+                        token=jwt_host.token().token,
+                        route=route,
+                        jwt_auth_enabled=False,
+                        key=jwt_host.token(),
+                    )
+                case ManagedAgentNeedsDirectJwt() | JwtOwnerDeactivated() | JwtKeyMappingFailed() as jwt_denial:
                     raise jwt_denial_exception(jwt_denial)
+                case unexpected:
+                    assert_never(unexpected)
         key_plan: Final = (
             credential_plan
             if isinstance(credential_plan, KeyValidator)
@@ -4168,14 +4193,8 @@ class _RequestCheckHost:
                 dict(end_user_model_max_budget) if end_user_model_max_budget else None
             )
 
-    def skips_budget_checks(self) -> bool:
-        return _should_skip_budget_checks(
-            request_data=self._request_data,
-            route=self._route,
-            request=self._request,
-            llm_router=self._llm_router,
-            team_id=self._token.team_id,
-        )
+    async def read_budget_exemption(self) -> BudgetExemption:
+        return _budget_exemption(self._request_data, self._route, self._request, self._llm_router, self._token.team_id)
 
     async def load_team_member_default_model_budget(self, skip_budget_checks: bool) -> None:
         await _load_team_member_default_model_budget(
@@ -4393,23 +4412,6 @@ async def _reserve_budget_after_common_checks(
     if request is not None:
         reservation: Final = user_api_key_auth_obj.budget_reservation
         request.state.budget_reservation = reservation  # rebind-ok: read by the release middleware
-
-
-def _should_skip_budget_checks(
-    request_data: dict[str, object],
-    route: str,
-    request: Request | None,
-    llm_router: litellm.Router | None,
-    team_id: str | None = None,
-) -> bool:
-    model: Final = _get_model_from_request_context(
-        request_data=request_data,
-        route=route,
-        request=request,
-        llm_router=llm_router,
-        team_id=team_id,
-    )
-    return request_skips_budget_checks(route=route, model=model, llm_router=llm_router, request_body=request_data)
 
 
 def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) -> Principal:

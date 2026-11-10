@@ -1736,45 +1736,6 @@ async def test_jwt_user_model_budget_is_enforced_before_the_jwt_path_returns(ove
         await _check_user_model_budgets(valid_token, model_max_budget_limiter, model=model)
 
 
-def test_every_jwt_branch_carries_the_user_model_budget():
-    """
-    Each JWT branch that builds or replaces `valid_token` has to put the user's
-    model budget on it, or the enforcement call a few lines later has nothing to
-    read and silently admits the request.
-
-    The auto-register branch is the one that regressed: it REPLACES the token
-    built above it with a key-scoped one whose columns carry no user budget.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._JwtHost))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module._KeyHost))
-    )
-
-    assignments = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Attribute) and t.attr == "user_model_max_budget" for t in node.targets)
-    ]
-    targets = {
-        t.value.id
-        for node in assignments
-        for t in node.targets
-        if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
-    }
-    assert "auto_registered" in targets, (
-        f"the auto-registered JWT token must carry the user's model budget; only these are populated: {sorted(targets)}"
-    )
-    assert "key" in targets, "the virtual-key path must carry the user's model budget"
-
-
 @pytest.mark.asyncio
 async def test_user_budget_lookup_tolerates_an_unreadable_user():
     """
@@ -1960,41 +1921,6 @@ def test_custom_auth_attaches_the_user_budget_even_when_it_does_not_enforce():
         )
 
 
-def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
-    """
-    A JWT that maps to an existing virtual key resolves through the resolver
-    store, which builds the token from the KEY row alone and therefore carries
-    no user-level per-model budget. The auth core sends that branch on to the
-    shared virtual-key checks (pinned in tests/unit/proxy/auth/core/test_jwt.py),
-    where the user row is loaded and its budget copied onto the token. This
-    pins the copy.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module._KeyHost))
-    )
-
-    # Half one: the shared block copies the user row's budget onto the token.
-    copies_user_row = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Attribute) and t.attr == "user_model_max_budget" for t in node.targets)
-        and any(isinstance(v, ast.Attribute) and v.attr == "model_max_budget" for v in ast.walk(node.value))
-    ]
-    assert copies_user_row, (
-        "nothing copies the user row's model_max_budget onto the token, so a mapped-key "
-        "JWT reaches enforcement carrying the key's columns only"
-    )
-
-
 def _rejected_websocket(sent: list[Message], bearer: str) -> WebSocket:
     async def receive() -> Message:
         return {"type": "websocket.connect"}
@@ -2130,12 +2056,12 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
         user_api_key_cache=DualCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
-    user_model_budget_check: Final = AsyncMock()
+    user_model_budget_check: Final = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder", return_value=jwt_response),
-        patch("litellm.proxy.auth.user_api_key_auth._enforce_model_budgets", user_model_budget_check),
+        patch("litellm.proxy.auth.core.jwt.check_user_model_budgets", user_model_budget_check),
     ):
         result: Final = await user_api_key_auth_builder(
             request=mock_request,

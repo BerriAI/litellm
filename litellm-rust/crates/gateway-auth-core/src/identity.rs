@@ -4,7 +4,7 @@ use litellm_secret_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::answers::KeyFacts;
+use crate::{answers::KeyFacts, model_budgets::ModelBudgetProof, outcome::ModelBudgetExceeded};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
 pub enum AnonymousReason {
@@ -20,7 +20,7 @@ pub struct Anonymous {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JwtIdentity {
     ProxyAdmin,
-    User,
+    User { budgets: ModelBudgetProof },
     Key,
 }
 
@@ -123,11 +123,12 @@ pub enum AuthDenial {
     OAuth2Proxy(OAuth2ProxyDenial),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum JwtDenial {
     ManagedAgentNeedsDirectJwt,
     OwnerDeactivated { user_id: Option<String> },
     KeyMappingFailed { reason: String },
+    ModelBudgetExceeded(ModelBudgetExceeded),
 }
 
 pub type JwtAuthentication = Result<JwtIdentity, JwtDenial>;

@@ -4,6 +4,7 @@ from enum import Enum
 from typing import TypeAlias
 
 from litellm.proxy.auth.core.answers import KeyFacts
+from litellm.proxy.auth.core.outcome import ModelBudgetExceeded, ModelBudgetProof
 
 
 class AnonymousReason(Enum):
@@ -51,7 +52,7 @@ class JwtProxyAdmin:
 
 @dataclass(frozen=True, slots=True)
 class JwtUser:
-    pass
+    budgets: ModelBudgetProof
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,7 +213,7 @@ class JwtKeyMappingFailed:
     reason: str
 
 
-JwtDenial: TypeAlias = ManagedAgentNeedsDirectJwt | JwtOwnerDeactivated | JwtKeyMappingFailed
+JwtDenial: TypeAlias = ManagedAgentNeedsDirectJwt | JwtOwnerDeactivated | JwtKeyMappingFailed | ModelBudgetExceeded
 
 JwtAuthentication: TypeAlias = JwtIdentity | JwtDenial
 

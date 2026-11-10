@@ -13649,9 +13649,10 @@ async def test_exhausted_key_budget_spares_only_zero_spend_mcp_discovery(
         ("/mcp-rest/tools/call", {}, False),
     ],
 )
-def test_should_skip_budget_checks_spares_only_zero_spend_mcp_discovery(
+def test_model_budgets_skip_only_zero_spend_mcp_discovery(
     route: str, request_data: dict[str, object], expected: bool
 ) -> None:
-    from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+    from litellm.proxy.auth.core.model_budgets import skips_model_budgets
+    from litellm.proxy.auth.user_api_key_auth import _budget_exemption
 
-    assert _should_skip_budget_checks(request_data=request_data, route=route, request=None, llm_router=None) is expected
+    assert skips_model_budgets(_budget_exemption(request_data, route, None, None, None)) is expected

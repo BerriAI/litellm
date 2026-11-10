@@ -3882,6 +3882,7 @@ version = "0.1.0"
 dependencies = [
  "ipnet",
  "litellm-secret-value",
+ "rstest",
  "serde",
  "serde_json",
  "strum",

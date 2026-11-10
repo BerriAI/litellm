@@ -9,7 +9,6 @@ from litellm.proxy.auth.auth_checks import key_budget_exceeded_error
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from litellm.proxy.auth.core.identity import (
     ExpiredKey,
-    JwtDenial,
     JwtKeyMappingFailed,
     JwtOwnerDeactivated,
     KeyBlocked,
@@ -153,7 +152,9 @@ def denial_exception(
             assert_never(denial)
 
 
-def jwt_denial_exception(denial: JwtDenial) -> HTTPException:
+def jwt_denial_exception(
+    denial: ManagedAgentNeedsDirectJwt | JwtOwnerDeactivated | JwtKeyMappingFailed,
+) -> HTTPException:
     match denial:
         case ManagedAgentNeedsDirectJwt():
             return HTTPException(403, "Managed agents require direct JWT authentication without virtual-key mapping")

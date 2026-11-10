@@ -11,8 +11,10 @@ from litellm.proxy.auth.core.answers import (
     ModelBudgetScope,
     NonAdminKey,
     OwnerFacts,
+    BudgetExemption,
     PresentedKey,
     TeamMember,
+    UserModelBudgets,
     TeamMemberBudget,
 )
 from litellm.proxy.auth.core.identity import (
@@ -73,7 +75,7 @@ PLAIN_KEY: Final = KeyFacts(
 )
 AUTHORIZED: Final = (
     "enforce_model_access",
-    "check_budget_exemption",
+    "read_budget_exemption",
     "send_key_budget_alerts",
     "read_model_budget_scope",
     "load_key_context",
@@ -147,9 +149,12 @@ class RecordingHandler:
         self._record("load_key_owner", user_id)
         return self.owner
 
-    async def check_budget_exemption(self) -> bool:
-        self._record("check_budget_exemption")
-        return self.exempt
+    async def read_budget_exemption(self) -> BudgetExemption:
+        self._record("read_budget_exemption")
+        return BudgetExemption(route_skips_budgets=False, mcp_discovery=False, model_is_free=self.exempt)
+
+    def attach_user_model_budgets(self, budgets: UserModelBudgets | None) -> None:
+        self._record("attach_user_model_budgets", budgets)
 
     async def read_team_member_budget(self, member: TeamMember) -> TeamMemberBudget | None:
         self._record("read_team_member_budget", member)
@@ -351,12 +356,17 @@ async def test_expired_virtual_key_is_labelled_by_the_hash_it_was_loaded_with():
         (replace(PLAIN_KEY, blocked=True), None, KeyBlocked(), ("inspect_key",)),
         (
             replace(PLAIN_KEY, user_id="u1"),
-            OwnerFacts(deactivated=True),
+            OwnerFacts(deactivated=True, model_budgets=None),
             OwnerDeactivated(user_id="u1"),
-            ("inspect_key", "load_key_owner"),
+            ("inspect_key", "load_key_owner", "attach_user_model_budgets"),
         ),
         (replace(PLAIN_KEY, has_token=False), None, KeyWithoutToken(), ("inspect_key",)),
-        (replace(PLAIN_KEY, user_id="u1"), OwnerFacts(deactivated=False), None, ("inspect_key", "load_key_owner")),
+        (
+            replace(PLAIN_KEY, user_id="u1"),
+            OwnerFacts(deactivated=False, model_budgets=None),
+            None,
+            ("inspect_key", "load_key_owner", "attach_user_model_budgets"),
+        ),
         (replace(PLAIN_KEY, user_id="u1"), None, None, ("inspect_key", "load_key_owner")),
     ],
 )
@@ -367,6 +377,24 @@ async def test_verify_decides_whether_the_resolved_key_is_usable(
     verified: Final = await PythonCore().keys().verify(handler, _facts("hash"), NOW)
     assert verified == (VirtualKey(key=key) if expected is None else expected)
     assert _calls(handler) == calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deactivated", [False, True])
+async def test_the_owner_model_budget_is_attached_to_the_key_even_when_the_owner_is_deactivated(deactivated: bool):
+    budgets: Final = UserModelBudgets(limits={"gpt-4o": {"budget_limit": 1.0, "time_period": "1mo"}})
+    handler: Final = RecordingHandler(
+        key=replace(PLAIN_KEY, user_id="u1"), owner=OwnerFacts(deactivated=deactivated, model_budgets=budgets)
+    )
+    _ = await PythonCore().keys().verify(handler, _facts("hash"), NOW)
+    assert handler.calls[2] == ("attach_user_model_budgets", budgets)
+
+
+@pytest.mark.asyncio
+async def test_a_key_without_an_owner_row_keeps_its_own_model_budget():
+    handler: Final = RecordingHandler(key=replace(PLAIN_KEY, user_id="u1"), owner=None)
+    _ = await PythonCore().keys().verify(handler, _facts("hash"), NOW)
+    assert "attach_user_model_budgets" not in _calls(handler)
 
 
 @pytest.mark.asyncio
@@ -389,7 +417,9 @@ async def test_expired_key_over_its_team_member_budget_is_denied_as_expired_with
 
 @pytest.mark.asyncio
 async def test_deactivated_owner_is_denied_before_model_access_is_checked():
-    handler: Final = RecordingHandler(key=replace(PLAIN_KEY, user_id="u1"), owner=OwnerFacts(deactivated=True))
+    handler: Final = RecordingHandler(
+        key=replace(PLAIN_KEY, user_id="u1"), owner=OwnerFacts(deactivated=True, model_budgets=None)
+    )
     authentication, calls = await _authenticate("sk-x", handler=handler)
     assert authentication == OwnerDeactivated(user_id="u1")
     assert "enforce_model_access" not in calls
@@ -450,7 +480,7 @@ async def test_exempt_request_skips_every_budget_check():
     )
     assert await _authorize_key(key, exempt=True) == (
         _allowed(),
-        ("enforce_model_access", "check_budget_exemption", "load_key_context"),
+        ("enforce_model_access", "read_budget_exemption", "load_key_context"),
     )
 
 

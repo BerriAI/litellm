@@ -2,6 +2,7 @@ from typing import Final
 
 from litellm.proxy.auth.core.host import RequestCheckHost
 from litellm.proxy.auth.core.inputs import CheckFacts, CheckSettings
+from litellm.proxy.auth.core.model_budgets import skips_model_budgets
 from litellm.proxy.auth.core.outcome import Checked, Exempt, ExemptionReason, RequestCheck
 from litellm.proxy.auth.core.plan import is_public_route
 
@@ -33,7 +34,7 @@ async def check_request(host: RequestCheckHost, facts: CheckFacts, settings: Che
     if end_user.has_end_user and end_user.has_key_end_user_budget and settings.has_db:
         await host.apply_end_user_default_budget()
     await host.load_end_user_model_budget(assign=end_user.has_end_user)
-    skip_budget_checks: Final = host.skips_budget_checks()
+    skip_budget_checks: Final = skips_model_budgets(await host.read_budget_exemption())
     await host.load_team_member_default_model_budget(
         skip_budget_checks=skip_budget_checks or facts.route_skips_budget_checks
     )

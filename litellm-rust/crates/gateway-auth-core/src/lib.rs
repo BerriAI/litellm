@@ -3,14 +3,15 @@ mod facets;
 mod host;
 mod identity;
 mod inputs;
+mod model_budgets;
 mod native;
 mod outcome;
 mod validators;
 
 pub use answers::{
-    AutoRegistration, EndUserScope, FallbackTarget, Introspection, JwtPolicy, KeyFacts, KeyMapping,
-    KeyModelBudgets, ModelBudgetScope, OwnerFacts, PresentedKey, TeamMember, TeamMemberBudget,
-    TeamMemberModelBudgetScope, TokenRole,
+    AutoRegistration, BudgetExemption, EndUserScope, FallbackTarget, Introspection, JwtPolicy,
+    KeyFacts, KeyMapping, KeyModelBudgets, ModelBudgetScope, OwnerFacts, PresentedKey, TeamMember,
+    TeamMemberBudget, TeamMemberModelBudgetScope, TokenRole, UserModelBudgets,
 };
 pub use facets::{
     AnonymousCore, AuthCore, AuthPlanner, AuthorizeCore, CustomAuthCore, JwtCore, KeyCore,
@@ -30,9 +31,11 @@ pub use inputs::{
     OAuth2IntrospectionSettings, OAuth2ProxySettings, PlanFacts, PlanSettings, RequestFacts,
     RoutingOverride,
 };
+pub use model_budgets::{
+    BudgetsSkipped, ModelBudgetProof, WithinModelBudgets, skips_model_budgets,
+};
 pub use native::{NativeCore, Unported};
 pub use outcome::{
     Denial, ExemptionReason, ModelBudgetExceeded, ModelBudgetResult, Outcome, RequestCheck,
-    WithinModelBudgets,
 };
 pub use validators::{CredentialPlan, KeyPlan, OAuth2Mode, Plan, PremiumFeature};

@@ -3,7 +3,7 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.auth.core.answers import EndUserScope, TokenRole
+from litellm.proxy.auth.core.answers import BudgetExemption, EndUserScope, TokenRole
 from litellm.proxy.auth.core.inputs import CheckFacts, CheckSettings, PlanSettings, RequestFacts
 from litellm.proxy.auth.core.outcome import Checked, Exempt, ExemptionReason, RequestCheck
 from litellm.proxy.auth.core.python_core import PythonCore
@@ -39,7 +39,7 @@ FULL_RUN: Final = (
     ("load_check_objects", None),
     ("apply_project", None),
     ("load_end_user_model_budget", False),
-    ("skips_budget_checks", None),
+    ("read_budget_exemption", None),
     ("load_team_member_default_model_budget", False),
     ("merge_request_tags", None),
     ("bind_admission_counters", None),
@@ -89,9 +89,9 @@ class RecordingCheckHost:
     async def load_end_user_model_budget(self, assign: bool) -> None:
         self._record("load_end_user_model_budget", assign)
 
-    def skips_budget_checks(self) -> bool:
-        self._record("skips_budget_checks")
-        return self.skip_budget_checks
+    async def read_budget_exemption(self) -> BudgetExemption:
+        self._record("read_budget_exemption")
+        return BudgetExemption(route_skips_budgets=False, mcp_discovery=False, model_is_free=self.skip_budget_checks)
 
     async def load_team_member_default_model_budget(self, skip_budget_checks: bool) -> None:
         self._record("load_team_member_default_model_budget", skip_budget_checks)

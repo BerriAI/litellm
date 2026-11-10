@@ -616,7 +616,7 @@ class TestEdgeCases:
 class TestOverBudgetRequestThroughModelGroupAlias:
     """The whole path a request takes, not just the predicate.
 
-    `user_api_key_auth._should_skip_budget_checks()` derives the exemption from the requested
+    `user_api_key_auth._budget_exemption()` and the core's `skips_model_budgets()` derive the exemption from the requested
     model name and `common_checks()` enforces the budgets with it, so a break anywhere between
     alias resolution and enforcement shows up here. See
     https://github.com/BerriAI/litellm/issues/35369.
@@ -649,13 +649,12 @@ class TestOverBudgetRequestThroughModelGroupAlias:
 
     async def _request(self, model: str, proxy_logging) -> bool:
         """Run one over-budget request for `model`, deriving the exemption the way auth does."""
-        from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+        from litellm.proxy.auth.core.model_budgets import skips_model_budgets
+        from litellm.proxy.auth.user_api_key_auth import _budget_exemption
 
         router = self._router()
         request_data = {"model": model}
-        skip_budget_checks = _should_skip_budget_checks(
-            request_data=request_data, route=self.ROUTE, request=None, llm_router=router
-        )
+        skip_budget_checks = skips_model_budgets(_budget_exemption(request_data, self.ROUTE, None, router, None))
         return await common_checks(
             request_body=request_data,
             team_object=None,

@@ -1,3 +1,5 @@
+use crate::model_budgets::WithinModelBudgets;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelBudgetExceeded {
     pub message: String,
@@ -6,9 +8,6 @@ pub struct ModelBudgetExceeded {
     pub entity_type: Option<String>,
     pub entity_id: Option<String>,
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WithinModelBudgets;
 
 pub type ModelBudgetResult = Result<WithinModelBudgets, ModelBudgetExceeded>;
 

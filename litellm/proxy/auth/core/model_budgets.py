@@ -1,11 +1,31 @@
 from collections.abc import Mapping
 from typing import Final
 
-from litellm.proxy.auth.core.answers import FallbackTarget, ModelBudgetScope, TeamMemberModelBudgetScope
+from litellm.proxy.auth.core.answers import (
+    BudgetExemption,
+    FallbackTarget,
+    ModelBudgetScope,
+    TeamMemberModelBudgetScope,
+)
 from litellm.proxy.auth.core.host import ModelBudgetHost, TeamMemberModelBudgetHost
 from litellm.proxy.auth.core.outcome import (
+    BudgetsSkipped,
     ModelBudgetExceeded,
+    ModelBudgetResult,
+    WithinModelBudgets,
 )
+
+
+def skips_model_budgets(exemption: BudgetExemption) -> bool:
+    return exemption.route_skips_budgets or exemption.mcp_discovery or exemption.model_is_free
+
+
+def skip_model_budgets() -> BudgetsSkipped:
+    return BudgetsSkipped()
+
+
+def within_model_budgets(exceeded: ModelBudgetExceeded | None) -> ModelBudgetResult:
+    return WithinModelBudgets() if exceeded is None else exceeded
 
 
 async def check_key_and_user_model_budgets(host: ModelBudgetHost) -> ModelBudgetExceeded | None:

@@ -73,19 +73,19 @@ from litellm.proxy.auth.core.model_budgets import (
     check_key_and_user_model_budgets,
     check_team_member_model_budgets,
     check_user_model_budgets,
+    skips_model_budgets,
+    within_model_budgets,
 )
 from litellm.proxy.auth.core.outcome import (
     Allow,
     Deny,
     KeyBudgetExceeded,
     MasterKeyOnlyRoute,
-    ModelBudgetExceeded,
     ModelBudgetResult,
     Outcome,
     RequestCheck,
     TeamMemberBudgetExceeded,
     UserAuthDisabled,
-    WithinModelBudgets,
 )
 from litellm.proxy.auth.core.validators import CredentialPlan, KeyPlan, Plan
 
@@ -204,17 +204,13 @@ class PythonAuthorizeCore(AuthorizeCore):
 
 class PythonModelBudgetCore(ModelBudgetCore):
     async def check_key_and_user(self, host: ModelBudgetHost) -> ModelBudgetResult:
-        return _within_model_budgets(await check_key_and_user_model_budgets(host))
+        return within_model_budgets(await check_key_and_user_model_budgets(host))
 
     async def check_user(self, host: ModelBudgetHost) -> ModelBudgetResult:
-        return _within_model_budgets(await check_user_model_budgets(host))
+        return within_model_budgets(await check_user_model_budgets(host))
 
     async def check_team_member(self, host: TeamMemberModelBudgetHost) -> ModelBudgetResult:
-        return _within_model_budgets(await check_team_member_model_budgets(host))
-
-
-def _within_model_budgets(exceeded: ModelBudgetExceeded | None) -> ModelBudgetResult:
-    return WithinModelBudgets() if exceeded is None else exceeded
+        return within_model_budgets(await check_team_member_model_budgets(host))
 
 
 async def _presented_key(host: KeyHost, token: str, settings: KeySettings, now: datetime) -> KeyAuthentication:
@@ -241,18 +237,16 @@ async def _verify_key(host: KeyHost, now: datetime, key_label: str) -> VirtualKe
     key: Final = await host.inspect_key()
     if key.blocked:
         return KeyBlocked()
-    if key.user_id is not None and await _owner_deactivated(host, key.user_id):
-        return OwnerDeactivated(user_id=key.user_id)
+    owner: Final = await host.load_key_owner(key.user_id) if key.user_id is not None else None
+    if owner is not None:
+        host.attach_user_model_budgets(owner.model_budgets)
+        if owner.deactivated and key.user_id is not None:
+            return OwnerDeactivated(user_id=key.user_id)
     if key.expires is not None and key.expires < now:
         return ExpiredKey(expires=key.expires, now=now, key_label=key_label)
     if not key.has_token:
         return KeyWithoutToken()
     return VirtualKey(key=key)
-
-
-async def _owner_deactivated(host: KeyHost, user_id: str) -> bool:
-    owner: Final = await host.load_key_owner(user_id)
-    return owner is not None and owner.deactivated
 
 
 async def _authorize_virtual_key(
@@ -261,7 +255,7 @@ async def _authorize_virtual_key(
     if facts.route in settings.master_key_only_routes:
         return Deny(MasterKeyOnlyRoute())
     await host.enforce_model_access()
-    exempt: Final = await host.check_budget_exemption()
+    exempt: Final = skips_model_budgets(await host.read_budget_exemption())
     if not exempt and settings.has_db and key.team_member is not None:
         team_member_exceeded: Final = await _check_team_member_budget(host, key.team_member)
         if team_member_exceeded is not None:

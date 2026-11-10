@@ -20,6 +20,13 @@ from litellm.proxy.auth.core.identity import (
     ManagedAgentNeedsDirectJwt,
 )
 from litellm.proxy.auth.core.inputs import JwtSettings
+from litellm.proxy.auth.core.model_budgets import (
+    check_user_model_budgets,
+    skip_model_budgets,
+    skips_model_budgets,
+    within_model_budgets,
+)
+from litellm.proxy.auth.core.outcome import ModelBudgetExceeded
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,15 +71,20 @@ async def _apply_policy(host: JwtHost, settings: JwtSettings, *, pending_auto_re
     match registration:
         case RegistrationFailed(reason=reason):
             return JwtKeyMappingFailed(reason=reason)
-        case Registered(links_existing_key=True) if settings.master_key_set:
-            return JwtKey()
-        case Registered() | NotRegistered():
+        case Registered(links_existing_key=links_existing_key):
+            host.attach_user_model_budgets(policy.user_model_budgets)
+            if links_existing_key and settings.master_key_set:
+                return JwtKey()
+        case NotRegistered():
             pass
-    skip_budget_checks: Final = host.skips_budget_checks()
+    exemption: Final = await host.read_budget_exemption()
     await host.load_project()
-    if not skip_budget_checks:
-        await host.check_user_model_budgets()
-    return JwtUser()
+    if skips_model_budgets(exemption):
+        return JwtUser(budgets=skip_model_budgets())
+    budgets: Final = within_model_budgets(await check_user_model_budgets(host.model_budgets()))
+    if isinstance(budgets, ModelBudgetExceeded):
+        return budgets
+    return JwtUser(budgets=budgets)
 
 
 async def authenticate(host: JwtHost, settings: JwtSettings) -> JwtAuthentication:
