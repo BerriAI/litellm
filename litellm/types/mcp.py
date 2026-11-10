@@ -410,7 +410,7 @@ def credential_redirect_hook(
 
 MCP_ADMIN_CONFIG_CREDENTIAL_KEYS: Final[tuple[str, ...]] = ("upstream_resource", "upstream_token_header")
 """Non-secret credential keys returned on read so the admin form can show and clear them. Mirrors
-``ADMIN_CONFIG_CREDENTIAL_KEYS`` in ``ui/litellm-dashboard/src/components/mcp_tools/types.tsx``."""
+``ADMIN_CONFIG_CREDENTIAL_KEYS`` in ``litellm/ui/litellm-dashboard/src/components/mcp_tools/types.tsx``."""
 
 
 class MCPServerCostInfo(TypedDict, total=False):

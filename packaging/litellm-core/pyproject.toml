@@ -68,6 +68,10 @@ include = [
 exclude = [
     "litellm/deploy",
     "litellm/deploy/**",
+    "litellm/ui",
+    "litellm/ui/**",
+    "litellm/vscode-extension",
+    "litellm/vscode-extension/**",
     "litellm/proxy/_experimental/out",
     "litellm/proxy/_experimental/out/**",
     "litellm/proxy/enterprise",

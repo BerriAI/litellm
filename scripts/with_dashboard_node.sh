@@ -4,7 +4,7 @@ set -eu
 [ $# -gt 0 ] || { echo "usage: $0 <command> [args...]" >&2; exit 2; }
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
-dashboard="$repo_root/ui/litellm-dashboard"
+dashboard="$repo_root/litellm/ui/litellm-dashboard"
 floor=$(sed -n 's/.*"node": *">=\([0-9][0-9.]*\)".*/\1/p' "$dashboard/package.json")
 pinned=$(tr -d '[:space:]' < "$dashboard/.nvmrc")
 floor="${floor:-$pinned}"
@@ -44,7 +44,7 @@ if command -v fnm > /dev/null 2>&1; then
 fi
 
 cat >&2 <<EOF
-with_dashboard_node: node ${current:-missing} does not meet ui/litellm-dashboard's engines floor (>= $floor) and neither nvm nor fnm is available to switch automatically.
+with_dashboard_node: node ${current:-missing} does not meet litellm/ui/litellm-dashboard's engines floor (>= $floor) and neither nvm nor fnm is available to switch automatically.
 Fix it with one of:
   - install nvm (https://github.com/nvm-sh/nvm) and re-run; it will pick up node $pinned for you
   - or install/upgrade node yourself to >= $floor (e.g. brew install node), then re-run

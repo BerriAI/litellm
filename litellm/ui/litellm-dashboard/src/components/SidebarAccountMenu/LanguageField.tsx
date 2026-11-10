@@ -16,7 +16,7 @@ import {
   supportedLanguages,
 } from "@/i18n/languages";
 
-const TRANSLATIONS_URL = "https://github.com/BerriAI/litellm/tree/main/ui/litellm-dashboard/src/i18n/locales";
+const TRANSLATIONS_URL = "https://github.com/BerriAI/litellm/tree/main/litellm/ui/litellm-dashboard/src/i18n/locales";
 const CONTROL_ID = "account-menu-language";
 
 type LanguageFieldProps = {

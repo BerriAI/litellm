@@ -27,8 +27,8 @@ while IFS= read -r file || [ -n "$file" ]; do
       has_windows_release=true ;;
   esac
   case "$file" in
-    ui/* | tests/e2e/ui/*) has_client=true ;;
-    docs/* | *.md | *.mdx) : ;;
+    litellm/ui/* | tests/e2e/ui/*) has_client=true ;;
+    *.md | *.mdx) : ;;
     .github/*) has_ci=true; has_backend=true ;;
     *) has_backend=true ;;
   esac

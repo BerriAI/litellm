@@ -40,8 +40,8 @@ def classify(category: str, changed: list[str]) -> str:
     return result.stdout.strip()
 
 
-DOCS = ["README.md", "docs/my_website/index.mdx", "litellm/anywhere.md"]
-CLIENT = ["ui/litellm-dashboard/src/App.tsx"]
+DOCS = ["README.md", "litellm/anywhere.md"]
+CLIENT = ["litellm/ui/litellm-dashboard/src/App.tsx"]
 BACKEND = ["litellm/main.py"]
 CI = [".github/workflows/test-unit.yml"]
 
@@ -68,7 +68,7 @@ CI = [".github/workflows/test-unit.yml"]
         ("windows-release", [".github/scripts/ci/classify_changes.sh"], "run"),
         ("windows-release", ["litellm/main.py"], "skip"),
         ("windows-release", ["tests/unit/test_utils.py"], "skip"),
-        ("windows-release", ["ui/litellm-dashboard/src/App.tsx"], "skip"),
+        ("windows-release", ["litellm/ui/litellm-dashboard/src/App.tsx"], "skip"),
         ("windows-release", ["docs/my-website/docs/index.md"], "skip"),
         # docs-only: skip everything
         ("backend", DOCS, "skip"),
@@ -136,9 +136,9 @@ def test_redis_compat_path_filter(changed: str, expected: str) -> None:
 
 
 def test_markdown_under_ui_counts_as_client_not_docs() -> None:
-    assert classify("client", ["ui/litellm-dashboard/README.md"]) == "run"
-    assert classify("backend", ["ui/litellm-dashboard/README.md"]) == "skip"
-    assert classify("ui", ["ui/litellm-dashboard/README.md"]) == "run"
+    assert classify("client", ["litellm/ui/litellm-dashboard/README.md"]) == "run"
+    assert classify("backend", ["litellm/ui/litellm-dashboard/README.md"]) == "skip"
+    assert classify("ui", ["litellm/ui/litellm-dashboard/README.md"]) == "run"
 
 
 def test_ci_config_changes_reach_every_category() -> None:

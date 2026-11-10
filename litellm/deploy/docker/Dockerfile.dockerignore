@@ -1,4 +1,4 @@
-docs
+litellm/vscode-extension
 litellm/proxy/discovery_endpoints/skill_scanner_adapter
 .github
 tests
@@ -47,8 +47,8 @@ build/
 *.egg-info/
 .DS_Store
 **/node_modules
-ui/litellm-dashboard/.next
-ui/litellm-dashboard/out
+litellm/ui/litellm-dashboard/.next
+litellm/ui/litellm-dashboard/out
 litellm-rust/target/
 litellm/rust_bridge/_native*.so
 *.log

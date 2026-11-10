@@ -274,7 +274,7 @@ AIRLINE_COMPLIANCE_CONFIG = {
     "threshold_low": 0.30,
 }
 
-# Dataset from ui/litellm-dashboard/src/data/compliancePrompts.ts airlineCompliancePrompts
+# Dataset from litellm/ui/litellm-dashboard/src/data/compliancePrompts.ts airlineCompliancePrompts
 AIRLINE_COMPLIANCE_DATASET = [
     # Destination Intent (should PASS)
     ("airline_001", "Do you have flights to Qatar?", "pass"),

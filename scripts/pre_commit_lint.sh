@@ -99,11 +99,11 @@ existing_files() {
 litellm_py_pattern='^litellm/.*\.py$'
 e2e_py_pattern='^tests/e2e(_harness)?/.*\.py$'
 test_tree_pattern='^(tests/.*\.py|\.github/linters/ruff-tests\.toml|pyproject\.toml|scripts/(check_test_quality|test_quality_gate)\.py)$'
-spec_pattern='^(litellm/.*|enterprise/.*|pyproject\.toml|uv\.lock|ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$'
-ui_prettier_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$'
-ui_eslint_pattern='^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$'
+spec_pattern='^(litellm/.*|enterprise/.*|pyproject\.toml|uv\.lock|litellm/ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$'
+ui_prettier_pattern='^litellm/ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$'
+ui_eslint_pattern='^litellm/ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$'
 
-litellm_py_files=$(scope_match "$litellm_py_pattern")
+litellm_py_files=$(scope_match "$litellm_py_pattern" | grep -Ev '^litellm/(ui|vscode-extension)/' || true)
 if [ -n "$(scope_match '^(litellm/proxy/mcp_server/|scripts/check_mcp_operation_boundary\.py)')" ]; then
     uv run --no-sync python scripts/check_mcp_operation_boundary.py || exit 1
 fi
@@ -111,7 +111,10 @@ e2e_py_files=$(scope_match "$e2e_py_pattern")
 test_tree_files=$(scope_match "$test_tree_pattern")
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' | existing_files)
-spec_files=$(scope_match "$spec_pattern")
+spec_files=$({
+    scope_match "$spec_pattern" | grep -Ev '^litellm/(ui|vscode-extension)/' || true
+    scope_match '^litellm/ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts)$'
+})
 # CI's ui job runs prettier over a wider extension set than eslint; keep that
 # split so this flags exactly what the job would.
 ui_prettier_changed=$(scope_match "$ui_prettier_pattern")
@@ -158,16 +161,16 @@ lint_dashboard() {
         prettier_rel=()
         eslint_rel=()
         while IFS= read -r f; do
-            [ -n "$f" ] && prettier_rel+=("${f#ui/litellm-dashboard/}")
+            [ -n "$f" ] && prettier_rel+=("${f#litellm/ui/litellm-dashboard/}")
         done <<EOF
 $ui_prettier_files
 EOF
         while IFS= read -r f; do
-            [ -n "$f" ] && eslint_rel+=("${f#ui/litellm-dashboard/}")
+            [ -n "$f" ] && eslint_rel+=("${f#litellm/ui/litellm-dashboard/}")
         done <<EOF
 $ui_eslint_files
 EOF
-        cd ui/litellm-dashboard
+        cd litellm/ui/litellm-dashboard
         if [ ${#prettier_rel[@]} -gt 0 ]; then
             npx prettier --check "${prettier_rel[@]}" || rc=1
         fi
@@ -237,12 +240,12 @@ fi
 
 dashboard_checks() {
     echo "check: linting dashboard (prettier + eslint + lint budgets)"
-    if [ ! -d ui/litellm-dashboard/node_modules ]; then
-        echo "✗ ui/litellm-dashboard/node_modules is missing; dashboard lint cannot run." >&2
+    if [ ! -d litellm/ui/litellm-dashboard/node_modules ]; then
+        echo "✗ litellm/ui/litellm-dashboard/node_modules is missing; dashboard lint cannot run." >&2
         bootstrap_hint
         return 1
     fi
-    lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; return 1; }
+    lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd litellm/ui/litellm-dashboard && npm run format)." >&2; return 1; }
 }
 
 if [ -n "$ui_prettier_changed" ] || [ -n "$ui_eslint_changed" ]; then
@@ -260,8 +263,8 @@ genapi_checks() {
     # and an up-to-date Prisma client; test-linting.yml installs those and runs
     # prisma generate before gen:api, so mirror that here or a stale client can mask
     # drift that CI will still flag.
-    if [ ! -d ui/litellm-dashboard/node_modules ]; then
-        echo "✗ ui/litellm-dashboard/node_modules is missing; the gen:api sync check cannot run." >&2
+    if [ ! -d litellm/ui/litellm-dashboard/node_modules ]; then
+        echo "✗ litellm/ui/litellm-dashboard/node_modules is missing; the gen:api sync check cannot run." >&2
         bootstrap_hint
         status=1
     elif ! uv run --no-sync python -c "import orjson, prisma" 2>/dev/null; then
@@ -274,12 +277,12 @@ genapi_checks() {
     elif ! uv run --no-sync python -m litellm.proxy._lazy_openapi_snapshot; then
         echo "✗ Could not regenerate the lazy OpenAPI snapshot (python -m litellm.proxy._lazy_openapi_snapshot failed)." >&2
         status=1
-    elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then
+    elif ( cd litellm/ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then
         if ! git diff --quiet -- litellm/proxy/_lazy_openapi_snapshot.json; then
             echo "✗ The lazy OpenAPI snapshot is stale; regenerated litellm/proxy/_lazy_openapi_snapshot.json. Stage it and commit; re-run make check only if other checks failed too." >&2
             status=1
         fi
-        if ! git diff --quiet -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
+        if ! git diff --quiet -- litellm/ui/litellm-dashboard/src/lib/http/schema.d.ts; then
             echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and commit; re-run make check only if other checks failed too." >&2
             status=1
         fi

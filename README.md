@@ -660,7 +660,7 @@ The Terraform modules live at [`litellm/deploy/terraform/litellm/aws/`](./litell
 2. Start proxy backend: `uv run python litellm/proxy/proxy_cli.py`
 
 #### Frontend
-1. Navigate to `ui/litellm-dashboard` (dependencies were already installed w/ `make bootstrap`)
+1. Navigate to `litellm/ui/litellm-dashboard` (dependencies were already installed w/ `make bootstrap`)
 2. Start dashboard: `npm run dev`
 
 ### Verify Docker Image Signatures
