@@ -15,6 +15,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
+from litellm.llms.vertex_ai.request_labels import without_caller_labels_header
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import (
@@ -73,7 +74,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
@@ -105,7 +106,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
             default_headers["Authorization"] = headers["Authorization"]
 
         # Merge other headers, overriding any default ones except Authorization
-        return {**default_headers, **headers}
+        return {**default_headers, **without_caller_labels_header(headers)}
 
     def transform_rerank_request(
         self,

@@ -21,7 +21,7 @@ from litellm.llms.vertex_ai.audio_transcription.transformation import (
     validate_vertex_transcription_project_id,
 )
 from litellm.llms.vertex_ai.common_utils import VertexAIError, get_vertex_base_url, pop_vertex_request_labels
-from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
+from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields, without_caller_labels_header
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -108,7 +108,7 @@ class VertexGeminiAudioTranscriptionConfig(BaseAudioTranscriptionConfig, VertexB
             custom_llm_provider="vertex_ai",
         )
         return {
-            **headers,
+            **without_caller_labels_header(headers),
             "Authorization": f"Bearer {access_token}",
             "x-goog-user-project": project_id,
             "Content-Type": "application/json",

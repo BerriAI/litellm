@@ -327,3 +327,17 @@ async def test_create_sends_caller_labels_as_is_while_the_setting_is_off(
 
     assert with_labels["labels"] == dict(FORGED)
     assert "labels" not in without_labels
+
+
+def test_create_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    config: VertexAIInteractionsConfig, litellm_params: GenericLiteLLMParams, monkeypatch: pytest.MonkeyPatch
+):
+    caller_headers: Final = {"x-vertex-ai-labels": "eyJ1c2VyX2FwaV9rZXlfdGVhbV9hbGlhcyI6ICJmb3JnZWQifQ==", "x-trace-id": "t-1"}
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = config.validate_environment(caller_headers, "gemini-omni-flash-preview", litellm_params)
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", LABEL_FIELDS)
+    setting_on: Final = config.validate_environment(caller_headers, "gemini-omni-flash-preview", litellm_params)
+
+    assert setting_off["x-vertex-ai-labels"] == caller_headers["x-vertex-ai-labels"]
+    assert "x-vertex-ai-labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"

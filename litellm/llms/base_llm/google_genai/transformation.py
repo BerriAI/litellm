@@ -82,6 +82,9 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
     ) -> Mapping[str, object] | None:
         return request_fields
 
+    def transform_caller_headers(self, headers: Mapping[str, object]) -> Mapping[str, object]:
+        return headers
+
     @abstractmethod
     def map_generate_content_optional_params(
         self,

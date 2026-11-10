@@ -7,6 +7,7 @@ from typing import Final, Literal
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
 from litellm.llms.vertex_ai.common_utils import vertex_top_level_request_fields
+from litellm.llms.vertex_ai.request_labels import without_caller_labels_header
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -46,6 +47,9 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         litellm_params: GenericLiteLLMParams,
     ) -> Mapping[str, object] | None:
         return vertex_top_level_request_fields(request_fields, litellm_params)
+
+    def transform_caller_headers(self, headers: Mapping[str, object]) -> Mapping[str, object]:
+        return without_caller_labels_header(headers)
 
     def _camel_to_snake(self, camel_str: str) -> str:
         """Convert camelCase to snake_case"""

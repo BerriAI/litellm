@@ -11,9 +11,9 @@ from __future__ import annotations
 import base64
 import json
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from itertools import chain
-from typing import Final, TypeAlias
+from typing import Final, TypeAlias, TypeVar
 
 from pydantic import TypeAdapter
 
@@ -33,6 +33,7 @@ _ANY_MAPPING: Final = TypeAdapter(Mapping[object, object])
 _ANY_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
 
 Label: TypeAlias = tuple[str, str]
+_HeaderValue: Final = TypeVar("_HeaderValue")
 
 
 def vertex_request_label_fields() -> tuple[str, ...]:
@@ -127,6 +128,19 @@ def resolve_vertex_request_labels(
 
 def is_vertex_labels_header(name: str) -> bool:
     return name.lower() == VERTEX_LABELS_HEADER.lower()
+
+
+def caller_labels_header_names(header_names: Iterable[str]) -> tuple[str, ...]:
+    """
+    The ``X-Vertex-AI-Labels`` headers a Vertex call that carries ``labels`` in its body drops once
+    ``litellm.vertex_request_label_fields`` is set, since a caller-set header would bill beside the resolved labels.
+    """
+    return tuple(filter(is_vertex_labels_header, header_names)) if vertex_request_label_fields() else ()
+
+
+def without_caller_labels_header(headers: Mapping[str, _HeaderValue]) -> Mapping[str, _HeaderValue]:
+    dropped: Final = caller_labels_header_names(headers)
+    return {name: value for name, value in headers.items() if name not in dropped}
 
 
 def _decoded_labels_header(encoded: object) -> object:

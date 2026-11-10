@@ -214,6 +214,42 @@ def test_team_alias_outside_googles_label_rules_is_rewritten_to_a_compliant_labe
     assert labels == rig.uppercase_team_identity, labels
 
 
+
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+def _gemini_route(rig: Rig, route: str, marker: str) -> tuple[str, dict[str, JsonValue]]:
+    caller_headers: Final[dict[str, JsonValue]] = {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER}
+    if route == "generate_content":
+        return f"/v1beta/models/{rig.chat_model}:generateContent", {
+            "contents": [{"role": "user", "parts": [{"text": marker}]}],
+            "extra_headers": caller_headers,
+        }
+    return "/v1/chat/completions", {
+        "model": rig.chat_model,
+        "messages": [{"role": "user", "content": marker}],
+        "stream": route == "chat_stream",
+        "extra_headers": caller_headers,
+    }
+
+
+@pytest.mark.parametrize("route", ["chat", "chat_stream", "generate_content"])
+def test_gemini_drops_a_forged_labels_header_and_bills_the_identity_in_the_body(rig: Rig, route: str) -> None:
+    marker: Final = f"forged-header-{route}-{uuid.uuid4().hex}"
+    path, body = _gemini_route(rig, route, marker)
+    response: Final = rig.proxy.request("POST", path, body, key=rig.key)
+
+    assert response.status_code == 200, response.text
+    assert _REPLY_TEXT in response.text, response.text
+    request: Final = rig.request_sent(marker)
+    assert _LABELS_HEADER not in {name.lower() for name in request.headers}, request.headers
+    assert _JSON_OBJECT.validate_json(request.body).get("labels") == {
+        **rig.identity,
+        "cost-center": "cc-1234",
+        "owner": "platform_team",
+    }
+
+
 def test_embedding_labels_carry_the_caller_identity(rig: Rig) -> None:
     marker: Final = f"embed-{uuid.uuid4().hex}"
     response: Final = rig.proxy.request(
