@@ -524,9 +524,10 @@ async def write_media_within_limit(response: httpx.Response, media_file: IO[byte
 def media_file_seconds(path: Path) -> float | None:
     try:
         with soundfile.SoundFile(str(path)) as audio:
-            if len(audio) >= LIBSNDFILE_UNKNOWN_FRAME_COUNT:
+            frames: Final = len(audio)
+            if frames >= LIBSNDFILE_UNKNOWN_FRAME_COUNT:
                 return None
-            return len(audio) / audio.samplerate
+            return frames / audio.samplerate
     except (RuntimeError, ValueError, OSError) as e:
         verbose_proxy_logger.warning("Transcribe media could not be decoded for its duration: %s", e)
         return None
