@@ -198,14 +198,24 @@ def _parse_binary_body(body: bytes) -> dict[str, object]:
     return {}
 
 
+_BODY_BYTES_SCOPE_KEY: Final = "litellm_received_body_bytes"
+
+
 def _declared_content_length(headers: Mapping[str, str]) -> int | None:
     declared: Final = headers.get("content-length")
     return int(declared) if isinstance(declared, str) and declared.isdigit() else None
 
 
-def request_declares_body(headers: Mapping[str, str]) -> bool:
+def _request_declares_body(headers: Mapping[str, str]) -> bool:
     content_length: Final = _declared_content_length(headers)
     return "transfer-encoding" in headers or (content_length is not None and content_length > 0)
+
+
+def request_sent_body(request: Request) -> bool:
+    received_bytes: Final[object] = request.scope.get(_BODY_BYTES_SCOPE_KEY) if hasattr(request, "scope") else None
+    if isinstance(received_bytes, int):
+        return received_bytes > 0
+    return _request_declares_body(request.headers)
 
 
 def _mark_body_received(byte_count: int | None) -> None:
@@ -214,6 +224,14 @@ def _mark_body_received(byte_count: int | None) -> None:
         "litellm.request.body_received",
         None if byte_count is None else {"litellm.request.body_bytes": byte_count},
     )
+
+
+async def _receive_body(request: Request) -> bytes:
+    body: Final = await request.body()
+    if hasattr(request, "scope"):
+        request.scope[_BODY_BYTES_SCOPE_KEY] = len(body)  # rebind-ok: the ASGI scope is per-request shared state
+    _mark_body_received(len(body))
+    return body
 
 
 def is_otlp_trace_request(request: HTTPConnection) -> bool:
@@ -293,8 +311,7 @@ async def read_request_body(request: Request | None) -> dict:
         content_type: Final = _request_headers.get("content-type", "")
 
         if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
-            binary_body: Final = await request.body()
-            _mark_body_received(len(binary_body))
+            binary_body: Final = await _receive_body(request)
             parsed_body = _parse_binary_body(binary_body)
         elif _is_form_content_type(content_type):
             form_body: Final = dict(await _read_form_data(request))
@@ -306,8 +323,7 @@ async def read_request_body(request: Request | None) -> dict:
             )
         else:
             # Read the request body
-            body: Final = await request.body()
-            _mark_body_received(len(body))
+            body: Final = await _receive_body(request)
 
             # Return empty dict if body is empty or None
             if not body:
