@@ -1,7 +1,5 @@
 {
-  ".agents": "Agent skills discovered from the repository root.",
   ".cargo": "Cargo configuration discovered by root-invoked Cargo and maturin.",
-  ".gitguardian.yaml": "Root configuration discovered by GitGuardian.",
   ".github": "GitHub workflows, repository automation, policy and ownership discovery.",
   ".gitignore": "Git ignore rules for repository worktrees.",
   "AGENTS.md": "Root instructions discovered by coding agents.",
