@@ -4,7 +4,9 @@
 //! the `max_completion_tokens` -> `max_tokens` rename and the usage
 //! `*_tokens` null-to-zero sanitize.
 
-use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_auth::CredentialPlacement;
+use litellm_secret_value::SecretValue;
+
 use litellm_core_utils::core_helpers::unix_now;
 use litellm_llms_types::formats::chat_completions::{
     ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,

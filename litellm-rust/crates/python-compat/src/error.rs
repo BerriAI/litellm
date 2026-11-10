@@ -6,6 +6,8 @@ use crate::MAX_DEPTH;
 pub enum Error {
     #[error("malformed Python literal at byte {0}")]
     InvalidLiteral(usize),
+    #[error("malformed JSON at byte {0}")]
+    InvalidJson(usize),
     #[error("unhashable type: '{0}'")]
     Unhashable(&'static str),
     #[error("value nests deeper than {MAX_DEPTH} levels")]

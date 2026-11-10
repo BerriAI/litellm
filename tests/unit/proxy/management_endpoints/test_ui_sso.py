@@ -15,9 +15,16 @@ from fastapi import HTTPException, Request
 from pydantic import SecretStr
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, ProxyException
+from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
+    LiteLLM_UserTable,
+    NewUserResponse,
+    SSOUserDefinedValues,
+    ProxyException,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -44,6 +51,62 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     TeamMappings,
 )
 from tests._master_key import MASTER_KEY
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("billable_users", "premium", "admitted"),
+    [(4, False, True), (5, False, False), (26, False, False), (26, True, True)],
+)
+async def test_sso_auto_creation_enforces_free_user_cap_through_new_user(
+    monkeypatch: pytest.MonkeyPatch, billable_users: int, premium: bool, admitted: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.utils import PrismaClient
+
+    row: Final = LiteLLM_UserTable(user_id="new-sso-user", user_email="new-sso-user@example.test")
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        find_unique=AsyncMock(return_value=None),
+        count=AsyncMock(side_effect=lambda where=None: billable_users if where is None else 0),
+        create=AsyncMock(return_value=row),
+        upsert=AsyncMock(return_value=row),
+    )
+    transaction: Final = MagicMock()
+    transaction.__aenter__ = AsyncMock(
+        return_value=SimpleNamespace(litellm_usertable=table, execute_raw=AsyncMock(), query_raw=AsyncMock())
+    )
+    transaction.__aexit__ = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        "prisma.Prisma",
+        lambda **kwargs: SimpleNamespace(litellm_usertable=table, tx=MagicMock(return_value=transaction)),
+    )
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "premium_user", premium)
+    monkeypatch.setattr("asyncio.sleep", AsyncMock())
+    values: Final[SSOUserDefinedValues] = {
+        "models": [],
+        "user_id": row.user_id,
+        "user_email": row.user_email,
+        "user_role": "internal_user_viewer",
+        "max_budget": None,
+        "budget_duration": None,
+    }
+    if admitted:
+        response: Final = await insert_sso_user(CustomOpenID(id=row.user_id, team_ids=[]), values)
+        assert response.user_id == row.user_id
+        assert table.create.await_count + table.upsert.await_count == 1
+    else:
+        with pytest.raises(ProxyException) as error:
+            await insert_sso_user(CustomOpenID(id=row.user_id, team_ids=[]), values)
+        assert str(error.value.code) == "403"
+        assert "SSO for more than 5 users" in error.value.message
+        table.create.assert_not_awaited()
+        table.upsert.assert_not_awaited()
 
 
 def _sso_http_handler(route: Callable[[httpx.Request], httpx.Response] | None = None) -> AsyncHTTPHandler:
@@ -285,6 +348,13 @@ def test_get_microsoft_callback_response(stubbed_graph_api):
     assert sso_assertion.refresh_token is not None
     assert sso_assertion.refresh_token.get_secret_value() == "msft-refresh-token"
     assert sso_assertion.issuer == "https://idp.example.com"
+
+
+
+def _jwt_handler_double() -> MagicMock:
+    handler: Final = MagicMock(spec=JWTHandler)
+    handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    return handler
 
 
 GRAPH_ERROR_BODIES: Final = (
@@ -714,10 +784,15 @@ def test_get_group_ids_from_graph_api_response():
     [
         # Test case 1: Using DefaultTeamSSOParams
         DefaultTeamSSOParams(
-            max_budget=10, budget_duration="1d", models=["special-gpt-5"]
+            max_budget=10, budget_duration="1d", models=["special-gpt-5"], access_group_ids=["central-models"]
         ),
         # Test case 2: Using Dict
-        {"max_budget": 10, "budget_duration": "1d", "models": ["special-gpt-5"]},
+        {
+            "max_budget": 10,
+            "budget_duration": "1d",
+            "models": ["special-gpt-5"],
+            "access_group_ids": ["central-models"],
+        },
     ],
 )
 async def test_default_team_params(team_params):
@@ -762,6 +837,7 @@ async def test_default_team_params(team_params):
         assert create_call_args["max_budget"] == 10
         assert create_call_args["budget_duration"] == "1d"
         assert create_call_args["models"] == ["special-gpt-5"]
+        assert create_call_args["access_group_ids"] == ["central-models"]
 
 
 @pytest.mark.asyncio
@@ -1158,7 +1234,7 @@ def test_generic_response_convertor_normalizes_email():
     }
 
     # Mock JWT handler
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -1268,7 +1344,8 @@ async def test_upsert_sso_user_fills_user_alias_for_existing_user():
 
 
 @pytest.mark.asyncio
-async def test_insert_sso_user_sets_user_alias_from_display_name():
+@pytest.mark.parametrize("user_id", ["S-1-5-21-adfs-user", " employee-42 "])
+async def test_insert_sso_user_sets_user_alias_from_display_name(user_id: str):
     """
     A newly created SSO user is inserted with the IdP display name as user_alias.
     """
@@ -1277,7 +1354,7 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
     from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
 
     sso_result = CustomOpenID(
-        id="S-1-5-21-adfs-user",
+        id=user_id,
         email="jane.doe@example.com",
         first_name="Jane",
         last_name="Doe",
@@ -1287,7 +1364,7 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
     )
     user_defined_values: SSOUserDefinedValues = {
         "models": [],
-        "user_id": "S-1-5-21-adfs-user",
+        "user_id": user_id,
         "user_email": "jane.doe@example.com",
         "max_budget": None,
         "user_role": "internal_user",
@@ -1296,12 +1373,14 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
 
     with patch(
         "litellm.proxy.management_endpoints.ui_sso.new_user",
-        return_value=NewUserResponse(user_id="S-1-5-21-adfs-user", key="sk-xxxxx", teams=None),
+        return_value=NewUserResponse(user_id=user_id, key="sk-xxxxx", teams=None),
     ) as mock_new_user:
         await insert_sso_user(result_openid=sso_result, user_defined_values=user_defined_values)
 
     new_user_request = mock_new_user.call_args.kwargs["data"]
-    assert new_user_request.user_id == "S-1-5-21-adfs-user"
+    assert new_user_request.user_id == user_id
+    assert new_user_request.sso_user_id == user_id
+    assert new_user_request.metadata == {"auth_provider": "generic"}
     assert new_user_request.user_email == "jane.doe@example.com"
     assert new_user_request.user_alias == "Doe, Jane"
 
@@ -2226,7 +2305,7 @@ async def test_get_generic_sso_response_with_additional_headers():
 
     # Arrange
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     generic_client_id = "test_client_id"
@@ -2299,7 +2378,7 @@ async def test_get_generic_sso_response_with_empty_headers():
 
     # Arrange
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     generic_client_id = "test_client_id"
@@ -2359,8 +2438,8 @@ async def test_get_generic_sso_response_includes_token_claims_when_enabled(monke
     from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
 
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
-    mock_sso_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
+    mock_sso_jwt_handler = _jwt_handler_double()
     mock_sso_jwt_handler.get_all_jwt_team_ids.return_value = ["team-from-userinfo"]
     mock_sso_jwt_handler.get_team_ids_from_jwt.return_value = []
 
@@ -2435,8 +2514,8 @@ async def test_get_generic_sso_response_does_not_include_token_claims_when_disab
     from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
 
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
-    mock_sso_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
+    mock_sso_jwt_handler = _jwt_handler_double()
     mock_sso_jwt_handler.get_all_jwt_team_ids.return_value = ["team-from-userinfo"]
     mock_sso_jwt_handler.get_team_ids_from_jwt.return_value = []
     access_token = pyjwt.encode({"upn": "token-user@example.com"}, "test-secret", algorithm="HS256")
@@ -2578,7 +2657,7 @@ async def test_get_generic_sso_response_pkce_merges_token_claims_and_excludes_cr
     ):
         result, received_response, _, _ = await get_generic_sso_response(
             request=request,
-            jwt_handler=MagicMock(spec=JWTHandler),
+            jwt_handler=_jwt_handler_double(),
             generic_client_id="test-client",
             redirect_url="http://test.com/callback",
             sso_jwt_handler=None,
@@ -2600,7 +2679,7 @@ async def test_get_generic_sso_response_ignores_opaque_and_empty_token_claims(mo
     from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
 
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     userinfo = {
         "preferred_username": "userinfo-user",
         "email": "userinfo@example.com",
@@ -3997,6 +4076,138 @@ class TestCLIKeyRegenerationFlow:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("browser_team_choice", [True, False])
+    async def test_cli_sso_callback_offers_a_team_picker_only_when_the_flow_chooses_the_team_in_the_browser(
+        self, browser_team_choice: bool
+    ):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_BROWSER_TEAM_CHOICE,
+            cli_sso_callback,
+        )
+
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.scope = {}
+        mock_request.base_url = "http://internal-proxy.local/"
+        mock_cache: Final = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+            **({CLI_SSO_BROWSER_TEAM_CHOICE: True} if browser_team_choice else {}),
+        }
+        mock_prisma: Final = MagicMock()
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[
+                MagicMock(model_dump=lambda team_id=team_id, alias=alias: {"team_id": team_id, "team_alias": alias})
+                for team_id, alias in (("team-ops", "Ops <eu>"), ("team-claude", None), ("team-ops-us", "Ops <eu>"))
+            ]
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+                return_value=LiteLLM_UserTable(
+                    user_id="dev-1", user_role="internal_user", teams=["team-claude", "team-ops", "team-ops-us"]
+                ),
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        ):
+            result: Final = await cli_sso_callback(
+                request=mock_request,
+                key="cli-session-4567890",
+                result=CustomOpenID(id="dev-1", email="dev-1@example.com", team_ids=[]),
+            )
+
+        page: Final = result.body.decode()
+        if not browser_team_choice:
+            assert 'name="team_id"' not in page
+            return
+        assert (
+            '<select id="team_id" name="team_id" required>'
+            '<option value="" disabled selected>Choose a team</option>'
+            '<option value="team-claude">team-claude</option>'
+            '<option value="team-ops">Ops &lt;eu&gt; (team-ops)</option>'
+            '<option value="team-ops-us">Ops &lt;eu&gt; (team-ops-us)</option>'
+            "</select>"
+        ) in page
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("posted_team_id", "chosen_team_id", "stored_teams"),
+        [("team-claude", "team-claude", ["team-claude", "team-ops"]), ("", None, ["team-ops", "team-claude"])],
+        ids=["chosen", "not_posted"],
+    )
+    async def test_cli_sso_complete_records_the_team_chosen_in_the_browser(
+        self, posted_team_id: str, chosen_team_id: str | None, stored_teams: list[str]
+    ):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_BROWSER_TEAM_CHOICE,
+            CLI_SSO_CHOSEN_TEAM_ID,
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(
+            return_value=f"user_code=ABCD-EFGH&browser_complete_token=browser-token&team_id={posted_team_id}".encode()
+        )
+        mock_cache: Final = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code("ABCD-EFGH")),
+            "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
+            "sso_complete": True,
+            "user_code_verified": False,
+            "session_data": {"user_id": "dev-1", "teams": ["team-ops", "team-claude"]},
+            CLI_SSO_BROWSER_TEAM_CHOICE: True,
+        }
+
+        with patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache):
+            result: Final = await cli_sso_complete(request=mock_request, login_id="cli-session-4567890")
+
+        assert result.status_code == 200
+        stored: Final = mock_cache.set_cache.call_args.kwargs["value"]
+        assert stored["user_code_verified"] is True
+        assert stored[CLI_SSO_CHOSEN_TEAM_ID] == chosen_team_id
+        assert stored["session_data"]["teams"] == stored_teams
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_complete_refuses_a_team_the_user_is_not_on(self):
+        from litellm.proxy.management_endpoints.ui_sso import (
+            CLI_SSO_BROWSER_TEAM_CHOICE,
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request: Final = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(
+            return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token&team_id=team-finance"
+        )
+        mock_cache: Final = MagicMock(redis_cache=None)
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code("ABCD-EFGH")),
+            "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
+            "sso_complete": True,
+            "user_code_verified": False,
+            "session_data": {"user_id": "dev-1", "teams": ["team-ops", "team-claude"]},
+            CLI_SSO_BROWSER_TEAM_CHOICE: True,
+        }
+
+        with patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_sso_complete(request=mock_request, login_id="cli-session-4567890")
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Choose one of the teams you belong to"
+        mock_cache.set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_cli_poll_key_returns_teams_for_selection(self):
         """Test CLI poll endpoint returns teams for user selection when multiple teams exist"""
         from litellm.proxy.management_endpoints.ui_sso import (
@@ -4399,6 +4610,39 @@ class TestCLIKeyRegenerationFlow:
         )
 
     @pytest.mark.asyncio
+    async def test_fetch_cli_sso_team_details_follows_the_user_record_order(self):
+        """The CLI login binds to the first detail, so it must be the first team on the user record.
+
+        Postgres returns the rows in whatever order the table holds them, which every write to a
+        team row changes, so the bound team used to flip between sign-ins.
+        """
+        from litellm.proxy.management_endpoints.ui_sso import (
+            fetch_cli_sso_team_details,
+        )
+
+        def team_row(team_id: str) -> MagicMock:
+            row: Final = MagicMock()
+            row.model_dump.return_value = {
+                "team_id": team_id,
+                "team_alias": None,
+                "models": [],
+                "litellm_model_table": None,
+            }
+            return row
+
+        prisma_client: Final = MagicMock()
+        prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[team_row("team-alpha"), team_row("team-zeta")]
+        )
+
+        details: Final = await fetch_cli_sso_team_details(
+            prisma_client=prisma_client,
+            teams=["team-zeta", "team-gone", "team-alpha", "team-zeta"],
+        )
+
+        assert [detail.team_id for detail in details] == ["team-zeta", "team-alpha"]
+
+    @pytest.mark.asyncio
     async def test_cli_poll_key_mints_jwt_with_selected_team_grants(self):
         """The selected team's grants must reach the mint, not just its alias."""
         from litellm.proxy.management_endpoints.ui_sso import (
@@ -4796,7 +5040,7 @@ class TestProcessSSOJWTAccessToken:
     @pytest.fixture
     def mock_jwt_handler(self):
         """Create a mock JWT handler for testing"""
-        mock_handler = MagicMock(spec=JWTHandler)
+        mock_handler = _jwt_handler_double()
         mock_handler.get_team_ids_from_jwt.return_value = ["team1", "team2", "team3"]
         return mock_handler
 
@@ -5183,7 +5427,7 @@ class TestGenericResponseConvertorNestedAttributes:
         from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
         # Mock JWT handler
-        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler = _jwt_handler_double()
         mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
         # Payload with nested attributes structure
@@ -5254,7 +5498,7 @@ class TestGenericResponseConvertorUserRole:
         from litellm.proxy._types import LitellmUserRoles
         from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
-        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler = _jwt_handler_double()
         mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
         sso_response = {
@@ -5284,7 +5528,7 @@ class TestGenericResponseConvertorUserRole:
         """
         from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
 
-        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler = _jwt_handler_double()
         mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
         sso_response = {
@@ -6560,72 +6804,57 @@ class TestPKCEFunctionality:
 class TestAddMissingTeamMember:
     """Tests for the add_missing_team_member function"""
 
+    @staticmethod
+    def _recording_add() -> tuple[
+        list[tuple[str, str | None]],
+        Callable[[str, NewUserResponse | LiteLLM_UserTable], Awaitable[None]],
+    ]:
+        added: Final[list[tuple[str, str | None]]] = []
+
+        async def add(team_id: str, user_info: NewUserResponse | LiteLLM_UserTable) -> None:
+            added.append((team_id, user_info.user_id))
+
+        return added, add
+
     @pytest.mark.asyncio
     async def test_add_missing_team_member_with_new_user_response_teams_none(self):
-        """
-        Bug reproduction: When a NewUserResponse has teams=None (new SSO user),
-        add_missing_team_member() should still add the user to the SSO teams.
-
-        Currently FAILS: The function returns early when teams is None.
-        """
+        """A new SSO user's NewUserResponse has teams=None, and the user must still be added to the SSO teams."""
         from litellm.proxy._types import NewUserResponse
         from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
-        # Simulate a new SSO user - NewUserResponse has teams=None by default
-        new_user = NewUserResponse(
-            user_id="new-sso-user-123",
-            key="sk-xxxxx",
-            teams=None,  # This is the default for NewUserResponse
+        new_user = NewUserResponse(user_id="new-sso-user-123", key="sk-xxxxx", teams=None)
+        added, add = self._recording_add()
+
+        await add_missing_team_member(
+            user_info=new_user,
+            sso_teams=["team-from-entra-1", "team-from-entra-2"],
+            add_team_member=add,
         )
 
-        sso_teams = ["team-from-entra-1", "team-from-entra-2"]
-
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
-        ) as mock_add_task:
-            mock_add_task.return_value = AsyncMock()
-
-            await add_missing_team_member(user_info=new_user, sso_teams=sso_teams)
-
-            # Bug: This assertion currently FAILS - no teams are added
-            # because function returns early when teams is None
-            assert (
-                mock_add_task.call_count == 2
-            ), f"Expected 2 calls to add user to teams, but got {mock_add_task.call_count}"
-            called_team_ids = [call.args[0] for call in mock_add_task.call_args_list]
-            assert set(called_team_ids) == {
-                "team-from-entra-1",
-                "team-from-entra-2",
-            }
+        assert added == [
+            ("team-from-entra-1", "new-sso-user-123"),
+            ("team-from-entra-2", "new-sso-user-123"),
+        ]
 
     @pytest.mark.asyncio
     async def test_add_missing_team_member_with_litellm_user_table_empty_teams(self):
-        """
-        Control test: When a LiteLLM_UserTable has teams=[] (existing user, no teams),
-        add_missing_team_member() should add the user to SSO teams.
-
-        This test PASSES because LiteLLM_UserTable defaults teams to [] not None.
-        """
+        """An existing user with teams=[] is added to every SSO team."""
         from litellm.proxy._types import LiteLLM_UserTable
         from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
-        # Existing user has teams=[] by default (not None)
-        existing_user = LiteLLM_UserTable(
-            user_id="existing-user-456",
-            teams=[],  # Empty list, not None
+        existing_user = LiteLLM_UserTable(user_id="existing-user-456", teams=[])
+        added, add = self._recording_add()
+
+        await add_missing_team_member(
+            user_info=existing_user,
+            sso_teams=["team-from-entra-1", "team-from-entra-2"],
+            add_team_member=add,
         )
 
-        sso_teams = ["team-from-entra-1", "team-from-entra-2"]
-
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task"
-        ) as mock_add_task:
-            mock_add_task.return_value = AsyncMock()
-
-            await add_missing_team_member(user_info=existing_user, sso_teams=sso_teams)
-
-            # This PASSES - teams are added because teams=[] not None
-            assert mock_add_task.call_count == 2
+        assert added == [
+            ("team-from-entra-1", "existing-user-456"),
+            ("team-from-entra-2", "existing-user-456"),
+        ]
 
     @pytest.mark.asyncio
     async def test_add_user_to_teams_from_sso_response_new_user(self):
@@ -6663,101 +6892,167 @@ class TestAddMissingTeamMember:
 
             # Verify add_missing_team_member was called with correct args
             mock_add_member.assert_called_once_with(
-                user_info=new_user_info, sso_teams=["entra-group-1", "entra-group-2"]
+                user_info=new_user_info,
+                sso_teams=["entra-group-1", "entra-group-2"],
+                team_id_to_upsert=None,
             )
 
     @pytest.mark.asyncio
     async def test_sso_first_login_full_flow_adds_user_to_teams(self):
-        """
-        End-to-end test: Simulates complete first-time SSO login with Entra groups.
-        Verifies teams are created AND user is added as a member.
-        """
+        """A first-time SSO login with Entra groups adds the new user as a member of every group's team."""
         from litellm.proxy._types import NewUserResponse
         from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
-        team_member_calls = []
+        new_user = NewUserResponse(user_id="first-time-sso-user", key="sk-xxxxx", teams=None)
+        added, add = self._recording_add()
 
-        async def track_team_member_add(team_id, user_info):
-            team_member_calls.append({"team_id": team_id, "user_id": user_info.user_id})
-
-        # New SSO user with Entra groups
-        new_user = NewUserResponse(
-            user_id="first-time-sso-user",
-            key="sk-xxxxx",
-            teams=None,  # The problematic default
+        await add_missing_team_member(
+            user_info=new_user,
+            sso_teams=["entra-team-alpha", "entra-team-beta"],
+            add_team_member=add,
         )
 
-        sso_teams = ["entra-team-alpha", "entra-team-beta"]
-
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task",
-            side_effect=track_team_member_add,
-        ):
-            await add_missing_team_member(user_info=new_user, sso_teams=sso_teams)
-
-        # Bug: With current code, team_member_calls will be empty
-        # After fix: Should have 2 entries
-        assert (
-            len(team_member_calls) == 2
-        ), f"Expected 2 teams to be added, but got {len(team_member_calls)}"
-        assert {c["team_id"] for c in team_member_calls} == {
-            "entra-team-alpha",
-            "entra-team-beta",
-        }
-        assert all(c["user_id"] == "first-time-sso-user" for c in team_member_calls)
+        assert added == [
+            ("entra-team-alpha", "first-time-sso-user"),
+            ("entra-team-beta", "first-time-sso-user"),
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "user_info_factory,teams_value,expected_teams_added",
+        "user_info_factory,expected_teams_added",
         [
-            # Bug case: NewUserResponse with teams=None
             pytest.param(
                 lambda uid: NewUserResponse(user_id=uid, key="sk-xxx", teams=None),
-                None,
-                ["team-1", "team-2"],  # Should still add teams
+                ["team-1", "team-2"],
                 id="new_user_teams_none",
             ),
-            # Working case: LiteLLM_UserTable with teams=[]
             pytest.param(
                 lambda uid: LiteLLM_UserTable(user_id=uid, teams=[]),
-                [],
                 ["team-1", "team-2"],
                 id="existing_user_empty_teams",
             ),
-            # Existing user with some teams already
             pytest.param(
                 lambda uid: LiteLLM_UserTable(user_id=uid, teams=["team-1"]),
-                ["team-1"],
-                ["team-2"],  # Only missing team should be added
+                ["team-2"],
                 id="existing_user_partial_teams",
+            ),
+            pytest.param(
+                lambda uid: LiteLLM_UserTable(user_id=uid, teams=["team-2", "team-1"]),
+                [],
+                id="existing_user_all_teams",
             ),
         ],
     )
     async def test_add_missing_team_member_handles_all_user_types(
-        self, user_info_factory, teams_value, expected_teams_added
+        self, user_info_factory, expected_teams_added
     ):
-        """
-        Parametrized test ensuring add_missing_team_member works for all user types.
-        """
+        """Only the SSO teams the user is not already on are added."""
         from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
 
-        user_info = user_info_factory("test-user-id")
-        sso_teams = ["team-1", "team-2"]
+        added, add = self._recording_add()
 
-        added_teams = []
+        await add_missing_team_member(
+            user_info=user_info_factory("test-user-id"),
+            sso_teams=["team-1", "team-2"],
+            add_team_member=add,
+        )
 
-        async def mock_create_task(team_id, user):
-            added_teams.append(team_id)
+        assert added == [(team_id, "test-user-id") for team_id in expected_teams_added]
 
-        with patch(
-            "litellm.proxy.management_endpoints.ui_sso.create_team_member_add_task",
-            side_effect=mock_create_task,
-        ):
-            await add_missing_team_member(user_info=user_info, sso_teams=sso_teams)
+    @pytest.mark.asyncio
+    async def test_add_missing_team_member_lands_teams_in_claim_order(self):
+        """user.teams is appended to as each add finishes, and the first team on it is the one a CLI
+        login binds to, so the adds must finish in the claim's order even when an earlier add is slower.
 
-        assert set(added_teams) == set(
-            expected_teams_added
-        ), f"Expected teams {expected_teams_added}, but got {added_teams}"
+        The adds used to run concurrently from a set, so they finished in an arbitrary order.
+        """
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        claim: Final = ["team-zeta", "team-alpha", "team-held", "team-zeta", "team-mu"]
+        yields_before_finishing: Final = {"team-zeta": 3, "team-alpha": 2, "team-mu": 1}
+        finished: Final[list[str]] = []
+
+        async def slower_when_earlier(team_id: str, user_info: NewUserResponse | LiteLLM_UserTable) -> None:
+            for _ in range(yields_before_finishing[team_id]):
+                await asyncio.sleep(0)
+            finished.append(team_id)
+
+        await add_missing_team_member(
+            user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-held"]),
+            sso_teams=claim,
+            add_team_member=slower_when_earlier,
+        )
+
+        assert finished == ["team-zeta", "team-alpha", "team-mu"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "existing,expected_teams_added",
+        [
+            pytest.param(frozenset({"team-zeta", "team-alpha"}), ["team-zeta", "team-alpha"], id="only_teams"),
+            pytest.param(None, ["grp-everyone", "team-zeta", "grp-vpn", "team-alpha"], id="lookup_failed"),
+        ],
+    )
+    async def test_add_missing_team_member_looks_up_missing_groups_once_and_adds_only_teams(
+        self, existing: frozenset[str] | None, expected_teams_added: list[str]
+    ):
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        added, add = self._recording_add()
+        lookups: Final[list[tuple[str, ...]]] = []
+
+        async def existing_team_ids(team_ids: Sequence[str]) -> frozenset[str] | None:
+            lookups.append(tuple(team_ids))
+            return existing
+
+        await add_missing_team_member(
+            user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-held"]),
+            sso_teams=["grp-everyone", "team-zeta", "team-held", "grp-vpn", "team-alpha"],
+            add_team_member=add,
+            existing_team_ids=existing_team_ids,
+        )
+
+        assert lookups == [("grp-everyone", "team-zeta", "grp-vpn", "team-alpha")]
+        assert added == [(team_id, "group-sync-user") for team_id in expected_teams_added]
+
+    @pytest.mark.asyncio
+    async def test_add_missing_team_member_skips_the_lookup_when_every_group_is_held(self):
+        from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+        added, add = self._recording_add()
+        lookup: Final = AsyncMock(return_value=frozenset())
+
+        await add_missing_team_member(
+            user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-alpha", "team-zeta"]),
+            sso_teams=["team-zeta", "team-alpha"],
+            add_team_member=add,
+            existing_team_ids=lookup,
+        )
+
+        lookup.assert_not_awaited()
+        assert added == []
+
+    @pytest.mark.asyncio
+    async def test_find_existing_team_ids_reads_the_writer_and_returns_none_when_the_db_cannot_answer(self):
+        from litellm.proxy.management_endpoints.ui_sso import find_existing_team_ids
+
+        stored_on_writer: Final = ("team-zeta", "team-alpha")
+
+        async def find_many(*, where: Mapping[str, Mapping[str, Sequence[str]]]) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(team_id=team_id) for team_id in stored_on_writer if team_id in where["team_id"]["in"]
+            ]
+
+        prisma: Final = MagicMock()
+        prisma.writer_db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
+        prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            assert await find_existing_team_ids(("grp-vpn", "team-alpha")) == frozenset({"team-alpha"})
+            prisma.writer_db.litellm_teamtable.find_many.side_effect = RuntimeError("db unavailable")
+            assert await find_existing_team_ids(("team-alpha",)) is None
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            assert await find_existing_team_ids(("team-alpha",)) is None
 
 
 @pytest.mark.asyncio
@@ -7683,7 +7978,7 @@ def test_generic_response_convertor_with_extra_attributes(monkeypatch):
         "custom_field3": {"nested": "data"},
     }
 
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -7717,7 +8012,7 @@ def test_generic_response_convertor_without_extra_attributes(monkeypatch):
         "custom_field2": "value2",
     }
 
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -7745,7 +8040,7 @@ def test_generic_response_convertor_extra_attributes_with_nested_paths(monkeypat
         "org_info": {"department": "Engineering", "manager": "Jane Smith"},
     }
 
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -7772,7 +8067,7 @@ def test_generic_response_convertor_extra_attributes_missing_field(monkeypatch):
         "email": "user@example.com",
     }
 
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     result = generic_response_convertor(
@@ -8651,7 +8946,7 @@ class TestPKCEStateCookieBinding:
         ):
             await get_generic_sso_response(
                 request=mock_request,
-                jwt_handler=MagicMock(spec=JWTHandler),
+                jwt_handler=_jwt_handler_double(),
                 generic_client_id="cid",
                 redirect_url="https://proxy.example.com/sso/callback",
                 sso_jwt_handler=None,
@@ -8703,7 +8998,7 @@ class TestPKCEStateCookieBinding:
         ):
             await get_generic_sso_response(
                 request=mock_request,
-                jwt_handler=MagicMock(spec=JWTHandler),
+                jwt_handler=_jwt_handler_double(),
                 generic_client_id="cid",
                 redirect_url="https://proxy.example.com/sso/callback",
                 sso_jwt_handler=None,
@@ -8766,7 +9061,7 @@ class TestPKCEStateCookieBinding:
                 },
             ),
         ):
-            jwt_handler = MagicMock(spec=JWTHandler)
+            jwt_handler = _jwt_handler_double()
             jwt_handler.get_team_ids_from_jwt.return_value = []
             result, _, _, _ = await get_generic_sso_response(
                 request=mock_request,
@@ -8873,7 +9168,7 @@ async def test_debug_sso_callback_renders_full_jwt_claims():
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),
+        patch("litellm.proxy.proxy_server.jwt_handler", _jwt_handler_double()),
     ):
         # Microsoft / Google envs may leak in from other tests — ensure only
         # the generic path runs.
@@ -8959,7 +9254,7 @@ async def test_debug_sso_callback_handles_missing_raw_response():
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),
+        patch("litellm.proxy.proxy_server.jwt_handler", _jwt_handler_double()),
     ):
         for var in ("GENERIC_CLIENT_ID", "GOOGLE_CLIENT_ID"):
             os.environ.pop(var, None)
@@ -9010,7 +9305,7 @@ async def _render_debug_page(provider_env, id_jag_registered, force_inert=False)
         patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: debug endpoint reads proxy globals
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: debug endpoint reads proxy DB
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: debug endpoint reads proxy globals
-        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),  # test-quality-ok: debug endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.jwt_handler", _jwt_handler_double()),  # test-quality-ok: debug endpoint reads proxy globals
     ]
     if force_inert:
         stack.append(
@@ -9375,7 +9670,7 @@ async def test_pkce_arm_captures_sso_assertion():
             },
         ),
     ):
-        jwt_handler = MagicMock(spec=JWTHandler)
+        jwt_handler = _jwt_handler_double()
         jwt_handler.get_team_ids_from_jwt.return_value = []
         result, received_response, _, sso_assertion = await get_generic_sso_response(
             request=mock_request,
@@ -9401,7 +9696,7 @@ async def test_verify_and_process_arm_captures_sso_assertion():
 
     id_token = _ema_id_token()
     mock_request = MagicMock(spec=Request)
-    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler = _jwt_handler_double()
     mock_jwt_handler.get_team_ids_from_jwt.return_value = []
 
     mock_sso_instance = MagicMock()
@@ -9466,7 +9761,7 @@ def _generic_sso_callback_request() -> Request:
 
 
 def _generic_sso_jwt_handler() -> MagicMock:
-    jwt_handler = MagicMock(spec=JWTHandler)
+    jwt_handler = _jwt_handler_double()
     jwt_handler.get_team_ids_from_jwt.return_value = []
     return jwt_handler
 
@@ -9916,6 +10211,60 @@ async def test_microsoft_login_asks_for_offline_access_only_while_an_id_jag_serv
     assert response is not None
     assert all(default in seen["scope"] for default in MicrosoftSSO.scope), seen["scope"]
     assert ("offline_access" in seen["scope"]) is asks_offline_access, seen["scope"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_id_kwarg, environment, upstream_redirect",
+    [
+        (
+            "google_client_id",
+            {"GOOGLE_CLIENT_ID": "google-cid", "GOOGLE_CLIENT_SECRET": "google-secret"},
+            "fastapi_sso.sso.google.GoogleSSO.get_login_redirect",
+        ),
+        (
+            "microsoft_client_id",
+            {"MICROSOFT_CLIENT_ID": "ms-cid", "MICROSOFT_CLIENT_SECRET": "ms-secret", "MICROSOFT_TENANT": "tenant"},
+            "fastapi_sso.sso.microsoft.MicrosoftSSO.get_login_redirect",
+        ),
+    ],
+)
+async def test_login_redirect_keeps_the_client_secret_read_with_its_client_id_when_a_sync_removes_both(
+    client_id_kwarg: str, environment: Mapping[str, str], upstream_redirect: str
+) -> None:
+    """A config sync can remove an SSO client's environment variables while a sign-in that already read
+    the client id is waiting on the refresh-token check. The redirect must use the secret that belonged
+    to that client id instead of failing because the secret is gone by then."""
+    from fastapi.responses import RedirectResponse
+
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    client_id: Final = next(value for key, value in environment.items() if key.endswith("_CLIENT_ID"))
+    client_secret: Final = next(value for key, value in environment.items() if key.endswith("_SECRET"))
+
+    async def sync_removes_the_client() -> bool:
+        for key in environment:
+            os.environ.pop(key, None)
+        return False
+
+    with (
+        patch.dict(os.environ, environment),
+        patch(  # test-quality-ok: stubs the upstream IdP authorization boundary, where the request leaves
+            upstream_redirect,
+            autospec=True,
+            return_value=RedirectResponse(url="https://idp.example/authorize"),
+        ) as idp_redirect,
+    ):
+        response: Final = await SSOAuthenticationHandler.get_sso_login_redirect(
+            redirect_url="http://localhost:4000/sso/callback",
+            retention_enabled=sync_removes_the_client,
+            **{client_id_kwarg: client_id},
+        )
+
+    assert response is not None
+    idp_redirect.assert_awaited_once()
+    provider: Final = idp_redirect.await_args.args[0]
+    assert (provider.client_id, provider.client_secret) == (client_id, client_secret)
 
 
 @pytest.mark.asyncio
@@ -10930,3 +11279,241 @@ async def test_cli_sso_login_never_serves_the_admin_login_form_on_a_ui_disabled_
     body = response.body.decode()
     assert "Admin UI is Disabled" in body
     assert 'name="username"' not in body
+
+
+def _upsert_jwt_handler(**jwtauth: object) -> JWTHandler:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=None, user_api_key_cache=DualCache(), litellm_jwtauth=LiteLLM_JWTAuth(**jwtauth)
+    )
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("jwtauth", "userinfo", "expected_team_ids", "expected_upsert"),
+    [
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": "finance"}, ["finance"], "finance"),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": False}, {"dept": "finance"}, ["finance"], None),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {}, [], None),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": ""}, [], None),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": "  "}, ["  "], None),
+        ({"team_id_jwt_field": "dept", "team_id_upsert": True}, {"dept": ["a", "b"]}, ["a", "b"], None),
+        (
+            {"team_id_jwt_field": "dept", "team_id_upsert": True, "team_id_default": "everyone"},
+            {},
+            [],
+            None,
+        ),
+        (
+            {"team_ids_jwt_field": "groups", "team_id_upsert": True},
+            {"groups": ["g1", "g2"]},
+            ["g1", "g2"],
+            None,
+        ),
+        (
+            {"team_ids_jwt_field": "groups", "team_id_jwt_field": "dept", "team_id_upsert": True},
+            {"groups": ["g1"], "dept": "finance"},
+            ["g1", "finance"],
+            "finance",
+        ),
+    ],
+    ids=[
+        "upsert-on",
+        "upsert-off",
+        "claim-missing",
+        "blank-claim-not-upserted",
+        "whitespace-claim-not-upserted",
+        "list-valued-claim-join-only",
+        "default-team-not-upserted",
+        "plural-claim-join-only",
+        "mixed",
+    ],
+)
+def test_generic_sso_login_upserts_only_the_team_id_jwt_field_claim(
+    jwtauth: dict[str, object],
+    userinfo: dict[str, object],
+    expected_team_ids: list[str],
+    expected_upsert: str | None,
+) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    result: Final = generic_response_convertor(
+        response={"preferred_username": "alice", "email": "alice@example.com", **userinfo},
+        jwt_handler=_upsert_jwt_handler(**jwtauth),
+        jwt_auth_enabled=True,
+    )
+
+    assert (result.team_ids, result.team_id_to_upsert) == (expected_team_ids, expected_upsert)
+
+
+def test_generic_sso_login_does_not_upsert_the_team_id_jwt_field_claim_when_jwt_auth_is_disabled() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    result: Final = generic_response_convertor(
+        response={"preferred_username": "alice", "email": "alice@example.com", "dept": "finance"},
+        jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
+        jwt_auth_enabled=False,
+    )
+
+    assert (result.team_ids, result.team_id_to_upsert) == (["finance"], None)
+
+
+def test_generic_sso_login_marks_the_team_id_jwt_field_team_for_upsert_without_adding_it_to_team_ids() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    result: Final = generic_response_convertor(
+        response={"preferred_username": "alice", "email": "alice@example.com", "groups": ["g1"], "dept": "finance"},
+        jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
+        team_mappings=TeamMappings(team_ids_jwt_field="groups"),
+        jwt_auth_enabled=True,
+    )
+
+    assert (result.team_ids, result.team_id_to_upsert) == (["g1"], "finance")
+
+
+def test_generic_sso_login_keeps_team_ids_empty_for_a_dept_only_user_so_the_access_token_group_fallback_runs() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    result: Final = generic_response_convertor(
+        response={"preferred_username": "alice", "email": "alice@example.com", "dept": "d1"},
+        jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
+        team_mappings=TeamMappings(team_ids_jwt_field="groups"),
+        jwt_auth_enabled=True,
+    )
+
+    assert (result.team_ids, result.team_id_to_upsert) == ([], "d1")
+
+
+def test_restricted_sso_group_still_rejects_a_user_whose_only_team_is_the_upserted_dept() -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler, generic_response_convertor
+
+    response: Final = {"preferred_username": "alice", "email": "alice@example.com", "dept": "X", "groups": []}
+    result: Final = generic_response_convertor(
+        response=response,
+        jwt_handler=_upsert_jwt_handler(team_id_jwt_field="dept", team_id_upsert=True),
+        team_mappings=TeamMappings(team_ids_jwt_field="groups"),
+        jwt_auth_enabled=True,
+    )
+
+    with pytest.raises(ProxyException) as denied:
+        SSOAuthenticationHandler.verify_user_in_restricted_sso_group(
+            general_settings={"ui_access_mode": {"type": "restricted_sso_group", "restricted_sso_group": "X"}},
+            result=result,
+            received_response=response,
+        )
+
+    assert denied.value.code == "403"
+
+
+def _recording_team_calls(
+    events: list[tuple[str, str]],
+) -> tuple[Callable[[str, NewUserResponse | LiteLLM_UserTable], Awaitable[None]], Callable[[str], Awaitable[None]]]:
+    async def add(team_id: str, user_info: NewUserResponse | LiteLLM_UserTable) -> None:
+        events.append(("join", team_id))
+
+    async def create(team_id: str) -> None:
+        events.append(("create", team_id))
+
+    return add, create
+
+
+async def _only_group_teams_exist(team_ids: Sequence[str]) -> frozenset[str] | None:
+    return frozenset(team_id for team_id in team_ids if team_id.startswith("g"))
+
+
+@pytest.mark.asyncio
+async def test_sso_login_joins_the_upsert_team_from_team_id_to_upsert_and_creates_it_before_the_join() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    events: Final[list[tuple[str, str]]] = []  # mutable-ok: records call order across awaited tasks
+    add, create = _recording_team_calls(events)
+
+    await add_missing_team_member(
+        NewUserResponse(user_id="alice", key="sk-x", teams=None),
+        ["g1", "g2"],
+        add_team_member=add,
+        existing_team_ids=_only_group_teams_exist,
+        team_id_to_upsert="finance",
+        create_team=create,
+    )
+
+    assert events == [("join", "g1"), ("join", "g2"), ("create", "finance"), ("join", "finance")]
+
+
+@pytest.mark.asyncio
+async def test_sso_login_joins_only_the_claimed_groups_when_team_id_upsert_is_off() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    events: Final[list[tuple[str, str]]] = []  # mutable-ok: records call order across awaited tasks
+    add, create = _recording_team_calls(events)
+
+    await add_missing_team_member(
+        NewUserResponse(user_id="alice", key="sk-x", teams=None),
+        ["g1", "g2"],
+        add_team_member=add,
+        existing_team_ids=_only_group_teams_exist,
+        create_team=create,
+    )
+
+    assert events == [("join", "g1"), ("join", "g2")]
+
+
+@pytest.mark.asyncio
+async def test_sso_login_does_not_create_the_team_id_jwt_field_team_when_it_already_exists() -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    events: Final[list[tuple[str, str]]] = []  # mutable-ok: records call order across awaited tasks
+    add, create = _recording_team_calls(events)
+
+    async def every_team_exists(team_ids: Sequence[str]) -> frozenset[str] | None:
+        return frozenset(team_ids)
+
+    await add_missing_team_member(
+        NewUserResponse(user_id="alice", key="sk-x", teams=None),
+        ["finance"],
+        add_team_member=add,
+        existing_team_ids=every_team_exists,
+        team_id_to_upsert="finance",
+        create_team=create,
+    )
+
+    assert events == [("join", "finance")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "create_error",
+    [
+        HTTPException(status_code=400, detail={"error": "Team id = finance already exists"}),
+        HTTPException(status_code=403, detail={"error": "team limit reached for this license"}),
+    ],
+    ids=["lost-the-create-race", "create-rejected"],
+)
+async def test_sso_login_still_joins_the_team_and_warns_when_creating_it_fails(
+    caplog: pytest.LogCaptureFixture, create_error: HTTPException
+) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import add_missing_team_member
+
+    events: Final[list[tuple[str, str]]] = []  # mutable-ok: records call order across awaited tasks
+    add, _ = _recording_team_calls(events)
+
+    async def failed_create(team_id: str) -> None:
+        raise create_error
+
+    with caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name):
+        await add_missing_team_member(
+            NewUserResponse(user_id="alice", key="sk-x", teams=None),
+            ["finance"],
+            add_team_member=add,
+            existing_team_ids=_only_group_teams_exist,
+            team_id_to_upsert="finance",
+            create_team=failed_create,
+        )
+
+    warnings: Final = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert events == [("join", "finance")]
+    assert len(warnings) == 1 and "finance" in warnings[0] and str(create_error.detail) in warnings[0]

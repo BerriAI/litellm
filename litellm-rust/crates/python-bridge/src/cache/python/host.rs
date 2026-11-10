@@ -9,7 +9,7 @@ use pyo3::{
 use serde_json::Value;
 
 use super::service::CacheCall;
-use crate::cache::HandleError;
+use crate::cache::{CACHE_HOST_MODULE, HandleError};
 
 enum Pending {
     Lookup(Reply<Result<Option<Value>, Error>>),
@@ -21,6 +21,7 @@ pub(crate) struct PythonCache {
     arguments: Option<Py<PyDict>>,
     pending: Option<Pending>,
     asynchronous: bool,
+    deferred: bool,
 }
 
 impl PythonCache {
@@ -30,6 +31,7 @@ impl PythonCache {
             arguments: None,
             pending: None,
             asynchronous,
+            deferred: false,
         }
     }
 
@@ -64,7 +66,14 @@ impl PythonCache {
                     None,
                 )
             }
-            CacheCall::Store { value, reply } => {
+            CacheCall::Store {
+                unary: true, reply, ..
+            } if self.asynchronous => {
+                self.deferred = true;
+                reply.send(Ok(()));
+                return Ok(None);
+            }
+            CacheCall::Store { value, reply, .. } => {
                 self.pending = Some(Pending::Store(reply));
                 (
                     if self.asynchronous {
@@ -87,6 +96,19 @@ impl PythonCache {
             return result.map(Some);
         }
         self.resume(py, result)
+    }
+
+    pub fn store_response(&mut self, py: Python<'_>, response: &Bound<'_, PyAny>) -> PyResult<()> {
+        if !std::mem::take(&mut self.deferred) {
+            return Ok(());
+        }
+        let (Some(cache), Some(arguments)) = (self.cache.as_ref(), self.arguments.as_ref()) else {
+            return Err(HandleError::Unconfigured.into());
+        };
+        py.import(CACHE_HOST_MODULE)?
+            .getattr("store_response")?
+            .call((cache, response), Some(&arguments.bind(py).copy()?))?;
+        Ok(())
     }
 
     pub fn resume(
@@ -124,6 +146,7 @@ impl PythonCache {
 
     pub fn close(&mut self) {
         self.pending = None;
+        self.deferred = false;
         self.cache = None;
         self.arguments = None;
     }
