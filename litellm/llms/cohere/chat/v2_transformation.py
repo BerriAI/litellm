@@ -1,3 +1,4 @@
+import itertools
 import reprlib
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -78,6 +79,8 @@ _SCHEMA_KEYWORDS_COHERE_REJECTS: Final = frozenset(
     }
 )
 _PATTERN_SYNTAX_COHERE_REJECTS: Final = ("(?=", "(?!", "(?<=", "(?<!")
+_COHERE_PROVIDERS: Final = ("cohere_chat", "cohere")
+_SCHEMA_DEPTH_CHECKED: Final = 64
 
 
 def _cohere_model_id(model: str) -> str:
@@ -91,7 +94,10 @@ def _cohere_model_ids(model: str, base_model: object) -> tuple[str, ...]:
 
 @VersionCached
 def _any_model_supports(capability: Callable[..., bool], model_ids: tuple[str, ...]) -> bool:
-    return any(capability(model=model_id, custom_llm_provider="cohere_chat") for model_id in model_ids)
+    return any(
+        capability(model=model_id, custom_llm_provider=provider)
+        for model_id, provider in itertools.product(model_ids, _COHERE_PROVIDERS)
+    )
 
 
 def _function_name(tool: object) -> object:
@@ -205,16 +211,16 @@ def _pattern_cohere_rejects(pattern: object) -> bool:
     return anchored or any(syntax in pattern for syntax in _PATTERN_SYNTAX_COHERE_REJECTS)
 
 
-def _schema_feature_cohere_rejects(schema: object) -> str | None:
+def _schema_feature_cohere_rejects(schema: object, depth: int = 0) -> str | None:
     fields: Final = as_str_mapping(schema)
-    if fields is None:
+    if fields is None or depth > _SCHEMA_DEPTH_CHECKED:
         return None
     keyword: Final = next((key for key in fields if key in _SCHEMA_KEYWORDS_COHERE_REJECTS), None)
     if keyword is not None:
         return f"'{keyword}'"
     if _pattern_cohere_rejects(fields.get("pattern")):
         return "a pattern with ^, $, or a lookaround"
-    nested: Final = (_schema_feature_cohere_rejects(subschema) for subschema in _subschemas(fields))
+    nested: Final = (_schema_feature_cohere_rejects(subschema, depth + 1) for subschema in _subschemas(fields))
     return next((feature for feature in nested if feature is not None), None)
 
 

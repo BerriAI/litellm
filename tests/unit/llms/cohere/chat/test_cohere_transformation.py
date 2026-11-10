@@ -1,3 +1,4 @@
+import functools
 import itertools
 import json
 import logging
@@ -1221,6 +1222,18 @@ def test_cohere_v2_json_schema_cohere_accepts_reaches_cohere_unchanged(
     assert body["response_format"] == {"type": "json_object", "json_schema": schema}
 
 
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_v2_json_schema_nested_past_the_check_reaches_cohere_unchanged(respx_mock: respx.MockRouter) -> None:
+    schema: Final = functools.reduce(
+        lambda inner, _: _object_schema({"child": inner}), range(400), {"type": "integer", "minimum": 0}
+    )
+
+    body: Final = _cohere_v2_request_body(respx_mock, JSON_SCHEMA_MODEL, {"response_format": _json_schema_format(schema)})
+
+    assert json.dumps(body["response_format"]) == json.dumps({"type": "json_object", "json_schema": schema})
+
+
 def test_cohere_v2_tool_choice_400_shortens_a_long_value() -> None:
     long_choice: Final = "x" * 5000
 
@@ -1263,6 +1276,36 @@ def test_cohere_v2_tool_choice_follows_a_later_model_registration(
     body: Final = _cohere_v2_request_body(respx_mock, "cohere-registered-later", params)
 
     assert body["tool_choice"] == "NONE"
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("provider", ["cohere", "cohere_chat"])
+def test_cohere_v2_tool_choice_follows_deployment_model_info(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "ok"}]}))
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "cohere-unlisted",
+                "litellm_params": {"model": f"{provider}/cohere-unlisted-alias", "api_key": "cohere-test-key"},
+                "model_info": {"supports_tool_choice": True},
+            }
+        ]
+    )
+
+    router.completion(
+        model="cohere-unlisted",
+        messages=[{"role": "user", "content": "What is the weather in Paris?"}],
+        tools=[WEATHER_TOOL],
+        tool_choice="required",
+    )
+
+    assert _sent_body(route)["tool_choice"] == "REQUIRED"
 
 
 SCHEMA_NOTE: Final = "internal-note-7f3a"
