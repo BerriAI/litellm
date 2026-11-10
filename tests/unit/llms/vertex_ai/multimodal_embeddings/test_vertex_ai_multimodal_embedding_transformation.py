@@ -192,12 +192,11 @@ SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
 
 
 async def multimodal_embedding_body(
-    is_async: bool, monkeypatch: pytest.MonkeyPatch, request_labels: Mapping[str, object]
+    is_async: bool, request_labels: Mapping[str, object]
 ) -> Mapping[str, object]:
     reply: Final = MagicMock(
         side_effect=lambda _request: httpx.Response(200, json={"predictions": [{"textEmbedding": [0.1, 0.2]}]})
     )
-    monkeypatch.setattr(litellm.main.vertex_multimodal_embedding, "_ensure_access_token", lambda **_: ("token", "proj"))
     transport: Final = httpx.MockTransport(reply)
     embed: Final = {
         "model": "vertex_ai/multimodalembedding@001",
@@ -206,10 +205,11 @@ async def multimodal_embedding_body(
         "metadata": dict(PROXY_METADATA),
         **request_labels,
     }
-    if is_async:
-        await litellm.aembedding(**embed, client=AsyncHTTPHandler(transport=transport))
-    else:
-        litellm.embedding(**embed, client=HTTPHandler(client=httpx.Client(transport=transport)))
+    with patch.object(litellm.main.vertex_multimodal_embedding, "_ensure_access_token", return_value=("token", "proj")):
+        if is_async:
+            await litellm.aembedding(**embed, client=AsyncHTTPHandler(transport=transport))
+        else:
+            litellm.embedding(**embed, client=HTTPHandler(client=httpx.Client(transport=transport)))
 
     sent: Final[httpx.Request] = reply.call_args.args[0]
     return SENT_BODY.validate_json(sent.content)
@@ -223,7 +223,7 @@ async def test_setting_off_sends_todays_multimodal_embedding_body(
 ):
     monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
 
-    assert await multimodal_embedding_body(is_async, monkeypatch, request_labels) == {"instances": TODAYS_INSTANCES}
+    assert await multimodal_embedding_body(is_async, request_labels) == {"instances": TODAYS_INSTANCES}
 
 
 @pytest.mark.asyncio
@@ -244,7 +244,7 @@ async def test_multimodal_embedding_sends_identity_labels_a_caller_cannot_forge(
 ):
     monkeypatch.setattr(litellm, "vertex_request_label_fields", LABEL_FIELDS)
 
-    body: Final = await multimodal_embedding_body(is_async, monkeypatch, request_labels)
+    body: Final = await multimodal_embedding_body(is_async, request_labels)
 
     assert body["instances"] == TODAYS_INSTANCES
     assert list(SENT_LABELS.validate_python(body["labels"]).items()) == list(expected_labels)
