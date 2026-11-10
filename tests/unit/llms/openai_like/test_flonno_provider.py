@@ -161,8 +161,8 @@ def test_catalog_row_matches_its_backup_and_fits_its_context():
     assert row == _BACKUP_PRICES[FLONNO_PREFIXED]
     assert row["mode"] == "chat"
     assert row["max_output_tokens"] <= row["max_input_tokens"]
-    assert row["input_cost_per_token"] == 3e-08
-    assert row["output_cost_per_token"] == 2.5e-07
+    assert row["input_cost_per_token"] == 5e-08
+    assert row["output_cost_per_token"] == 8e-07
     assert litellm.get_model_info(FLONNO_PREFIXED)["litellm_provider"] == "flonno"
 
 
