@@ -484,7 +484,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
             {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"},
             {},
         ),
-        (Feature.CACHE_CONTROL_INJECTION, "anthropic/claude-sonnet-4-5", {"enable_prompt_caching": True}, {}),
     ),
 )
 def test_each_detected_feature_reaches_its_rule(

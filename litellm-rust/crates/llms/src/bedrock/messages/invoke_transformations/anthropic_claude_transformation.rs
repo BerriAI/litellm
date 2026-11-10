@@ -5,7 +5,7 @@ use std::convert::Infallible;
 
 use crate::{
     anthropic::messages::handler::shape_anthropic_messages_request,
-    base_llm::messages::context::MessagesTransformContext,
+    base_llm::messages::context::{MessagesShapeOptions, MessagesTransformContext},
 };
 use futures_util::StreamExt;
 use litellm_auth::AwsParams;
@@ -118,9 +118,9 @@ impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn get_complete_url(

@@ -349,7 +349,6 @@ S15_COMPLETE_DEADLINE: Final = (
     "S15: by design, native bounds a complete response by one overall deadline where Python bounds each read, "
     "so a body trickling in slower than the timeout succeeds in Python and times out natively"
 )
-F_CACHE_INJECTION: Final = "F: prompt cache_control injection is Python-only (detector cache_control_injection)"
 F_STREAMED_MOCK: Final = (
     "F: a mock with stream=True returns the mock dict and logs no success in Python (detector streamed_mock_response)"
 )
@@ -358,8 +357,6 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
     {
         "response_private_keys": _gaps(outcome=S6_PRIVATE_KEYS),
         "missing_max_tokens": _gaps(dispatch=A10_NO_MAX_TOKENS),
-        "cache_control_injection_points": _gaps(request=F_CACHE_INJECTION, logged_request=F_CACHE_INJECTION),
-        "enable_prompt_caching": _gaps(request=F_CACHE_INJECTION, logged_request=F_CACHE_INJECTION),
         "mock_response_streamed": _gaps(
             logged=F_STREAMED_MOCK,
             logged_metadata=F_STREAMED_MOCK,
@@ -713,6 +710,142 @@ SYNC_CASES: Final = (
     Case("sync_upstream_429", upstream=(_failure(429, "rate_limit_error", "slow down"),), sync=True),
 )
 
+SYSTEM_POINT: Final[Mapping[str, JsonValue]] = MappingProxyType({"location": "message", "role": "system"})
+LAST_MESSAGE_POINT: Final[Mapping[str, JsonValue]] = MappingProxyType({"location": "message", "index": -1})
+SYSTEM_BLOCKS: Final[tuple[JsonValue, ...]] = (
+    {"type": "text", "text": "Answer in one word."},
+    {"type": "text", "text": "Be terse."},
+)
+MARKED_TURNS: Final[tuple[JsonValue, ...]] = (
+    {"role": "user", "content": [{"type": "text", "text": "One.", "cache_control": {"type": "ephemeral"}}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "Two.", "cache_control": {"type": "ephemeral"}}]},
+    {"role": "user", "content": [{"type": "text", "text": "Three.", "cache_control": {"type": "ephemeral"}}]},
+)
+
+PROMPT_CACHING_CASES: Final = (
+    Case(
+        "cache_control_injection_points",
+        _kw(system="Answer in one word.", cache_control_injection_points=[dict(SYSTEM_POINT)]),
+    ),
+    Case("enable_prompt_caching", _kw(system="Answer in one word.", enable_prompt_caching=True)),
+    Case(
+        "enable_prompt_caching_without_system",
+        _kw(messages=list(TOOL_TURNS), tools=[dict(WEATHER_TOOL)], enable_prompt_caching=True),
+    ),
+    Case(
+        "global_prompt_caching_with_ttl",
+        _kw(system=list(SYSTEM_BLOCKS)),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True, "anthropic_prompt_caching_ttl": "1h"}),
+    ),
+    Case(
+        "global_prompt_caching_stands_down_on_client_marks",
+        _kw(system=[{"type": "text", "text": "Answer in one word.", "cache_control": {"type": "ephemeral"}}]),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True}),
+    ),
+    Case(
+        "global_prompt_caching_stands_down_on_marked_tools",
+        _kw(tools=[{**WEATHER_TOOL, "cache_control": {"type": "ephemeral"}}]),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True}),
+    ),
+    Case(
+        "enable_prompt_caching_false_overrides_nothing",
+        _kw(system="Answer in one word.", enable_prompt_caching=False),
+    ),
+    Case(
+        "injection_point_negative_index",
+        _kw(
+            messages=list(TOOL_TURNS),
+            cache_control_injection_points=[
+                {"location": "message", "index": -2, "control": {"type": "ephemeral", "ttl": "1h"}}
+            ],
+        ),
+    ),
+    Case(
+        "injection_point_string_index",
+        _kw(messages=list(TOOL_TURNS), cache_control_injection_points=[{"location": "message", "index": "1"}]),
+    ),
+    Case(
+        "injection_point_out_of_range_index",
+        _kw(messages=list(TOOL_TURNS), cache_control_injection_points=[{"location": "message", "index": 7}]),
+    ),
+    Case(
+        "injection_point_by_role",
+        _kw(messages=list(TOOL_TURNS), cache_control_injection_points=[{"location": "message", "role": "user"}]),
+    ),
+    Case(
+        "injection_points_capped_by_client_marks",
+        _kw(
+            messages=list(MARKED_TURNS),
+            system=list(SYSTEM_BLOCKS),
+            tools=[{**WEATHER_TOOL, "cache_control": {"type": "ephemeral"}}],
+            cache_control_injection_points=[dict(SYSTEM_POINT), dict(LAST_MESSAGE_POINT)],
+        ),
+    ),
+    Case(
+        "injection_points_beside_client_marks",
+        _kw(
+            messages=[*MARKED_TURNS[:2], {"role": "user", "content": "Three."}],
+            cache_control_injection_points=[dict(SYSTEM_POINT), dict(LAST_MESSAGE_POINT)],
+            system="Answer in one word.",
+        ),
+    ),
+    Case(
+        "tool_config_point_marks_the_last_tool",
+        _kw(
+            tools=[dict(WEATHER_TOOL), {**WEATHER_TOOL, "name": "get_time"}],
+            cache_control_injection_points=[{"location": "tool_config"}, dict(LAST_MESSAGE_POINT)],
+        ),
+    ),
+    Case(
+        "tool_config_point_without_tools",
+        _kw(cache_control_injection_points=[{"location": "tool_config"}]),
+    ),
+    Case(
+        "injection_marks_the_gateway_deployment",
+        _kw(
+            system="Answer in one word.",
+            enable_prompt_caching=True,
+            litellm_metadata={"user_api_key": "hashed"},
+            model_info={"id": "deployment-1"},
+        ),
+    ),
+    Case(
+        "injection_into_whitespace_only_turn",
+        _kw(
+            messages=[dict(USER), {"role": "assistant", "content": "Paris"}, {"role": "user", "content": "  "}],
+            cache_control_injection_points=[dict(LAST_MESSAGE_POINT)],
+        ),
+        upstream=(_failure(400, "invalid_request_error", "messages: text content blocks must be non-empty"),),
+    ),
+    Case(
+        "injection_after_empty_blocks_are_stripped",
+        _kw(
+            messages=[
+                dict(USER),
+                {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+                {"role": "user", "content": "And Germany?"},
+            ],
+            cache_control_injection_points=[{"location": "message", "index": 1}],
+        ),
+    ),
+    Case(
+        "stream_with_prompt_caching",
+        _kw(stream=True, system="Answer in one word.", enable_prompt_caching=True),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "global_prompt_caching_beside_an_unmatched_point",
+        _kw(
+            system="Answer in one word.", cache_control_injection_points=[{"location": "message", "role": "assistant"}]
+        ),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True}),
+    ),
+)
+
+SYNC_PROMPT_CACHING_CASES: Final = tuple(
+    replace(case, name=f"sync_{case.name}", sync=True) for case in PROMPT_CACHING_CASES
+)
+
 LATEST_ALIAS: Final = "anthropic/claude-opus-latest"
 CUSTOM_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType({**WEATHER_TOOL, "custom": {"defer_loading": True}})
 COST_HEADER: Final[Mapping[str, JsonValue]] = MappingProxyType(
@@ -771,10 +904,6 @@ SERVED_NATIVELY_CASES: Final = (
 FALLBACK_CASES: Final = (
     Case("mock_response_streamed", _kw(stream=True, mock_response="Hi from the mock"), upstream=()),
     Case(
-        "cache_control_injection_points",
-        _kw(system="Answer in one word.", cache_control_injection_points=[{"location": "message", "role": "system"}]),
-    ),
-    Case(
         "strict_tools_rejected_then_retried",
         _kw(tools=[{**WEATHER_TOOL, "strict": True}], drop_params=True),
         upstream=(
@@ -783,7 +912,6 @@ FALLBACK_CASES: Final = (
         ),
     ),
     Case("modify_params", _kw(max_tokens=1), settings=MappingProxyType({"modify_params": True})),
-    Case("enable_prompt_caching", _kw(system="Answer in one word.", enable_prompt_caching=True)),
     Case("request_timeout_kwarg", _kw(request_timeout=30)),
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
 )
@@ -898,6 +1026,8 @@ CACHE_CASES: Final = (
 
 CASES: Final = (
     *REQUEST_CASES,
+    *PROMPT_CACHING_CASES,
+    *SYNC_PROMPT_CACHING_CASES,
     *RESPONSE_CASES,
     *FAILURE_CASES,
     *STREAM_CASES,

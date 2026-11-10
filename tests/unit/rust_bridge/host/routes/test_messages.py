@@ -175,7 +175,7 @@ def test_body_params_round_effort_to_the_levels_the_deployment_declares(
         "model_info": {"id": "deployment-1", "reasoning_effort_levels": levels},
     }
 
-    assert messages_host.body_params(request)["output_config"] == {"effort": expected}
+    assert messages_host.body_params(request, asynchronous=True)["output_config"] == {"effort": expected}
 
 
 def test_body_params_keep_the_requested_effort_without_deployment_levels() -> None:
@@ -186,7 +186,7 @@ def test_body_params_keep_the_requested_effort_without_deployment_levels() -> No
         "output_config": {"effort": "max"},
     }
 
-    assert messages_host.body_params(request)["output_config"] == {"effort": "max"}
+    assert messages_host.body_params(request, asynchronous=True)["output_config"] == {"effort": "max"}
 
 
 @pytest.mark.parametrize(
@@ -208,7 +208,7 @@ def test_body_params_derive_no_effort_from_a_param_the_deployment_lists(
         "model_info": {"id": "deployment-1", "reasoning_effort_levels": ["low", "medium", "high"]},
     }
 
-    assert set(messages_host.body_params(request)).difference({"messages", "model"}) == expected_keys
+    assert set(messages_host.body_params(request, asynchronous=True)).difference({"messages", "model"}) == expected_keys
 
 
 def _marked(phase: str | None = None, *args: object) -> ValueError:
@@ -534,3 +534,96 @@ def test_settings_infer_no_provider_off_an_affinity_host(monkeypatch: pytest.Mon
 
     assert settings["model"] == "claude-sonnet-4-5"
     assert settings["extra_headers"] is None
+
+
+def test_body_params_leave_the_messages_to_the_route_for_a_call_without_prompt_caching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+
+    fields: Final = messages_host.body_params(
+        {
+            "model": "anthropic/claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "system": "Be terse.",
+            "enable_prompt_caching": False,
+            "cache_control_injection_points": [],
+        },
+        asynchronous=True,
+    )
+
+    assert fields == {"system": "Be terse."}
+
+
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_body_params_mark_the_turns_tools_and_deployment_the_handler_marks(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)
+    gateway: Final[dict[str, object]] = {}
+    caller_metadata: Final = {"user_id": "u"}
+    tool: Final = {"name": "get_weather", "input_schema": {"type": "object"}}
+
+    fields: Final = messages_host.body_params(
+        {
+            "model": "anthropic/claude-sonnet-4-5",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+                {"role": "user", "content": "again"},
+            ],
+            "system": "Be terse.",
+            "tools": [tool],
+            "metadata": caller_metadata,
+            "litellm_metadata": gateway,
+            "model_info": {"id": "deployment-1"},
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system"},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "tool_config"},
+            ],
+        },
+        asynchronous=asynchronous,
+    )
+
+    assert fields == {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "again", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            },
+        ],
+        "system": [{"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}}],
+        "tools": [{**tool, "cache_control": {"type": "ephemeral"}}],
+        "metadata": caller_metadata,
+    }
+    assert gateway == {"litellm_gateway_injected_cache": "deployment-1"}
+    assert caller_metadata == {"user_id": "u"}
+
+
+@pytest.mark.parametrize(
+    ("asynchronous", "expected_system"),
+    [
+        # The async entry spends the configured point, so the handler's own pass falls back
+        # to the global defaults; the sync handler prepares the messages only once.
+        (True, [{"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}}]),
+        (False, "Be terse."),
+    ],
+)
+def test_body_params_prepare_prompt_caching_as_the_entry_that_ran(
+    monkeypatch: pytest.MonkeyPatch, asynchronous: bool, expected_system: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+
+    fields: Final = messages_host.body_params(
+        {
+            "model": "anthropic/claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "system": "Be terse.",
+            "cache_control_injection_points": [{"location": "message", "role": "assistant"}],
+        },
+        asynchronous=asynchronous,
+    )
+
+    assert fields["system"] == expected_system

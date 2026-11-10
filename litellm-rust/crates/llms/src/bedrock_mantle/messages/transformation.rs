@@ -29,7 +29,7 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         messages::{
-            context::MessagesTransformContext,
+            context::{MessagesShapeOptions, MessagesTransformContext},
             transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
         },
     },
@@ -142,9 +142,9 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn wire_body(&self, body: Value) -> Value {

@@ -12,7 +12,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # narrows native payl
 
 import httpx
 from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils import exception_mapping_utils
@@ -41,15 +41,16 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
+from litellm.llms.anthropic.messages.native.utils import prepare_native_messages
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.llms.custom_httpx.llm_http_handler import (
     _merge_messages_header_sources as _merged_headers,  # pyright: ignore[reportPrivateUsage]  # the handler's own header merge
 )
-from litellm.rust_bridge import failures
+from litellm.rust_bridge import detectors, failures
 from litellm.rust_bridge.host import callbacks_legacy_python, http_transport
-from litellm.rust_bridge.public_call import known_params, optional_str
+from litellm.rust_bridge.public_call import NativeCall, known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ProviderSpecificHeader
@@ -113,11 +114,28 @@ def inferred_provider(model: str, api_base: str | None) -> str | None:
     return provider
 
 
-def body_params(request: Mapping[str, object]) -> Mapping[str, object]:
+def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     params: Final = known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request)), request)
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:
         return params
     return _with_deployment_effort(params, request)
+
+
+def body_params(request: Mapping[str, object], asynchronous: bool) -> Mapping[str, object]:
+    """The body fields Python's handler sends. For a call that asks for prompt caching they
+    also hold the handler's ``messages``, normalized and with its breakpoints injected, and
+    its ``system`` and ``tools`` after injection; ``messages`` is here only then, which tells
+    the native route not to normalize them again."""
+    fields: Final = _body_fields(request)
+    if not detectors.cache_control_injection(NativeCall(args=(), kwargs=request, base={})):
+        return fields
+    messages, system, tools = _prompt_cached(request, asynchronous)
+    return {
+        **fields,
+        "messages": messages,
+        **({"system": system} if "system" in fields else {}),
+        **({"tools": tools} if tools is not None and "tools" in fields else {}),
+    }
 
 
 def _with_deployment_effort(params: Mapping[str, object], request: Mapping[str, object]) -> Mapping[str, object]:
@@ -144,6 +162,85 @@ def cached_function() -> Callable[..., object]:
         "Callable[..., object]",
         handler.anthropic_messages,  # noqa: TID251  # the @client cache read names and checks the legacy handler it wraps
     )
+
+
+_ENTRY: Final = cast(  # cast-ok: only the untyped handler's signature is read
+    Callable[..., object],
+    handler.anthropic_messages,  # noqa: TID251  # reads the handler's signature, never calls it
+)
+_HANDLER: Final = cast(  # cast-ok: only the untyped handler's signature is read
+    Callable[..., object],
+    handler.anthropic_messages_handler,  # noqa: TID251  # reads the handler's signature, never calls it
+)
+_ENTRY_PARAMS: Final = frozenset(inspect.signature(_ENTRY).parameters) - {"kwargs"}
+_HANDLER_PARAMS: Final = frozenset(inspect.signature(_HANDLER).parameters) - {"kwargs"}
+_JsonBlocks: TypeAlias = list[dict[str, JsonValue]]
+_Prepared: TypeAlias = tuple[_JsonBlocks, str | _JsonBlocks | None, Sequence[object] | None]
+
+
+def _prompt_cached(request: Mapping[str, object], asynchronous: bool) -> _Prepared:
+    """What Python's handler sends after injecting prompt-cache breakpoints. The sync handler
+    prepares the messages once; the async entry prepares them, then hands them to the handler,
+    which prepares them again as already normalized for the provider the pre-request hooks
+    leave. The ``**kwargs`` each function sees is the call minus its named params."""
+    model: Final = str(request["model"])
+    provider: Final = optional_str(request.get("custom_llm_provider"))
+    api_base: Final = optional_str(request.get("api_base"))
+    tools: Final = cast(_JsonBlocks | None, request.get("tools"))  # cast-ok: handed on unchecked, as the handler does
+    messages: Final = cast(_JsonBlocks, request["messages"])  # cast-ok: handed on unchecked, as the handler does
+    system: Final = cast(  # cast-ok: handed on unchecked, as the handler does
+        str | _JsonBlocks | None, request.get("system")
+    )
+    if not asynchronous:
+        return _handler_prepared(
+            request,
+            messages,
+            system,
+            model=model,
+            provider=provider,
+            tools=tools,
+            api_base=api_base,
+            presanitized=False,
+        )
+    entry_kwargs: Final = {name: value for name, value in request.items() if name not in _ENTRY_PARAMS}
+    entry_messages, entry_system = prepare_native_messages(
+        messages, system, entry_kwargs, model=model, custom_llm_provider=provider, tools=tools, api_base=api_base
+    )
+    return _handler_prepared(
+        entry_kwargs,
+        entry_messages,
+        entry_system,
+        model=model,
+        provider=handler.provider_after_pre_request_hooks(model, provider, entry_kwargs),
+        tools=tools,
+        api_base=api_base,
+        presanitized=True,
+    )
+
+
+def _handler_prepared(
+    call: Mapping[str, object],
+    messages: _JsonBlocks,
+    system: str | _JsonBlocks | None,
+    *,
+    model: str,
+    provider: str | None,
+    tools: _JsonBlocks | None,
+    api_base: str | None,
+    presanitized: bool,
+) -> _Prepared:
+    handler_kwargs: Final = {name: value for name, value in call.items() if name not in _HANDLER_PARAMS}
+    prepared_messages, prepared_system = prepare_native_messages(
+        messages,
+        system,
+        handler_kwargs,
+        model=model,
+        custom_llm_provider=provider,
+        tools=tools,
+        api_base=api_base,
+        presanitized=presanitized,
+    )
+    return prepared_messages, prepared_system, handler.tools_marked_for_cache_points(tools, handler_kwargs)
 
 
 def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:
@@ -364,8 +461,8 @@ def _log_resolved_call(request: Mapping[str, object], request_provider: str) -> 
         logger,
         kwargs={name: value for name, value in request.items() if name != "metadata"},
         model=str(request["model"]).removeprefix(f"{request_provider}/"),
-        optional_params=dict(body_params(request)),
-        litellm_params={"model_info": request.get("model_info"), **body_params(request)},
+        optional_params=dict(_body_fields(request)),
+        litellm_params={"model_info": request.get("model_info"), **_body_fields(request)},
         custom_llm_provider=request_provider,
     )
 
@@ -426,15 +523,6 @@ def settings(kwargs: Mapping[str, object], request: Mapping[str, object] | None 
         request_timeout=get_configured_request_timeout(),
     )
     return asdict(configured if request is None else _with_call_settings(configured, request))
-
-
-_HANDLER_PARAMS: Final = frozenset(
-    name
-    for name, parameter in inspect.signature(
-        cast(Callable[..., object], handler.anthropic_messages_handler)  # noqa: TID251  # cast-ok: reads the handler's parameter names, never calls it
-    ).parameters.items()
-    if parameter.kind is not inspect.Parameter.VAR_KEYWORD
-)
 
 
 def _handler_params(request: Mapping[str, object]) -> GenericLiteLLMParams:
