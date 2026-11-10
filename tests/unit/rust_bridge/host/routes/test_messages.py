@@ -184,6 +184,28 @@ def test_body_params_keep_the_requested_effort_without_deployment_levels() -> No
     assert messages_host.body_params(request)["output_config"] == {"effort": "max"}
 
 
+@pytest.mark.parametrize(
+    ("additional_drop_params", "expected_keys"),
+    [
+        (["thinking"], {"max_tokens"}),
+        (["top_k"], {"max_tokens", "thinking", "output_config"}),
+    ],
+)
+def test_body_params_derive_no_effort_from_a_param_the_deployment_lists(
+    additional_drop_params: list[str], expected_keys: set[str]
+) -> None:
+    request: Final[dict[str, object]] = {
+        "model": _ADAPTIVE_OPUS,
+        "messages": [],
+        "max_tokens": 8192,
+        "thinking": {"type": "enabled", "budget_tokens": 4096},
+        "additional_drop_params": additional_drop_params,
+        "model_info": {"id": "deployment-1", "reasoning_effort_levels": ["low", "medium", "high"]},
+    }
+
+    assert set(messages_host.body_params(request)).difference({"messages", "model"}) == expected_keys
+
+
 def _marked(phase: str | None = None, *args: object) -> ValueError:
     error: Final = ValueError(*args)
     if phase is not None:
