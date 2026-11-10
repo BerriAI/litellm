@@ -28,6 +28,21 @@ class TranslationTestCase:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class RejectionTestCase:
+    """A request LiteLLM must refuse before it reaches any provider: the exact status and error body returned."""
+
+    scenario: str
+    litellm_endpoint: str
+    litellm_request: Mapping[str, JsonValue]
+    expected_litellm_status_code: int
+    expected_litellm_response: Mapping[str, JsonValue]
+
+    @property
+    def id(self) -> str:
+        return f"{self.litellm_request['model']}-{self.scenario}"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SSEFrame:
     data: Mapping[str, JsonValue] | Literal["[DONE]"]
     event: str | None = None
