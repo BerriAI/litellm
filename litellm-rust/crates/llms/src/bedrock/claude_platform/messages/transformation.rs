@@ -23,7 +23,10 @@ use crate::{
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
-        messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
+        messages::{
+            context::{MessagesShapeOptions, MessagesTransformContext},
+            transformation::BaseMessagesConfig,
+        },
     },
     bedrock::common_utils::validated_region,
 };
@@ -71,9 +74,9 @@ impl BaseMessagesConfig for BedrockClaudePlatformMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn validate_environment(

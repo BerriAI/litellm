@@ -14,7 +14,10 @@ use serde_json::{Map, Value, json};
 
 use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
 use crate::anthropic::beta_headers::accepted_or_unlisted;
-use crate::base_llm::messages::{context::MessagesTransformContext, tools::ToolCustomField};
+use crate::base_llm::messages::{
+    context::{MessagesShapeOptions, MessagesTransformContext},
+    tools::ToolCustomField,
+};
 use crate::{
     Error,
     anthropic::common_utils::{
@@ -41,9 +44,9 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
     fn shape_request(
         &self,
         request: MessagesRequest,
-        reasoning_auto_summary: bool,
+        options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, reasoning_auto_summary)
+        shape_anthropic_messages_request(request, options)
     }
 
     fn get_complete_url(

@@ -23,6 +23,12 @@ impl SupportedEffortTiers {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MessagesShapeOptions {
+    pub reasoning_auto_summary: bool,
+    pub presanitized: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessagesModelCapabilities {
     #[serde(default)]
