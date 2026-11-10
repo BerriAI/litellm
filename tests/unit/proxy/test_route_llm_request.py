@@ -9,7 +9,6 @@ from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
-from urllib.parse import unquote
 from uuid import uuid4
 
 import httpx
@@ -3205,7 +3204,7 @@ async def test_route_request_sends_a_bedrock_model_id_missing_from_the_config_to
         )
 
     assert response.json() == dict(_BEDROCK_CONVERSE_ANSWER)
-    assert unquote(upstream.calls.last.request.url.raw_path.decode()) == f"/model/{model_id}/converse"
+    assert upstream.calls.last.request.url.raw_path.decode() == f"/model/{model_id.replace('/', '%2F')}/converse"
     assert upstream.calls.last.request.headers["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIDPROXYENV/")
 
 
