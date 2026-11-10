@@ -38,6 +38,26 @@ tests:
                 name: RELEASE-NAME-litellm-ui
                 port:
                   number: 3000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /tripo
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /cn.tripo
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
 
   - it: renders no dotted Exact or Prefix path for ingress-nginx, whose admission webhook rejects them
     set:
@@ -60,6 +80,26 @@ tests:
           path: spec.rules[0].http.paths
           content:
             path: /eu.assemblyai
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /tripo
+            pathType: Prefix
+            backend:
+              service:
+                name: RELEASE-NAME-litellm-gateway
+                port:
+                  number: 4000
+      - contains:
+          path: spec.rules[0].http.paths
+          content:
+            path: /cn.tripo
             pathType: ImplementationSpecific
             backend:
               service:

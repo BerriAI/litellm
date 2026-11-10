@@ -20,6 +20,7 @@ from litellm.secret_managers.main import (
     resolve_local_oidc_reference,
 )
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.passthrough_endpoints.tripo import tripo_region_from_url
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 
@@ -111,6 +112,25 @@ class PassthroughEndpointRouter:
             custom_llm_provider=custom_llm_provider,
         )
         return _resolve_oidc_reference(get_secret_str(_env_variable_name))
+
+    def get_credentials_with_api_base(
+        self,
+        custom_llm_provider: str,
+        region_name: str | None,
+    ) -> _PassThroughCredentials | None:
+        deployment_credentials: Final = self._get_deployment_credentials(
+            custom_llm_provider=custom_llm_provider,
+            region_name=region_name,
+            include_team_deployments=True,
+        )
+        if deployment_credentials is not None:
+            api_key: Final = _resolve_oidc_reference(deployment_credentials.api_key)
+            return (
+                _PassThroughCredentials(api_key=api_key, api_base=deployment_credentials.api_base)
+                if api_key
+                else None
+            )
+        return None
 
     def get_proxy_wide_credentials(self, custom_llm_provider: str) -> _PassThroughCredentials | None:
         deployment_credentials: Final = self._get_deployment_credentials(
@@ -416,6 +436,8 @@ class PassthroughEndpointRouter:
         if custom_llm_provider == "assemblyai":
             if api_base and "eu" in api_base:
                 return "eu"
+        if custom_llm_provider == "tripo":
+            return tripo_region_from_url(api_base) if api_base else None
         return None
 
     @staticmethod

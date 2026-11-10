@@ -13,17 +13,16 @@ from typing import Final
 
 import pytest
 
-
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.instrumentation.fastapi")
 fastapi = pytest.importorskip("fastapi")
 
-from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+import httpx  # noqa: E402
 from fastapi import FastAPI, HTTPException, Request, Response  # noqa: E402  # optional dependencies are skipped first
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from starlette.routing import Route  # noqa: E402
-import httpx  # noqa: E402
+from opentelemetry import trace  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from opentelemetry.instrumentation.propagators import (  # noqa: E402
     ResponsePropagator,
@@ -35,18 +34,16 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
-from opentelemetry import trace  # noqa: E402
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF  # noqa: E402
 from opentelemetry.trace import SpanKind  # noqa: E402
+from starlette.routing import Route  # noqa: E402
 
 from litellm.constants import LITELLM_UI_ALLOW_HEADERS  # noqa: E402
-from litellm.types.services import ServiceLoggerPayload, ServiceTypes  # noqa: E402  # optional dependencies are skipped first
-
+from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import (  # noqa: E402
     OpenTelemetryV2Config,
     is_otel_v2_enabled,
 )
-from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.mount import (  # noqa: E402
     PASSTHROUGH_PREFIXES,
     _passthrough_span_name_hook,
@@ -54,12 +51,16 @@ from litellm.integrations.otel.mount import (  # noqa: E402
     trace_response_expose_headers,
     trace_response_headers,
 )
-from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: E402
-    HttpPassThroughEndpointHelpers,
-)
 from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     request_root_http_route,
     set_request_root_span,
+)
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: E402
+    HttpPassThroughEndpointHelpers,
+)
+from litellm.types.services import (  # noqa: E402  # optional dependencies are skipped first
+    ServiceLoggerPayload,
+    ServiceTypes,
 )
 
 
@@ -153,14 +154,19 @@ def test_logger_and_instrumentor_share_provider():
     assert logger._emitter._tracer is logger.tracer
 
 
-def test_passthrough_hook_renames_catch_all_span():
-    """A passthrough route gets its span renamed to the real request path."""
+@pytest.mark.parametrize(
+    ("path", "method"),
+    (
+        ("/openai/v1/chat/completions", "POST"),
+        ("/tripo/v3/generation/text-to-model", "POST"),
+        ("/cn.tripo/v3/tasks/task-1", "GET"),
+    ),
+)
+def test_passthrough_hook_renames_catch_all_span(path, method):
     span = _FakeSpan()
-    _passthrough_span_name_hook(
-        span, {"path": "/openai/v1/chat/completions", "method": "POST"}
-    )
-    assert span.name == "POST /openai/v1/chat/completions"
-    assert span.attributes["http.route"] == "/openai/v1/chat/completions"
+    _passthrough_span_name_hook(span, {"path": path, "method": method})
+    assert span.name == f"{method} {path}"
+    assert span.attributes["http.route"] == path
 
 
 def test_passthrough_hook_leaves_non_passthrough_route_unchanged():
@@ -274,7 +280,7 @@ def test_span_hook_does_not_break_requests_when_the_span_provider_fails():
 
 def test_known_passthrough_prefixes_present():
     """Guard the prefix set against accidental edits."""
-    assert {"openai", "anthropic", "vertex_ai", "bedrock"} <= PASSTHROUGH_PREFIXES
+    assert {"openai", "anthropic", "vertex_ai", "bedrock", "tripo", "cn.tripo"} <= PASSTHROUGH_PREFIXES
 
 
 def test_instrument_fastapi_app_noop_when_gate_off(monkeypatch):

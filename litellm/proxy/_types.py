@@ -418,6 +418,8 @@ class LiteLLMRoutes(enum.Enum):
         "/openai",
         "/openai_passthrough",
         "/assemblyai",
+        "/tripo",
+        "/cn.tripo",
         "/eu.assemblyai",
         "/tinyfish",
         "/vllm",
