@@ -15,6 +15,7 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    NonNegativeInt,
     PositiveInt,
     TypeAdapter,
     field_validator,
@@ -1825,6 +1826,14 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
     model_max_budget: GenericBudgetConfigType | None = Field(
         default=None,
         description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
+    )
+    model_tpm_limit: Mapping[str, NonNegativeInt] | None = Field(
+        default=None,
+        description="Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})",
+    )
+    model_rpm_limit: Mapping[str, NonNegativeInt] | None = Field(
+        default=None,
+        description="Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})",
     )
     budget_reset_at: datetime | None = Field(
         default=None,
