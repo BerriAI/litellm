@@ -3,9 +3,11 @@
 
 import asyncio
 import base64
+import copy
 import json
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import chain
 from types import MappingProxyType
@@ -21,6 +23,7 @@ from typing import (
     TypedDict,
     Union,
     cast,
+    runtime_checkable,
 )
 from uuid import NAMESPACE_URL, uuid5
 
@@ -33,7 +36,7 @@ from typing_extensions import ReadOnly, Unpack
 
 import litellm
 from litellm import Router, verbose_logger
-from litellm._internal_context import with_service_target
+from litellm._internal_context import internal_sub_call, post_response_phase, with_service_target
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -94,6 +97,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attributio
     request_tags_from_metadata,
 )
 from litellm.repositories.managed_file_repository import ManagedFileRepository
+from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
@@ -123,7 +127,6 @@ class _ManagedFileRetrieve(Protocol):
         self,
         *,
         file_id: str,
-        _litellm_internal_model_credentials: Mapping[str, object] | None = None,
         **kwargs: Unpack[FileRetrieveCallOptions],
     ) -> OpenAIFileObject: ...
 
@@ -245,7 +248,7 @@ def _provider_file_retrieve_credentials(
     if llm_router is None or model_id is None:
         return None
     try:
-        credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id)
+        credentials: Final = llm_router.registry().credentials(model_id, form="with_provider")
     except Exception as error:
         verbose_logger.warning(
             "Failed to retrieve credentials for provider file "
@@ -374,6 +377,12 @@ class _ManagedResourcePrismaClient(Protocol):
     def db(self) -> _ManagedResourceDatabase: ...
 
 
+@runtime_checkable
+class _WriterRoutedDatabase(Protocol):
+    @property
+    def writer(self) -> _ManagedResourceDatabase: ...
+
+
 class _SchedulerWithJobLookup(Protocol):
     def get_job(self, job_id: str) -> object: ...
 
@@ -386,6 +395,126 @@ class _CursorPageArgs(TypedDict, total=False):
 class _RouterFileCallKwargs(TypedDict, total=False):
     client: ReadOnly[AsyncOpenAI | None]
     custom_llm_provider: ReadOnly[str | None]
+
+
+_MODEL_FILE_ID_MAPPING: Final = TypeAdapter(dict[str, str])
+_FILE_UPLOAD_ONLY_FIELDS: Final = frozenset({"file", "purpose", "expires_after", "extra_body"})
+_FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id"})
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderUpload:
+    model_id: str
+    provider_file_id: str
+    upload_call_id: str | None = None
+
+
+def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, ...]:
+    file_hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic file metadata
+        dict[str, object], getattr(file_object, HIDDEN_PARAMS_ATTR)
+    )
+    model_file_id_mapping: Final = _MODEL_FILE_ID_MAPPING.validate_python(
+        file_hidden_params.get("model_file_id_mapping") or {}
+    )
+    upload_call_id: Final = file_hidden_params.get("litellm_call_id")
+    return tuple(
+        _ProviderUpload(
+            model_id=model_id,
+            provider_file_id=provider_file_id,
+            upload_call_id=upload_call_id if isinstance(upload_call_id, str) else None,
+        )
+        for model_id, provider_file_id in model_file_id_mapping.items()
+    )
+
+
+def _keeps_one_upload_per_target(llm_router: Router, model_id: str) -> bool:
+    credentials: Final = _provider_file_retrieve_credentials(llm_router=llm_router, model_id=model_id)
+    return (credentials or {}).get("custom_llm_provider") == LlmProviders.LITELLM_PROXY.value
+
+
+def _is_kept_upload(uploads: Sequence[_ProviderUpload], index: int, per_target_model_ids: frozenset[str]) -> bool:
+    upload: Final = uploads[index]
+    other_uploads: Final = uploads[index + 1 :] if upload.model_id in per_target_model_ids else uploads[:index]
+    return all(other.model_id != upload.model_id for other in other_uploads)
+
+
+def _upload_from_trailing_id_fields(decoded_unified_file_id: str) -> _ProviderUpload:
+    trailing_fields: Final = decoded_unified_file_id.rpartition(";llm_output_file_id,")[2]
+    provider_file_id, _, model_id = trailing_fields.partition(";llm_output_file_model_id,")
+    return _ProviderUpload(model_id=model_id, provider_file_id=provider_file_id)
+
+
+def _carried_upload_missing_from(unified_file_id: str, model_file_ids: Mapping[str, str]) -> _ProviderUpload | None:
+    decoded: Final = _is_base64_encoded_unified_file_id(unified_file_id)
+    carried: Final = _upload_from_trailing_id_fields(decoded) if decoded else None
+    if carried is None or model_file_ids.get(carried.model_id) in (None, carried.provider_file_id):
+        return None
+    return carried
+
+
+async def _delete_provider_file(
+    llm_router: Router,
+    model_id: str,
+    provider_file_id: str,
+    request_data: Mapping[str, object],
+) -> None:
+    delete_data: Final = {k: v for k, v in request_data.items() if k not in _FILE_DELETE_RESERVED_FIELDS}
+    await llm_router.afile_delete(
+        model=model_id,
+        file_id=provider_file_id,
+        **cast(_RouterFileCallKwargs, delete_data),
+    )
+
+
+def _with_own_nested_dicts(request_data: Mapping[str, object]) -> MappingProxyType[str, object]:
+    return MappingProxyType({k: copy.copy(v) if isinstance(v, dict) else v for k, v in request_data.items()})
+
+
+async def _delete_redundant_upload(
+    llm_router: Router,
+    upload: _ProviderUpload,
+    delete_request: Mapping[str, object],
+    parent_call_id: str | None,
+) -> None:
+    try:
+        with internal_sub_call(parent_call_id):
+            await _delete_provider_file(
+                llm_router, upload.model_id, upload.provider_file_id, _with_own_nested_dicts(delete_request)
+            )
+    except Exception as error:
+        verbose_logger.warning(
+            f"Could not delete the redundant upload provider_file_id={sanitize_for_log(upload.provider_file_id)} "
+            f"at deployment model_id={sanitize_for_log(upload.model_id)}: "
+            f"{type(error).__name__} {sanitize_for_log(error)}"
+        )
+
+
+async def _delete_redundant_uploads(
+    llm_router: Router,
+    uploads: Sequence[_ProviderUpload],
+    delete_request: Mapping[str, object],
+) -> None:
+    await asyncio.gather(
+        *(_delete_redundant_upload(llm_router, upload, delete_request, upload.upload_call_id) for upload in uploads)
+    )
+
+
+def _start_deleting_redundant_uploads(
+    llm_router: Router,
+    uploads: Sequence[_ProviderUpload],
+    create_file_request: CreateFileRequest,
+) -> None:
+    if not uploads:
+        return
+    delete_request: Final = MappingProxyType(
+        {k: v for k, v in create_file_request.items() if k not in _FILE_UPLOAD_ONLY_FIELDS}
+    )
+    with post_response_phase():
+        spawn_logging_task(
+            asyncio.get_running_loop(),
+            _delete_redundant_uploads(llm_router, uploads, delete_request),
+            task_name="managed file repeat upload cleanup",
+        )
 
 
 def _managed_database(prisma_client: _ManagedResourcePrismaClient) -> _ManagedResourceDatabase:
@@ -479,6 +608,11 @@ def _managed_object_table(prisma_client: _ManagedResourcePrismaClient) -> _Manag
     return prisma_client.db.litellm_managedobjecttable
 
 
+def _writer_database(db: _ManagedResourceDatabase) -> _ManagedResourceDatabase:
+    """Reads that feed a write must see the create that just happened; a lagging read replica may not"""
+    return db.writer if isinstance(db, _WriterRoutedDatabase) else db
+
+
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _POSTGRES_UNSTORABLE_CHARACTER: Final = "\x00"
 
@@ -510,6 +644,25 @@ def _without_model_output(
     return (
         file_object.model_copy(update={"output": []}) if isinstance(file_object, ResponsesAPIResponse) else file_object
     )
+
+
+def _with_model_id(
+    file_object: LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse,
+    model_id: str | None,
+) -> LiteLLMBatch | LiteLLMFineTuningJob | ResponsesAPIResponse:
+    return file_object if model_id is None else file_object.model_copy(update={"model_id": model_id})
+
+
+async def _stored_model_id(managed_object_table: _ManagedObjectTableActions, unified_object_id: str) -> str | None:
+    row: Final = await managed_object_table.find_first(where={"unified_object_id": unified_object_id})
+    if row is None:
+        return None
+    try:
+        parsed: Final = _JSON_VALUE_ADAPTER.validate_python(_decode_json_blob(row.file_object))
+    except (json.JSONDecodeError, ValidationError):
+        return None
+    model_id: Final = parsed.get("model_id") if isinstance(parsed, dict) else None
+    return model_id if isinstance(model_id, str) and model_id else None
 
 
 def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, str]:
@@ -697,8 +850,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         persist_attribution: bool = False,
         create_if_missing: bool = True,
         batch_processed: bool = False,
+        creating_model_id: str | None = None,
     ) -> None:
         """Persist a managed object row, caching it and upserting it in the DB.
+
+        creating_model_id is the router deployment that created the object. It is kept
+        inside the stored file_object JSON as `model_id`, because the raw provider id an
+        unmanaged batch stores as unified_object_id says nothing about which deployment
+        made it, and the cost poller needs that deployment to read the result back. A
+        later observe of the row (create_if_missing=False) keeps the stored value rather
+        than overwriting it with whichever deployment served the retrieve.
 
         persist_attribution is set only by the batch and background response creates,
         the callers that can speak for the creator; it gates the api_key, request_tags, and,
@@ -720,7 +881,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         It is written only in the upsert create branch.
         """
         verbose_logger.info(f"Storing LiteLLM Managed {file_purpose} object with id={unified_object_id} in cache")
-        stored_object: Final = _without_model_output(file_object)
+        managed_database: Final = _managed_database(self.prisma_client)
+        managed_object_table: Final = managed_database.litellm_managedobjecttable
+        preserved_model_id: Final = (
+            creating_model_id
+            if creating_model_id is not None or create_if_missing
+            else await _stored_model_id(_writer_database(managed_database).litellm_managedobjecttable, unified_object_id)
+        )
+        stored_object: Final = _with_model_id(_without_model_output(file_object), preserved_model_id)
         litellm_managed_object = LiteLLM_ManagedObjectTable(
             unified_object_id=unified_object_id,
             model_object_id=model_object_id,
@@ -752,7 +920,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "status": file_object.status,
             "updated_by": user_api_key_dict.user_id,
         }
-        managed_object_table: Final = _managed_object_table(self.prisma_client)
         if not create_if_missing:
             await managed_object_table.update_many(
                 where={"unified_object_id": unified_object_id},
@@ -984,7 +1151,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         *,
         provider_file_id: str,
         call_options: Mapping[str, object],
-        internal_model_credentials: Mapping[str, object] | None = None,
     ) -> OpenAIFileObject:
         """Retrieve provider file details with transient retries and SDK retries disabled."""
         retrieve_file: Final = cast(_ManagedFileRetrieve, litellm.afile_retrieve)
@@ -996,14 +1162,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if attempt > 0:
                 await self._sleep(_PROVIDER_FILE_RETRIEVE_RETRY_DELAYS_SECONDS[attempt - 1])
             try:
-                if internal_model_credentials is None:
-                    return await retrieve_file(
-                        file_id=provider_file_id,
-                        **retrieve_options,
-                    )
                 return await retrieve_file(
                     file_id=provider_file_id,
-                    _litellm_internal_model_credentials=MappingProxyType(dict(internal_model_credentials)),
                     **retrieve_options,
                 )
             except Exception as error:
@@ -1045,7 +1205,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     self._afile_retrieve_with_retries(
                         provider_file_id=provider_file_id,
                         call_options=router_credentials,
-                        internal_model_credentials=router_credentials,
                     ),
                     timeout=BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS,
                 )
@@ -1989,16 +2148,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             target_model_names_list=target_model_names_list,
         )
 
-        ## STORE MODEL MAPPINGS IN DB
-        model_mappings: Dict[str, str] = {}
-
-        for file_object in responses:
-            file_hidden_params = cast(  # cast-ok: preserve mapping operations on dynamic file metadata
-                dict[str, object], getattr(file_object, HIDDEN_PARAMS_ATTR)
-            )
-            model_file_id_mapping = file_hidden_params.get("model_file_id_mapping")
-            if model_file_id_mapping and isinstance(model_file_id_mapping, dict):
-                model_mappings.update(model_file_id_mapping)
+        uploads: Final = tuple(chain.from_iterable(map(_provider_uploads, responses)))
+        per_target_model_ids: Final = frozenset(
+            model_id
+            for model_id in {upload.model_id for upload in uploads}
+            if _keeps_one_upload_per_target(llm_router, model_id)
+        )
+        kept_uploads: Final = tuple(
+            upload for index, upload in enumerate(uploads) if _is_kept_upload(uploads, index, per_target_model_ids)
+        )
+        model_mappings: Final = {upload.model_id: upload.provider_file_id for upload in kept_uploads}
 
         await self.store_unified_file_id(
             file_id=response.id,
@@ -2006,6 +2165,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             litellm_parent_otel_span=litellm_parent_otel_span,
             model_mappings=model_mappings,
             user_api_key_dict=user_api_key_dict,
+        )
+        _start_deleting_redundant_uploads(
+            llm_router,
+            tuple(
+                upload
+                for upload in uploads
+                if upload not in kept_uploads and upload.model_id not in per_target_model_ids
+            ),
+            create_file_request,
         )
 
         # Emit Prometheus metrics for managed file creation
@@ -2170,6 +2338,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 request_tags=request_tags_from_metadata(request_metadata if isinstance(request_metadata, dict) else {}),
                 persist_attribution=is_batch_create,
                 create_if_missing=is_batch_create,
+                creating_model_id=model_id if is_batch_create else None,
             )
             if not is_batch_create:
                 await self.store_batch_output_file_ownership(
@@ -2646,23 +2815,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         specific_model_file_id_mapping: Final = model_file_id_mapping.get(file_id)
         if not specific_model_file_id_mapping:
             return
-        filtered_data: Final = {
-            k: v for k, v in data.items() if k not in ("model", "file_id", "_litellm_internal_model_credentials")
-        }
         for model_id, model_file_id in specific_model_file_id_mapping.items():
-            credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
-            delete_data = {
-                **filtered_data,
-                **(
-                    {"_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
-                    if credentials is not None
-                    else {}
-                ),
-            }
-            await llm_router.afile_delete(
-                model=model_id,
-                file_id=model_file_id,
-                **cast(_RouterFileCallKwargs, delete_data),
+            await _delete_provider_file(llm_router, model_id, model_file_id, data)
+        unrecorded_upload: Final = _carried_upload_missing_from(file_id, specific_model_file_id_mapping)
+        delete_call_id: Final = data.get("litellm_call_id")
+        if unrecorded_upload is not None:
+            await _delete_redundant_upload(
+                llm_router, unrecorded_upload, data, delete_call_id if isinstance(delete_call_id, str) else None
             )
 
     async def afile_content(
@@ -2690,15 +2849,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             exception_dict = {}
             for model_id, provider_file_id in specific_model_file_id_mapping.items():
                 try:
-                    # Cloud-storage providers (e.g. Bedrock S3) validate file ids
-                    # against the deployment's configured bucket, which they only
-                    # trust from this immutable server-side snapshot, never from
-                    # request params.
-                    credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
-                    if credentials is not None:
-                        data["_litellm_internal_model_credentials"] = cast(Dict, MappingProxyType(dict(credentials)))
-                    else:
-                        data.pop("_litellm_internal_model_credentials", None)
                     return cast(
                         HttpxBinaryResponseContent,
                         await llm_router.afile_content(

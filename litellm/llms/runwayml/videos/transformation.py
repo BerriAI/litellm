@@ -11,6 +11,7 @@ import litellm
 from litellm.constants import RUNWAYML_DEFAULT_API_VERSION
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.videos.async_task_utils import unsupported_video_fields
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -155,12 +156,23 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         - size -> ratio (convert "WIDTHxHEIGHT" to "WIDTH:HEIGHT")
         - seconds -> duration (convert to integer)
         """
+        unsupported: Final = unsupported_video_fields(
+            video_create_optional_params,
+            model,
+            "runwayml",
+            drop_params,
+            frozenset({"seed", "duration", "aspect_ratio", "generate_audio"}),
+        )
         supported_openai_params: Final = self.get_supported_openai_params(model)
         return {
             **self._prompt_image_param(video_create_optional_params),
             **self._ratio_param(video_create_optional_params),
             **self._duration_param(video_create_optional_params),
-            **{key: value for key, value in video_create_optional_params.items() if key not in supported_openai_params},
+            **{
+                key: value
+                for key, value in video_create_optional_params.items()
+                if key not in supported_openai_params and key not in unsupported
+            },
         }
 
     @staticmethod

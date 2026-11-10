@@ -225,7 +225,7 @@ def jwks_unavailable_exception(error: JWKSUnreachableError) -> ProxyException:
             f"unreachable, so the JWT signature could not be verified. Please retry shortly. Error: {error}"
         ),
         type=ProxyErrorTypes.auth_provider_unavailable,
-        param="None",
+        param=None,
         code=status.HTTP_503_SERVICE_UNAVAILABLE,
     )
 
@@ -1768,6 +1768,7 @@ class JWTAuthManager:
 
         denied_pass_through_team: LiteLLM_TeamTable | None = None
         route_denied_team_id: str | None = None  # rebind-ok: retain route-denied team while checking all claims
+        fallback_team: tuple[str, LiteLLM_TeamTable] | None = None  # rebind-ok: retain first route-allowed candidate
 
         if not team_ids:
             if (
@@ -1796,6 +1797,21 @@ class JWTAuthManager:
 
                 if team_object and team_object.models is not None:
                     team_models = team_object.models
+                    if (
+                        fallback_team is None
+                        and allowed_routes_check(
+                            user_role=LitellmUserRoles.TEAM,
+                            user_route=route,
+                            litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+                        )
+                        and JWTAuthManager._team_has_passthrough_route_access(
+                            team_object=team_object,
+                            route=route,
+                            request_method=request_method,
+                            team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
+                        )
+                    ):
+                        fallback_team = (team_id, team_object)
                     if isinstance(team_models, list) and (
                         not requested_model
                         or await can_team_access_model(
@@ -1827,6 +1843,9 @@ class JWTAuthManager:
                             return team_id, team_object
             except Exception:
                 continue
+
+        if fallback_team is not None:
+            return fallback_team
 
         if denied_pass_through_team is not None:
             JWTAuthManager._raise_team_passthrough_route_denial(route=route, team_object=denied_pass_through_team)
@@ -2199,15 +2218,19 @@ class JWTAuthManager:
         # not mistaken for claimless and left with stale DB memberships the fallback
         # could later attribute. With the flag off, keep the upstream plural-only
         # reconciliation so existing deployments are unchanged.
-        jwt_team_ids: Final = set(
-            jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
-            if jwt_handler.litellm_jwtauth.fallback_to_db_teams
-            else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+        claim_team_ids: Final = tuple(
+            dict.fromkeys(
+                jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
+                if jwt_handler.litellm_jwtauth.fallback_to_db_teams
+                else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+            )
         )
-        existing_teams: Final = set(user_object.teams or [])
-        teams_to_add: Final = jwt_team_ids - existing_teams
+        jwt_team_ids: Final = frozenset(claim_team_ids)
+        existing_team_order: Final = tuple(dict.fromkeys(user_object.teams or []))
+        existing_teams: Final = frozenset(existing_team_order)
+        teams_to_add: Final = tuple(team_id for team_id in claim_team_ids if team_id not in existing_teams)
         preserve_db_teams_without_claims: Final = jwt_handler.litellm_jwtauth.fallback_to_db_teams and not jwt_team_ids
-        teams_to_remove: Final = set() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
+        teams_to_remove: Final = frozenset() if preserve_db_teams_without_claims else existing_teams - jwt_team_ids
         if teams_to_add or teams_to_remove:
             from litellm.proxy.management_endpoints.scim.scim_v2 import (
                 patch_team_membership,
@@ -2218,7 +2241,10 @@ class JWTAuthManager:
                 teams_ids_to_add_user_to=list(teams_to_add),
                 teams_ids_to_remove_user_from=list(teams_to_remove),
             )
-            user_object.teams = list(jwt_team_ids)
+            user_object.teams = [
+                *(team_id for team_id in existing_team_order if team_id not in teams_to_remove),
+                *teams_to_add,
+            ]
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,
@@ -2373,6 +2399,7 @@ class JWTAuthManager:
             route=route, request_method=request_method, jwt_handler=jwt_handler
         )
         any_team_resolved = False
+        fallback_team: tuple[str, LiteLLM_TeamTable] | None = None  # rebind-ok: retain first route-allowed membership
         for candidate_team_id in user_team_ids:
             try:
                 team_object = await get_team_object(
@@ -2386,6 +2413,17 @@ class JWTAuthManager:
             except HTTPException:
                 continue
             any_team_resolved = True
+            if (
+                team_route_allowed
+                and fallback_team is None
+                and JWTAuthManager._team_has_passthrough_route_access(
+                    team_object=team_object,
+                    route=route,
+                    request_method=request_method,
+                    team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
+                )
+            ):
+                fallback_team = (candidate_team_id, team_object)
             if requested_model:
                 try:
                     await can_team_access_model(
@@ -2416,6 +2454,23 @@ class JWTAuthManager:
                     ),
                 )
             return candidate_team_id, team_object, None
+
+        if fallback_team is not None:
+            fallback_id, fallback_object = fallback_team
+            return (
+                fallback_id,
+                fallback_object,
+                await get_team_membership(
+                    user_id=user_id,
+                    team_id=fallback_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                if user_id
+                else None,
+            )
 
         if enforce_team_based_model_access:
             if requested_model and any_team_resolved:

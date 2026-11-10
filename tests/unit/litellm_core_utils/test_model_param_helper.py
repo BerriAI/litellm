@@ -1,5 +1,9 @@
+from collections.abc import Sequence
+from typing import Final
 
+import pytest
 
+from litellm.caching.caching import Cache
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 
 
@@ -46,3 +50,18 @@ def test_langfuse_model_parameters_no_secret_leakage():
     assert "secret_fields" not in sanitized
     assert "authorization" not in sanitized
     assert "headers" not in sanitized
+
+
+@pytest.mark.parametrize(
+    "hint,first_value,second_value",
+    [("languages", ("en",), ("fr",)), ("keywords", ("LiteLLM",), ("Kubernetes",))],
+)
+def test_transcription_cache_key_separates_recognition_hints(
+    hint: str, first_value: Sequence[str], second_value: Sequence[str]
+) -> None:
+    cache: Final = Cache()
+    request: Final = {"model": "gpt-4o-transcribe", "file": "meeting.wav", "response_format": "json"}
+
+    assert cache.get_cache_key(**request, **{hint: first_value}) != cache.get_cache_key(
+        **request, **{hint: second_value}
+    )
