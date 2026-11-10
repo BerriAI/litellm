@@ -104,3 +104,12 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
     )
 
     assert response.get("totalTokens") > 0
+
+
+def test_google_count_tokens_counts_an_entry_without_parts_as_an_empty_turn() -> None:
+    turn: Final = {"role": "user", "parts": [{"text": "Count this request"}]}
+
+    with_partless_entries: Final = _google_count_tokens_request("counted", {"contents": [{"role": "user"}, {}, turn]})
+    without_them: Final = _google_count_tokens_request("counted", {"contents": [turn]})
+
+    assert with_partless_entries.messages == without_them.messages

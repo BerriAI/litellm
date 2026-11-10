@@ -1798,6 +1798,27 @@ _WEATHER_CONTENTS: Final = ({"role": "user", "parts": [{"text": "What is the wea
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "deployment",
+    [pytest.param(_local_luna, id="local_count"), pytest.param(_framed_kimi_count, id="provider_count_fails")],
+)
+async def test_utils_token_counter_counts_an_entry_without_parts_as_empty(
+    monkeypatch: pytest.MonkeyPatch, deployment: Callable[[pytest.MonkeyPatch], bool]
+):
+    call_endpoint: Final = deployment(monkeypatch)
+
+    with_partless_entries: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=[*_WEATHER_CONTENTS, {"role": "user"}, {}]),
+        call_endpoint=call_endpoint,
+    )
+    without_them: Final = await token_counter(
+        request=TokenCountRequest(model="kimi", contents=list(_WEATHER_CONTENTS)), call_endpoint=call_endpoint
+    )
+
+    assert with_partless_entries.total_tokens == without_them.total_tokens > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "system_instruction",
     [
         pytest.param({"parts": 4}, id="parts_number"),
