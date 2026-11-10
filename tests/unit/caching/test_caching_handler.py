@@ -3095,9 +3095,29 @@ async def test_async_get_cache_answers_400_for_a_single_object_embedding_input()
 @pytest.mark.parametrize("internal", [False, True])
 async def test_a_cache_hit_inside_an_internal_sub_call_fires_no_callbacks_of_its_own(
     monkeypatch: pytest.MonkeyPatch, internal: bool
-):
-    cache: Final = Cache(type="local")
+) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    logged: Final[list[tuple[str, object]]] = []
+
+    class Recorder(CustomLogger):
+        def log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged.append(("sync", kwargs.get("litellm_call_id")))
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            logged.append(("async", kwargs.get("litellm_call_id")))
+
+    recorder: Final = Recorder()
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     kwargs: Final = {"model": "gpt-5.4", "messages": [{"role": "user", "content": "hello"}], "caching": True}
     cache.add_cache(
         result=litellm.ModelResponse(
@@ -3108,10 +3128,7 @@ async def test_a_cache_hit_inside_an_internal_sub_call_fires_no_callbacks_of_its
         **kwargs,
     )
     async_logging: Final = _build_logging_obj(CallTypes.acompletion.value, stream=False)
-    async_logging.async_success_handler = AsyncMock()
-    async_logging.handle_sync_success_callbacks_for_async_calls = MagicMock()
     sync_logging: Final = _build_logging_obj(CallTypes.completion.value, stream=False)
-    sync_logging.handle_sync_cache_hit_success_callbacks = MagicMock()
 
     with internal_sub_call() if internal else nullcontext():
         async_hit: Final = await LLMCachingHandler(
@@ -3136,8 +3153,17 @@ async def test_a_cache_hit_inside_an_internal_sub_call_fires_no_callbacks_of_its
             kwargs=kwargs,
         )
 
+    expected: Final = (
+        Counter()
+        if internal
+        else Counter({("async", async_logging.litellm_call_id): 1, ("sync", sync_logging.litellm_call_id): 1})
+    )
+    for _ in range(100):
+        if len(logged) >= expected.total():
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.5)
+
     assert async_hit is not None and async_hit.cached_result is not None
     assert sync_hit.cached_result is not None
-    assert async_logging.async_success_handler.called is not internal
-    assert async_logging.handle_sync_success_callbacks_for_async_calls.called is not internal
-    assert sync_logging.handle_sync_cache_hit_success_callbacks.called is not internal
+    assert Counter(logged) == expected, logged

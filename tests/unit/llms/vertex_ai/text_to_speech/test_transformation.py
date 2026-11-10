@@ -1,7 +1,9 @@
+import asyncio
 import base64
 from typing import Final
 import json
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -1169,3 +1171,41 @@ async def test_aspeech_vertex_ai_gemini_tts_no_cache_request_reaches_vertex(
     await litellm.aspeech(**speech_kwargs, cache={"no-cache": True})
 
     assert vertex_route.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_waits_for_a_stalled_upstream_without_holding_a_worker_thread(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock
+) -> None:
+    upstream_reached: Final = asyncio.Event()
+    release_upstream: Final = asyncio.Event()
+
+    async def stalled_upstream(request: httpx.Request) -> httpx.Response:
+        upstream_reached.set()
+        await release_upstream.wait()
+        return httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE)
+
+    respx_mock.post(
+        url__regex=r"https://aiplatform\.googleapis\.com/.*/models/gemini-3\.8-flash-tts:generateContent$"
+    ).mock(side_effect=stalled_upstream)
+    loop: Final = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=1) as single_worker:
+        loop.set_default_executor(single_worker)
+        speech_task: Final = asyncio.create_task(
+            litellm.aspeech(
+                model="vertex_ai/gemini-3.8-flash-tts",
+                input="Say hello",
+                voice="Kore",
+                vertex_credentials=_AUTHORIZED_USER,
+                vertex_location="global",
+            )
+        )
+        await asyncio.wait_for(upstream_reached.wait(), timeout=10)
+
+        worker_answer: Final = await asyncio.wait_for(loop.run_in_executor(None, lambda: "free"), timeout=10)
+
+        release_upstream.set()
+        response: Final = await asyncio.wait_for(speech_task, timeout=10)
+
+    assert worker_answer == "free"
+    assert _PCM_AUDIO in response.content

@@ -4547,7 +4547,6 @@ async def test_aspeech_gemini_bridge_logs_only_the_speech_call_under_its_call_id
     _assert_logged_once_as_speech(events)
 
 
-
 @pytest.mark.asyncio
 async def test_aspeech_gemini_bridge_runs_sync_function_callbacks_once_with_the_speech_response(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
@@ -4560,6 +4559,7 @@ async def test_aspeech_gemini_bridge_runs_sync_function_callbacks_once_with_the_
     def sync_callback(kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
         logged.append((type(response_obj), kwargs.get("litellm_call_id")))
 
+    monkeypatch.setattr(litellm.utils, "callback_list", [])
     monkeypatch.setattr(litellm, "success_callback", [sync_callback])
     respx_mock.post(
         url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
@@ -5097,7 +5097,7 @@ def test_speech_gemini_tts_keeps_cached_audio_only_for_the_request_ttl(
 
 async def test_aspeech_gemini_tts_waits_for_a_stalled_upstream_without_holding_a_worker_thread(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream_reached: Final = asyncio.Event()
     release_upstream: Final = asyncio.Event()
