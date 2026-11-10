@@ -2,7 +2,7 @@
 
 import { useTerminology } from "@/contexts/TerminologyContext";
 import { Plus } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
@@ -91,15 +91,15 @@ export default function CredentialsPanel() {
     }
   };
 
-  const openEditModal = (credential: CredentialItem) => {
+  const openEditModal = useCallback((credential: CredentialItem) => {
     setSelectedCredential(credential);
     setIsUpdateModalOpen(true);
-  };
+  }, []);
 
-  const openDeleteModal = (credential: CredentialItem) => {
+  const openDeleteModal = useCallback((credential: CredentialItem) => {
     setCredentialToDelete(credential);
     setIsDeleteModalOpen(true);
-  };
+  }, []);
 
   const closeDeleteModal = () => {
     setCredentialToDelete(null);
