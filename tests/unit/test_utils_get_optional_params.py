@@ -18,6 +18,7 @@ from litellm.utils import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.factory import map_system_message_pt
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_llm import CustomLLM
 
 
 COHERE_CHAT_RESPONSE: Final = {
@@ -2316,3 +2317,53 @@ def test_completion_forwards_vector_store_ids_to_litellm_proxy(respx_mock: respx
     )
 
     assert json.loads(route.calls[0].request.content)["vector_store_ids"] == ["vs_abc"]
+
+
+class OptionalParamsEchoHandler(CustomLLM):
+    def completion(self, *args: object, **kwargs: object) -> litellm.ModelResponse:
+        return litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": json.dumps(kwargs["optional_params"])}}]
+        )
+
+
+def _register_echo_handler(monkeypatch: pytest.MonkeyPatch, provider: str) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": provider, "custom_handler": OptionalParamsEchoHandler()}]
+    )
+    monkeypatch.setattr(litellm, "_custom_providers", [])
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+
+
+@pytest.mark.parametrize(
+    "vector_store_params",
+    ({"vector_store_ids": []}, {"vector_store_ids": ["vs_abc"]}, {"vector_store_id": "vs_abc"}),
+)
+def test_completion_passes_vector_store_params_to_custom_handler(
+    monkeypatch: pytest.MonkeyPatch, vector_store_params: dict[str, object]
+) -> None:
+    _register_echo_handler(monkeypatch, "echo-handler")
+
+    response: Final = litellm.completion(
+        model="echo-handler/any-model", messages=[{"role": "user", "content": "hello"}], **vector_store_params
+    )
+
+    received_params: Final = json.loads(response.choices[0].message.content)
+    assert received_params.items() >= vector_store_params.items()
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_keeps_vector_store_ids_out_when_custom_handler_shadows_a_provider(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _register_echo_handler(monkeypatch, "anthropic")
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages")
+    route.return_value = httpx.Response(200, json=ANTHROPIC_MESSAGE_RESPONSE)
+
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-api-key",
+        vector_store_ids=["vs_abc"],
+    )
+
+    assert "vector_store_ids" not in json.loads(route.calls[0].request.content)
