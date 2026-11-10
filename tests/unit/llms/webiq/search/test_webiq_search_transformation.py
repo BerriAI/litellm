@@ -82,13 +82,14 @@ def test_search_maps_request_and_preserves_sources(respx_mock: respx.MockRouter)
     }
 
 
+@pytest.mark.parametrize("api_base", [None, "https://api.microsoft.ai/v3", "https://api.microsoft.ai/v3/search/web"])
 async def test_asearch_uses_environment_credentials_at_default_endpoint(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, api_base: str | None
 ) -> None:
     monkeypatch.setenv("WEBIQ_API_KEY", "environment-key")
     route: Final = respx_mock.post(f"{WebIQSearchConfig.DEFAULT_API_BASE}/search/web").respond(json={"webResults": []})
 
-    response: Final = await litellm.asearch(query="no matches", search_provider="webiq")
+    response: Final = await litellm.asearch(query="no matches", search_provider="webiq", api_base=api_base)
 
     assert response.model_dump() == {"object": "search", "results": []}
     assert route.calls.last.request.headers["x-apikey"] == "environment-key"
@@ -220,6 +221,26 @@ def test_environment_key_cannot_be_sent_to_caller_selected_host(monkeypatch: pyt
     monkeypatch.setenv("WEBIQ_API_KEY", "server-key")
     with pytest.raises(ValueError, match="Refusing to send"):
         WebIQSearchConfig().validate_environment({}, api_base="https://untrusted.example/v3")
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("api_key", [None, "caller-key"])
+async def test_http_endpoint_rejected_before_sending_credentials(
+    monkeypatch: pytest.MonkeyPatch, use_async: bool, api_key: str | None
+) -> None:
+    monkeypatch.setenv("WEBIQ_API_KEY", "server-key")
+    with respx.mock(assert_all_called=False) as transport:
+        transport.post("http://api.microsoft.ai/v3/search/web").respond(json={"webResults": []})
+        with pytest.raises(openai.APIError, match="HTTPS"):
+            if use_async:
+                await litellm.asearch(
+                    query="query", search_provider="webiq", api_base="http://api.microsoft.ai/v3", api_key=api_key
+                )
+            else:
+                litellm.search(
+                    query="query", search_provider="webiq", api_base="http://api.microsoft.ai/v3", api_key=api_key
+                )
+        assert len(transport.calls) == 0
 
 
 def test_explicit_key_wins_and_headers_are_not_mutated(monkeypatch: pytest.MonkeyPatch) -> None:

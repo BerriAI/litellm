@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
+from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -56,6 +57,8 @@ class WebIQSearchConfig(BaseSearchConfig):
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig interface
     ) -> dict[str, str]:  # mutable-ok: HTTP handler requires a dict
+        if urlsplit(api_base or self.DEFAULT_API_BASE).scheme != "https":
+            raise ValueError("Microsoft Web IQ search requires an HTTPS api_base")
         resolved_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
