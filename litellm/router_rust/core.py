@@ -2757,8 +2757,8 @@ class RustCore(
             **({"web_search": True} if web_search else {}),
             **({"route_handler": handler} if serves_route_capability(handler) else {}),
             **({"decisions_media": True} if decisions_media else {}),
-            # `batch_create_routing`: a batch create keeps to the deployments that can run batches.
-            **({"batch_create": True} if plan.kind == "batch" else {}),
+            # `batch_create_routing`: a batch create, and its file's upload, keep to the deployments that can run batches.
+            **({"batch_create": True} if _routes_as_batch_create(plan, request) else {}),
             # `deployments_admitting_embedding_batch`: an embedding keeps to the deployments admitting its input.
             **({"embedding_batch": True} if plan.kind == "embedding" else {}),
         }
@@ -4289,6 +4289,10 @@ def _narrowing_fields(request: dict[str, object], kind: str) -> Mapping[str, obj
     for key in ("_target_order", "_excluded_deployment_ids", "_retry_skipped_deployment_ids"):
         request.pop(key, None)
     return fields
+
+
+def _routes_as_batch_create(plan: Plan, request: Mapping[str, object]) -> bool:
+    return plan.kind == "batch" or (plan.kind == "create_file" and request.get("purpose") == "batch")
 
 
 def _request_narrowing(request: Mapping[str, object]) -> Mapping[str, object]:

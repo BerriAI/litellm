@@ -1245,6 +1245,42 @@ async fn a_served_fallback_and_a_disabled_walk_report_no_failure(config: RouterC
     assert_eq!(fallbacks_failed(&host), vec![]);
 }
 
+fn azure_chat_and_batch_tiers() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch-a", "order": 2}, "model_info": {"id": "b2", "mode": "batch"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch-b", "order": 3}, "model_info": {"id": "b3", "mode": "batch"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::batch_create_moves_past_the_level_it_used(true, vec!["b2", "b3"])]
+#[case::other_calls_walk_every_level(false, vec!["c1", "b2"])]
+#[tokio::test]
+async fn a_failed_order_level_falls_back_to_the_next_level_its_pick_can_use(
+    #[case] batch_create: bool,
+    #[case] expected: Vec<&str>,
+) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
+    let router = router(
+        azure_chat_and_batch_tiers(),
+        json!({"num_retries": 0}),
+        host.clone(),
+    );
+    let request = RouterRequest {
+        batch_create,
+        ..request()
+    };
+    router
+        .call(Op::from("acreate_batch"), request)
+        .await
+        .unwrap();
+    assert_eq!(host.selected(), expected);
+}
+
 #[tokio::test]
 async fn the_order_path_reports_no_failed_fallbacks() {
     let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
