@@ -8,10 +8,11 @@ from typing import Final
 
 from pydantic import ConfigDict, TypeAdapter
 
-from litellm.proxy.utils import PrismaClient, query_raw_rows
+from litellm.proxy.utils import PrismaClient, query_raw_within_statement_timeout
 from litellm.types.llms.base import LiteLLMBaseModel
 
 SPEND_LOG_API_KEY_SCOPE_MAX_KEYS: Final = 5000
+_WHAT: Final = "Spend log key lookup"
 
 _USER_API_KEYS_SQL: Final = """
 SELECT DISTINCT api_key FROM (
@@ -43,9 +44,10 @@ class _ApiKeyRow(LiteLLMBaseModel):
 _API_KEY_ROWS: Final = TypeAdapter(tuple[_ApiKeyRow, ...])
 
 
-def _unless_too_many(rows: Sequence[Mapping[str, object]]) -> tuple[str, ...] | None:
+def _narrowing_keys(rows: Sequence[Mapping[str, object]]) -> tuple[str, ...] | None:
+    """None when the list cannot narrow the read: nothing known about the owner, or too many keys to help."""
     keys: Final = tuple(row.api_key for row in _API_KEY_ROWS.validate_python(rows))
-    return None if len(keys) > SPEND_LOG_API_KEY_SCOPE_MAX_KEYS else keys
+    return None if not keys or len(keys) > SPEND_LOG_API_KEY_SCOPE_MAX_KEYS else keys
 
 
 def _daily_dates_around(start: date, end: date) -> tuple[str, str]:
@@ -57,9 +59,9 @@ async def spend_log_api_keys_for_user(
 ) -> tuple[str, ...] | None:
     """The api_keys that can carry this user's spend logs in the window, or None when there are too many to help."""
     first, last = _daily_dates_around(start, end)
-    return _unless_too_many(
-        await query_raw_rows(
-            prisma_client.db, _USER_API_KEYS_SQL, user_id, first, last, SPEND_LOG_API_KEY_SCOPE_MAX_KEYS + 1
+    return _narrowing_keys(
+        await query_raw_within_statement_timeout(
+            prisma_client, _USER_API_KEYS_SQL, user_id, first, last, SPEND_LOG_API_KEY_SCOPE_MAX_KEYS + 1, what=_WHAT
         )
     )
 
@@ -68,8 +70,14 @@ async def spend_log_api_keys_for_teams(
     prisma_client: PrismaClient, team_ids: Sequence[str], start: date, end: date
 ) -> tuple[str, ...] | None:
     first, last = _daily_dates_around(start, end)
-    return _unless_too_many(
-        await query_raw_rows(
-            prisma_client.db, _TEAM_API_KEYS_SQL, list(team_ids), first, last, SPEND_LOG_API_KEY_SCOPE_MAX_KEYS + 1
+    return _narrowing_keys(
+        await query_raw_within_statement_timeout(
+            prisma_client,
+            _TEAM_API_KEYS_SQL,
+            list(team_ids),
+            first,
+            last,
+            SPEND_LOG_API_KEY_SCOPE_MAX_KEYS + 1,
+            what=_WHAT,
         )
     )

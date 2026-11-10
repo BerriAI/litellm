@@ -2970,8 +2970,12 @@ async def ui_view_spend_logs(
             sql_params.append(f"%{like_escaped_session_id}%")
             p += 1
 
-        scope_api_keys: Final = await _scope_api_keys(
-            prisma_client, where_conditions=where_conditions, start=start_date_obj, end=end_date_obj
+        scope_api_keys: Final = (
+            await _scope_api_keys(
+                prisma_client, where_conditions=where_conditions, start=start_date_obj, end=end_date_obj
+            )
+            if not search_owns_window
+            else None
         )
         if scope_api_keys is not None:
             sql_conditions.append(f"api_key = ANY(${p}::text[])")

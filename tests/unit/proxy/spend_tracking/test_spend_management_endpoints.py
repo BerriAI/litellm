@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import timezone
 from functools import partial
 from types import SimpleNamespace
@@ -221,7 +221,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     return where
 
 
-def _emulate_owner_api_key_lookup(mock_spend_logs, sql_query, params):
+def _emulate_owner_api_key_lookup(mock_spend_logs: list[dict], sql_query: str, params: tuple) -> list[dict]:
     """The daily spend tables and key table name every api_key an owner's requests ran under, so the
     lookup answers with the distinct api_keys of the owner's logs."""
     owner_col = "user" if 'FROM "LiteLLM_DailyUserSpend"' in sql_query else "team_id"
@@ -865,7 +865,7 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     assert data["data"][0]["user"] == "test_user_1"
 
 
-def _owned_log(request_id, api_key, user, team_id):
+def _owned_log(request_id: str, api_key: str, user: str, team_id: str) -> dict:
     return {
         "id": request_id,
         "request_id": request_id,
@@ -878,27 +878,36 @@ def _owned_log(request_id, api_key, user, team_id):
     }
 
 
-def _owner_filtered_logs(logs):
-    def filter_fn(where):
+def _owner_filtered_logs(logs: list[dict]) -> Callable[[dict], list[dict]]:
+    """What Postgres returns for the page query: the owner filter and, when present, the api_key list both apply."""
+
+    def filter_fn(where: dict) -> list[dict]:
         return [
             log
             for log in logs
-            if log["user"] == where.get("user", log["user"]) and log["team_id"] == where.get("team_id", log["team_id"])
+            if log["user"] == where.get("user", log["user"])
+            and log["team_id"] == where.get("team_id", log["team_id"])
+            and log["api_key"] in where.get("api_key_in", [log["api_key"]])
         ]
 
     return filter_fn
 
 
-def _spend_logs_page_query(queries):
+def _owner_api_keys(daily_rows: dict[str, set[str]], live_keys: dict[str, set[str]]) -> Callable[[tuple], list[dict]]:
+    """The key lookup's two sources, keyed by owner: api_keys on daily spend rows and api_keys of live keys."""
+
+    def lookup(params: tuple) -> list[dict]:
+        owners = {params[0]} if isinstance(params[0], str) else set(params[0])
+        api_keys = set().union(*(daily_rows.get(o, set()) | live_keys.get(o, set()) for o in owners))
+        return [{"api_key": api_key} for api_key in sorted(api_keys)]
+
+    return lookup
+
+
+def _spend_logs_page_query(queries: list[tuple[str, tuple]]) -> tuple[str, tuple, list[str] | None]:
     sql, params = next((sql, params) for sql, params in queries if '"LiteLLM_SpendLogs"' in sql and "ORDER BY" in sql)
     key_param = re.search(r"api_key = ANY\(\$(\d+)::text\[\]\)", sql)
     return sql, params, None if key_param is None else params[int(key_param.group(1)) - 1]
-
-
-def _too_many_owner_api_keys(params):
-    from litellm.proxy.spend_tracking.spend_log_api_key_scope import SPEND_LOG_API_KEY_SCOPE_MAX_KEYS
-
-    return [{"api_key": f"sk-{i}"} for i in range(SPEND_LOG_API_KEY_SCOPE_MAX_KEYS + 1)]
 
 
 @pytest.mark.asyncio
@@ -910,11 +919,16 @@ async def test_ui_view_spend_logs_user_filter_reads_spend_logs_through_the_users
         _owned_log("req2", "sk-deleted", "alice", "team1"),
         _owned_log("req3", "sk-bob", "bob", "team1"),
     ]
-    queries = []
+    queries: list[tuple[str, tuple]] = []
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma(
-            logs, _owner_filtered_logs(logs), query_observer=lambda sql, params: queries.append((sql, params))
+            logs,
+            _owner_filtered_logs(logs),
+            query_observer=lambda sql, params: queries.append((sql, params)),
+            owner_api_keys_fn=_owner_api_keys(
+                daily_rows={"alice": {"sk-deleted"}, "bob": {"sk-bob"}}, live_keys={"alice": {"sk-live"}}
+            ),
         ),
     )
 
@@ -941,11 +955,17 @@ async def test_ui_view_spend_logs_team_filter_reads_spend_logs_through_the_teams
         _owned_log("req2", "sk-alpha-2", "bob", "team-alpha"),
         _owned_log("req3", "sk-beta", "carol", "team-beta"),
     ]
-    queries = []
+    queries: list[tuple[str, tuple]] = []
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma(
-            logs, _owner_filtered_logs(logs), query_observer=lambda sql, params: queries.append((sql, params))
+            logs,
+            _owner_filtered_logs(logs),
+            query_observer=lambda sql, params: queries.append((sql, params)),
+            owner_api_keys_fn=_owner_api_keys(
+                daily_rows={"team-alpha": {"sk-alpha-1"}, "team-beta": {"sk-beta"}},
+                live_keys={"team-alpha": {"sk-alpha-2"}},
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -974,16 +994,19 @@ async def test_ui_view_spend_logs_team_filter_reads_spend_logs_through_the_teams
 
 
 @pytest.mark.asyncio
-async def test_ui_view_spend_logs_with_too_many_owner_keys_keeps_the_plain_user_filter(client, monkeypatch):
+@pytest.mark.parametrize("known_keys", [set(), {f"sk-{i}" for i in range(5001)}])
+async def test_ui_view_spend_logs_without_a_usable_key_list_keeps_the_plain_user_filter(
+    client, monkeypatch, known_keys: set[str]
+):
     logs = [_owned_log("req1", "sk-live", "alice", "team1")]
-    queries = []
+    queries: list[tuple[str, tuple]] = []
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma(
             logs,
             _owner_filtered_logs(logs),
             query_observer=lambda sql, params: queries.append((sql, params)),
-            owner_api_keys_fn=_too_many_owner_api_keys,
+            owner_api_keys_fn=_owner_api_keys(daily_rows={"alice": known_keys}, live_keys={}),
         ),
     )
 
@@ -998,6 +1021,38 @@ async def test_ui_view_spend_logs_with_too_many_owner_keys_keeps_the_plain_user_
     page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
     assert scoped_api_keys is None
     assert '"user" = $' in page_sql
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_search_with_user_filter_is_not_narrowed_to_the_windows_keys(client, monkeypatch):
+    logs = [_owned_log("req-old", "sk-retired", "alice", "team1")]
+    queries: list[tuple[str, tuple]] = []
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(
+            logs,
+            _owner_filtered_logs(logs),
+            query_observer=lambda sql, params: queries.append((sql, params)),
+            owner_api_keys_fn=_owner_api_keys(daily_rows={}, live_keys={"alice": {"sk-live"}}),
+        ),
+    )
+
+    response = client.get(
+        "/spend/logs/ui",
+        params={
+            "user_id": "alice",
+            "search": "req-old",
+            "start_date": "2026-09-01 00:00:00",
+            "end_date": "2026-09-03 23:59:59",
+        },
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [row["request_id"] for row in response.json()["data"]] == ["req-old"]
+    page_sql, _, scoped_api_keys = _spend_logs_page_query(queries)
+    assert scoped_api_keys is None
+    assert "request_id = $" in page_sql and '"user" = $' in page_sql
 
 
 @pytest.mark.asyncio

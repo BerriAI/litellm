@@ -17341,10 +17341,17 @@ def _team_spend_by_user_caller(user_id: str, teams: list[str]) -> LiteLLM_UserTa
     )
 
 
-def _team_api_keys_in_window(mock_db_client, monkeypatch: pytest.MonkeyPatch, api_keys: list[str]) -> AsyncMock:
-    lookup = AsyncMock(return_value=[{"api_key": api_key} for api_key in api_keys])
-    monkeypatch.setattr(mock_db_client.db, "query_raw", lookup)
-    return lookup
+def _team_spend_reads(api_keys: list[str], spend_rows: list[dict] | Exception) -> AsyncMock:
+    """Raw reads inside the statement-timeout transaction: the key lookup, then the spend log aggregate."""
+
+    async def read(sql: str, *params: object) -> list[dict]:
+        if 'FROM "LiteLLM_DailyTeamSpend"' in sql:
+            return [{"api_key": api_key} for api_key in api_keys]
+        if isinstance(spend_rows, Exception):
+            raise spend_rows
+        return spend_rows
+
+    return AsyncMock(side_effect=read)
 
 
 def _team_spend_by_user_db_row(team_id: str, user_id: str, spend: float, requests: int) -> dict:
@@ -17364,22 +17371,22 @@ def _team_spend_by_user_db_row(team_id: str, user_id: str, spend: float, request
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(mock_db_client, monkeypatch):
+async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(mock_db_client):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     beta = _team_spend_by_user_team("team-beta", "Team Beta", Member(user_id="alice", role="user"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha, beta])
-    lookup = _team_api_keys_in_window(mock_db_client, monkeypatch, ["sk-alpha", "sk-beta"])
     transaction = statement_timeout_reads(
         mock_db_client,
-        AsyncMock(
-            return_value=[
+        _team_spend_reads(
+            ["sk-alpha", "sk-beta"],
+            [
                 _team_spend_by_user_db_row("team-alpha", "alice", 0.5, 3),
                 _team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2),
                 _team_spend_by_user_db_row("team-beta", "alice", 0.1, 1),
-            ]
+            ],
         ),
     )
 
@@ -17399,7 +17406,7 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
     assert "sl.\"startTime\" < $2::timestamp + INTERVAL '1 day'" in sql
     assert "sl.team_id IN ($3, $4)" in sql
     assert "sl.api_key = ANY($5::text[])" in sql
-    lookup_sql, *lookup_params = lookup.call_args.args
+    lookup_sql, *lookup_params = transaction.query_raw.call_args_list[0].args
     assert 'FROM "LiteLLM_DailyTeamSpend"' in lookup_sql and 'FROM "LiteLLM_VerificationToken"' in lookup_sql
     assert lookup_params == [["team-alpha", "team-beta"], "2026-08-31", "2026-09-05", 5001]
     assert 'GROUP BY sl.team_id, sl."user"' in sql
@@ -17417,14 +17424,13 @@ async def test_get_team_spend_by_user_admin_groups_spend_logs_by_team_and_user(m
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_client, monkeypatch):
+async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_client):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     caller = UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
-    _team_api_keys_in_window(mock_db_client, monkeypatch, ["sk-alpha"])
-    transaction = statement_timeout_reads(mock_db_client, AsyncMock(return_value=[]))
+    transaction = statement_timeout_reads(mock_db_client, _team_spend_reads(["sk-alpha"], []))
     mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("alice", ["team-alpha"])
     )
@@ -17440,16 +17446,15 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_client, monkeypatch):
+async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_client):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="bob", role="user"), ["/key/info"])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
-    _team_api_keys_in_window(mock_db_client, monkeypatch, ["sk-bob"])
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     transaction = statement_timeout_reads(
-        mock_db_client, AsyncMock(return_value=[_team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2)])
+        mock_db_client, _team_spend_reads(["sk-bob"], [_team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2)])
     )
     mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
@@ -17515,14 +17520,13 @@ async def test_get_team_spend_by_user_rejects_bad_input(mock_db_client, team_ids
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_statement_timeout_returns_503(mock_db_client, monkeypatch):
+async def test_get_team_spend_by_user_statement_timeout_returns_503(mock_db_client):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
 
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
-    _team_api_keys_in_window(mock_db_client, monkeypatch, [])
-    statement_timeout_reads(mock_db_client, AsyncMock(side_effect=statement_timeout_error()))
+    statement_timeout_reads(mock_db_client, _team_spend_reads(["sk-alpha"], statement_timeout_error()))
 
     with pytest.raises(HTTPException) as exc_info:
         await get_team_spend_by_user(
@@ -17537,17 +17541,18 @@ async def test_get_team_spend_by_user_statement_timeout_returns_503(mock_db_clie
 
 
 @pytest.mark.asyncio
-async def test_get_team_spend_by_user_with_too_many_keys_falls_back_to_the_team_filter(mock_db_client, monkeypatch):
+@pytest.mark.parametrize("known_key_count", [0, 5001])
+async def test_get_team_spend_by_user_without_a_usable_key_list_keeps_the_plain_team_filter(
+    mock_db_client, known_key_count: int
+):
     from litellm.proxy.management_endpoints.team_endpoints import get_team_spend_by_user
-    from litellm.proxy.spend_tracking.spend_log_api_key_scope import SPEND_LOG_API_KEY_SCOPE_MAX_KEYS
 
     admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
-    _team_api_keys_in_window(
-        mock_db_client, monkeypatch, [f"sk-{i}" for i in range(SPEND_LOG_API_KEY_SCOPE_MAX_KEYS + 1)]
+    transaction = statement_timeout_reads(
+        mock_db_client, _team_spend_reads([f"sk-{i}" for i in range(known_key_count)], [])
     )
-    transaction = statement_timeout_reads(mock_db_client, AsyncMock(return_value=[]))
 
     await get_team_spend_by_user(
         user_api_key_dict=admin, team_ids="team-alpha", start_date="2026-09-01", end_date="2026-09-04"
