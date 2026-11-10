@@ -14,11 +14,12 @@ the normal unit-test run and exercised only where an image has been built (the
 image-scan workflow). Requires a working docker CLI.
 """
 
+import os
 import shutil
 import subprocess
 import uuid
+from typing import Final
 
-import os
 import pytest
 
 IMAGE = os.getenv("LITELLM_IMAGE")
@@ -188,3 +189,62 @@ def test_runtime_cache_env_not_read_only():
         and line.split("=", 1)[1].startswith("/opt/prisma")
     ]
     assert not offenders, f"cache/home env points at the read-only bake: {offenders}"
+
+
+WRITABLE_PATHS_PROBE: Final = """
+import os
+from pathlib import Path
+from tempfile import TemporaryFile
+
+import prisma
+import litellm_proxy_extras
+
+assert os.getuid() != 0
+for path in (
+    Path(prisma.__file__),
+    Path(litellm_proxy_extras.__file__),
+    Path('/var/lib/litellm/ui/index.html'),
+    Path('/var/lib/litellm/assets/logo.png'),
+):
+    with path.open('r+b') as handle:
+        content = handle.read()
+        handle.seek(0)
+        handle.write(content)
+    with TemporaryFile(dir=path.parent):
+        pass
+
+if os.getuid() == 65534:
+    for directory in (
+        '/app', '/app/.cache', '/app/.venv', '/app/docker', '/app/litellm/proxy',
+        '/app/enterprise', '/app/litellm-proxy-extras', '/nonexistent',
+    ):
+        with TemporaryFile(dir=directory):
+            pass
+"""
+
+
+@pytest.mark.parametrize("user", [None, NON_ROOT_UID], ids=["default-uid", "arbitrary-uid"])
+def test_non_root_runtime_paths_are_writable(user: str | None) -> None:
+    assert IMAGE is not None
+    if "LITELLM_NON_ROOT=true" not in _docker("run", "--rm", "--entrypoint", "env", IMAGE).stdout.splitlines():
+        pytest.skip("only non-root runtime images prepare writable application paths")
+    user_args: Final = ("--user", user) if user is not None else ()
+    probe: Final = _docker(
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--cap-drop",
+        "ALL",
+        *user_args,
+        "--entrypoint",
+        "python",
+        IMAGE,
+        "-c",
+        WRITABLE_PATHS_PROBE,
+        check=False,
+    )
+    assert probe.returncode == 0, (
+        f"runtime paths are not writable as {user or 'the default uid'}\n"
+        f"stdout:\n{probe.stdout}\nstderr:\n{probe.stderr}"
+    )
