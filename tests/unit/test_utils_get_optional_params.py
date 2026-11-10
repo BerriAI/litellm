@@ -51,6 +51,16 @@ OPENAI_CHAT_RESPONSE: Final = {
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
 
+PROVIDER_CHAT_ROUTES: Final = (
+    ("anthropic/claude-sonnet-5-5", "https://api.anthropic.com/v1/messages", ANTHROPIC_MESSAGE_RESPONSE),
+    ("openai/gpt-5.6", "https://api.openai.com/v1/chat/completions", OPENAI_CHAT_RESPONSE),
+    (
+        "fireworks_ai/accounts/fireworks/models/qwen3p8-max",
+        "https://api.fireworks.ai/inference/v1/chat/completions",
+        OPENAI_CHAT_RESPONSE,
+    ),
+)
+
 
 def _check_additional_properties(schema):
     if isinstance(schema, dict):
@@ -2271,18 +2281,7 @@ def test_turning_reasoning_off_for_a_catalog_non_reasoning_model_drops_it_silent
     "vector_store_params",
     ({"vector_store_ids": []}, {"vector_store_ids": ["vs_abc"]}, {"vector_store_id": "vs_abc"}),
 )
-@pytest.mark.parametrize(
-    ("model", "provider_url", "provider_response"),
-    (
-        ("anthropic/claude-sonnet-5-5", "https://api.anthropic.com/v1/messages", ANTHROPIC_MESSAGE_RESPONSE),
-        ("openai/gpt-5.6", "https://api.openai.com/v1/chat/completions", OPENAI_CHAT_RESPONSE),
-        (
-            "fireworks_ai/accounts/fireworks/models/qwen3p8-max",
-            "https://api.fireworks.ai/inference/v1/chat/completions",
-            OPENAI_CHAT_RESPONSE,
-        ),
-    ),
-)
+@pytest.mark.parametrize(("model", "provider_url", "provider_response"), PROVIDER_CHAT_ROUTES)
 @pytest.mark.respx(assert_all_called=True)
 def test_completion_keeps_vector_store_params_out_of_provider_request(
     respx_mock: respx.MockRouter,
@@ -2358,29 +2357,41 @@ def test_completion_passes_vector_store_params_to_custom_handler(
     assert received_params.items() >= vector_store_params.items()
 
 
-def test_embedding_passes_vector_store_ids_to_custom_handler_named_like_an_openai_compatible_provider(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("vector_store_params", ({"vector_store_ids": ["vs_abc"]}, {"vector_store_id": "vs_abc"}))
+def test_embedding_passes_only_vector_store_params_to_custom_handler_named_like_an_openai_compatible_provider(
+    monkeypatch: pytest.MonkeyPatch, vector_store_params: Mapping[str, object]
 ) -> None:
     _register_handler(monkeypatch, "deepseek", OptionalParamsEchoHandler())
 
-    response: Final = litellm.embedding(model="deepseek/any-model", input=["hello"], vector_store_ids=["vs_abc"])
+    response: Final = litellm.embedding(
+        model="deepseek/any-model",
+        input=["hello"],
+        cache_control_injection_points=[{"location": "message", "role": "system"}],
+        **vector_store_params,
+    )
 
-    assert json.loads(response.model)["extra_body"]["vector_store_ids"] == ["vs_abc"]
+    assert json.loads(response.model) == {"extra_body": vector_store_params}
 
 
+@pytest.mark.parametrize(("model", "provider_url", "provider_response"), PROVIDER_CHAT_ROUTES)
 @pytest.mark.respx(assert_all_called=True)
-def test_completion_keeps_vector_store_ids_out_when_only_a_video_handler_shares_the_provider_name(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+def test_completion_keeps_vector_store_params_out_when_only_a_video_handler_shares_the_provider_name(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    provider_url: str,
+    provider_response: dict[str, object],
 ) -> None:
-    _register_handler(monkeypatch, "anthropic", OpenAIVideoConfig())
-    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages")
-    route.return_value = httpx.Response(200, json=ANTHROPIC_MESSAGE_RESPONSE)
+    _register_handler(monkeypatch, model.split("/")[0], OpenAIVideoConfig())
+    route: Final = respx_mock.post(provider_url)
+    route.return_value = httpx.Response(200, json=provider_response)
 
     litellm.completion(
-        model="anthropic/claude-sonnet-5-5",
+        model=model,
         messages=[{"role": "user", "content": "hello"}],
         api_key="test-api-key",
         vector_store_ids=["vs_abc"],
+        vector_store_id="vs_abc",
     )
 
-    assert "vector_store_ids" not in json.loads(route.calls[0].request.content)
+    assert json.loads(route.calls[0].request.content).keys().isdisjoint(("vector_store_ids", "vector_store_id"))
