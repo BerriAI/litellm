@@ -809,7 +809,7 @@ def _named_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, objec
         return MappingProxyType({})
     return MappingProxyType(
         {
-            key: value
+            key: copy.deepcopy(value)
             for key, value in credential_api_key_secret_reference(credential.credential_values).items()
             if key not in kwargs
         }
