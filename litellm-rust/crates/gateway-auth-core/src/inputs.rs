@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use litellm_secret_value::SecretValue;
+use serde::Deserialize;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RequestFacts {
     pub route: String,
     pub token: Option<SecretValue>,
@@ -33,7 +34,7 @@ pub struct JwtSettings {
     pub leeway_seconds: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct OAuth2Settings {
     pub user_id_header: Option<String>,
     pub team_id_header: Option<String>,

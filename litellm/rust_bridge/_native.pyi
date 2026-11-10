@@ -676,6 +676,8 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "AtomicApplied",
     "AtomicOverLimit",
+    "AuthCoreHandle",
+    "CustomAuthCall",
     "ForkedAfterNativeRuntimeStarted",
     "GaugeOverLimit",
     "GaugesAcquired",
@@ -710,6 +712,7 @@ __all__ = [
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
     "NativeTableSwapped",
+    "OAuth2Call",
     "PostCallSettlement",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
@@ -1286,3 +1289,70 @@ class RouterCall(Generic[_S]):
     # candidate ids, pick first; pre_route: see _PreRouteStep; cache: see _CacheStep; secrets, build and model_info:
     # see those steps; first call: None.
     def next(self, outcome: object) -> _S: ...
+
+class _AuthRequestFacts(TypedDict):
+    route: str
+    token: str | None
+    is_llm_api_route: bool
+
+class _AuthOAuth2Settings(TypedDict):
+    user_id_header: str | None
+    team_id_header: str | None
+
+class _AuthIntrospection(TypedDict):
+    active: bool
+    subject: str | None
+    client_id: str | None
+    scopes: Sequence[str]
+
+class _AuthCustomIdentity(TypedDict):
+    user_id: str | None
+    team_id: str | None
+    hashed_token: str | None
+
+class _AuthIntrospectStep(TypedDict):
+    kind: Literal["introspect"]
+    token: str
+
+class _AuthOAuth2Identity(TypedDict):
+    kind: Literal["identity"]
+    user_id: str | None
+    team_id: str | None
+    scopes: list[str]
+
+class _AuthOAuth2Denied(TypedDict):
+    kind: Literal["missing_key", "inactive_token"]
+
+class _AuthOAuth2Done(TypedDict):
+    kind: Literal["done"]
+    outcome: _AuthOAuth2Identity | _AuthOAuth2Denied
+
+class _AuthCustomAuthStep(TypedDict):
+    kind: Literal["custom_auth"]
+
+class _AuthCustomAuthDone(TypedDict):
+    kind: Literal["done"]
+    outcome: _AuthCustomIdentity
+
+_AuthOAuth2Steps = _AuthIntrospectStep | _AuthOAuth2Done
+_AuthCustomAuthSteps = _AuthCustomAuthStep | _AuthCustomAuthDone
+
+@final
+class AuthCoreHandle:
+    def __new__(cls) -> AuthCoreHandle: ...
+    def oauth2(
+        self, facts: _AuthRequestFacts, settings: _AuthOAuth2Settings, proxy_headers: Mapping[str, str]
+    ) -> OAuth2Call: ...
+    def custom(self, facts: _AuthRequestFacts) -> CustomAuthCall: ...
+
+# Each call raises ValueError when started twice, or answered before it starts, after it ends, or
+# for a host call it is not waiting on.
+@final
+class OAuth2Call:
+    def start(self) -> _AuthOAuth2Steps: ...
+    def answer_introspection(self, introspection: _AuthIntrospection) -> _AuthOAuth2Steps: ...
+
+@final
+class CustomAuthCall:
+    def start(self) -> _AuthCustomAuthSteps: ...
+    def answer_custom_auth(self, identity: _AuthCustomIdentity) -> _AuthCustomAuthSteps: ...

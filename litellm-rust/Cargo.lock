@@ -3882,6 +3882,7 @@ version = "0.1.0"
 dependencies = [
  "litellm-secret-value",
  "rstest",
+ "serde",
  "strum",
  "tokio",
 ]
@@ -4403,6 +4404,7 @@ dependencies = [
  "litellm-circuit-breaker",
  "litellm-core-utils",
  "litellm-error",
+ "litellm-gateway-auth-core",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",

@@ -1,5 +1,7 @@
 use std::{collections::BTreeMap, time::SystemTime};
 
+use serde::Deserialize;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentedKey {
     Admin { expires: Option<SystemTime> },
@@ -71,7 +73,7 @@ pub struct SigningKey {
     pub public_key_pem: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Introspection {
     pub active: bool,
     pub subject: Option<String>,

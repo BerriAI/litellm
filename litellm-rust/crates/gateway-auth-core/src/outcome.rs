@@ -1,6 +1,7 @@
 use std::time::SystemTime;
 
 use litellm_secret_value::SecretValue;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Grant {
@@ -79,14 +80,14 @@ pub struct JwtIdentity {
     pub scopes: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OAuth2Identity {
     pub user_id: Option<String>,
     pub team_id: Option<String>,
     pub scopes: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomIdentity {
     pub user_id: Option<String>,
     pub team_id: Option<String>,
