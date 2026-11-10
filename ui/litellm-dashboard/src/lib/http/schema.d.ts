@@ -26239,6 +26239,17 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
+        /** AccessGroupRule */
+        AccessGroupRule: {
+            /** Access Group */
+            access_group: string;
+            /** Attribute */
+            attribute: string;
+            /** Contains */
+            contains?: string | number | boolean | null;
+            /** Equals */
+            equals?: string | number | boolean | null;
+        };
         /** AccessGroupUpdateRequest */
         AccessGroupUpdateRequest: {
             /** Access Agent Ids */
@@ -30808,6 +30819,8 @@ export interface components {
          * @description Documents all the fields supported by `general_settings` in config.yaml
          */
         ConfigGeneralSettings: {
+            /** Access Group Rules */
+            access_group_rules?: components["schemas"]["AccessGroupRule"][] | null;
             /**
              * Admission Queue Timeout Seconds
              * @description maximum time a request waits for a worker slot
@@ -44019,7 +44032,7 @@ export interface components {
             heuristic_v2_success_threshold?: number | null;
             /**
              * Housekeeping Patterns
-             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
+             * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title, agent-summary and prompt-suggestion ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
              */
             housekeeping_patterns?: string[] | null;
             /**
@@ -52359,6 +52372,8 @@ export interface components {
             discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
+            /** Encrypted Content Boundary */
+            encrypted_content_boundary?: string | null;
             /** Enforce Supported Endpoints */
             enforce_supported_endpoints?: boolean | null;
             /** Explicit Cache Read Input Token Cost */

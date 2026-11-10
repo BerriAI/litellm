@@ -48,6 +48,7 @@ from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
 from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
@@ -621,7 +622,7 @@ class ResetBudgetJob:
         from litellm.proxy.proxy_server import spend_counter_store
 
         try:
-            await spend_counter_store.delete((counter_key,))
+            await spend_counter_store.delete((counter_key, *committed_spend_keys((counter_key,))))
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Failed to reset spend counter %s in Redis: %s. Budget may be over-enforced until counter expires.",
@@ -680,7 +681,7 @@ class ResetBudgetJob:
 
             match cache:
                 case "spend counter":
-                    await spend_counter_store.delete(keys)
+                    await spend_counter_store.delete((*keys, *committed_spend_keys(keys)))
                 case "user_api_key_cache":
                     await user_api_key_cache.async_delete_cache_keys(keys)
                 case _:

@@ -424,13 +424,34 @@ async def test_spend_counter_increments_ride_the_native_post_call_batch(monkeypa
 
     with request_redis_batch_scope(native_factory=natives, native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
         await proxy_server._apply_spend_counter_increments(pending)
-        declared = list(spend.post_call)
+        declared = [(request, increments) for request, increments, _ in spend.post_call]
         assert natives.built[0].events == []
         await flush_post_call_redis_batches()
 
     assert declared == [(natives.built[0], (("spend:key:k1", 0.5), ("spend:team:t1", 0.5)))]
     assert natives.built[0].events == ["flush_post"]
     assert spend.commands == []
+
+
+@pytest.mark.asyncio
+async def test_the_request_sees_its_committed_spend_charge_settle_whoever_sends_the_batch(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    spend = FakeSpendCounters(redis={})
+    monkeypatch.setattr(proxy_server, "spend_counter_store", spend.store())
+
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+        await proxy_server._apply_spend_counter_increments([PendingSpendIncrement("spend:key:k1", 0.5)])
+        without_committed_spend = request.post_call_settlements
+        await proxy_server._apply_spend_counter_increments(
+            [PendingSpendIncrement("spend:key:k1", 0.5), PendingSpendIncrement("spend:committed:key:k1", 0.5)]
+        )
+        declared = [settlement.settled for settlement in request.post_call_settlements]
+        spend.settle_post_call()
+        sent = [settlement.settled for settlement in request.post_call_settlements]
+
+    assert without_committed_spend == ()
+    assert (declared, sent) == ([False], [True])
 
 
 @pytest.mark.asyncio

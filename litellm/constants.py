@@ -1533,6 +1533,7 @@ BEDROCK_CONVERSE_MODELS: Final = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5-2",
     "anthropic.claude-fable-5-1",
     "anthropic.claude-fable-5",
     "anthropic.claude-sonnet-5",
@@ -1941,6 +1942,7 @@ SPEND_ROLLUP_LOCK_TIMEOUT_MS: Final = max(1, get_env_int("SPEND_ROLLUP_LOCK_TIME
 SPEND_LOG_QUEUE_SIZE_THRESHOLD: Final = get_env_int("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100)
 SPEND_LOG_QUEUE_MAX_BYTES: Final = max(1, get_env_int("SPEND_LOG_QUEUE_MAX_BYTES", 64000000))
 SPEND_LOG_QUEUE_POLL_INTERVAL: Final = get_env_float("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0)
+SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS: Final = 30.0
 RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS: Final = max(1, get_env_int("RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS", 3))
 RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL: Final = get_env_float("RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", 0.2)
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = get_env_int("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)

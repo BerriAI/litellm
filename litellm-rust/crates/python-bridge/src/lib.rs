@@ -55,7 +55,9 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::sensitive_route_pins::NativeSensitiveRoutePins;
     #[pymodule_export]
-    use crate::redis::store::spend_counters::{NativeSpendCounters, PySpendRead};
+    use crate::redis::store::spend_counters::{
+        NativeSpendCounters, PyPostCallSettlement, PySpendRead,
+    };
     #[pymodule_export]
     use crate::redis::store::{
         NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
@@ -90,6 +92,7 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
@@ -154,6 +157,7 @@ mod tests {
                 "NativeSensitiveRoutePins",
                 "NativeRedisStoreError",
                 "NativeSpendCounters",
+                "PostCallSettlement",
                 "SpendRead",
                 "LocalSizes",
                 "native_redis_breaker_states",
@@ -185,5 +189,19 @@ mod tests {
             public_names.sort_unstable();
             assert_eq!(public_names, expected);
         });
+    }
+    #[rstest::rstest]
+    fn module_import_installs_ring_as_the_process_crypto_provider() {
+        Python::initialize();
+        Python::attach(|py| {
+            native_module(py);
+        });
+
+        let installed = rustls::crypto::CryptoProvider::get_default()
+            .expect("importing _native should install a process crypto provider");
+        assert_eq!(
+            format!("{installed:?}"),
+            format!("{:?}", rustls::crypto::ring::default_provider())
+        );
     }
 }

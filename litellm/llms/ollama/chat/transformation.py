@@ -16,6 +16,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
+from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
+    parse_tool_call_arguments,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import ensure_api_route
@@ -51,6 +54,29 @@ def _json_document(value: object) -> str | bytes | bytearray:
     if isinstance(value, (str, bytes, bytearray)):
         return value
     raise TypeError(f"the JSON object must be str, bytes or bytearray, not {value.__class__.__name__}")
+
+
+_TOOL_CALL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
+
+
+def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistantToolCall) -> OllamaToolCallFunction:
+    function: Final = tool_call["function"]
+    name: Final = function.get("name") or ""
+    raw_arguments: Final[object] = function.get("arguments")
+    try:
+        parsed: Final[object] = (
+            parse_tool_call_arguments(raw_arguments, tool_name=name, context="Ollama chat request")
+            if isinstance(raw_arguments, str) or raw_arguments is None
+            else raw_arguments
+        )
+        arguments: Final = _TOOL_CALL_ARGUMENTS.validate_python({} if parsed is None else parsed)
+    except ValueError:
+        raise litellm.BadRequestError(
+            message=f"OllamaException - arguments of assistant tool call {tool_call.get('id')!r} are not a JSON object",
+            model=model,
+            llm_provider="ollama_chat",
+        ) from None
+    return OllamaToolCallFunction(name=name, arguments=arguments)
 
 
 class OllamaChatConfig(BaseConfig):
@@ -254,12 +280,7 @@ class OllamaChatConfig(BaseConfig):
         tools: Final = optional_params.pop("tools", None)
 
         def transform_tool_call(typed_tool: ChatCompletionAssistantToolCall) -> OllamaToolCall:
-            function: Final = OllamaToolCallFunction(
-                name=typed_tool["function"].get("name") or "",
-                arguments=json.loads(typed_tool["function"]["arguments"])
-                if "arguments" in typed_tool["function"]
-                else {},
-            )
+            function: Final = _to_ollama_tool_call_function(model, typed_tool)
             tool_id: Final = typed_tool.get("id")
             ollama_tool_call: Final = (
                 OllamaToolCall(function=function) if tool_id is None else OllamaToolCall(id=tool_id, function=function)
@@ -455,6 +476,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     started_reasoning_content: bool = False
     finished_reasoning_content: bool = False
     seen_tool_calls: bool = False
+    _next_tool_call_index: int = 0
 
     def _is_function_call_complete(self, function_args: str | dict) -> bool:
         if isinstance(function_args, dict):
@@ -502,6 +524,8 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             if tool_calls is not None:
                 self.seen_tool_calls = True
                 for tool_call in tool_calls:
+                    tool_call["index"] = self._next_tool_call_index
+                    self._next_tool_call_index += 1
                     function_args = tool_call.get("function").get("arguments")
                     if function_args is not None and len(function_args) > 0:
                         is_function_call_complete = self._is_function_call_complete(function_args)

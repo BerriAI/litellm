@@ -79,6 +79,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     check_permissions_caller_permission,
     generate_key_helper_fn,
     prepare_metadata_fields,
+    raise_on_logging_credential_change,
 )
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -598,6 +599,7 @@ async def new_user(
         if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
             enforce_vector_store_index_grants_are_admin_only(data, None, None, user_api_key_dict, "key")
+            raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
         check_permissions_caller_permission(
             data=data,
@@ -1483,8 +1485,11 @@ async def _invalidate_user_spend_counter_if_changed(
     """
     if non_default_values.get("spend") is not None:
         from litellm.proxy.proxy_server import invalidate_spend_counter
+        from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 
-        await invalidate_spend_counter(counter_key=user_counter(str(non_default_values["user_id"])))
+        counter_key: Final = user_counter(str(non_default_values["user_id"]))
+        await invalidate_spend_counter(counter_key=counter_key)
+        await invalidate_spend_counter(counter_key=committed_spend_key(counter_key))
 
 
 def _clears_object_permission(user_request: UpdateUserRequest) -> bool:
