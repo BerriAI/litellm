@@ -6,7 +6,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, drops_params
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase, graft_default_vertex_path
 from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
@@ -89,9 +89,21 @@ class VertexAIMuseResponsesAPIConfig(OpenAIResponsesAPIConfig):
             raise UnsupportedParamsError(
                 status_code=400, message="Vertex Muse supports stateless Responses requests only. Set store=False."
             )
+        tool_choice: Final = response_api_optional_request_params.get("tool_choice")
+        if tool_choice is not None and tool_choice != "auto" and not drops_params(litellm_params):
+            raise UnsupportedParamsError(
+                status_code=400,
+                message="Vertex Muse supports only tool_choice='auto'. Set drop_params=True to normalize unsupported choices.",
+            )
+        tool_params: Final = {
+            key: value
+            for key, value in response_api_optional_request_params.items()
+            if not (tool_choice == "none" and key == "tools")
+        }
+        normalized_params: Final = {**tool_params, **({"tool_choice": "auto"} if tool_choice is not None else {})}
         request: Final = _FIELDS.validate_python(
             super().transform_responses_api_request(  # pyright: ignore[reportUnknownMemberType]  # untyped bags
-                model, input, dict(response_api_optional_request_params), litellm_params, dict(headers)
+                model, input, normalized_params, litellm_params, dict(headers)
             )
         )
         return {
