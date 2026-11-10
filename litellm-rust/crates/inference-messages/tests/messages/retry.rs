@@ -216,3 +216,149 @@ async fn other_failures_reach_the_caller_without_a_retry(
     assert!(host.retried.lock().unwrap().is_empty());
     assert!(observed_retries(&host).is_empty());
 }
+
+const STRICT_REJECTION: &str = "Too many strict tools (21). The maximum is 20.";
+
+fn strict_tools(
+    call: MessagesCall,
+    api_base: String,
+    stream: bool,
+    drop_params: bool,
+) -> MessagesCall {
+    MessagesCall {
+        api_key: Some("sk-ant".into()),
+        api_base: Some(api_base),
+        shaping: MessagesShaping {
+            settings: MessagesSettings {
+                drop_params,
+                drops_unsupported_params: drop_params,
+                ..MessagesSettings::default()
+            },
+            ..MessagesShaping::default()
+        },
+        ..with_fields(
+            call,
+            json!({
+                "max_tokens": 64,
+                "stream": stream,
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": [
+                    {"name": "a", "input_schema": {"type": "object"}, "strict": true},
+                    {"name": "b", "input_schema": {"type": "object"}, "strict": false},
+                    {"name": "c", "input_schema": {"type": "object"}}
+                ]
+            }),
+        )
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_rejected_strict_tool_is_sent_once_more_without_strict_under_drop_params(
+    call: MessagesCall,
+    #[values(false, true)] stream: bool,
+) {
+    let success = if stream {
+        sse_response()
+    } else {
+        message_response()
+    };
+    let upstream = upstream([rejection(400, STRICT_REJECTION), success]).await;
+    let host = RecordingCall::<Messages>::new(strict_tools(call, upstream.uri(), stream, true));
+
+    let (response, _) = execute(&host).await.expect("the retry succeeds");
+
+    let [first, second] = <[_; 2]>::try_from(received(&upstream).await).unwrap();
+    assert_eq!(first.json()["tools"][0]["strict"], json!(true));
+    let mut expected = first.json();
+    expected["tools"] = json!([
+        {"name": "a", "input_schema": {"type": "object"}},
+        {"name": "b", "input_schema": {"type": "object"}},
+        {"name": "c", "input_schema": {"type": "object"}}
+    ]);
+    assert_eq!(second.json(), expected);
+    let expected_retry = RetriedRequest {
+        reasons: vec![RetryReason::StrictTools { dropped: 1 }],
+        body: second.json(),
+    };
+    assert_eq!(*host.retried.lock().unwrap(), vec![expected_retry.clone()]);
+    assert_eq!(observed_retries(&host), vec![expected_retry]);
+    assert_eq!(
+        matches!(response, MessagesCallResponse::Stream { .. }),
+        stream
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_rejected_strict_tool_reaches_the_caller_without_drop_params(call: MessagesCall) {
+    let upstream = upstream([rejection(400, STRICT_REJECTION), message_response()]).await;
+    let host = RecordingCall::<Messages>::new(strict_tools(call, upstream.uri(), false, false));
+
+    let error = execute(&host).await.err().expect("the call fails");
+
+    assert_eq!(
+        only_request(&upstream).await.json()["tools"][0]["strict"],
+        json!(true)
+    );
+    assert_eq!(error.upstream_response().unwrap().0, 400);
+    assert!(observed_retries(&host).is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn strict_tools_and_a_thinking_replay_share_the_one_retry(call: MessagesCall) {
+    let upstream = upstream([
+        rejection(400, STRICT_REJECTION),
+        rejection(400, INVALID_SIGNATURE),
+        message_response(),
+    ])
+    .await;
+    let host = RecordingCall::<Messages>::new(replay(
+        strict_tools(call, upstream.uri(), false, true),
+        upstream.uri(),
+        false,
+        enabled(),
+    ));
+
+    let error = execute(&host)
+        .await
+        .err()
+        .expect("the second rejection is raised");
+
+    let [first, second] = <[_; 2]>::try_from(received(&upstream).await).unwrap();
+    assert_eq!(first.json()["thinking"], enabled());
+    assert_eq!(second.json()["thinking"], enabled());
+    assert_eq!(
+        second.json()["tools"][0],
+        json!({"name": "a", "input_schema": {"type": "object"}})
+    );
+    assert_eq!(received(&upstream).await.len(), 2);
+    assert!(error.upstream_response().unwrap().1.contains("signature"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_truthy_global_drop_params_that_is_not_true_does_not_drop_strict(call: MessagesCall) {
+    let upstream = upstream([rejection(400, STRICT_REJECTION), message_response()]).await;
+    let strict = strict_tools(call, upstream.uri(), false, true);
+    let host = RecordingCall::<Messages>::new(MessagesCall {
+        shaping: MessagesShaping {
+            settings: MessagesSettings {
+                drops_unsupported_params: false,
+                ..strict.shaping.settings.clone()
+            },
+            ..strict.shaping.clone()
+        },
+        ..strict
+    });
+
+    let error = execute(&host).await.err().expect("the call fails");
+
+    assert_eq!(
+        only_request(&upstream).await.json()["tools"][0]["strict"],
+        json!(true)
+    );
+    assert_eq!(error.upstream_response().unwrap().0, 400);
+    assert!(observed_retries(&host).is_empty());
+}

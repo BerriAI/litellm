@@ -92,8 +92,6 @@ class Feature(str, Enum):
     """No static key, so Python mints a workload identity federation token."""
     CACHE_CONTROL_INJECTION = "cache_control_injection"
     """Prompt caching injection that Python applies to messages and system."""
-    STRICT_TOOLS_RETRY = "strict_tools_retry"
-    """Strict tools under drop_params, which Python sends again without strict if Claude rejects their limits."""
     CLIENT_HEADERS = "client_headers"
     """Proxy-forwarded headers that Python merges into extra_headers."""
     DEPLOYMENT_HOOK = "deployment_hook"
@@ -169,7 +167,6 @@ MESSAGES_PYTHON_FEATURES: Final = (COMMON_PYTHON_FEATURES - {Feature.TIMEOUT_VAR
     Feature.PRE_REQUEST_HOOK,
     Feature.WEBSEARCH_INTERCEPTION,
     Feature.MESSAGES_INTERCEPTOR,
-    Feature.STRICT_TOOLS_RETRY,
 }
 
 RESPONSES_PYTHON_FEATURES: Final = COMMON_PYTHON_FEATURES | {

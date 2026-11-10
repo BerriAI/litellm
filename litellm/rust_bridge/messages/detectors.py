@@ -5,20 +5,12 @@ from __future__ import annotations
 from typing import Final
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.rust_bridge.detectors import overridden, present
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
 
 def streamed_mock_response(request: NativeCall) -> bool:
     return present(request, "mock_response") and request.resolved.get("stream") is True
-
-
-def strict_tools_retry(request: NativeCall) -> bool:
-    tools: Final = optional_sequence(request.resolved.get("tools")) or ()
-    return drops_unsupported_params(request.resolved.get("drop_params")) and any(
-        (optional_mapping(tool) or {}).get("strict") is True for tool in tools
-    )
 
 
 def pre_request_hook(_request: NativeCall) -> bool:

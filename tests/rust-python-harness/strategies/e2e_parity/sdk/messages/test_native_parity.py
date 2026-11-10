@@ -905,14 +905,6 @@ SERVED_NATIVELY_CASES: Final = (
 
 FALLBACK_CASES: Final = (
     Case("mock_response_streamed", _kw(stream=True, mock_response="Hi from the mock"), upstream=()),
-    Case(
-        "strict_tools_rejected_then_retried",
-        _kw(tools=[{**WEATHER_TOOL, "strict": True}], drop_params=True),
-        upstream=(
-            _failure(400, "invalid_request_error", "tools.0.strict: too many strict tools"),
-            _ok(),
-        ),
-    ),
     Case("modify_params", _kw(max_tokens=1), settings=_MODIFY_PARAMS),
     Case("modify_params_clamps_max_tokens", _kw(max_tokens=200_000), settings=_MODIFY_PARAMS),
     Case(
@@ -1161,6 +1153,97 @@ WORKLOAD_IDENTITY_CASES: Final = (
     Case("workload_identity_shadowed_by_a_static_key", _kw(**FEDERATION_IDS), env=FEDERATION_ENV),
 )
 
+STRICT_REJECTION: Final = "Too many strict tools (21). The maximum number of strict tools is 20."
+STRICT_TOOLS: Final[tuple[JsonValue, ...]] = (
+    {**WEATHER_TOOL, "strict": True},
+    {**WEATHER_TOOL, "name": "get_time", "strict": False},
+    dict(WEATHER_TOOL, name="get_tide"),
+)
+
+
+def _strict(**kwargs: object) -> Mapping[str, object]:
+    return _kw(tools=list(STRICT_TOOLS), **kwargs)
+
+
+STRICT_TOOLS_RETRY_CASES: Final = (
+    Case(
+        "strict_tools_rejected_then_retried", _strict(drop_params=True), upstream=(_rejected(STRICT_REJECTION), _ok())
+    ),
+    Case(
+        "strict_tools_rejected_then_retried_stream",
+        _strict(drop_params=True, stream=True),
+        upstream=(_rejected(STRICT_REJECTION), _stream(TEXT_STREAM)),
+    ),
+    Case(
+        "strict_tools_rejected_then_retried_under_global_drop_params",
+        _strict(),
+        upstream=(_rejected("The compiled grammar is too large"), _ok()),
+        settings=MappingProxyType({"drop_params": True}),
+    ),
+    Case(
+        "strict_tools_custom_field_rejected_then_retried",
+        _strict(drop_params="true"),
+        upstream=(_rejected("tools.0.custom.strict: Extra inputs are not permitted"), _ok()),
+    ),
+    Case(
+        "strict_tools_rejected_without_drop_params",
+        _strict(),
+        upstream=(_rejected(STRICT_REJECTION),),
+        settings=MappingProxyType({"drop_params": False}),
+    ),
+    Case(
+        "strict_tools_rejected_under_a_truthy_global_drop_params_that_is_not_true",
+        _strict(),
+        upstream=(_rejected(STRICT_REJECTION),),
+        settings=MappingProxyType({"drop_params": 1}),
+    ),
+    Case(
+        "strict_rejection_without_a_strict_tool",
+        _kw(tools=[{**WEATHER_TOOL, "strict": False}], drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION),),
+    ),
+    Case(
+        "strict_rejection_text_on_a_429_is_not_retried",
+        _strict(drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION, status=429),),
+    ),
+    Case(
+        "strict_tools_rejected_twice",
+        _strict(drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION), _rejected("Grammar compilation timed out")),
+    ),
+    Case(
+        "strict_tools_rejected_twice_stream",
+        _strict(drop_params=True, stream=True),
+        upstream=(_rejected(STRICT_REJECTION), _rejected(STRICT_REJECTION)),
+    ),
+    Case(
+        "strict_tools_and_thinking_strict_rejected_then_retried",
+        _replay(tools=list(STRICT_TOOLS), drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION), _ok()),
+    ),
+    Case(
+        "strict_tools_and_thinking_signature_rejected_then_retried",
+        _replay(tools=list(STRICT_TOOLS), drop_params=True),
+        upstream=(_rejected(), _ok()),
+    ),
+    Case(
+        "strict_tools_and_thinking_each_rejected_spends_the_one_retry",
+        _replay(tools=list(STRICT_TOOLS), drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION), _rejected()),
+    ),
+    Case(
+        "strict_tools_and_thinking_signature_then_strict_rejected",
+        _replay(tools=list(STRICT_TOOLS), drop_params=True),
+        upstream=(_rejected(), _rejected(STRICT_REJECTION), _ok()),
+    ),
+    Case(
+        "one_error_naming_both_drops_thinking_and_strict_without_drop_params",
+        _replay(tools=list(STRICT_TOOLS)),
+        upstream=(_rejected(f"{INVALID_SIGNATURE}. {STRICT_REJECTION}"), _ok()),
+    ),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *PROMPT_CACHING_CASES,
@@ -1171,6 +1254,7 @@ CASES: Final = (
     *SYNC_CASES,
     *SERVED_NATIVELY_CASES,
     *THINKING_RETRY_CASES,
+    *STRICT_TOOLS_RETRY_CASES,
     *FALLBACK_CASES,
     *CACHE_CASES,
     *WORKLOAD_IDENTITY_CASES,
@@ -1434,6 +1518,7 @@ def _logged(
         "logged_request": {
             "messages": details.get("messages"),
             "thinking": details.get("thinking"),
+            "tools": details.get("tools"),
             "complete_input_dict": _mapping(details.get("additional_args")).get("complete_input_dict"),
         },
     }
