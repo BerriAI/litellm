@@ -36,7 +36,7 @@ const dateFormat = (preset: Intl.DateTimeFormatOptions) =>
     return (value: DateInput) => format.format(new Date(value));
   });
 
-const USD = { style: "currency", currency: "USD", currencyDisplay: "symbol" } as const;
+const CURRENCY = { style: "currency", currencyDisplay: "symbol" } as const;
 const COMPACT = { notation: "compact", maximumFractionDigits: 1 } as const;
 const MONTH_DAY = { month: "short", day: "numeric" } as const;
 const DATE = { ...MONTH_DAY, year: "numeric" } as const;
@@ -50,19 +50,37 @@ const NUMERIC_DATE_TIME = {
   second: "2-digit",
 } as const;
 
+const DEFAULT_CURRENCY = "USD";
+let displayCurrency = DEFAULT_CURRENCY;
+
+const knownCurrency = (code: string): string => {
+  try {
+    const { currency } = new Intl.NumberFormat("en", { style: "currency", currency: code }).resolvedOptions();
+    return currency ?? DEFAULT_CURRENCY;
+  } catch {
+    return DEFAULT_CURRENCY;
+  }
+};
+
+export const setDisplayCurrency = (code: string | null | undefined): void => {
+  displayCurrency = code ? knownCurrency(code) : DEFAULT_CURRENCY;
+};
+
+const numberFormat = (preset: Intl.NumberFormatOptions) => {
+  const format = cachedFormat((lng, options: Intl.NumberFormatOptions) => {
+    const formatter = new Intl.NumberFormat(lng, { ...options, ...preset });
+    return (value: number) => formatter.format(value);
+  });
+  return (value: number, lng: string | undefined, options: Intl.NumberFormatOptions & InterpolationOptions) =>
+    format(value, lng, { ...options, currency: displayCurrency });
+};
+
+export const formatCurrency = numberFormat(CURRENCY);
+
 const FORMATS = {
-  number: cachedFormat((lng, options: Intl.NumberFormatOptions) => {
-    const format = new Intl.NumberFormat(lng, { ...options, currency: USD.currency });
-    return (value: number) => format.format(value);
-  }),
-  compact: cachedFormat((lng, options: Intl.NumberFormatOptions) => {
-    const format = new Intl.NumberFormat(lng, { ...options, ...COMPACT, currency: USD.currency });
-    return (value: number) => format.format(value);
-  }),
-  usd: cachedFormat((lng, options: Intl.NumberFormatOptions) => {
-    const format = new Intl.NumberFormat(lng, { ...options, ...USD });
-    return (value: number) => format.format(value);
-  }),
+  number: numberFormat({}),
+  compact: numberFormat(COMPACT),
+  usd: formatCurrency,
   relativetime: cachedFormat(
     (lng, options: Intl.RelativeTimeFormatOptions & { range?: Intl.RelativeTimeFormatUnit }) => {
       const format = new Intl.RelativeTimeFormat(lng, options);

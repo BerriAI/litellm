@@ -1,5 +1,6 @@
 import type { ParseKeys } from "i18next";
 
+import { formatCurrency } from "@/i18n/formats";
 import i18n from "@/i18n/i18n";
 import type { components } from "@/lib/http/schema";
 
@@ -160,17 +161,13 @@ const compareRanks = (a: readonly number[], b: readonly number[]): number =>
   a.reduce((result, value, index) => result || value - b[index], 0);
 
 const PRICE_FORMAT_OPTIONS: Intl.NumberFormatOptions = {
-  style: "currency",
-  currency: "USD",
   minimumFractionDigits: 2,
   maximumFractionDigits: 10,
   useGrouping: false,
 };
 
-const PRICE_FORMAT = new Intl.NumberFormat("en-US", PRICE_FORMAT_OPTIONS);
-
 export const formatRawPrice = (value: number): string =>
-  value === 0 ? i18n.t("deploymentPricing.free") : PRICE_FORMAT.format(value);
+  value === 0 ? i18n.t("deploymentPricing.free") : formatCurrency(value, "en-US", PRICE_FORMAT_OPTIONS);
 
 const formatUnitPrice = (value: number, unit: Unit): string =>
   formatRawPrice(unit === "token" ? value * 1_000_000 : value);

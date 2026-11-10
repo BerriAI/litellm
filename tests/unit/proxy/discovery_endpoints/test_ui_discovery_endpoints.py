@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -6,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import router
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 
@@ -553,3 +555,39 @@ def test_ui_config_reports_whether_the_marketplace_requires_a_key_as_the_marketp
 
     assert response.status_code == 200
     assert response.json()["claude_code_marketplace_auth_required"] is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected", "warns"),
+    [
+        (None, "USD", False),
+        ("", "USD", False),
+        ("EUR", "EUR", False),
+        (" chf ", "CHF", False),
+        ("EURO", "USD", True),
+        ("€", "USD", True),
+        ("E1R", "USD", True),
+    ],
+)
+def test_ui_config_tells_the_dashboard_which_currency_to_display(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, value: str | None, expected: str, warns: bool
+) -> None:
+    if value is None:
+        monkeypatch.delenv("LITELLM_UI_CURRENCY", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_UI_CURRENCY", value)
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
+        caplog.at_level(logging.WARNING, logger=verbose_proxy_logger.name),
+    ):
+        response: Final = TestClient(app).get("/.well-known/litellm-ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["currency"] == expected
+    assert any("LITELLM_UI_CURRENCY" in record.getMessage() for record in caplog.records) is warns

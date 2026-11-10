@@ -1,3 +1,5 @@
+import { formatCurrency } from "@/i18n/formats";
+
 export type Metric = "requests" | "spend" | "tokens";
 
 export type ModelMetric = {
@@ -40,13 +42,10 @@ const COMPACT_SPEND_FROM = 10_000;
 export const formatMetric = (value: number, metric: Metric) => {
   if (metric === "spend") {
     const compact = value >= COMPACT_SPEND_FROM;
-    const options: Intl.NumberFormatOptions = {
-      style: "currency",
-      currency: "USD",
+    return formatCurrency(value, "en-US", {
       notation: compact ? "compact" : "standard",
       maximumFractionDigits: compact ? 1 : 2,
-    };
-    return new Intl.NumberFormat("en-US", options).format(value);
+    });
   }
   return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 };

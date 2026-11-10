@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { formatCurrency } from "@/i18n/formats";
 import i18n from "@/i18n/i18n";
 import type { AriaAccess } from "./operations";
 
@@ -143,7 +144,5 @@ export function buildUsageChart(source: UsageChartSource, view: UsageChartView):
 
 export function formatUsageChartValue(value: number | null, unit: UsageChart["unit"]): string {
   if (value == null) return i18n.t("aria.chart.unavailable");
-  return unit === "usd"
-    ? value.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 6 })
-    : value.toLocaleString("en-US");
+  return unit === "usd" ? formatCurrency(value, "en-US", { maximumFractionDigits: 6 }) : value.toLocaleString("en-US");
 }

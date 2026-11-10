@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { setDisplayCurrency } from "@/i18n/formats";
 
 import { buildPricingTable, describePricingTier, fallbackCostLabel, parseCostKey } from "./deploymentPricing";
 
@@ -144,6 +146,19 @@ describe("buildPricingTable", () => {
     };
     expect(buildPricingTable(CONTRACT_COSTS).hasBlankCells).toBe(true);
     expect(buildPricingTable(everyTierPriced).hasBlankCells).toBe(false);
+  });
+});
+
+describe("prices with a display currency set by the proxy", () => {
+  afterEach(() => setDisplayCurrency(undefined));
+
+  it("shows the configured currency on the same amounts, without converting them", () => {
+    setDisplayCurrency("EUR");
+    const { groups } = buildPricingTable({ input_cost_per_token: 2.5e-6, output_cost_per_pixel: 1e-8 });
+    expect(groups[0].rows).toEqual([
+      { label: "Input / 1M tokens", prices: { standard: "€2.50" } },
+      { label: "Output / pixel", prices: { standard: "€0.00000001" } },
+    ]);
   });
 });
 

@@ -87,6 +87,7 @@ export const getAutoRouterAssembledPromptCall = async (
  * Helper file for calls being made to proxy
  */
 import i18n from "@/i18n/i18n";
+import { setDisplayCurrency } from "@/i18n/formats";
 import { toast } from "@/lib/toast";
 import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
@@ -427,6 +428,7 @@ export interface LiteLLMWellKnownUiConfig {
   workers?: WorkerInfo[];
   mcp_stdio_enabled?: boolean;
   use_si_terminology?: boolean;
+  currency?: string;
 }
 
 export interface CredentialsResponse {
@@ -599,6 +601,7 @@ export const getUiConfig = async () => {
   updateServerRootPath(jsonData.server_root_path);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url || runtimeBackendUrl);
   gatewayBaseUrl = normalizeHttpUrl(jsonData.gateway_base_url);
+  setDisplayCurrency(jsonData.currency);
   return jsonData;
 };
 

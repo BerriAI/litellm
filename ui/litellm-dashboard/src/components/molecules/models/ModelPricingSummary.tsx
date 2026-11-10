@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 
 import { ModelData, ModelInfo } from "@/components/model_dashboard/types";
 import { Badge } from "@/components/ui/badge";
-import { formatPerSecondCost } from "@/utils/dataUtils";
+import { formatPerMillionCost, formatPerSecondCost } from "@/utils/dataUtils";
 
 type PricingFields = Pick<
   ModelData,
@@ -27,10 +27,10 @@ function PricingSource({ overrides }: { overrides: string[] | undefined }) {
 
 export function ModelPricingSummary({ model }: { model: PricingFields }) {
   const { t } = useTranslation();
-  const perSecond = model.output_cost_per_second;
+  const { input_cost: inputCost, output_cost: outputCost, output_cost_per_second: perSecond } = model;
   const hasPerSecond = perSecond != null;
-  const showInput = model.input_cost != null && (!hasPerSecond || Number(model.input_cost) > 0);
-  const showOutput = model.output_cost != null && (!hasPerSecond || Number(model.output_cost) > 0);
+  const showInput = inputCost != null && (!hasPerSecond || Number(inputCost) > 0);
+  const showOutput = outputCost != null && (!hasPerSecond || Number(outputCost) > 0);
 
   if (!showInput && !showOutput && !hasPerSecond) {
     return <p className="mt-2 text-sm text-muted-foreground">-</p>;
@@ -38,9 +38,13 @@ export function ModelPricingSummary({ model }: { model: PricingFields }) {
 
   return (
     <div className="mt-2">
-      {showInput && <p className="text-sm">{t("modelPricingSummary.inputPerMillion", { cost: model.input_cost })}</p>}
+      {showInput && (
+        <p className="text-sm">{t("modelPricingSummary.inputPerMillion", { cost: formatPerMillionCost(inputCost) })}</p>
+      )}
       {showOutput && (
-        <p className="text-sm">{t("modelPricingSummary.outputPerMillion", { cost: model.output_cost })}</p>
+        <p className="text-sm">
+          {t("modelPricingSummary.outputPerMillion", { cost: formatPerMillionCost(outputCost) })}
+        </p>
       )}
       {hasPerSecond && (
         <p className="text-sm">{t("modelPricingSummary.outputPerSecond", { cost: formatPerSecondCost(perSecond) })}</p>
