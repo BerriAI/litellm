@@ -531,7 +531,7 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 # ``attempted_fallbacks`` and ``original_model_group`` are written by the router
 # and read by spend logs as fact; a client value has no legitimate meaning and no
 # key or team setting keeps it, so the strip is never gated.
-_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
+ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
         "original_model_group",
@@ -883,7 +883,7 @@ def _strip_router_reserved_metadata(
     for metadata_key in ("metadata", "litellm_metadata"):
         if not isinstance(metadata := data.get(metadata_key), dict):
             continue
-        for field in _ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
+        for field in ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
             metadata.pop(field)
             verbose_proxy_logger.debug(
                 "Stripped router-reserved metadata field from request body: %s.%s", metadata_key, field

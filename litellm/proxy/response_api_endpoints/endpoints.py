@@ -92,9 +92,9 @@ from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
-    _ROUTER_RESERVED_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_ROOT_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
+    ROUTER_RESERVED_METADATA_FIELDS,
     add_guardrails_from_policy_engine,
     is_chat_completions_body,
 )
@@ -2587,7 +2587,7 @@ def _without_untrusted_metadata(key: str, value: object) -> object:
         if not name.startswith("user_api_key_")
         and name not in _UNTRUSTED_METADATA_CONTROL_FIELDS
         and name not in _CLIENT_PRICING_METADATA_FIELDS
-        and name not in _ROUTER_RESERVED_METADATA_FIELDS
+        and name not in ROUTER_RESERVED_METADATA_FIELDS
         and name not in ("headers", "pii_tokens", _GUARDRAIL_INFORMATION_KEY, *_CLIENT_GUARDRAIL_SELECTORS)
     }
 
