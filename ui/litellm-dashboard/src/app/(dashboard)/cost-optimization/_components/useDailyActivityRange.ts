@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { createParser, useQueryStates } from "nuqs";
 
 import { dailyActivityAggregatedCall } from "@/components/networking";
@@ -52,15 +52,17 @@ export const useActivityDateRange = (): ActivityDateRange => {
   const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
   const initialTo = useMemo(() => new Date(), []);
   const [params, setParams] = useQueryStates(activityDates);
-  const [dateValue, setDateValue] = useState<DateRange>(() =>
-    params.activity_from && params.activity_to && params.activity_from <= params.activity_to
-      ? { from: params.activity_from, to: params.activity_to }
-      : { from: initialFrom, to: initialTo },
+  const dateValue = useMemo<DateRange>(
+    () =>
+      params.activity_from && params.activity_to && params.activity_from <= params.activity_to
+        ? { from: params.activity_from, to: params.activity_to }
+        : { from: initialFrom, to: initialTo },
+    [params.activity_from, params.activity_to, initialFrom, initialTo],
   );
-  useEffect(() => {
-    if (params.activity_from || params.activity_to) void setParams({ activity_from: null, activity_to: null });
-  }, [params.activity_from, params.activity_to, setParams]);
-  return { dateValue, onDateChange: setDateValue };
+  const onDateChange = (value: DateRange) => {
+    void setParams({ activity_from: value.from ?? null, activity_to: value.to ?? null });
+  };
+  return { dateValue, onDateChange };
 };
 
 export interface ScopedActivityInput {

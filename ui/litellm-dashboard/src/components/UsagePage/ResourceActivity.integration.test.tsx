@@ -1,4 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders as render } from "../../../tests/test-utils";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import * as networking from "@/components/networking";
@@ -43,6 +46,37 @@ const response: DailyActivityAggregatedResponse = {
 
 describe("ResourceActivity", () => {
   afterEach(() => vi.useRealTimers());
+
+  it("keeps alert dates when Activity mounts after another date consumer", async () => {
+    function Details() {
+      useActivityDateRange();
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>Open Activity</button>
+          {open && <ResourceActivity scope="team" id="resource-1" />}
+        </>
+      );
+    }
+    render(<Details />, { searchParams: "activity_from=2026-01-01&activity_to=2026-01-08" });
+    fireEvent.click(screen.getByRole("button", { name: "Open Activity" }));
+    expect(await screen.findByText("$12.34")).toBeInTheDocument();
+    expect(networking.dailyActivityAggregatedCall).toHaveBeenCalledWith(
+      "team",
+      expect.objectContaining({ startTime: new Date(2026, 0, 1, 12), endTime: new Date(2026, 0, 8, 12) }),
+    );
+  });
+
+  it("preserves an unfinished date edit when the parent rerenders", async () => {
+    const { rerender } = render(<ResourceActivity scope="team" id="resource-1" />, {
+      searchParams: "activity_from=2026-01-01&activity_to=2026-01-08",
+    });
+    expect(await screen.findByText("$12.34")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "1 Jan, 12:00 - 8 Jan, 12:00" }));
+    fireEvent.change(screen.getByLabelText("Start date"), { target: { value: "2026-01-02" } });
+    rerender(<ResourceActivity scope="team" id="resource-1" />);
+    expect(screen.getByLabelText("Start date")).toHaveValue("2026-01-02");
+  });
 
   it.each(["team", "user"] as const)("shows the returned model breakdown for a %s", async (scope) => {
     vi.mocked(networking.dailyActivityAggregatedCall).mockResolvedValue({

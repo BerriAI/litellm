@@ -7,12 +7,12 @@ from datetime import timedelta
 from typing import (
     TYPE_CHECKING,
     Final,
-    LiteralString,
     Protocol,
     cast,  # noqa: TID251  # Prisma exposes generated table actions dynamically
 )
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import LiteralString
 
 from litellm._logging import verbose_proxy_logger
 from litellm.models.alert import (
@@ -216,14 +216,11 @@ class AlertRepository:
         if not requested:
             return tuple(AlertView.model_validate(alert.model_dump()) for alert in alerts)
         scopes: Final = frozenset[AlertResourceType](alert.resource_type for alert in alerts)
-        query: Final = (
-            """WITH requested AS (
+        histories: Final = " UNION ALL ".join(_history_sql(scope) for scope in scopes)
+        query: Final = f"""WITH requested AS (
             SELECT * FROM jsonb_to_recordset($1::jsonb)
             AS r(id text, resource_id text, resource_type text, day text, start text)
-        ) """
-            + " UNION ALL ".join(_history_sql(scope) for scope in scopes)
-            + " ORDER BY id, date"
-        )
+        ) {histories} ORDER BY id, date"""
         try:
             async with self._database.tx(timeout=timedelta(seconds=3)) as transaction:
                 await transaction.query_raw(
@@ -232,8 +229,8 @@ class AlertRepository:
                 )
                 rows: Final = _HISTORY_ROWS.validate_python(await transaction.query_raw(query, json.dumps(requested)))
             return tuple(_view(alert, rows) for alert in alerts)
-        except (PrismaError, TimeoutError, ValueError):
-            verbose_proxy_logger.warning("Alert Usage history unavailable")
+        except (PrismaError, TimeoutError, ValueError) as error:
+            verbose_proxy_logger.warning("Alert Usage history unavailable (%s)", type(error).__name__)
             return tuple(AlertView.model_validate(alert.model_dump()) for alert in alerts)
 
 
