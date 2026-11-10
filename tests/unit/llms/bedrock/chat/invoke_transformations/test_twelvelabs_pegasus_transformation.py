@@ -1,9 +1,10 @@
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import Mock
 
 import httpx
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from litellm.llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import (
     AmazonTwelveLabsPegasusConfig,
@@ -116,11 +117,13 @@ def test_transform_response_accepts_null_finish_reason(finish_reason: str | None
 
 
 class _VideoSummary(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     title: str
     duration_seconds: int
 
 
-def _request_with_response_format(response_format: object) -> dict:
+def _request_with_response_format(response_format: object) -> Mapping[str, object]:
     config: Final = AmazonTwelveLabsPegasusConfig()
     optional_params: Final = config.map_openai_params(
         non_default_params={"response_format": response_format},
@@ -138,9 +141,12 @@ def _request_with_response_format(response_format: object) -> dict:
 
 
 def test_pydantic_response_format_is_sent_as_the_json_schema_of_its_fields() -> None:
-    request: Final = _request_with_response_format(_VideoSummary)
+    response_format: Final = _request_with_response_format(_VideoSummary)["responseFormat"]
+    assert isinstance(response_format, Mapping)
+    json_schema: Final = response_format["jsonSchema"]
+    assert isinstance(json_schema, Mapping)
 
-    assert set(request["responseFormat"]["jsonSchema"]["properties"]) == {"title", "duration_seconds"}
+    assert set(json_schema["properties"]) == {"title", "duration_seconds"}
 
 
 def test_null_response_format_sends_no_response_format() -> None:

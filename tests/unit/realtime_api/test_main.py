@@ -1174,7 +1174,7 @@ async def test_translation_client_secret_forwards_a_mapping_expires_after(expire
 async def test_translation_client_secret_rejects_an_expires_after_that_is_not_a_mapping(expires_after: object) -> None:
     gateway: Final = _GatewayThatRecordsTheBody()
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match=r"realtime\.RealtimeExpiresAfter\(\) argument after \*\* must be a mapping"):
         await _create_translation_client_secret(expires_after, gateway)
 
     assert gateway.body is None
@@ -1191,7 +1191,9 @@ async def test_translation_client_secret_rejects_an_expires_after_that_is_not_a_
 async def test_transcription_session_rejects_a_session_that_is_not_a_mapping(transcription_session: object) -> None:
     gateway: Final = _GatewayThatRecordsTheBody()
 
-    with pytest.raises(TypeError):
+    with pytest.raises(
+        TypeError, match=r"realtime\.RealtimeTranscriptionSessionRequest\(\) argument after \*\* must be a mapping"
+    ):
         await realtime_main.acreate_realtime_transcription_session.__wrapped__(
             model="openai/gpt-transcribe",
             transcription_session=transcription_session,

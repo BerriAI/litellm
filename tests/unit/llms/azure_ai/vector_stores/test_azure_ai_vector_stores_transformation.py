@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -187,8 +188,8 @@ class _SearchLogging:
         self.model_call_details = {"input": query}
 
 
-def test_search_response_keeps_document_fields_as_attributes_without_search_internals():
-    body = {
+def test_search_response_keeps_document_fields_as_attributes_without_search_internals() -> None:
+    body: Final = {
         "value": [
             {
                 "@search.score": 0.8,
@@ -201,7 +202,7 @@ def test_search_response_keeps_document_fields_as_attributes_without_search_inte
         ]
     }
 
-    response = AzureAIVectorStoreConfig().transform_search_vector_store_response(
+    response: Final = AzureAIVectorStoreConfig().transform_search_vector_store_response(
         httpx.Response(200, json=body), _SearchLogging("how do I start the proxy")
     )
 
