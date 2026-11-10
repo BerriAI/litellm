@@ -921,7 +921,9 @@ def is_request_body_safe(
         *request_fallback_model_names(root_body),
         *((route_model,) if route_model else ()),
     )
-    opt_in_groups: Final = cache(lambda: _resolve_opt_in_groups(model, also_requested_models, llm_router, team_id))
+    opt_in_groups: Final = cache(
+        lambda: _resolve_opt_in_groups(model or route_model or "", also_requested_models, llm_router, team_id)
+    )
     _check_banned_params(
         root_body,
         general_settings,

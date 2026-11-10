@@ -4852,9 +4852,22 @@ def _proxy_attrs_for_centralized_checks(user_custom_auth=None, flag=False, maste
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route, include_model, path_params",
+    [
+        ("/v1/chat/completions", True, {}),
+        ("/v1beta/models/chat:generateContent", False, {"model_name": "chat"}),
+        ("/openai/deployments/chat/chat/completions", False, {"model": "chat"}),
+    ],
+)
 @pytest.mark.parametrize("team_id, is_allowed", [(None, True), ("other-team", True), ("pinned-team", False)])
 async def test_deferred_body_check_uses_only_the_authenticated_teams_deployments(
-    monkeypatch: pytest.MonkeyPatch, team_id: str | None, is_allowed: bool
+    monkeypatch: pytest.MonkeyPatch,
+    team_id: str | None,
+    is_allowed: bool,
+    route: str,
+    include_model: bool,
+    path_params: Mapping[str, str],
 ) -> None:
     from litellm.proxy.utils import ProxyLogging
 
@@ -4890,12 +4903,14 @@ async def test_deferred_body_check_uses_only_the_authenticated_teams_deployments
     for name, value in attributes.items():
         monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
     request: Final = Request(
-        {"type": "http", "method": "POST", "path": "/v1/chat/completions", "headers": []},
+        {"type": "http", "method": "POST", "path": route, "headers": [], "path_params": path_params},
         receive=AsyncMock(
             return_value={
                 "type": "http.request",
                 "more_body": False,
-                "body": json.dumps({"model": "chat", "vertex_location": "us-central1"}).encode(),
+                "body": json.dumps(
+                    {"vertex_location": "us-central1", **({"model": "chat"} if include_model else {})}
+                ).encode(),
             }
         ),
     )

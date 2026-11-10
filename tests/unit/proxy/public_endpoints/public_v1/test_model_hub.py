@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,6 +27,7 @@ class _FakeRouter:
 
     infos: Mapping[str, ModelGroupInfo]
     model_group_alias: Mapping[str, str] = MappingProxyType({})
+    team_model_to_deployment_indices: Mapping[tuple[str, str], Sequence[int]] = MappingProxyType({})
 
     def get_model_group_info(self, model_group: str, team_id: str | None = None) -> ModelGroupInfo | None:
         return self.infos.get(model_group)
@@ -351,6 +353,8 @@ def test_no_router_answers_with_a_problem_rather_than_the_openai_error_shape(mon
 
 def test_an_unexpected_router_failure_answers_as_a_problem_not_the_openai_error_shape(monkeypatch):
     class _Exploding:
+        team_model_to_deployment_indices: Final[Mapping[tuple[str, str], Sequence[int]]] = MappingProxyType({})
+
         def get_model_group_info(self, model_group: str, team_id: str | None = None) -> ModelGroupInfo:
             raise RuntimeError("router blew up")
 
