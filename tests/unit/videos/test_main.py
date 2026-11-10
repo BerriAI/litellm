@@ -30,6 +30,7 @@ helper runs for real against genuinely-encoded ids, so the provider assertions
 reflect production.
 """
 
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Final
@@ -38,6 +39,7 @@ from unittest.mock import MagicMock, patch
 from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
 import pytest
+from pydantic import BaseModel
 
 
 import litellm
@@ -486,3 +488,80 @@ def test_video_generation__custom_provider_without_a_video_config_is_a_400(monke
         with pytest.raises(litellm.BadRequestError, match="video generation is not supported for image-only"):
             videos_main.video_generation(model="image-only/seedance-1", prompt="a cat")
     handler.video_generation_handler.assert_not_called()
+
+
+_VIDEO_JSON: Final = '{"id": "video_1", "object": "video", "status": "completed", "model": "sora-2"}'
+_CHARACTER_JSON: Final = '{"id": "char_1", "object": "character", "created_at": 1767225600, "name": "hero"}'
+
+
+def _fields(value: object) -> object:
+    if isinstance(value, list):
+        return [_fields(item) for item in value]
+    return value.model_dump() if isinstance(value, BaseModel) else value
+
+
+@pytest.mark.parametrize(
+    ("operation", "arguments", "mock_response", "expected"),
+    [
+        pytest.param(
+            videos_main.video_generation,
+            {"prompt": "a cat surfing", "model": "sora-2"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="generation",
+        ),
+        pytest.param(
+            videos_main.video_remix,
+            {"video_id": "video_1", "prompt": "make it night"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="remix",
+        ),
+        pytest.param(
+            videos_main.video_status,
+            {"video_id": "video_1"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="status",
+        ),
+        pytest.param(
+            videos_main.video_edit,
+            {"video_id": "video_1", "prompt": "add rain"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="edit",
+        ),
+        pytest.param(
+            videos_main.video_extension,
+            {"video_id": "video_1", "prompt": "keep going", "seconds": "4"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="extension",
+        ),
+        pytest.param(
+            videos_main.video_list,
+            {},
+            f"[{_VIDEO_JSON}]",
+            [VideoObject(id="video_1", object="video", status="completed", model="sora-2")],
+            id="list",
+        ),
+        pytest.param(
+            videos_main.video_create_character,
+            {"name": "hero", "video": b"\x00\x00\x00\x18ftypmp42"},
+            _CHARACTER_JSON,
+            CharacterObject(id="char_1", object="character", created_at=1767225600, name="hero"),
+            id="create-character",
+        ),
+        pytest.param(
+            videos_main.video_get_character,
+            {"character_id": "char_1"},
+            _CHARACTER_JSON,
+            CharacterObject(id="char_1", object="character", created_at=1767225600, name="hero"),
+            id="get-character",
+        ),
+    ],
+)
+def test_a_json_string_mock_response_is_parsed_into_the_typed_result(
+    operation: Callable[..., object], arguments: Mapping[str, object], mock_response: str, expected: object
+) -> None:
+    assert _fields(operation(**arguments, mock_response=mock_response)) == _fields(expected)
