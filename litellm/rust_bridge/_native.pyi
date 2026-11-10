@@ -1,5 +1,5 @@
 from asyncio import Future
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Generic, Literal, Never, NotRequired, Protocol, TypedDict, TypeVar, final
 
 import httpx
@@ -7,6 +7,7 @@ from pydantic import JsonValue
 from typing_extensions import disjoint_base
 
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
+from litellm.redis.stores.router_session_pins.keys import PinKey
 from litellm.rust_bridge.execution import Execution
 from litellm.rust_bridge.public_call import NativeCall
 
@@ -254,6 +255,38 @@ class NativeUsageRead:
     @property
     def read(self) -> NativePending[list[float | None]]: ...
     def release(self) -> None: ...
+
+@final
+class NativeRouterSessionPins:
+    def __new__(
+        cls, client: NativeRedisClient | None, clock: Callable[[], float] | None = None
+    ) -> NativeRouterSessionPins: ...
+    def attach(self, client: NativeRedisClient) -> bool: ...
+    @property
+    def has_redis(self) -> bool: ...
+    def get(self, key: PinKey) -> Future[object]: ...
+    def get_local(self, key: PinKey) -> object: ...
+    def set_local(self, key: PinKey, value: object, ttl_seconds: float) -> None: ...
+    def delete_local(self, key: PinKey) -> None: ...
+    def set(self, key: PinKey, value: object, ttl_seconds: float) -> Future[None]: ...
+    def get_shared(self, key: PinKey) -> Future[object]: ...
+    def read(self, key: PinKey, ttl_seconds: float, send: NativeSend) -> NativePending[object]: ...
+    def claim(
+        self,
+        key: PinKey,
+        value: object,
+        ttl_seconds: float,
+        eligible_values: Sequence[object] | None,
+        preserve_legacy_model_ids: bool,
+    ) -> Future[object]: ...
+    def claim_local(
+        self,
+        key: PinKey,
+        value: object,
+        ttl_seconds: float,
+        eligible_values: Sequence[object] | None,
+        preserve_legacy_model_ids: bool,
+    ) -> object: ...
 
 @final
 class NativeRouterUsage:
@@ -742,6 +775,7 @@ __all__ = [
     "NativeRejected",
     "NativeRequestRedis",
     "NativeRouterCooldowns",
+    "NativeRouterSessionPins",
     "NativeRouterUsage",
     "NativeSend",
     "NativeSensitiveRoutePins",

@@ -9,6 +9,7 @@ from litellm.rust_bridge._native import (
     NativeRateLimits,
     NativeRedisClient,
     NativeRouterCooldowns,
+    NativeRouterSessionPins,
     NativeRouterUsage,
     NativeSensitiveRoutePins,
     NativeSpendCounters,
@@ -47,6 +48,9 @@ class RedisStores:
 
     def deployment_health(self) -> NativeDeploymentHealth:
         return NativeDeploymentHealth(self.client)
+
+    def router_session_pins(self) -> NativeRouterSessionPins:
+        return NativeRouterSessionPins(self.client)
 
 
 def connect(redis_cache: RedisCache | None) -> RedisStores:
