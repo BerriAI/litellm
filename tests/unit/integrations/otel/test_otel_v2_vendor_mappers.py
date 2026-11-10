@@ -33,6 +33,7 @@ from litellm.integrations.otel.model.payloads import (
     ToolDefinition,
 )
 from litellm.integrations.otel.model.trace_controls import TraceControls
+from litellm.types.utils import Message
 from tests.unit.integrations.otel.test_otel_v2_sources_of_truth import _responses_payload
 
 
@@ -706,6 +707,40 @@ def test_langfuse_mapper_keeps_chat_output_when_no_embedding_summary():
     attrs = LangfuseMapper().map(_llm_call(embedding_output=None))
 
     assert json.loads(attrs["langfuse.observation.output"]) == [{"role": "assistant", "content": "Sunny."}]
+
+
+LITELLM_USER_MESSAGE: Final = Message(role="user", content="weather in sf?")
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_prompt"),
+    [
+        ({"role": "user", "content": "weather in sf?"}, {"role": "user", "content": "weather in sf?"}),
+        (LITELLM_USER_MESSAGE, LITELLM_USER_MESSAGE.model_dump(mode="json")),
+    ],
+    ids=["dict_message", "litellm_message_object"],
+)
+def test_vendor_mappers_keep_the_prompt_of_litellm_message_objects(
+    message: Mapping[str, object] | Message, expected_prompt: Mapping[str, object]
+) -> None:
+    payload: Final = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-5.4-nano",
+        "messages": [message],
+        "response": {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "Sunny."}}]},
+    }
+    data: Final = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
+
+    assert {
+        "langfuse": json.loads(str(LangfuseMapper().map(data)["langfuse.observation.input"])),
+        "langtrace": json.loads(str(LangtraceMapper().map(data)["llm.prompts"])),
+        "openinference": json.loads(str(OpenInferenceMapper().map(data)["input.value"])),
+    } == {
+        "langfuse": [expected_prompt],
+        "langtrace": [expected_prompt],
+        "openinference": [{"role": "user", "content": "weather in sf?"}],
+    }
 
 
 def test_langfuse_mapper_renders_a_responses_api_call_from_the_standard_logging_payload():
