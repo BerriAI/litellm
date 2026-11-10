@@ -3965,6 +3965,7 @@
         "supports_vision": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 4096
     },
     "azure_ai/claude-opus-4-7": {
@@ -3997,6 +3998,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 2048
     },
     "azure_ai/claude-fable-5": {
@@ -4031,6 +4033,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": false,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-fable-5-1": {
@@ -4065,6 +4068,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": false,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-12-05",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement"
@@ -4136,6 +4140,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-opus-5-5": {
@@ -4171,6 +4176,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
     },
@@ -4208,6 +4214,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-5": {
@@ -4267,6 +4274,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-6": {
@@ -76637,6 +76645,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "supports_forced_tool_use": false,
+        "supports_web_search": true,
         "thinking_always_on": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
@@ -78208,6 +78217,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "supports_forced_tool_use": true,
+        "supports_web_search": true,
         "thinking_always_on": false,
         "prompt_cache_min_tokens": 512,
         "source": "https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide"
@@ -79277,6 +79287,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "baseten/meta-models/muse-spark-open": {
@@ -88134,6 +88145,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "azure_ai/claude-mythos-5-2-fast": {
@@ -88169,6 +88181,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "azure_ai/claude-fable-5-2": {
@@ -88200,6 +88213,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "azure_ai/claude-fable-5-2-fast": {
@@ -88231,6 +88245,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-mythos-5-2": {
