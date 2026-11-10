@@ -1051,6 +1051,29 @@ def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> 
 
 
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_azure_ai_claude_rows_bill_web_search_like_their_anthropic_rows(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    pairs: Final = {
+        key: (row, prices[key.removeprefix("azure_ai/")])
+        for key, row in prices.items()
+        if key.startswith("azure_ai/claude") and isinstance(row, dict) and key.removeprefix("azure_ai/") in prices
+    }
+    priced_pairs: Final = {
+        key: (row, bare)
+        for key, (row, bare) in pairs.items()
+        if isinstance(bare, dict) and bare.get("search_context_cost_per_query")
+    }
+    assert priced_pairs
+    drifted: Final = tuple(
+        key
+        for key, (row, bare) in priced_pairs.items()
+        if row.get("search_context_cost_per_query") != bare["search_context_cost_per_query"]
+        or row.get("supports_web_search") is not True
+    )
+    assert drifted == (), drifted
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_azure_ai_claude_rows_priced_for_web_search_say_they_support_it(path: Path) -> None:
     prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
     priced_rows: Final = {
