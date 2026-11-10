@@ -9915,11 +9915,11 @@ def _format_fallback_metadata_sse_event(
     *,
     fallback_model: str | None,
     fallback_errors: list[dict[str, object]],
-    error_state: ResponsesStreamErrorState | None,
+    responses_stream: bool,
     return_raw_model_name: bool,
-) -> str | bytes:
+) -> str:
     litellm_fallback: Final = {"fallback_model": fallback_model, "errors": fallback_errors}
-    if error_state is not None:
+    if responses_stream:
         stamped_model: Final = None if return_raw_model_name else fallback_model
         event: Final = {
             "type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE,
@@ -9927,8 +9927,7 @@ def _format_fallback_metadata_sse_event(
             **({"model": stamped_model} if stamped_model else {}),
             "litellm_fallback": litellm_fallback,
         }
-        error_state.observe_chunk(event)
-        return error_state.mark_emitted(f"data: {json.dumps(event)}\n\n")
+        return f"data: {json.dumps(event)}\n\n"
     payload: Final = {
         "id": _FALLBACK_METADATA_ID,
         "object": "chat.completion.chunk",
@@ -10588,7 +10587,7 @@ async def async_data_generator(
                     yield _format_fallback_metadata_sse_event(
                         fallback_model=fallback_model_from_metadata,
                         fallback_errors=fallback_errors,
-                        error_state=error_state,
+                        responses_stream=error_state is not None,
                         return_raw_model_name=return_raw_model_name,
                     )
                     fallback_metadata_event_sent = True
@@ -10643,7 +10642,7 @@ async def async_data_generator(
                 yield _format_fallback_metadata_sse_event(
                     fallback_model=fallback_model_from_metadata,
                     fallback_errors=fallback_errors,
-                    error_state=error_state,
+                    responses_stream=error_state is not None,
                     return_raw_model_name=return_raw_model_name,
                 )
                 fallback_metadata_event_sent = True

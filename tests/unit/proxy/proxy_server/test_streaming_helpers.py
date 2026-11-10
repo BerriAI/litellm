@@ -504,7 +504,7 @@ def test_format_fallback_metadata_sse_event():
     event = _format_fallback_metadata_sse_event(
         fallback_model="fallback-model",
         fallback_errors=fallback_errors,
-        error_state=None,
+        responses_stream=False,
         return_raw_model_name=False,
     )
 
@@ -899,7 +899,7 @@ async def test_chat_stream_sends_fallback_metadata_in_place_of_a_stripped_usage_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fallback_model", ["fallback-model", None])
 @pytest.mark.parametrize("return_raw_model_name", [False, True])
-async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_framed_like_its_neighbours(
+async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_without_an_event_line(
     monkeypatch: pytest.MonkeyPatch,
     fallback_model: str | None,
     return_raw_model_name: bool,
@@ -967,51 +967,7 @@ async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_framed_
         "litellm_fallback": {"fallback_model": fallback_model, "errors": fallback_errors},
     }
     assert {payload.get("model") for payload in payloads} == {stamped_model}
-    assert len({frame.startswith("event: ") for frame in event_frames}) == 1
-
-
-@pytest.mark.asyncio
-async def test_responses_stream_names_the_fallback_event_after_a_raw_upstream_frame(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_logging_flags(monkeypatch)
-    monkeypatch.setitem(ps.general_settings, "expose_fallback_errors_to_caller", True)
-    response: Final = ResponsesAPIResponse(id="resp_fallback", created_at=1, model="fallback-model", output=[])
-    created_event: Final = {"type": "response.created", "sequence_number": 0, "response": response.model_dump(mode="json")}
-    upstream: Final = _FakeStream(
-        [
-            f"event: response.created\ndata: {json.dumps(created_event)}\n\n".encode(),
-            ResponseCompletedEvent.model_validate(
-                {"type": "response.completed", "sequence_number": 1, "response": response}
-            ),
-        ],
-        hidden_params={
-            "additional_headers": {
-                "x-litellm-attempted-fallbacks": 1,
-                "x-litellm-model-group": "fallback-model",
-                "x-litellm-fallback-errors": json.dumps([{"message": "upstream failed", "code": "500"}]),
-            }
-        },
-    )
-
-    frames: Final = tuple(
-        [
-            frame.decode() if isinstance(frame, bytes) else frame
-            async for frame in async_data_generator(
-                response=upstream,
-                user_api_key_dict=_user_auth(),
-                request_data={"model": "primary-model", "include_fallback_errors": True},
-                responses_stream_errors=True,
-            )
-        ]
-    )
-    event_names: Final = tuple(
-        tuple(line.removeprefix("event: ") for line in frame.splitlines() if line.startswith("event: "))
-        for frame in frames[1:3]
-    )
-
-    assert '"type": "litellm.fallback_metadata"' in frames[1]
-    assert event_names in (((), ()), (("litellm.fallback_metadata",), ("response.completed",)))
+    assert event_frames[1] == f"data: {json.dumps(payloads[1])}\n\n"
 
 
 @pytest.mark.asyncio
