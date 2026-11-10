@@ -1,15 +1,15 @@
 import json
 from dataclasses import dataclass
 from typing import Final, Literal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakeredis import FakeRedis as FakeSyncRedis
 from fakeredis import FakeServer
-from fakeredis.aioredis import FakeConnection, FakeRedis
+from fakeredis.aioredis import FakeRedis
 from pydantic import TypeAdapter
-from redis.asyncio import BlockingConnectionPool
 
+from litellm import in_memory_llm_clients_cache
 from litellm.accounting.worker import flush_accounting_deliveries
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -76,25 +76,23 @@ async def test_delivery_charges_the_creating_key_despite_an_orphaned_maintenance
     writer: Final = DBSpendUpdateWriter(accounting_clock=lambda: 0.0)
     logger: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     server: Final = FakeServer()
-    pool: Final = BlockingConnectionPool(connection_class=FakeConnection, server=server)
     redis: Final = FakeRedis(server=server)
     sync_redis: Final = FakeSyncRedis(server=server)
+    cache: Final = RedisCache(host="accounting-unit.example", connection_pool=sync_redis.connection_pool)
+    cache_key: Final = cache._get_async_client_cache_key()
+    in_memory_llm_clients_cache.set_cache(key=cache_key, value=redis)
     await redis.set("cronjob_lock:accounting_delivery", json.dumps("terminated-worker"), ex=60)
     try:
-        with (
-            patch("redis.asyncio.BlockingConnectionPool.from_url", return_value=pool),
-            patch("redis.Redis.from_url", return_value=sync_redis),
-        ):
-            if locked:
-                writer.pod_lock_manager.redis_cache = RedisCache(url="redis://accounting-unit.example:6379/0")
-            await flush_accounting_deliveries(writer, database, logger)
-            await flush_accounting_deliveries(writer, database, logger)
+        if locked:
+            writer.pod_lock_manager.redis_cache = cache
+        await flush_accounting_deliveries(writer, database, logger)
+        await flush_accounting_deliveries(writer, database, logger)
 
         assert ledger.spend == (0.25 if scenario == "charge" else 0.0)
         assert ledger.pending is (scenario == "unavailable")
         assert ledger.attempts == (1 if scenario == "unavailable" else 0)
         assert await redis.get("cronjob_lock:accounting_delivery") == json.dumps("terminated-worker").encode()
     finally:
-        await pool.aclose()
+        in_memory_llm_clients_cache.delete_cache(key=cache_key)
         await redis.aclose()
         sync_redis.close()

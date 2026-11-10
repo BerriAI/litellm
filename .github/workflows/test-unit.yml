@@ -915,7 +915,6 @@ jobs:
 
           - shard: db-and-spend
             test-path: |-
-              tests/test_litellm/test_accounting_worker.py
               tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
               tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
               tests/unit/proxy/db/test_update_daily_tag_spend.py
