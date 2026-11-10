@@ -1,22 +1,23 @@
 from collections.abc import MutableMapping
+from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
+from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import get_web_search_requests_from_usage
 from litellm.llms.gemini.cost_calculator import cost_per_web_search_request
-from litellm.types.utils import CostBreakdown, ModelInfo, SearchFreeRequests, StandardLoggingPayload, Usage
+from litellm.types.utils import ModelInfo, SearchFreeRequests, StandardLoggingPayload, Usage
 
 _PERIOD_DURATION: Final = MappingProxyType({"day": "1d", "month": "1mo"})
 _PERIOD_STAMP: Final = MappingProxyType({"day": "%Y-%m-%d", "month": "%Y-%m"})
 _TTL_GRACE_SECONDS: Final = 3600
 _COUNTED_KWARG: Final = "search_free_tier_counted"
-_COST_BREAKDOWN: Final = TypeAdapter(CostBreakdown)
 
 
 class SharedCounter(Protocol):
@@ -70,22 +71,21 @@ def _record_freed_cost(
     original_cost: float,
     freed_cost: float,
 ) -> float:
-    reduced_cost: Final = original_cost - freed_cost
-    breakdown: Final = sl_object["cost_breakdown"] or CostBreakdown(total_cost=original_cost)
-    sl_object["cost_breakdown"] = _COST_BREAKDOWN.validate_python(  # rebind-ok: the spend row reads this payload
-        {
-            **breakdown,
-            "total_cost": reduced_cost,
-            "original_cost": breakdown.get("original_cost", original_cost),
-            "discount_amount": breakdown.get("discount_amount", 0.0) + freed_cost,
-        }
-    )
-    sl_object["response_cost"] = reduced_cost  # rebind-ok: the spend row reads this payload
-    kwargs["response_cost"] = reduced_cost  # rebind-ok: the spend row reads kwargs["response_cost"]
-    return reduced_cost
+    finalized: Final = finalize_cost(original_cost, sl_object["cost_breakdown"], freed_cost)
+    sl_object["cost_breakdown"] = finalized.logging_breakdown()  # rebind-ok: legacy callback payload
+    sl_object["response_cost"] = finalized.amount  # rebind-ok: legacy callback payload
+    kwargs["response_cost"] = finalized.amount  # rebind-ok: legacy callback payload
+    return finalized.amount
 
 
-@with_service_target("search_free_tier")
+@dataclass(frozen=True, slots=True)
+class SearchAllowanceAllocation:
+    counter_key: str
+    units: int
+    free_units: int
+    discount: float
+
+
 async def apply_search_free_tier(
     kwargs: MutableMapping[str, object],  # mutable-ok: writes the reduced cost where the spend row reads it
     sl_object: StandardLoggingPayload,
@@ -95,19 +95,36 @@ async def apply_search_free_tier(
     now: datetime,
 ) -> float:
     """Zero the grounding queries that landed under the model's shared free allowance, everything else is unchanged."""
+    if kwargs.get(_COUNTED_KWARG):
+        return response_cost
+    allocation: Final = await allocate_search_free_tier(sl_object, response_cost, completion_response, counter, now)
+    if allocation is None:
+        return response_cost
+    kwargs[_COUNTED_KWARG] = True  # rebind-ok: legacy callback deduplication
+    return _record_freed_cost(kwargs, sl_object, response_cost, allocation.discount)
+
+
+@with_service_target("search_free_tier")
+async def allocate_search_free_tier(
+    sl_object: StandardLoggingPayload,
+    response_cost: float,
+    completion_response: object,
+    counter: SharedCounter | None,
+    now: datetime,
+) -> SearchAllowanceAllocation | None:
     model_info: Final = sl_object["model_map_information"]["model_map_value"]
     allowance: Final = model_info.get("search_free_requests") if model_info is not None else None
     usage: Final = _usage_of(completion_response)
     if model_info is None or allowance is None or usage is None or sl_object["cache_hit"]:
-        return response_cost
+        return None
     units: Final = _billable_units(usage, model_info)
-    if units == 0 or kwargs.get(_COUNTED_KWARG):
-        return response_cost
+    if units == 0:
+        return None
     if counter is None:
         verbose_proxy_logger.warning(
             "apply_search_free_tier is on but the proxy has no Redis, grounding is billed at full price"
         )
-        return response_cost
+        return None
     provider: Final = sl_object["custom_llm_provider"] or model_info["litellm_provider"]
     key: Final = search_free_tier_key(provider, allowance, now)
     try:
@@ -116,10 +133,7 @@ async def apply_search_free_tier(
         verbose_proxy_logger.warning(
             "search free tier counter %s is unavailable, grounding is billed at full price", key
         )
-        return response_cost
-    kwargs[_COUNTED_KWARG] = True  # rebind-ok: the proxy runs this callback twice per request, count it once
+        return None
     freed: Final = freed_units(allowance["count"], units, int(total_after))
-    if freed == 0:
-        return response_cost
     freed_cost: Final = min(response_cost, cost_per_web_search_request(usage, model_info) * freed / units)
-    return _record_freed_cost(kwargs, sl_object, response_cost, freed_cost)
+    return SearchAllowanceAllocation(key, units, freed, freed_cost)
