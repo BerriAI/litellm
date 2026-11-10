@@ -1,3 +1,5 @@
+use crate::anthropic::messages::transformation::retry_anthropic_messages_after_http_error;
+use litellm_host::interceptors::RetriedRequest;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_llms_types::{
     formats::messages::{MessagesOptionalParams, MessagesRequest},
@@ -5,6 +7,7 @@ use litellm_llms_types::{
 };
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
+use serde_json::Value;
 
 use crate::{
     Error,
@@ -40,6 +43,16 @@ impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
         crate::base_llm::messages::tools::ToolCustomField::Rewrite {
             hoist_defer_loading: crate::anthropic::messages::transformation::is_claude_model(model),
         }
+    }
+
+    fn retry_after_http_error(
+        &self,
+        status: u16,
+        error_text: &str,
+        request_body: &Value,
+        context: &MessagesTransformContext,
+    ) -> Option<RetriedRequest> {
+        retry_anthropic_messages_after_http_error(status, error_text, request_body, context)
     }
 
     fn shape_request(

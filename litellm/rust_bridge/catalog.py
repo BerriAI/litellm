@@ -92,8 +92,6 @@ class Feature(str, Enum):
     """No static key, so Python mints a workload identity federation token."""
     CACHE_CONTROL_INJECTION = "cache_control_injection"
     """Prompt caching injection that Python applies to messages and system."""
-    THINKING_SIGNATURE_RETRY = "thinking_signature_retry"
-    """Replayed thinking blocks, which Python strips and retries once if Anthropic rejects their signature."""
     STRICT_TOOLS_RETRY = "strict_tools_retry"
     """Strict tools under drop_params, which Python sends again without strict if Claude rejects their limits."""
     CLIENT_HEADERS = "client_headers"
@@ -175,7 +173,6 @@ MESSAGES_PYTHON_FEATURES: Final = (COMMON_PYTHON_FEATURES - {Feature.TIMEOUT_VAR
     Feature.MODIFY_PARAMS,
     Feature.WORKLOAD_IDENTITY,
     Feature.CACHE_CONTROL_INJECTION,
-    Feature.THINKING_SIGNATURE_RETRY,
     Feature.STRICT_TOOLS_RETRY,
 }
 

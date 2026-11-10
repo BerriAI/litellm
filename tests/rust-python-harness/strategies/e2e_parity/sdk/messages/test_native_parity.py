@@ -307,6 +307,7 @@ CALLBACK_ASPECTS: Final = (
     "logged_response_headers",
     "logged_api_key",
     "logged_call",
+    "logged_request",
 )
 ASPECTS: Final = ("dispatch", "request", "outcome", "hidden_params", "logged", *CALLBACK_ASPECTS)
 
@@ -344,9 +345,6 @@ S15_COMPLETE_DEADLINE: Final = (
     "S15: by design, native bounds a complete response by one overall deadline where Python bounds each read, "
     "so a body trickling in slower than the timeout succeeds in Python and times out natively"
 )
-F_THINKING_RETRY: Final = (
-    "F: retry without thinking after a rejected signature is Python-only (detector thinking_signature_retry)"
-)
 F_CACHE_INJECTION: Final = "F: prompt cache_control injection is Python-only (detector cache_control_injection)"
 F_STREAMED_MOCK: Final = (
     "F: a mock with stream=True returns the mock dict and logs no success in Python (detector streamed_mock_response)"
@@ -356,21 +354,14 @@ KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
     {
         "response_private_keys": _gaps(outcome=S6_PRIVATE_KEYS),
         "missing_max_tokens": _gaps(dispatch=A10_NO_MAX_TOKENS),
-        "thinking_signature_rejected_then_retried": _gaps(
-            request=F_THINKING_RETRY,
-            outcome=F_THINKING_RETRY,
-            hidden_params=F_THINKING_RETRY,
-            logged=F_THINKING_RETRY,
-            logged_metadata=F_THINKING_RETRY,
-            logged_response_headers=F_THINKING_RETRY,
-        ),
-        "cache_control_injection_points": _gaps(request=F_CACHE_INJECTION),
-        "enable_prompt_caching": _gaps(request=F_CACHE_INJECTION),
+        "cache_control_injection_points": _gaps(request=F_CACHE_INJECTION, logged_request=F_CACHE_INJECTION),
+        "enable_prompt_caching": _gaps(request=F_CACHE_INJECTION, logged_request=F_CACHE_INJECTION),
         "mock_response_streamed": _gaps(
             logged=F_STREAMED_MOCK,
             logged_metadata=F_STREAMED_MOCK,
             logged_response_headers=F_STREAMED_MOCK,
             logged_call=F_STREAMED_MOCK,
+            logged_request=F_STREAMED_MOCK,
         ),
     }
 )
@@ -673,6 +664,7 @@ FAILURE_CASES: Final = (
         _kw(timeout=1),
         upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), chunk_delay=0.5, body_chunks=4),),
         gaps=_gaps(
+            logged_request=S15_COMPLETE_DEADLINE,
             outcome=S15_COMPLETE_DEADLINE,
             hidden_params=S15_COMPLETE_DEADLINE,
             logged=S15_COMPLETE_DEADLINE,
@@ -775,18 +767,6 @@ SERVED_NATIVELY_CASES: Final = (
 FALLBACK_CASES: Final = (
     Case("mock_response_streamed", _kw(stream=True, mock_response="Hi from the mock"), upstream=()),
     Case(
-        "thinking_replay",
-        _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
-    ),
-    Case(
-        "thinking_signature_rejected_then_retried",
-        _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
-        upstream=(
-            _failure(400, "invalid_request_error", "messages.1.content.0: Invalid `signature` in `thinking` block"),
-            _ok(),
-        ),
-    ),
-    Case(
         "cache_control_injection_points",
         _kw(system="Answer in one word.", cache_control_injection_points=[{"location": "message", "role": "system"}]),
     ),
@@ -804,6 +784,84 @@ FALLBACK_CASES: Final = (
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
 )
 
+INVALID_SIGNATURE: Final = "messages.1.content.0: Invalid `signature` in `thinking` block"
+BOUND_ELSEWHERE: Final = f"{INVALID_SIGNATURE}. The block is bound to a different conversation."
+THINKING: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "enabled", "budget_tokens": 2048})
+BINDING_ERRORS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+)
+THINKING_ONLY_REPLAY: Final[tuple[JsonValue, ...]] = (
+    {"role": "user", "content": "What is the capital of France?"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "redacted_thinking", "data": "EmwKAhgBEgy"},
+            {"type": "thinking", "thinking": "Paris.", "signature": "EqQBCkYIARgCKkB"},
+        ],
+    },
+    {"role": "assistant", "content": []},
+    {"role": "user", "content": "And Germany?"},
+)
+
+
+def _replay(**kwargs: object) -> Mapping[str, object]:
+    return _kw(messages=list(THINKING_REPLAY), thinking=dict(THINKING), max_tokens=4096, **kwargs)
+
+
+def _rejected(message: str = INVALID_SIGNATURE, status: int = 400) -> ResponseSpec:
+    return _failure(status, "invalid_request_error", message)
+
+
+THINKING_RETRY_CASES: Final = (
+    Case("thinking_replay", _replay()),
+    Case("thinking_signature_rejected_then_retried", _replay(), upstream=(_rejected(), _ok())),
+    Case(
+        "thinking_signature_rejected_then_retried_stream",
+        _replay(stream=True),
+        upstream=(_rejected(), _stream(TEXT_STREAM)),
+    ),
+    Case(
+        "thinking_signature_missing_then_retried",
+        _replay(),
+        upstream=(_rejected("messages.1.content.0.thinking.signature.str: Input should be a valid string"), _ok()),
+    ),
+    Case(
+        "empty_thinking_rejected_then_retried_without_thinking_only_turns",
+        _kw(messages=list(THINKING_ONLY_REPLAY), thinking=dict(THINKING), max_tokens=4096),
+        upstream=(_rejected("messages.1.content.1.thinking: each thinking block must contain thinking"), _ok()),
+    ),
+    Case("thinking_signature_rejected_twice", _replay(), upstream=(_rejected(), _rejected())),
+    Case(
+        "thinking_signature_rejected_twice_stream",
+        _replay(stream=True),
+        upstream=(_rejected(), _rejected()),
+    ),
+    Case("thinking_signature_text_on_a_429_is_not_retried", _replay(), upstream=(_rejected(status=429),)),
+    Case(
+        "unrelated_400_is_not_retried",
+        _replay(),
+        upstream=(_rejected("max_tokens: 4096 > 64000, which is the maximum allowed"),),
+    ),
+    Case(
+        "binding_mismatch_retried_when_the_caller_did_not_pin_it",
+        _kw(messages=list(THINKING_REPLAY), thinking={"type": "adaptive"}, max_tokens=4096),
+        model=OPUS_ADAPTIVE,
+        upstream=(_rejected(BOUND_ELSEWHERE), _ok()),
+    ),
+    Case(
+        "binding_mismatch_raised_when_the_caller_pinned_it",
+        _kw(messages=list(THINKING_REPLAY), thinking=dict(BINDING_ERRORS), max_tokens=4096),
+        model=OPUS_ADAPTIVE,
+        upstream=(_rejected(BOUND_ELSEWHERE),),
+    ),
+    Case(
+        "invalid_signature_retried_even_when_the_caller_pinned_binding",
+        _kw(messages=list(THINKING_REPLAY), thinking=dict(BINDING_ERRORS), max_tokens=4096),
+        model=OPUS_ADAPTIVE,
+        upstream=(_rejected(), _ok()),
+    ),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *RESPONSE_CASES,
@@ -811,6 +869,7 @@ CASES: Final = (
     *STREAM_CASES,
     *SYNC_CASES,
     *SERVED_NATIVELY_CASES,
+    *THINKING_RETRY_CASES,
     *FALLBACK_CASES,
 )
 
@@ -1038,6 +1097,11 @@ def _logged(recorder: RecordingLogger, events: tuple[str, ...]) -> tuple[Mapping
             "custom_llm_provider": details.get("custom_llm_provider"),
             "model": details.get("model"),
             "stream": details.get("stream"),
+        },
+        "logged_request": {
+            "messages": details.get("messages"),
+            "thinking": details.get("thinking"),
+            "complete_input_dict": _mapping(details.get("additional_args")).get("complete_input_dict"),
         },
     }
     return logged, callback_kwargs
