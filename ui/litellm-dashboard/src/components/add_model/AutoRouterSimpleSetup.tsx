@@ -1,8 +1,11 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { ROUTER_FAMILIES, ROUTER_GOALS, type FamilyPreference, type RouterGoal, type SolverModel } from "./auto_setup";
+
+const TIER_ROLES = ["everyday", "hard"] as const;
 
 type Props = {
   customized: boolean;
@@ -49,11 +52,17 @@ export default function AutoRouterSimpleSetup({
   onAdvanced,
   onRetry,
 }: Props) {
+  const { t } = useTranslation();
   const inventoryReady = !waitingForTeam && !loading;
   const showPreferences = !inventoryReady || error || hasSuggestions;
   const sameFamily = sharedFamily(everyday, hard);
   const familyItems = [
-    { value: "auto", label: sameFamily ? `Auto (${sameFamily})` : "Auto" },
+    {
+      value: "auto",
+      label: sameFamily
+        ? t("addModel.autoRouterSimpleSetup.autoWithFamily", { family: sameFamily })
+        : t("addModel.autoRouterSimpleSetup.auto"),
+    },
     ...Object.entries(ROUTER_FAMILIES).map(([value, label]) => ({ value, label })),
   ];
   return (
@@ -61,8 +70,12 @@ export default function AutoRouterSimpleSetup({
       {showPreferences && (
         <>
           <div className="space-y-2">
-            <Label>Optimize for</Label>
-            <div className="grid grid-cols-3 gap-2" role="group" aria-label="Routing goal">
+            <Label>{t("addModel.autoRouterSimpleSetup.optimizeFor")}</Label>
+            <div
+              className="grid grid-cols-3 gap-2"
+              role="group"
+              aria-label={t("addModel.autoRouterSimpleSetup.routingGoal")}
+            >
               {Object.entries(ROUTER_GOALS).map(([key, label]) => (
                 <Button
                   key={key}
@@ -72,13 +85,13 @@ export default function AutoRouterSimpleSetup({
                   aria-pressed={goal === key}
                   onClick={() => onGoalChange(key as RouterGoal)}
                 >
-                  {label}
+                  {t(label)}
                 </Button>
               ))}
             </div>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="auto-router-family">Model family</Label>
+            <Label htmlFor="auto-router-family">{t("addModel.autoRouterSimpleSetup.modelFamily")}</Label>
             <Select
               items={familyItems}
               value={family}
@@ -86,7 +99,11 @@ export default function AutoRouterSimpleSetup({
                 if (value === "auto" || (value && value in ROUTER_FAMILIES)) onFamilyChange(value as FamilyPreference);
               }}
             >
-              <SelectTrigger id="auto-router-family" aria-label="Model family" className="w-full">
+              <SelectTrigger
+                id="auto-router-family"
+                aria-label={t("addModel.autoRouterSimpleSetup.modelFamily")}
+                className="w-full"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -100,18 +117,20 @@ export default function AutoRouterSimpleSetup({
           </div>
         </>
       )}
-      {waitingForTeam && <p className="text-sm text-muted-foreground">Select a team to see available models.</p>}
+      {waitingForTeam && (
+        <p className="text-sm text-muted-foreground">{t("addModel.autoRouterSimpleSetup.selectTeamToSeeModels")}</p>
+      )}
       {!waitingForTeam && loading && (
         <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
           <UiLoadingSpinner className="size-4" />
-          Loading deployed models
+          {t("addModel.autoRouterSimpleSetup.loadingModels")}
         </p>
       )}
       {inventoryReady && error && (
         <p role="alert" className="text-sm text-destructive">
-          Could not load deployed models.{" "}
+          {t("addModel.autoRouterSimpleSetup.modelsLoadFailed")}{" "}
           <Button type="button" variant="link" onClick={onRetry}>
-            Retry
+            {t("addModel.autoRouterSimpleSetup.retry")}
           </Button>
         </p>
       )}
@@ -119,26 +138,31 @@ export default function AutoRouterSimpleSetup({
         <>
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
-              <Label>Chosen models</Label>
+              <Label>{t("addModel.autoRouterSimpleSetup.chosenModels")}</Label>
               {customized && hasSuggestions && (
                 <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={onReset}>
-                  Use suggested models
+                  {t("addModel.autoRouterSimpleSetup.useSuggested")}
                 </Button>
               )}
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
-              {(["everyday", "hard"] as const).map((role) => {
+              {TIER_ROLES.map((role) => {
                 const chosen = role === "everyday" ? everyday : hard;
                 const other = role === "everyday" ? hard : everyday;
                 const choices = models.filter((model) => model.name !== other?.name);
                 const items = choices.map((model) => ({ value: model.name, label: model.name }));
-                const label = role === "everyday" ? "Everyday" : "Hard tasks";
+                const label =
+                  role === "everyday"
+                    ? t("addModel.autoRouterSimpleSetup.everyday")
+                    : t("addModel.autoRouterSimpleSetup.hardTasks");
                 return (
                   <div className="min-w-0 space-y-3 rounded-lg border bg-muted/20 p-4" key={role}>
                     <div className="space-y-1">
                       <Label htmlFor={`auto-router-${role}`}>{label}</Label>
                       <p className="text-xs text-muted-foreground">
-                        {role === "everyday" ? "Your cheaper model" : "Your stronger model"}
+                        {role === "everyday"
+                          ? t("addModel.autoRouterSimpleSetup.everydayDescription")
+                          : t("addModel.autoRouterSimpleSetup.hardDescription")}
                       </p>
                     </div>
                     <Select
@@ -148,8 +172,12 @@ export default function AutoRouterSimpleSetup({
                         if (value) onModelChange(role, value);
                       }}
                     >
-                      <SelectTrigger id={`auto-router-${role}`} aria-label={`${label} model`} className="w-full">
-                        <SelectValue placeholder="Select a deployed model" />
+                      <SelectTrigger
+                        id={`auto-router-${role}`}
+                        aria-label={t("addModel.autoRouterSimpleSetup.roleModel", { label })}
+                        className="w-full"
+                      >
+                        <SelectValue placeholder={t("addModel.autoRouterSimpleSetup.selectModel")} />
                       </SelectTrigger>
                       <SelectContent>
                         {choices.map((model) => (
@@ -171,8 +199,8 @@ export default function AutoRouterSimpleSetup({
           {(!everyday || !hard) && (
             <p role="status" className="text-sm text-muted-foreground">
               {models.length < 2
-                ? "Two deployed models are needed. Add a model or use Advanced configuration."
-                : "Choose two models to get started."}
+                ? t("addModel.autoRouterSimpleSetup.needTwoModels")
+                : t("addModel.autoRouterSimpleSetup.chooseTwoModels")}
             </p>
           )}
           {notice && !customized && (
@@ -183,7 +211,7 @@ export default function AutoRouterSimpleSetup({
         </>
       )}
       <Button type="button" variant="link" className="px-0" onClick={onAdvanced}>
-        Advanced configuration
+        {t("addModel.autoRouterSimpleSetup.advancedConfiguration")}
       </Button>
     </div>
   );

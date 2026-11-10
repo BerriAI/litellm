@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import logging
 import sys
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -10,6 +11,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.ollama.completion.transformation import (
@@ -990,3 +992,111 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "http://gateway.example.com/ollama/api/generate"
     )
+
+
+_DEEPWIKI_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}
+
+
+def _ollama_generate_route(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post("http://ollama.test:11434/api/generate").respond(
+        json={"model": "llama3.2", "response": "Sunny", "done": True, "prompt_eval_count": 5, "eval_count": 3}
+    )
+
+
+def test_ollama_answers_400_for_a_hosted_mcp_tool_instead_of_pasting_it_into_the_prompt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "add_function_to_prompt", False)
+    route: Final = _ollama_generate_route(respx_mock)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        litellm.completion(
+            model="ollama/llama3.2",
+            messages=[{"role": "user", "content": "weather in Paris?"}],
+            tools=[_DEEPWIKI_MCP_TOOL, _WEATHER_TOOL],
+            api_base="http://ollama.test:11434",
+        )
+
+    assert raised.value.status_code == 400
+    assert "cannot run the hosted MCP tool `deepwiki`" in str(raised.value)
+    assert not route.called
+
+
+@pytest.mark.parametrize(
+    ("tools", "prompt_names_weather"),
+    [([_DEEPWIKI_MCP_TOOL, _WEATHER_TOOL], True), ([_DEEPWIKI_MCP_TOOL], False)],
+    ids=["beside-a-function", "alone"],
+)
+def test_ollama_drop_params_keeps_a_hosted_mcp_tool_out_of_the_prompt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, tools: list[object], prompt_names_weather: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "add_function_to_prompt", False)
+    route: Final = _ollama_generate_route(respx_mock)
+
+    litellm.completion(
+        model="ollama/llama3.2",
+        messages=[{"role": "user", "content": "weather in Paris?"}],
+        tools=tools,
+        api_base="http://ollama.test:11434",
+        drop_params=True,
+    )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    prompt: Final = body["prompt"]
+    assert (body.get("format") == "json") is prompt_names_weather
+    assert "deepwiki" not in prompt
+    assert ("get_weather" in prompt) is prompt_names_weather
+    assert prompt.startswith("### User:\nweather in Paris?")
+    assert prompt_names_weather or prompt == "### User:\nweather in Paris?\n\n"
+
+
+def _reasoning_effort_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "Dropping reasoning_effort=" in r.getMessage()
+    )
+
+
+@pytest.mark.parametrize("effort", ("minimal", "xhigh"))
+def test_reasoning_effort_mapped_to_think_off_warns_once(effort: str, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model="qwen3:0.6b", drop_params=False
+        )
+
+    warnings: Final = _reasoning_effort_warnings(caplog)
+    assert result["think"] is False
+    assert len(warnings) == 1
+    assert f"reasoning_effort={effort!r}" in warnings[0]
+    assert "qwen3:0.6b" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "model, effort, think",
+    (("qwen3:0.6b", "none", False), ("qwen3:0.6b", "high", True), ("gpt-oss:20b", "xhigh", "xhigh")),
+)
+def test_reasoning_effort_ollama_honors_does_not_warn(
+    model: str, effort: str, think: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        result: Final = OllamaConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort}, optional_params={}, model=model, drop_params=False
+        )
+
+    assert result["think"] == think
+    assert _reasoning_effort_warnings(caplog) == ()
