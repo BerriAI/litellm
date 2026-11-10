@@ -28,7 +28,7 @@ from litellm.llms.gemini.common_utils import GeminiError, GeminiModelInfo
 from litellm.llms.gemini.files.transformation import gemini_file_name
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
-from litellm.types.utils import LiteLLMBatch, LlmProviders
+from litellm.types.utils import LiteLLMBatch, LlmProviders, Usage
 
 GeminiBatchState: TypeAlias = Literal[
     "BATCH_STATE_UNSPECIFIED",
@@ -123,6 +123,32 @@ class GeminiBatchOperation(LiteLLMBaseModel):
     name: str
     metadata: _GeminiBatchMetadata
     error: _GeminiOperationError | None = None
+
+
+class _GeminiBatchOutputUsage(LiteLLMBaseModel):
+    """The ``usage`` block Gemini writes on an OpenAI-shaped batch output row. ``totalTokens``
+    includes thinking tokens that ``completionTokens`` leaves out, and Gemini bills them as output."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    prompt_tokens: int = Field(default=0, alias="promptTokens")
+    completion_tokens: int = Field(default=0, alias="completionTokens")
+    total_tokens: int = Field(default=0, alias="totalTokens")
+
+
+def is_gemini_batch_usage_shape(usage_object: Mapping[str, object]) -> bool:
+    return any(key in usage_object for key in ("promptTokens", "completionTokens", "totalTokens"))
+
+
+def usage_from_batch_output(usage_object: Mapping[str, object]) -> Usage:
+    reported: Final = _GeminiBatchOutputUsage.model_validate(usage_object)
+    reasoning_tokens: Final = max(reported.total_tokens - reported.prompt_tokens - reported.completion_tokens, 0)
+    return Usage(
+        prompt_tokens=reported.prompt_tokens,
+        completion_tokens=reported.completion_tokens + reasoning_tokens,
+        total_tokens=reported.total_tokens,
+        reasoning_tokens=reasoning_tokens or None,
+    )
 
 
 def _bare_id(resource_name: str | None, prefix: str) -> str | None:

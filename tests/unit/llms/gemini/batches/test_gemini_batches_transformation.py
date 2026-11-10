@@ -13,7 +13,11 @@ import json
 import httpx
 import pytest
 
-from litellm.llms.gemini.batches.transformation import GeminiBatchesConfig
+from litellm.llms.gemini.batches.transformation import (
+    GeminiBatchesConfig,
+    is_gemini_batch_usage_shape,
+    usage_from_batch_output,
+)
 from litellm.llms.gemini.common_utils import GeminiError
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 
@@ -245,3 +249,37 @@ def test_error_class_is_gemini_error(config):
     err = config.get_error_class("quota", 429, {"retry-after": "7"})
     assert isinstance(err, GeminiError)
     assert (err.status_code, err.message) == (429, "quota")
+
+
+# Gemini writes the usage of an OpenAI-shaped output row as camelCase, with thinking tokens
+# counted in totalTokens but not in completionTokens (observed 2026-11-10 on gemini-3.8-flash).
+@pytest.mark.parametrize(
+    "reported,expected",
+    [
+        (
+            {"promptTokens": 9, "completionTokens": 1, "totalTokens": 75},
+            {"prompt_tokens": 9, "completion_tokens": 66, "total_tokens": 75, "reasoning_tokens": 65},
+        ),
+        (
+            {"promptTokens": 9, "completionTokens": 4, "totalTokens": 13},
+            {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13, "reasoning_tokens": None},
+        ),
+    ],
+)
+def test_batch_output_usage_folds_thinking_tokens_into_completion(reported, expected):
+    usage = usage_from_batch_output(reported)
+    details = usage.completion_tokens_details
+    assert {
+        "prompt_tokens": usage.prompt_tokens,
+        "completion_tokens": usage.completion_tokens,
+        "total_tokens": usage.total_tokens,
+        "reasoning_tokens": details.reasoning_tokens if details else None,
+    } == expected
+
+
+@pytest.mark.parametrize(
+    "usage_object,expected",
+    [({"promptTokens": 9}, True), ({"prompt_tokens": 9, "completion_tokens": 1}, False), ({}, False)],
+)
+def test_batch_usage_shape_detection(usage_object, expected):
+    assert is_gemini_batch_usage_shape(usage_object) is expected

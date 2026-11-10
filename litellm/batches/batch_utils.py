@@ -831,6 +831,12 @@ def _get_batch_job_usage_from_response_body(
     _usage_dict: Final = response_body.get("usage", None) or {}
     if ResponseAPILoggingUtils.is_response_api_usage(_usage_dict):
         return ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(_usage_dict)
+    if custom_llm_provider == "gemini":
+        from litellm.llms.gemini.batches.transformation import is_gemini_batch_usage_shape, usage_from_batch_output
+
+        gemini_usage: Final = cast(Mapping[str, object], _usage_dict)  # cast-ok: usage block comes from provider JSON
+        if is_gemini_batch_usage_shape(gemini_usage):
+            return usage_from_batch_output(gemini_usage)
     usage: Final[Usage] = Usage(**_usage_dict)
     if custom_llm_provider == "xai":
         from litellm.llms.xai.chat.transformation import XAIChatConfig

@@ -3456,3 +3456,32 @@ def test_native_vertex_capture_retains_unknown_models_without_changing_legacy_co
     assert captured["batch_usage_by_request"] == ({"model": "missing-usage-model", "usage": None},)
     assert captured["batch_unknown_usage_requests"] == 1
     assert (result.cost, result.successful_requests, result.failed_requests) == (0, 0, 1)
+
+
+def test_gemini_output_lines_bill_camelcase_usage_with_thinking_tokens_at_batch_rates():
+    row = _success_row(
+        model="gemini-3.8-flash",
+        usage={"promptTokens": 9, "completionTokens": 1, "totalTokens": 75},
+    )
+
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[row],
+        custom_llm_provider="gemini",
+        model_info=ModelInfo(
+            key="gemini/gemini-3.8-flash",
+            max_tokens=None,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            input_cost_per_token=7.5e-7,
+            output_cost_per_token=3.75e-6,
+            litellm_provider="gemini",
+            mode="chat",
+            supported_openai_params=None,
+            input_cost_per_token_batches=3.75e-7,
+            output_cost_per_token_batches=1.875e-6,
+        ),
+    )
+
+    assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (9, 66, 75)
+    assert result.cost == pytest.approx((9 * 3.75e-7) + (66 * 1.875e-6))
+    assert (result.successful_requests, result.failed_requests, result.models) == (1, 0, ["gemini-3.8-flash"])
