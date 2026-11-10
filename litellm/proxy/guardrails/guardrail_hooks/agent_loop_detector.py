@@ -165,7 +165,7 @@ class AgentLoopDetector(CustomGuardrail):
             if n < seq_len * 2:
                 continue
             for start in range(n - seq_len * 2 + 1):
-                window = names[start:]
+                window = names[start : start + 2 * seq_len]
                 seq = tuple(window[:seq_len])
                 # Count consecutive repetitions of *seq* from position 0 in window
                 reps, idx = 0, 0
