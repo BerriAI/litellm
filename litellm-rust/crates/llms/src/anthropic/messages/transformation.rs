@@ -1,25 +1,27 @@
 use litellm_auth::CredentialPlacement;
+use litellm_http::request::{with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{
         ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message,
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
-    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
+    providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
     recognized::Recognized,
 };
 use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
 use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
-use crate::base_llm::messages::context::MessagesTransformContext;
+use crate::anthropic::beta_headers::accepted_or_unlisted;
+use crate::base_llm::messages::{context::MessagesTransformContext, tools::ToolCustomField};
 use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, existing_betas,
+        get_auth_header, has_advisor_tool, has_anthropic_credential, is_tool_search_used,
+        merge_beta_headers, optionally_handle_anthropic_oauth, requires_native_compaction_beta,
+        strip_advisor_blocks, strip_encrypted_reasoning_blocks,
     },
     base_llm::{
         auth::AuthScheme,
@@ -57,6 +59,12 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
         transform_messages_request(request, &context.keeping_display_updates())
+    }
+
+    fn tool_custom_field(&self, model: &str) -> ToolCustomField {
+        ToolCustomField::Rewrite {
+            hoist_defer_loading: is_claude_model(model),
+        }
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -116,6 +124,47 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
             provider_feature_betas(request, BetaProvider::Anthropic),
         )
     }
+
+    fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
+        if !is_foundry_url(url) {
+            return headers;
+        }
+        let betas = existing_betas(&headers);
+        if betas.is_empty() {
+            return headers;
+        }
+        let kept = accepted_or_unlisted(betas, BetaProvider::AzureAi);
+        if kept.is_empty() {
+            return without_headers(headers, &[BETA_HEADER]);
+        }
+        with_header(headers, BETA_HEADER, kept.to_string())
+    }
+}
+
+const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
+    "services.ai.azure.com",
+    "openai.azure.com",
+    "cognitiveservices.azure.com",
+];
+
+fn is_foundry_url(url: &str) -> bool {
+    let absolute = if url.contains("://") {
+        url.to_string()
+    } else {
+        format!("https://{url}")
+    };
+    url::Url::parse(&absolute)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| {
+            FOUNDRY_HOST_SUFFIXES
+                .iter()
+                .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+        })
+}
+
+pub(crate) fn is_claude_model(model: &str) -> bool {
+    model.to_lowercase().contains("claude")
 }
 
 pub(crate) fn transform_messages_request(
@@ -437,6 +486,7 @@ mod tests {
 
     use super::*;
     use crate::anthropic::common_utils::ENCRYPTED_REASONING_SIGNATURE_PREFIX;
+    use litellm_http::request::header_values;
 
     type Env = &'static [(&'static str, &'static str)];
 
@@ -1351,5 +1401,57 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+
+    const FOUNDRY: &str = "https://team.services.ai.azure.com/anthropic/v1/messages";
+
+    #[rstest]
+    #[case::drops_a_beta_foundry_lacks(
+        FOUNDRY,
+        "advisor-tool-2026-03-01,context-1m-2025-08-07",
+        Some("context-1m-2025-08-07")
+    )]
+    #[case::forwards_unknown_betas_sorted(
+        FOUNDRY,
+        "zzz,files-api-2025-04-14,aaa",
+        Some("aaa,files-api-2025-04-14,zzz")
+    )]
+    #[case::removes_the_header_when_nothing_is_left(FOUNDRY, "advisor-tool-2026-03-01", None)]
+    #[case::cognitive_services_host(
+        "team.cognitiveservices.azure.com/anthropic",
+        "advisor-tool-2026-03-01",
+        None
+    )]
+    #[case::anthropic_host_is_untouched(
+        "https://api.anthropic.com/v1/messages",
+        "advisor-tool-2026-03-01",
+        Some("advisor-tool-2026-03-01")
+    )]
+    #[case::lookalike_host_is_untouched(
+        "https://notservices.ai.azure.com.example/v1/messages",
+        "advisor-tool-2026-03-01",
+        Some("advisor-tool-2026-03-01")
+    )]
+    fn foundry_urls_filter_betas_through_the_azure_ai_row(
+        #[case] url: &str,
+        #[case] betas: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        let filtered = ANTHROPIC_MESSAGES_CONFIG
+            .headers_for_url(headers(&[("x-a", "1"), (BETA_HEADER, betas)]), url);
+        assert_eq!(
+            header_values(&filtered, BETA_HEADER).collect::<Vec<_>>(),
+            expected.into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(header_values(&filtered, "x-a").collect::<Vec<_>>(), ["1"]);
+    }
+
+    #[rstest]
+    fn foundry_url_without_betas_keeps_the_headers() {
+        let sent = headers(&[("x-a", "1")]);
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.headers_for_url(sent.clone(), FOUNDRY),
+            sent
+        );
     }
 }

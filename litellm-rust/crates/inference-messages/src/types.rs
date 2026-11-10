@@ -71,6 +71,10 @@ pub struct MessagesSettings {
     pub additional_drop_params: Vec<String>,
     #[serde(default)]
     pub request_timeout: Option<f64>,
+    #[serde(default)]
+    pub mock_response: Option<Map<String, Value>>,
+    #[serde(default)]
+    pub whole_sse_frames: bool,
 }
 
 impl MessagesSettings {
@@ -148,6 +152,7 @@ mod tests {
                 reasoning_auto_summary: true,
                 additional_drop_params: vec!["metadata.user_id".to_string(), "thinking".to_string()],
                 request_timeout: Some(1800.0),
+                ..MessagesSettings::default()
             },
             capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,

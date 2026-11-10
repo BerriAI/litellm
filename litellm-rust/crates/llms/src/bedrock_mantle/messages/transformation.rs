@@ -17,6 +17,7 @@ use serde_json::Value;
 use crate::{
     Error,
     anthropic::{
+        beta_headers::accepted_or_unlisted,
         common_utils::{existing_betas, merge_beta_headers},
         messages::{
             handler::shape_anthropic_messages_request,
@@ -191,14 +192,10 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
             .filter_map(Value::as_str)
             .filter_map(|beta| beta.parse::<AnthropicBeta>().ok())
             .collect();
-        let caller: BetaSet = existing_betas(&headers)
-            .union(body_betas)
-            .into_iter()
-            .filter_map(|beta| match beta {
-                AnthropicBeta::Other(_) => Some(beta),
-                _ => beta.on(BetaProvider::BedrockMantle),
-            })
-            .collect();
+        let caller = accepted_or_unlisted(
+            existing_betas(&headers).union(body_betas),
+            BetaProvider::BedrockMantle,
+        );
         let safeguards: BetaSet = request
             .params
             .extra

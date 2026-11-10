@@ -464,6 +464,10 @@ ADVISOR_TOOL: Final = {"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "
 STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict": True}
 
 
+def _handler_cache() -> Cache:
+    return Cache(supported_call_types=["anthropic_messages_handler"])  # pyright: ignore[reportArgumentType]  # the sync handler name the cache gate keys on
+
+
 @pytest.mark.parametrize(
     ("feature", "model", "kwargs", "settings"),
     (
@@ -476,7 +480,12 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
         ),
         (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
         (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
-        (Feature.RESPONSE_CACHE, "anthropic/claude-sonnet-4-5", {}, {"cache": Cache()}),
+        (
+            Feature.RESPONSE_CACHE,
+            "anthropic/claude-sonnet-4-5",
+            {},
+            {"cache": _handler_cache()},
+        ),
         (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
         (Feature.MODIFY_PARAMS, "anthropic/claude-sonnet-4-5", {}, {"modify_params": True}),
         (
@@ -491,18 +500,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
             "anthropic/claude-sonnet-4-5",
             {"messages": [{"role": "assistant", "content": [{"type": "redacted_thinking", "data": "x"}]}]},
             {},
-        ),
-        (
-            Feature.TOOL_CUSTOM_FIELD,
-            "anthropic/claude-sonnet-4-5",
-            {"tools": [{"name": "a", "input_schema": {"type": "object"}, "custom": {"eager_input_streaming": True}}]},
-            {},
-        ),
-        (
-            Feature.STREAM_COST_INJECTION,
-            "anthropic/claude-sonnet-4-5",
-            {"stream": True},
-            {"include_cost_in_streaming_usage": True},
         ),
     ),
 )
@@ -620,12 +617,6 @@ async def test_strict_tools_stay_native_unless_python_could_drop_strict(
 ASYNC_ONLY_FEATURES: Final = (
     pytest.param(Feature.PRE_REQUEST_HOOK, {}, {"callbacks": [_Rewrite()]}, id="pre-request-hook"),
     pytest.param(
-        Feature.FOUNDRY_BETA_ROW,
-        {"api_base": "https://team.services.ai.azure.com/anthropic"},
-        {},
-        id="foundry-beta-row",
-    ),
-    pytest.param(
         Feature.WEBSEARCH_INTERCEPTION, {}, {"callbacks": [WebSearchInterceptionLogger()]}, id="websearch-interception"
     ),
     pytest.param(
@@ -684,6 +675,51 @@ async def test_handler_hooks_the_sync_entry_never_runs_keep_only_async_calls_on_
     )
     assert served_async is python_result
     assert served_sync is native_result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kwargs", "async_on_python"),
+    (
+        pytest.param({"mock_response": "hi"}, False, id="unary"),
+        pytest.param({"mock_response": "hi", "stream": True}, True, id="streamed"),
+    ),
+)
+async def test_async_mock_response_falls_back_only_when_streamed(
+    monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object], async_on_python: bool
+) -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.MOCK_RESPONSE})),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    python_result: Final = response()
+    native_result: Final = response()
+
+    async def python(*call_args: object, **python_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        return python_result
+
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        return native_result
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    served_async: Final = await _ADISPATCH.arun(
+        (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
+        kwargs,
+        python=python,
+        binding=amessages_binding(native),
+        native=lambda hook, request, args, native_kwargs: hook(request),
+        rules=rules,
+    )
+    served_sync: Final = _DISPATCH.run(
+        (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
+        kwargs,
+        python=lambda *call_args, **python_kwargs: python_result,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, args, native_kwargs: hook(request),
+        rules=rules,
+    )
+    assert served_async is (python_result if async_on_python else native_result)
+    assert served_sync is python_result
 
 
 @pytest.mark.asyncio

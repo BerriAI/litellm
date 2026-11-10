@@ -114,7 +114,14 @@ def _drop_logging_obj_from_kwargs(request_kwargs: dict[str, object]) -> dict[str
     return {k: v for k, v in request_kwargs.items() if k != "litellm_logging_obj"}
 
 
-def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object]) -> bool:
+def is_call_type_supported_by_cache(call_type: str) -> bool:
+    if litellm.cache is None or litellm.cache.supported_call_types is None:
+        return False
+    covering_call_types: Final = ("aresponses", "responses") if call_type == "aresponses" else (call_type,)
+    return any(name in litellm.cache.supported_call_types for name in covering_call_types)
+
+
+def is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object]) -> bool:
     from litellm.llms.github_copilot.per_user_auth import is_github_copilot_per_user_request
 
     custom_llm_provider: Final = kwargs.get("custom_llm_provider")
@@ -395,7 +402,7 @@ class LLMCachingHandler:
         Raises:
             None
         """
-        if _is_response_cache_excluded(model=model, kwargs=kwargs):
+        if is_response_cache_excluded(model=model, kwargs=kwargs):
             self.request_kwargs = _drop_logging_obj_from_kwargs(kwargs)
             return None
 
@@ -524,7 +531,7 @@ class LLMCachingHandler:
         cached_result: Any | None = None
 
         # Check if caching should be performed BEFORE doing expensive kwargs copy
-        if _is_response_cache_excluded(model=model, kwargs=kwargs):
+        if is_response_cache_excluded(model=model, kwargs=kwargs):
             self.request_kwargs = _drop_logging_obj_from_kwargs(kwargs)
             return CachingHandlerResponse(cached_result=None)
         if litellm.cache is not None and self._is_call_type_supported_by_cache(original_function=original_function):
@@ -965,7 +972,7 @@ class LLMCachingHandler:
         model_value: Final = new_kwargs.get("model")
         model: Final = model_value if isinstance(model_value, str) else None
         self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
-        if _is_response_cache_excluded(model=model, kwargs=new_kwargs):
+        if is_response_cache_excluded(model=model, kwargs=new_kwargs):
             return None
         if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
@@ -1323,7 +1330,7 @@ class LLMCachingHandler:
         )
         no_store: Final = cache_options.get("no-store", False)
         return (
-            not _is_response_cache_excluded(model=model, kwargs=kwargs)
+            not is_response_cache_excluded(model=model, kwargs=kwargs)
             and self._is_call_type_supported_by_cache(original_function=original_function)
             and no_store is not True
         )
@@ -1364,11 +1371,7 @@ class LLMCachingHandler:
         Returns:
             bool: True if the call type is supported by the cache, False otherwise.
         """
-        if litellm.cache is None or litellm.cache.supported_call_types is None:
-            return False
-        call_type: Final = str(original_function.__name__)
-        covering_call_types: Final = ("aresponses", "responses") if call_type == "aresponses" else (call_type,)
-        return any(name in litellm.cache.supported_call_types for name in covering_call_types)
+        return is_call_type_supported_by_cache(str(original_function.__name__))
 
     async def add_streaming_response_to_cache(self, processed_chunk: ModelResponse) -> None:
         """

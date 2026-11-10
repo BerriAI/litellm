@@ -4,7 +4,7 @@ use litellm_llms_types::formats::messages::{
 use litellm_router_types::LitellmParams;
 use serde_json::Value;
 
-use super::context::MessagesTransformContext;
+use super::{context::MessagesTransformContext, tools::ToolCustomField};
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
@@ -33,6 +33,10 @@ pub trait BaseMessagesConfig: Sync {
         _context: &MessagesTransformContext,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
+    }
+
+    fn tool_custom_field(&self, _model: &str) -> ToolCustomField {
+        ToolCustomField::Keep
     }
 
     fn transform_anthropic_messages_response(
@@ -74,6 +78,10 @@ pub trait BaseMessagesConfig: Sync {
     }
 
     fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
+        headers
+    }
+
+    fn headers_for_url(&self, headers: Headers, _url: &str) -> Headers {
         headers
     }
 
