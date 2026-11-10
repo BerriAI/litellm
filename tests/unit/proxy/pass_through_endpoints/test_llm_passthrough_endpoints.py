@@ -588,3 +588,105 @@ def test_vertex_claude_pass_through_forwards_the_callers_labels_header_with_the_
 
     assert response.status_code == 200
     assert upstream.calls.last.request.headers.get_list("x-vertex-ai-labels") == [forged_header]
+
+
+@pytest.mark.usefixtures("search_team_caller")
+def test_vertex_mistral_pass_through_moves_body_labels_into_the_labels_header(
+    vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", list(_VERTEX_LABEL_FIELDS))
+    endpoint: Final = (
+        "v1/projects/deployment-project/locations/global/publishers/mistralai/models/mistral-medium-3:rawPredict"
+    )
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{endpoint}").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    body: Final = {"model": "mistral-medium-3", "messages": [{"role": "user", "content": "hi"}]}
+
+    response: Final = vertex_proxy.post(
+        f"/vertex_ai/{endpoint}",
+        json={**body, "labels": _VERTEX_FORGED_LABELS},
+        headers={"x-litellm-api-key": "sk-caller"},
+    )
+
+    assert response.status_code == 200
+    outbound: Final = upstream.calls.last.request
+    assert json.loads(base64.b64decode(outbound.headers["x-vertex-ai-labels"])) == {
+        **_VERTEX_IDENTITY_LABELS,
+        "env": "prod",
+        "app": "chat",
+        **_VERTEX_SPEND_LOGS_LABELS,
+    }
+    assert json.loads(outbound.content) == body
+
+
+@pytest.mark.usefixtures("search_team_caller")
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "v1/projects/deployment-project/locations/global/endpoints/123:rawPredict",
+        "v1/projects/deployment-project/locations/global/publishers/ai21/models/jamba-1.5-mini:streamRawPredict",
+    ],
+    ids=["custom-endpoint", "publisher-without-a-labels-header"],
+)
+def test_vertex_raw_predict_pass_through_leaves_other_publishers_as_the_caller_sent_them(
+    vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch, endpoint: str
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", list(_VERTEX_LABEL_FIELDS))
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{endpoint}").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    body: Final = {"instances": [{"content": "hi"}], "labels": _VERTEX_FORGED_LABELS}
+
+    response: Final = vertex_proxy.post(f"/vertex_ai/{endpoint}", json=body, headers={"x-litellm-api-key": "sk-caller"})
+
+    assert response.status_code == 200
+    outbound: Final = upstream.calls.last.request
+    assert json.loads(outbound.content) == body
+    assert "x-vertex-ai-labels" not in outbound.headers
+
+
+@pytest.mark.usefixtures("search_team_caller")
+@pytest.mark.parametrize("http_method", ["PATCH", "PUT"])
+def test_vertex_pass_through_leaves_labels_on_non_post_requests_as_the_caller_sent_them(
+    vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch, http_method: str
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", list(_VERTEX_LABEL_FIELDS))
+    endpoint: Final = "v1/projects/deployment-project/locations/global/endpoints/123"
+    upstream: Final = respx_mock.route(method=http_method, url=f"https://aiplatform.googleapis.com/{endpoint}").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    body: Final = {"labels": _VERTEX_FORGED_LABELS}
+
+    response: Final = vertex_proxy.request(
+        http_method, f"/vertex_ai/{endpoint}", json=body, headers={"x-litellm-api-key": "sk-caller"}
+    )
+
+    assert response.status_code == 200
+    assert json.loads(upstream.calls.last.request.content) == body
+
+
+@pytest.mark.usefixtures("search_team_caller")
+@pytest.mark.parametrize("action", ["generateContent", "countTokens"])
+def test_vertex_gemini_pass_through_drops_a_callers_labels_header_where_it_writes_body_labels(
+    vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", list(_VERTEX_LABEL_FIELDS))
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_MODEL_PATH}:{action}").mock(
+        return_value=httpx.Response(200, json=_VERTEX_GEMINI_REPLY)
+    )
+
+    response: Final = vertex_proxy.post(
+        f"/vertex_ai/{_VERTEX_GEMINI_MODEL_PATH}:{action}",
+        json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}], "labels": {"env": "prod"}},
+        headers={"x-litellm-api-key": "sk-caller", "x-pass-x-vertex-ai-labels": _labels_header(_VERTEX_FORGED_LABELS)},
+    )
+
+    assert response.status_code == 200
+    outbound: Final = upstream.calls.last.request
+    assert "x-vertex-ai-labels" not in outbound.headers
+    assert json.loads(outbound.content)["labels"] == {
+        **_VERTEX_IDENTITY_LABELS,
+        "env": "prod",
+        **_VERTEX_SPEND_LOGS_LABELS,
+    }

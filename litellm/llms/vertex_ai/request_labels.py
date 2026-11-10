@@ -37,6 +37,8 @@ Label: TypeAlias = tuple[str, str]
 
 def vertex_request_label_fields() -> tuple[str, ...]:
     configured: Final[object] = litellm.vertex_request_label_fields
+    if isinstance(configured, str):
+        return (configured,) if configured else ()
     if not isinstance(configured, (list, tuple)):
         return ()
     return tuple(field for field in _ANY_SEQUENCE.validate_python(configured) if isinstance(field, str))
@@ -143,15 +145,17 @@ def vertex_partner_labels_header(
     litellm_params: Mapping[str, object],
 ) -> str | None:
     """
-    The ``X-Vertex-AI-Labels`` value for a partner model call once ``allowed_fields`` is non-empty. A labels header the
-    caller already set stands in for ``caller_labels``, as it does with the setting off, and the result replaces it.
+    The ``X-Vertex-AI-Labels`` value for a partner model call once ``allowed_fields`` is non-empty. A decodable labels
+    header the caller already set stands in for ``caller_labels``, as it does with the setting off, and the result
+    replaces it.
     """
     caller_header: Final = next(
         (value for name, value in outbound_headers.items() if is_vertex_labels_header(name)), None
     )
+    decoded_header: Final = _decoded_labels_header(caller_header)
     resolved: Final = resolve_vertex_request_labels(
         allowed_fields,
-        caller_labels if caller_header is None else _decoded_labels_header(caller_header),
+        caller_labels if decoded_header is None else decoded_header,
         litellm_params,
         VERTEX_PARTNER_REQUEST_LABELS_MAX,
     )

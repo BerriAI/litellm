@@ -18,8 +18,9 @@ import sys
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
+from itertools import pairwise
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
 
 import httpx
 import openai
@@ -2579,23 +2580,41 @@ _VERTEX_BODY_LABELLED_METHODS: Final = frozenset(
     {"generateContent", "streamGenerateContent", "predict", "batchPredictionJobs"}
 )
 _VERTEX_HEADER_LABELLED_METHODS: Final = frozenset({"rawPredict", "streamRawPredict"})
+_VERTEX_HEADER_LABELLED_PUBLISHERS: Final = frozenset({"anthropic", "mistralai"})
+
+VertexLabelPlacement: TypeAlias = Literal["header", "body", "caller_body"]
 
 
-def _vertex_labelled_method(http_method: str, endpoint: str) -> str | None:
+def _vertex_publisher(segments: tuple[str, ...]) -> str | None:
+    return next((value for name, value in pairwise(segments) if name == "publishers"), None)
+
+
+def _vertex_label_placement(http_method: str, endpoint: str) -> VertexLabelPlacement | None:
     if http_method != "POST":
         return None
-    resource: Final = endpoint.rstrip("/").rsplit("/", 1)[-1]
-    return resource.partition(":")[2] or resource
+    segments: Final = tuple(endpoint.strip("/").split("/"))
+    method: Final = segments[-1].partition(":")[2] or segments[-1]
+    if method in _VERTEX_HEADER_LABELLED_METHODS:
+        return "header" if _vertex_publisher(segments) in _VERTEX_HEADER_LABELLED_PUBLISHERS else None
+    return "body" if method in _VERTEX_BODY_LABELLED_METHODS else "caller_body"
+
+
+def _without_vertex_labels_header(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return {name: value for name, value in headers.items() if not is_vertex_labels_header(name)}
 
 
 def _with_vertex_body_labels(
-    allowed_fields: tuple[str, ...], body: Mapping[str, object], litellm_params: Mapping[str, object]
-) -> Mapping[str, object]:
+    allowed_fields: tuple[str, ...],
+    headers: Mapping[str, str],
+    body: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+) -> UpstreamRequest:
     resolved: Final = resolve_vertex_request_labels(
         allowed_fields, body.get("labels"), litellm_params, VERTEX_REQUEST_LABELS_MAX
     )
     unlabelled: Final = {key: value for key, value in body.items() if key != "labels"}
-    return {**unlabelled, "labels": dict(resolved)} if resolved else unlabelled
+    labelled_body: Final = {**unlabelled, "labels": dict(resolved)} if resolved else unlabelled
+    return _without_vertex_labels_header(headers), labelled_body
 
 
 def _with_vertex_labels_header(
@@ -2606,7 +2625,7 @@ def _with_vertex_labels_header(
 ) -> UpstreamRequest:
     caller_labels: Final = body.get("labels") if body is not None else None
     labels_header: Final = vertex_partner_labels_header(allowed_fields, caller_labels, headers, litellm_params)
-    unlabelled_headers: Final = {name: value for name, value in headers.items() if not is_vertex_labels_header(name)}
+    unlabelled_headers: Final = _without_vertex_labels_header(headers)
     unlabelled_body: Final = None if body is None else {key: value for key, value in body.items() if key != "labels"}
     if labels_header is None:
         return unlabelled_headers, unlabelled_body
@@ -2614,7 +2633,7 @@ def _with_vertex_labels_header(
 
 
 def _with_vertex_request_labels(
-    vertex_method: str | None,
+    placement: VertexLabelPlacement | None,
     headers: Mapping[str, str],
     body: Mapping[str, object] | None,
     litellm_params: Mapping[str, object],
@@ -2622,11 +2641,15 @@ def _with_vertex_request_labels(
     allowed_fields: Final = vertex_request_label_fields()
     if not allowed_fields:
         return headers, body
-    if vertex_method in _VERTEX_HEADER_LABELLED_METHODS:
-        return _with_vertex_labels_header(allowed_fields, headers, body, litellm_params)
-    if body is not None and (vertex_method in _VERTEX_BODY_LABELLED_METHODS or "labels" in body):
-        return headers, _with_vertex_body_labels(allowed_fields, body, litellm_params)
-    return headers, body
+    match placement:
+        case "header":
+            return _with_vertex_labels_header(allowed_fields, headers, body, litellm_params)
+        case "body" if body is not None:
+            return _with_vertex_body_labels(allowed_fields, headers, body, litellm_params)
+        case "caller_body" if body is not None and "labels" in body:
+            return _with_vertex_body_labels(allowed_fields, headers, body, litellm_params)
+        case _:
+            return headers, body
 
 
 def get_vertex_pass_through_handler(
@@ -3076,7 +3099,7 @@ async def _base_vertex_proxy_route(
         custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
         upstream_request_filter=partial(
-            _with_vertex_request_labels, _vertex_labelled_method(request.method, encoded_endpoint)
+            _with_vertex_request_labels, _vertex_label_placement(request.method, encoded_endpoint)
         ),
     )  # dynamically construct pass-through endpoint based on incoming path
 

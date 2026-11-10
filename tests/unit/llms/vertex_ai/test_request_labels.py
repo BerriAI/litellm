@@ -309,6 +309,27 @@ def test_a_caller_set_claude_labels_header_cannot_forge_identity_and_is_replaced
     assert decoded_labels(undecodable) == IDENTITY
 
 
+def test_an_undecodable_claude_labels_header_keeps_the_callers_labels(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+
+    sent: Final = claude_headers(metadata(**IDENTITY), {"labels": {"app": "bot"}}, {LABELS_HEADER: "%%"})
+
+    assert decoded_labels(sent) == {**IDENTITY, "app": "bot"}
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [("user_api_key_team_alias", {"user_api_key_team_alias": "ai-platform"}), ("", None)],
+    ids=["one-field", "empty"],
+)
+def test_a_single_field_written_as_text_turns_the_setting_on_for_that_field(
+    setting: str, expected: dict[str, str] | None, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", setting)
+
+    assert gemini_labels(metadata(**IDENTITY), {}) == expected
+
+
 @pytest.mark.parametrize("surface", ALL_SURFACES)
 def test_identity_and_spend_logs_text_is_rewritten_to_labels_google_accepts(
     surface: LabelSource, monkeypatch: pytest.MonkeyPatch
