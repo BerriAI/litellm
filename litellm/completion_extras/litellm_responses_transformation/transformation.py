@@ -85,7 +85,14 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
-from litellm.types.utils import CallTypes, Delta, GenericStreamingChunk, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    CallTypes,
+    ChatCompletionDeltaToolCall,
+    Delta,
+    GenericStreamingChunk,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
@@ -575,6 +582,50 @@ def _reasoning_done_stream_chunk(
             )
         ]
     )
+
+
+def _tool_call_arguments_chunk(tool_call_index: int, arguments: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    tool_calls=[
+                        ChatCompletionToolCallChunk(
+                            id=None,
+                            index=tool_call_index,
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(name=None, arguments=arguments),
+                        )
+                    ]
+                ),
+                finish_reason=None,
+            )
+        ]
+    )
+
+
+def _tool_call_indices_with_arguments(chunk: ModelResponseStream) -> frozenset[int]:
+    tool_calls: Final = chunk.choices[0].delta.tool_calls if chunk.choices else None
+    return frozenset(
+        tool_call.index
+        for tool_call in tool_calls or ()
+        if isinstance(tool_call, ChatCompletionDeltaToolCall) and tool_call.function.arguments
+    )
+
+
+_ARGUMENTS_DONE_FIELDS: Final = MappingProxyType(
+    {
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE.value: "arguments",
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value: "input",
+    }
+)
+
+
+def _done_arguments(chunk: Mapping[str, object]) -> str | None:
+    field: Final = _ARGUMENTS_DONE_FIELDS.get(str(_responses_event_type(chunk)))
+    arguments: Final = chunk.get(field) if field else None
+    return arguments if isinstance(arguments, str) and arguments else None
 
 
 def _shift_annotation(annotation: ChatCompletionAnnotation, offset: int) -> ChatCompletionAnnotation:
@@ -2135,6 +2186,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._first_message_item_done: bool = False
         self._reasoning_summary_streamed: bool = False
         self._summary_streamed_outputs: frozenset[int | None] = frozenset()
+        self._tool_calls_with_arguments: frozenset[int] = frozenset()
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -2197,7 +2249,6 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         """
         from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
         from litellm.types.utils import (
-            ChatCompletionToolCallChunk,
             Delta,
             ModelResponseStream,
             StreamingChoices,
@@ -2282,24 +2333,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 tool_call_index = OpenAiResponsesToChatCompletionStreamIterator._sequential_tool_call_index(
                     tool_call_index_map, parsed_chunk.get("output_index", 0)
                 )
-                return ModelResponseStream(
-                    choices=[
-                        StreamingChoices(
-                            index=0,
-                            delta=Delta(
-                                tool_calls=[
-                                    ChatCompletionToolCallChunk(
-                                        id=None,
-                                        index=tool_call_index,
-                                        type="function",
-                                        function=ChatCompletionToolCallFunctionChunk(name=None, arguments=content_part),
-                                    )
-                                ]
-                            ),
-                            finish_reason=None,
-                        )
-                    ]
-                )
+                return _tool_call_arguments_chunk(tool_call_index, content_part)
             else:
                 raise ValueError(f"Chat provider: Invalid function argument delta {parsed_chunk}")
         elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
@@ -2473,11 +2507,14 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             if self._streams_reasoning_signatures
             else None
         )
+        arguments_done_chunk: Final = self._unstreamed_arguments_chunk(chunk)
         translated: Final = (
             self._empty_content_chunk()
             if self._is_text_delta_after_structured_answer(chunk)
             else reasoning_chunk
             if reasoning_chunk is not None
+            else arguments_done_chunk
+            if arguments_done_chunk is not None
             else OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                 chunk,
                 tool_call_index_map=self._tool_call_index_map,
@@ -2486,12 +2523,27 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 reasoning_summary_streamed=self._reasoning_summary_streamed,
             )
         )
+        self._tool_calls_with_arguments = self._tool_calls_with_arguments | _tool_call_indices_with_arguments(
+            translated
+        )
         if self._structured_output and _is_message_item_done(chunk):
             self._first_message_item_done = True
         if _responses_event_type(chunk) == "response.reasoning_summary_text.delta" and chunk.get("delta"):
             self._reasoning_summary_streamed = True
             self._summary_streamed_outputs = self._summary_streamed_outputs | {_stream_output_index(chunk)}
         return self._with_served_service_tier(self._with_stream_scoped_id(translated))
+
+    def _unstreamed_arguments_chunk(self, chunk: Mapping[str, object]) -> "ModelResponseStream | None":
+        """OpenAI sometimes sends a tool call's arguments only in its done event, with no delta."""
+        arguments: Final = _done_arguments(chunk)
+        if arguments is None:
+            return None
+        tool_call_index: Final = self._sequential_tool_call_index(
+            self._tool_call_index_map, _stream_output_index(chunk) or 0
+        )
+        if tool_call_index in self._tool_calls_with_arguments:
+            return None
+        return _tool_call_arguments_chunk(tool_call_index, arguments)
 
     def _is_text_delta_after_structured_answer(self, chunk: Mapping[str, object]) -> bool:
         """Under a structured response_format the first message item is the whole answer, so
