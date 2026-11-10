@@ -3,11 +3,11 @@ import hashlib
 import json
 import re
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeVar
 from uuid import uuid4
 
 import httpx
@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
-from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router import router_arguments
 from litellm.router_api import router_init_args
@@ -147,15 +147,34 @@ def _may_call_bedrock_without_a_deployment(route_type: str, data: Mapping[str, o
     )
 
 
+def _deployment_names_bedrock_model(params: Mapping[str, object], model_id: str) -> bool:
+    model: Final = params.get("model")
+    return params.get("model_id") == model_id or (isinstance(model, str) and model.endswith(f"/{model_id}"))
+
+
 def _a_deployment_serves_bedrock_model(llm_router: LitellmRouter | None, model_id: str) -> bool:
     if llm_router is None:
         return False
-    deployment_params: Final = (
-        deployment["litellm_params"] for deployment in llm_router.registry().deployments() or []
-    )
     return any(
-        "model" in params and strip_bedrock_routing_prefix(params["model"]) == model_id for params in deployment_params
+        _deployment_names_bedrock_model(deployment["litellm_params"], model_id)
+        for deployment in llm_router.registry().deployments() or []
     )
+
+
+_BedrockAnswerT: Final = TypeVar("_BedrockAnswerT")
+
+
+async def _bedrock_answer_or_original_error(
+    direct_call: Awaitable[_BedrockAnswerT], original_error: Exception
+) -> _BedrockAnswerT:
+    from botocore.exceptions import NoCredentialsError
+
+    try:
+        return await direct_call
+    except BedrockError as error:
+        if isinstance(error.__context__, NoCredentialsError):
+            raise original_error from error
+        raise
 
 
 def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object, team_id: str | None) -> None:
@@ -824,7 +843,7 @@ async def route_request(
             and not _a_deployment_serves_bedrock_model(proxy_server.llm_router, requested_model)
         ):
             raise
-        return await _route_request_single_attempt(
+        retried_call: Final = await _route_request_single_attempt(
             data=data,
             llm_router=proxy_server.llm_router if loaded_by_read_through else None,
             user_model=user_model,
@@ -832,6 +851,9 @@ async def route_request(
             router_only_settings_from_override=router_only_settings_from_override,
             user_api_key_dict=user_api_key_dict,
         )
+        if loaded_by_read_through:
+            return retried_call
+        return _bedrock_answer_or_original_error(retried_call, e)
 
 
 async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited provider coroutines; the inferred union keeps route_request's callers typed

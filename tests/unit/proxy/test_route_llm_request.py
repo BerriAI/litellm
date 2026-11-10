@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import gc
 import json
+import os
 import threading
 import weakref
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
@@ -22,6 +23,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils import registry_read_through
 from litellm.proxy.route_llm_request import (
@@ -3290,6 +3292,54 @@ async def test_route_request_does_not_call_bedrock_directly_until_the_lookup_con
     assert not upstream.called
 
 
+@pytest.fixture
+def proxy_without_aws_credentials(proxy_aws_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID")
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", os.devnull)
+    monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_without_aws_credentials")
+async def test_route_request_keeps_the_invalid_model_error_when_the_proxy_has_no_aws_credentials() -> None:
+    router: Final = litellm.Router(model_list=[])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route(host__regex=r"bedrock-runtime\..*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        direct_call: Final = await route_request(
+            _bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route"
+        )
+        with pytest.raises(ProxyModelNotFoundError):
+            await direct_call
+
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_without_aws_credentials")
+async def test_route_request_reports_a_broken_proxy_aws_setup_on_a_direct_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDPROXYENV")
+    router: Final = litellm.Router(model_list=[])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route(host__regex=r"bedrock-runtime\..*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        direct_call: Final = await route_request(
+            _bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route"
+        )
+        with pytest.raises(BedrockError):
+            await direct_call
+
+    assert not upstream.called
+
+
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_aws_env")
 async def test_route_request_serves_a_bedrock_model_created_on_a_sibling_replica_from_its_deployment(
@@ -3391,16 +3441,21 @@ async def test_route_request_keeps_a_bedrock_model_the_router_routes_on_its_depl
 
 
 @pytest.mark.parametrize(
-    "deployment_model",
+    "served_as",
     [
-        pytest.param(f"bedrock/{_BEDROCK_MODEL_ID}", id="bedrock-prefix"),
-        pytest.param(f"bedrock/converse/{_BEDROCK_MODEL_ID}", id="converse-route-prefix"),
+        pytest.param({"model": f"bedrock/{_BEDROCK_MODEL_ID}"}, id="bedrock-prefix"),
+        pytest.param({"model": f"bedrock/converse/{_BEDROCK_MODEL_ID}"}, id="converse-route-prefix"),
+        pytest.param({"model": f"bedrock/us-west-2/{_BEDROCK_MODEL_ID}"}, id="region-path"),
+        pytest.param(
+            {"model": "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0", "model_id": _BEDROCK_MODEL_ID},
+            id="model-id-param",
+        ),
     ],
 )
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_aws_env")
 async def test_route_request_does_not_call_bedrock_directly_for_a_model_id_a_configured_deployment_serves(
-    deployment_model: str,
+    served_as: Mapping[str, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import litellm.proxy.proxy_server as proxy_server
@@ -3410,7 +3465,7 @@ async def test_route_request_does_not_call_bedrock_directly_for_a_model_id_a_con
             {
                 "model_name": "claude-haiku",
                 "litellm_params": {
-                    "model": deployment_model,
+                    **served_as,
                     "aws_access_key_id": "AKIDDEPLOYMENT",
                     "aws_secret_access_key": "deployment-secret",
                     "aws_region_name": "us-east-1",
@@ -3428,6 +3483,36 @@ async def test_route_request_does_not_call_bedrock_directly_for_a_model_id_a_con
             await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
 
     assert not upstream.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_calls_bedrock_directly_for_a_base_model_id_when_a_deployment_serves_only_its_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    base_model_id: Final = _BEDROCK_MODEL_ID.removeprefix("us.")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-haiku",
+                "litellm_params": {"model": f"bedrock/{_BEDROCK_MODEL_ID}", "aws_region_name": "us-east-1"},
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.post(
+            url__regex=r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/.+/converse"
+        ).mock(return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER)))
+        response: Final = await (
+            await route_request(_bedrock_passthrough_data(base_model_id), router, None, "allm_passthrough_route")
+        )
+
+    assert response.json() == dict(_BEDROCK_CONVERSE_ANSWER)
+    assert upstream.calls.last.request.url.raw_path.decode() == f"/model/{base_model_id}/converse"
 
 
 def _router_answering_hi() -> "litellm.Router":

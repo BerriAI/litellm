@@ -73,6 +73,25 @@ def test_encode_bedrock_runtime_modelid_arn():
     assert result == expected
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "expected"),
+    [
+        pytest.param(
+            "model/arn:aws:bedrock:us-east-1:123456789012:custom-model/amazon.titan-text-express-v1:0:8k/abc123/converse",
+            "model/arn:aws:bedrock:us-east-1:123456789012:custom-model%2Famazon.titan-text-express-v1:0:8k%2Fabc123/converse",
+            id="custom-model-of-a-versioned-base-model",
+        ),
+        pytest.param(
+            "model/arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abc123def456/converse",
+            "model/arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment%2Fabc123def456/converse",
+            id="custom-model-deployment",
+        ),
+    ],
+)
+def test_encode_bedrock_runtime_modelid_arn_custom_model_ids(endpoint: str, expected: str) -> None:
+    assert CommonUtils.encode_bedrock_runtime_modelid_arn(endpoint) == expected
+
+
 def test_encode_bedrock_runtime_modelid_arn_no_arn():
     # Test regular model ID (no ARN)
     endpoint = "model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
