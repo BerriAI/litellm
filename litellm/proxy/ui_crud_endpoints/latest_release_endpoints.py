@@ -206,15 +206,20 @@ async def fetch_latest_release(client: _AsyncGetClient) -> LatestReleaseInfo | L
     )
 
 
+def _cached_release(cache: InMemoryCache) -> LatestReleaseInfo | LatestReleaseUnavailable | None:
+    cached: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
+    return cached if isinstance(cached, (LatestReleaseInfo, LatestReleaseUnavailable)) else None
+
+
 async def get_latest_release_info(
     client: _AsyncGetClient, cache: InMemoryCache, fetch_lock: asyncio.Lock
 ) -> LatestReleaseInfo | LatestReleaseUnavailable:
-    cached: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
-    if isinstance(cached, (LatestReleaseInfo, LatestReleaseUnavailable)):
+    cached: Final = _cached_release(cache)
+    if cached is not None:
         return cached
     async with fetch_lock:
-        cached_after_lock: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
-        if isinstance(cached_after_lock, (LatestReleaseInfo, LatestReleaseUnavailable)):
+        cached_after_lock: Final = _cached_release(cache)
+        if cached_after_lock is not None:
             return cached_after_lock
         result: Final = await fetch_latest_release(client)
         ttl: Final = (
@@ -255,9 +260,9 @@ async def latest_release_info(
     """
     if not release_check_enabled:
         return None
-    cached: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
+    cached: Final = _cached_release(cache)
     if isinstance(cached, LatestReleaseInfo):
         return cached
-    if not isinstance(cached, LatestReleaseUnavailable) and not fetch_lock.locked():
+    if cached is None and not fetch_lock.locked():
         background_tasks.add_task(refresh_latest_release_info, client, cache, fetch_lock)
     return None
