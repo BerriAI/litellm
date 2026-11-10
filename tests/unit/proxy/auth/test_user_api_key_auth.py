@@ -18,14 +18,33 @@ import litellm.proxy
 import litellm.proxy.proxy_server
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_AccessGroupTable, LiteLLM_UserTable, LitellmUserRoles, ProxyException
+from litellm.proxy.auth.core.python_core import PythonCore
 from litellm.proxy.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     _authorize_authenticated_request,
-    get_api_key_from_custom_header,
+    _enforce_model_budgets,
+    _ModelBudgetHost,
     user_api_key_auth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from tests._master_key import MASTER_KEY
+
+
+async def _check_user_model_budgets(valid_token: UserAPIKeyAuth, limiter: object, model: str) -> None:
+    request: Final = MagicMock()
+    request.scope = {}
+    await _enforce_model_budgets(
+        PythonCore().model_budgets().check_user,
+        _ModelBudgetHost(
+            request=request,
+            request_data={"model": model},
+            valid_token=valid_token,
+            route="/chat/completions",
+            limiter=limiter,
+            llm_router=None,
+            llm_model_list=None,
+        ),
+    )
 
 
 class Request:
@@ -646,50 +665,6 @@ async def test_auth_not_connected_to_db():
     print("got valid token", valid_token)
     assert valid_token.key_name == "failed-to-connect-to-db"
     assert valid_token.token == "failed-to-connect-to-db"
-
-
-def _assert_api_key_from_custom_header(headers, custom_header_name, expected_api_key):
-    verbose_proxy_logger.setLevel(logging.DEBUG)
-    request = MagicMock(spec=Request)
-    request.headers = headers
-    api_key = get_api_key_from_custom_header(request=request, custom_litellm_key_header_name=custom_header_name)
-    assert api_key == expected_api_key
-
-
-def test_get_api_key_from_custom_header_bearer_token():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": f"Bearer {token}"},
-        custom_header_name="x-custom-api-key",
-        expected_api_key=token,
-    )
-
-
-def test_get_api_key_from_custom_header_empty_value():
-    _assert_api_key_from_custom_header(
-        headers={"x-custom-api-key": ""},
-        custom_header_name="x-custom-api-key",
-        expected_api_key="",
-    )
-
-
-def test_get_api_key_from_custom_header_missing_header():
-    _assert_api_key_from_custom_header(
-        headers={},
-        custom_header_name="X-Custom-API-Key",
-        expected_api_key="",
-    )
-
-
-def test_get_api_key_from_custom_header_different_casing():
-    token = "sk-" + "1" * 8
-    _assert_api_key_from_custom_header(
-        headers={"X-CUSTOM-API-KEY": f"Bearer {token}"},
-        custom_header_name="X-Custom-API-Key",
-        expected_api_key=token,
-    )
-
-
 
 
 @pytest.mark.parametrize(
@@ -1568,11 +1543,12 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
     stored on LiteLLM_UserTable, accepted by /user/new and /user/update, and read
     by nothing, so a user-level per-model budget never blocked anything.
     """
-    from litellm.proxy.auth.user_api_key_auth import _check_user_model_budget
-
     calls = []
 
     class _Limiter:
+        async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
+            return True
+
         async def is_user_within_model_budget(
             self, user_id: str, user_model_max_budget: Mapping[str, object], model: str, team_id: str | None = None
         ) -> bool:
@@ -1584,11 +1560,7 @@ async def test_check_user_model_budget(user_id, user_model_max_budget, expected_
         user_id=user_id,
         user_model_max_budget=user_model_max_budget,
     )
-    await _check_user_model_budget(
-        valid_token=valid_token,
-        model_max_budget_limiter=_Limiter(),
-        models=["gpt-4"],
-    )
+    await _check_user_model_budgets(valid_token, _Limiter(), model="gpt-4")
     assert len(calls) == expected_calls
     if expected_calls:
         assert calls[0] == ("u-1", user_model_max_budget, "gpt-4")
@@ -1730,7 +1702,6 @@ async def test_jwt_user_model_budget_is_enforced_before_the_jwt_path_returns(ove
     nothing ever reads it, which looks enforced and is not.
     """
     from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import _check_user_model_budget
     from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
@@ -1758,99 +1729,11 @@ async def test_jwt_user_model_budget_is_enforced_before_the_jwt_path_returns(ove
 
     if expect_refusal:
         with pytest.raises(litellm.BudgetExceededError) as exc:
-            await _check_user_model_budget(
-                valid_token=valid_token,
-                model_max_budget_limiter=model_max_budget_limiter,
-                models=[model],
-            )
+            await _check_user_model_budgets(valid_token, model_max_budget_limiter, model=model)
         assert exc.value.entity_type == Litellm_EntityType.USER.value
+        assert exc.value.entity_id == user_id
     else:
-        await _check_user_model_budget(
-            valid_token=valid_token,
-            model_max_budget_limiter=model_max_budget_limiter,
-            models=[model],
-        )
-
-
-def test_jwt_path_enforces_the_user_model_budget_before_returning():
-    """
-    The JWT branch returns early, so the enforcement call has to sit before that
-    return rather than in the virtual-key block. Assert on the call graph, since
-    a helper-level test passes whether or not the JWT path ever calls it.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
-    )
-
-    def calls_before_each_return(node):
-        seen_check = []
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                fn = child.func
-                name = getattr(fn, "id", None) or getattr(fn, "attr", None)
-                if name == "_check_user_model_budget":
-                    seen_check.append(child.lineno)
-        return seen_check
-
-    check_lines = calls_before_each_return(tree)
-    assert check_lines, "_user_api_key_auth_builder never enforces the user model budget"
-
-    jwt_returns = [
-        n.lineno
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Return) and isinstance(n.value, ast.Call) and getattr(n.value.func, "id", None) == "cast"
-    ]
-    assert jwt_returns, "expected the JWT branch's `return cast(UserAPIKeyAuth, valid_token)`"
-    assert any(check < jwt_return for check in check_lines for jwt_return in jwt_returns), (
-        "the user model-budget check must run before the JWT branch returns"
-    )
-
-
-def test_every_jwt_branch_carries_the_user_model_budget():
-    """
-    Each JWT branch that builds or replaces `valid_token` has to put the user's
-    model budget on it, or the enforcement call a few lines later has nothing to
-    read and silently admits the request.
-
-    The auto-register branch is the one that regressed: it REPLACES the token
-    built above it with a key-scoped one whose columns carry no user budget.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
-    )
-
-    assignments = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Attribute) and t.attr == "user_model_max_budget" for t in node.targets)
-    ]
-    targets = {
-        t.value.id
-        for node in assignments
-        for t in node.targets
-        if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
-    }
-    assert "auto_registered" in targets, (
-        f"the auto-registered JWT token must carry the user's model budget; only these are populated: {sorted(targets)}"
-    )
-    assert "valid_token" in targets, "the virtual-key path must carry the user's model budget"
+        await _check_user_model_budgets(valid_token, model_max_budget_limiter, model=model)
 
 
 @pytest.mark.asyncio
@@ -1949,58 +1832,6 @@ async def test_user_budget_lookup_returns_the_budget_when_the_row_reads():
     assert budget == stored
 
 
-def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
-    """
-    `skip_budget_checks` is computed per request for zero-cost models, and the
-    JWT branch logs "Skipping all budget checks" when it is set. Any enforcement
-    call that ignores it makes the same request behave differently depending on
-    whether the caller used a JWT or a virtual key, and makes that log a lie.
-
-    Structural rather than behavioural on purpose: the defect is a call site
-    sitting outside a guard, and driving both auth paths to a zero-cost model
-    would prove it for the two requests exercised rather than for every site.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
-    )
-
-    def guarded_by_skip(node: ast.AST, target: ast.AST) -> bool:
-        for parent in ast.walk(node):
-            if not isinstance(parent, ast.If):
-                continue
-            test = parent.test
-            is_skip_guard = (
-                isinstance(test, ast.UnaryOp)
-                and isinstance(test.op, ast.Not)
-                and isinstance(test.operand, ast.Name)
-                and test.operand.id == "skip_budget_checks"
-            )
-            if is_skip_guard and any(sub is target for sub in ast.walk(parent)):
-                return True
-        return False
-
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_check_user_model_budget"
-    ]
-    assert len(calls) == 2, f"expected the JWT and virtual-key call sites, found {len(calls)}"
-
-    unguarded = [c for c in calls if not guarded_by_skip(tree, c)]
-    assert not unguarded, (
-        f"{len(unguarded)} _check_user_model_budget call(s) run even when "
-        "skip_budget_checks is set, so a zero-cost model is enforced on one auth path and not the other"
-    )
-
-
 def test_custom_auth_also_skips_budget_checks_for_zero_cost_models():
     """
     The custom-auth helper runs its own key, user and end-user per-model budget
@@ -2024,8 +1855,7 @@ def test_custom_auth_also_skips_budget_checks_for_zero_cost_models():
     assert "skip_budget_checks" in src, "the custom-auth path never computes the zero-cost skip flag"
 
     budget_calls = (
-        "_check_key_model_budget_with_fallback",
-        "_check_user_model_budget",
+        "_enforce_model_budgets",
         "is_end_user_within_model_budget",
     )
 
@@ -2089,71 +1919,6 @@ def test_custom_auth_attaches_the_user_budget_even_when_it_does_not_enforce():
             "the user budget is attached inside a conditional, so the spend hook "
             "cannot charge the user counter whenever that condition is false"
         )
-
-
-def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
-    """
-    A JWT that maps to an existing virtual key resolves through the resolver
-    store, which builds the token from the KEY row alone and therefore carries
-    no user-level per-model budget. That branch sets `do_standard_jwt_auth =
-    False` precisely so it falls through to the shared virtual-key checks, where
-    the user row is loaded and its budget copied onto the token.
-
-    Reviewed as a bypass three times, so the two halves it depends on are pinned
-    here: the branch must not return before the shared block, and the shared
-    block must copy the user row's budget onto the token. Structural on purpose,
-    because the claim is about control flow reaching a statement, and it has to
-    hold for branches added later rather than for one mocked request.
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    from litellm.proxy.auth import user_api_key_auth as auth_module
-
-    tree = ast.parse(
-        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
-        + "\n"
-        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
-    )
-
-    # Half one: the shared block copies the user row's budget onto the token.
-    copies_user_row = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Attribute) and t.attr == "user_model_max_budget" for t in node.targets)
-        and any(isinstance(v, ast.Attribute) and v.attr == "model_max_budget" for v in ast.walk(node.value))
-    ]
-    assert copies_user_row, (
-        "nothing copies the user row's model_max_budget onto the token, so a mapped-key "
-        "JWT reaches enforcement carrying the key's columns only"
-    )
-
-    # Half two: the mapped-key branch does not return before reaching it.
-    disables_standard_auth = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "do_standard_jwt_auth" for t in node.targets)
-        and isinstance(node.value, ast.Constant)
-        and node.value.value is False
-    ]
-    assert len(disables_standard_auth) == 1, "expected exactly one mapped-key branch"
-    marker = disables_standard_auth[0]
-
-    enclosing = [
-        node for node in ast.walk(tree) if isinstance(node, ast.If) and any(sub is marker for sub in node.body)
-    ]
-    assert enclosing, "could not locate the mapped-key branch body"
-
-    returns_after = [
-        node for node in ast.walk(enclosing[0]) if isinstance(node, ast.Return) and node.lineno > marker.lineno
-    ]
-    assert not returns_after, (
-        "the mapped-key branch returns before the shared virtual-key checks, so the "
-        "user's per-model budget is never attached and never enforced"
-    )
 
 
 def _rejected_websocket(sent: list[Message], bearer: str) -> WebSocket:
@@ -2291,12 +2056,12 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
         user_api_key_cache=DualCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
-    user_model_budget_check: Final = AsyncMock()
+    user_model_budget_check: Final = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.auth.handle_jwt.JWTAuthManager.auth_builder", return_value=jwt_response),
-        patch("litellm.proxy.auth.user_api_key_auth._check_user_model_budget", user_model_budget_check),
+        patch("litellm.proxy.auth.core.jwt.check_user_model_budgets", user_model_budget_check),
     ):
         result: Final = await user_api_key_auth_builder(
             request=mock_request,

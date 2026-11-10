@@ -74,19 +74,19 @@ from litellm.proxy.auth.auth_checks import (
     cache_key_object,
     jwt_key_mapping_cache_key,
 )
+from litellm.proxy.auth.core.python_core import PythonCore
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import get_client_requested_model
 from litellm.proxy.auth.user_api_key_auth import (
-    _check_key_model_budget_with_fallback,
+    _enforce_model_budgets,
+    _ModelBudgetHost,
     _check_team_member_model_budget_with_fallback,
     _ensure_litellm_received_at_on_request_state,
     _ensure_parent_otel_span_on_request_state,
     _load_team_member_default_model_budget,
     _PendingAutoRegister,
-    _matches_routing_override,
+    _plan_settings,
     _reserve_budget_after_common_checks,
-    _route_requires_auth_despite_public,
-    _routing_selector_matches_claim,
     _authorize_authenticated_request,
     run_centralized_common_checks,
     _run_post_custom_auth_checks,
@@ -95,6 +95,8 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     user_api_key_auth_websocket_for_model,
 )
+from litellm.proxy.auth.core.inputs import PlanSettings
+from litellm.proxy.auth.core.plan import is_public_route
 from litellm.proxy.pass_through_endpoints import pass_through_endpoints as pass_through
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
@@ -201,15 +203,18 @@ def test_get_api_key():
     ) == (api_key, passed_in_key)
 
 
-def test_route_requires_auth_despite_public_for_metrics(monkeypatch):
+def _builder_plan_settings(general_settings: dict) -> PlanSettings:
+    return _plan_settings(general_settings, JWTHandler(), premium_user=False, custom_auth=False)
+
+
+def test_planning_reads_whether_metrics_requires_auth(monkeypatch):
     monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
 
-    assert _route_requires_auth_despite_public("/metrics", {}) is True
-    assert _route_requires_auth_despite_public("/metrics/", {}) is True
+    assert _builder_plan_settings({}).metrics_require_auth is True
 
     monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", False)
 
-    assert _route_requires_auth_despite_public("/metrics", {}) is False
+    assert _builder_plan_settings({}).metrics_require_auth is False
 
 
 def test_public_ai_hub_routes_remain_public():
@@ -221,7 +226,7 @@ def test_public_ai_hub_routes_remain_public():
         "/public/skill_hub",
     ):
         assert route in LiteLLMRoutes.public_routes.value
-        assert _route_requires_auth_despite_public(route, {}) is False
+        assert is_public_route(route, _builder_plan_settings({})) is True
 
 
 @pytest.mark.asyncio
@@ -703,6 +708,61 @@ async def _authenticate_through_custom_auth() -> UserAPIKeyAuth:
     )
 
 
+async def _authenticate_master_key(request_data: dict[str, object]) -> UserAPIKeyAuth:
+    from starlette.datastructures import URL
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_builder
+
+    request: Final = Request(scope={"type": "http", "headers": []})
+    request._url = URL(url="/chat/completions")
+    return await user_api_key_auth_builder(
+        request=request,
+        api_key="Bearer sk-master-key",
+        azure_api_key_header=None,
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data=request_data,
+    )
+
+
+@pytest.mark.asyncio
+async def test_master_key_request_does_not_inherit_previous_requests_end_user_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    proxy_attrs: Final = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    for attr, val in proxy_attrs.items():
+        monkeypatch.setattr(_proxy_server_mod, attr, val, raising=False)
+    monkeypatch.setattr(_proxy_server_mod, "user_api_key_cache", UserApiKeyCache())
+    capped: Final = LiteLLM_EndUserTable(
+        user_id="eu-capped",
+        blocked=False,
+        litellm_budget_table=LiteLLM_BudgetTable(tpm_limit=5, rpm_limit=7),
+    )
+
+    async def end_user_object(end_user_id: str, **_: object) -> LiteLLM_EndUserTable | None:
+        return capped if end_user_id == "eu-capped" else None
+
+    with patch("litellm.proxy.auth.user_api_key_auth.get_end_user_object", side_effect=end_user_object):
+        capped_request: Final = await _authenticate_master_key({"user": "eu-capped"})
+        await asyncio.sleep(0.05)
+        next_request: Final = await _authenticate_master_key({})
+
+    assert (capped_request.end_user_id, capped_request.end_user_tpm_limit, capped_request.end_user_rpm_limit) == (
+        "eu-capped",
+        5,
+        7,
+    )
+    assert (next_request.end_user_id, next_request.end_user_tpm_limit, next_request.end_user_rpm_limit) == (
+        None,
+        None,
+        None,
+    )
+    assert next_request.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
 @pytest.mark.asyncio
 async def test_user_custom_auth_returning_one_shared_token_keeps_each_requests_end_user_apart(
     monkeypatch: pytest.MonkeyPatch,
@@ -861,146 +921,6 @@ def _assert_get_api_key_with_custom_litellm_key_header(custom_litellm_key_header
         route="",
         request=MagicMock(),
     ) == (api_key, passed_in_key)
-
-
-@pytest.mark.parametrize(
-    "selector_value, claim_value, expected, split_space_delimited",
-    [
-        (None, "any-value", True, False),
-        ("issuer.example.com", "issuer.example.com", True, False),
-        ("issuer.example.com", "other-issuer.example.com", False, False),
-        # iss (and other non-scope claims) must not match via space-split injection
-        (
-            "trusted.example.com",
-            "trusted.example.com attacker.example.com",
-            False,
-            False,
-        ),
-        # Wildcard iss must not match space-containing claim strings (fnmatch * spans spaces)
-        (
-            "trusted.*",
-            "trusted.example.com attacker.example.com",
-            False,
-            False,
-        ),
-        ("trusted.*", "trusted.example.com", True, False),
-        (
-            ["issuer-a.example.com", "issuer-b.example.com"],
-            "issuer-b.example.com",
-            True,
-            False,
-        ),
-        ("*MID_LITELLM", "STREAM_MID_LITELLM", True, False),
-        ("*MID_LITELLM", "REDIS_LITELLM", False, False),
-        ("machine-??", "machine-01", True, False),
-        ("machine-??", "machine-001", False, False),
-        # Wildcard matching is case-sensitive (fnmatch.fnmatchcase)
-        ("*litellm", "BATCH_LITELLM", False, False),
-        ("*LITELLM", "BATCH_LITELLM", True, False),
-        ("App:LiteLLM", "App:LiteLLM openid", True, True),
-        ("App:*", "App:LiteLLM openid", True, True),
-        (["openid", "App:LiteLLM"], "openid profile", True, True),
-        (["service-*", "batch-*"], "batch-123", True, False),
-        (["service-*", "batch-*"], "other-123", False, False),
-        ("App:LiteLLM", ["openid", "App:LiteLLM"], True, False),
-        ("App:LiteLLM", None, False, False),
-    ],
-)
-def test_routing_selector_matches_claim_parametrized(selector_value, claim_value, expected, split_space_delimited):
-    assert (
-        _routing_selector_matches_claim(
-            selector_value=selector_value,
-            claim_value=claim_value,
-            split_space_delimited=split_space_delimited,
-        )
-        is expected
-    )
-
-
-@pytest.mark.parametrize(
-    "override, token_claims, expected",
-    [
-        # Only iss selector is required and should match.
-        (
-            JWTRoutingOverride(iss="oauth-issuer.example.com", path="oauth2"),
-            {"iss": "oauth-issuer.example.com"},
-            True,
-        ),
-        # Scope selector narrows the match.
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                scope="App:LiteLLM",
-                path="oauth2",
-            ),
-            {"iss": "oauth-issuer.example.com", "scope": "App:LiteLLM openid"},
-            True,
-        ),
-        # client_id wildcard selector narrows the match.
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                client_id="*MID_LITELLM",
-                path="oauth2",
-            ),
-            {"iss": "oauth-issuer.example.com", "client_id": "BATCH_MID_LITELLM"},
-            True,
-        ),
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                client_id="*MID_LITELLM",
-                path="oauth2",
-            ),
-            {"iss": "oauth-issuer.example.com", "client_id": "BATCH_PORTAL"},
-            False,
-        ),
-        # aud selector still works with list claims.
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                aud=["api://litellm", "api://fallback"],
-                path="oauth2",
-            ),
-            {
-                "iss": "oauth-issuer.example.com",
-                "aud": ["api://other", "api://litellm"],
-            },
-            True,
-        ),
-        # All provided selectors are AND-ed.
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                scope="App:LiteLLM",
-                client_id="*MID_LITELLM",
-                path="oauth2",
-            ),
-            {
-                "iss": "oauth-issuer.example.com",
-                "scope": "App:LiteLLM openid",
-                "client_id": "BATCH_MID_LITELLM",
-            },
-            True,
-        ),
-        (
-            JWTRoutingOverride(
-                iss="oauth-issuer.example.com",
-                scope="App:LiteLLM",
-                client_id="*MID_LITELLM",
-                path="oauth2",
-            ),
-            {
-                "iss": "oauth-issuer.example.com",
-                "scope": "App:Other openid",
-                "client_id": "BATCH_MID_LITELLM",
-            },
-            False,
-        ),
-    ],
-)
-def test_matches_routing_override_parametrized(override, token_claims, expected):
-    assert _matches_routing_override(token_claims=token_claims, override=override) is expected
 
 
 def test_get_api_key_with_custom_litellm_key_header_bearer_prefix():
@@ -2056,7 +1976,7 @@ async def test_standard_jwt_auth_propagates_user_email():
     ):
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -2126,7 +2046,7 @@ async def test_jwt_auth_propagates_agent_id_to_user_api_key_auth(is_proxy_admin:
     ):
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -2691,7 +2611,7 @@ async def test_auto_register_map_existing_key_first_request_runs_key_checks(
     ):
         call = user_api_key_auth(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -2800,7 +2720,7 @@ async def test_auto_register_first_request_propagates_user_email(active: bool) -
             with pytest.raises(ProxyException, match="deactivated via SCIM") as exc:
                 await user_api_key_auth_builder(
                     request=mock_request,
-                    api_key=jwt_token,
+                    api_key=f"Bearer {jwt_token}",
                     azure_api_key_header="",
                     anthropic_api_key_header=None,
                     google_ai_studio_api_key_header=None,
@@ -2812,7 +2732,7 @@ async def test_auto_register_first_request_propagates_user_email(active: bool) -
             return
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -3032,7 +2952,7 @@ async def test_jwt_auto_register_forwards_bound_agent_id():
     ):
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -3279,7 +3199,9 @@ class TestJWTOAuth2Coexistence:
     async def test_auto_register_passes_validated_org_context_to_generated_key(self):
         jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
         general_settings = {"enable_jwt_auth": True}
-        user_api_key_cache: Final = _validated_jwt_admission_cache(org_id="validated-org", end_user_id="validated-end-user")
+        user_api_key_cache: Final = _validated_jwt_admission_cache(
+            org_id="validated-org", end_user_id="validated-end-user"
+        )
         prisma_client = MagicMock()
         jwt_handler = MagicMock()
         jwt_handler.is_jwt.return_value = True
@@ -3348,7 +3270,7 @@ class TestJWTOAuth2Coexistence:
         ):
             result = await user_api_key_auth_builder(
                 request=mock_request,
-                api_key=jwt_token,
+                api_key=f"Bearer {jwt_token}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -3429,7 +3351,7 @@ class TestJWTOAuth2Coexistence:
         ):
             result = await user_api_key_auth_builder(
                 request=mock_request,
-                api_key=jwt_token,
+                api_key=f"Bearer {jwt_token}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -3505,7 +3427,7 @@ class TestJWTOAuth2Coexistence:
         ):
             result = await user_api_key_auth_builder(
                 request=mock_request,
-                api_key=jwt_token,
+                api_key=f"Bearer {jwt_token}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -3577,7 +3499,7 @@ class TestJWTOAuth2Coexistence:
         ):
             result = await user_api_key_auth_builder(
                 request=mock_request,
-                api_key=jwt_token,
+                api_key=f"Bearer {jwt_token}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -5554,8 +5476,6 @@ async def _run_centralized_checks_for_end_user(
     finally:
         for attribute, value in originals.items():
             setattr(_proxy_server_mod, attribute, value)
-
-
 
 
 @pytest.mark.parametrize(
@@ -9609,10 +9529,43 @@ class TestJWTAuthUserEmail:
         assert result.user_email == "admin@example.com"
 
 
-class TestCheckKeyModelBudgetWithFallback:
-    """`_check_key_model_budget_with_fallback` must reroute a request to the
-    first configured `budget_fallbacks` entry still within its own budget,
-    and only raise `BudgetExceededError` when no fallback is available."""
+def _key_over_budget_for(*models: str) -> AsyncMock:
+    async def is_key_within_model_budget(user_api_key_dict: UserAPIKeyAuth, model: str) -> bool:
+        if model in models:
+            raise litellm.BudgetExceededError(current_cost=10, max_budget=5, message=f"over budget for {model}")
+        return True
+
+    limiter: Final = AsyncMock()
+    limiter.is_key_within_model_budget.side_effect = is_key_within_model_budget
+    return limiter
+
+
+async def _check_key_model_budgets(
+    valid_token: UserAPIKeyAuth,
+    limiter: object,
+    request_data: dict[str, object],
+    request: object,
+    llm_router: litellm.Router | None = None,
+) -> None:
+    await _enforce_model_budgets(
+        PythonCore().model_budgets().check_key_and_user,
+        _ModelBudgetHost(
+            request=request,
+            request_data=request_data,
+            valid_token=valid_token,
+            route="/chat/completions",
+            limiter=limiter,
+            llm_router=llm_router,
+            llm_model_list=None,
+        ),
+    )
+
+
+_KEY_MODEL_BUDGET: Final = {"gpt-4o": {"budget_limit": 5.0, "time_period": "1d"}}
+
+
+class TestKeyModelBudgetFallback:
+    """An over-budget key reroutes to the first `budget_fallbacks` entry it may call and can still afford."""
 
     def _make_request(self):
         request = MagicMock()
@@ -9621,162 +9574,64 @@ class TestCheckKeyModelBudgetWithFallback:
 
     @pytest.mark.asyncio
     async def test_within_budget_does_not_reroute(self):
-        valid_token = UserAPIKeyAuth(token="test-key", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]})
-        limiter = AsyncMock()
-        limiter.is_key_within_model_budget.return_value = True
+        valid_token = UserAPIKeyAuth(
+            token="test-key", model_max_budget=_KEY_MODEL_BUDGET, budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}
+        )
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
-        await _check_key_model_budget_with_fallback(
-            valid_token=valid_token,
-            model_max_budget_limiter=limiter,
-            model_name="gpt-4o",
-            request_data=request_data,
-            request=request,
-        )
+        await _check_key_model_budgets(valid_token, _key_over_budget_for(), request_data, request)
 
         assert request_data["model"] == "gpt-4o"
-        limiter.get_fallback_model_within_budget.assert_not_awaited()
         assert "parsed_body" not in request.scope
 
     @pytest.mark.asyncio
-    async def test_exceeded_budget_reroutes_to_fallback(self):
+    async def test_exceeded_budget_reroutes_to_fallback_visible_to_a_later_body_read(self):
         valid_token = UserAPIKeyAuth(
             token="test-key",
+            model_max_budget=_KEY_MODEL_BUDGET,
             budget_fallbacks={"gpt-4o": ["gpt-4o-mini", "claude-haiku"]},
         )
-        limiter = AsyncMock()
-        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(current_cost=10, max_budget=5)
-        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
-        await _check_key_model_budget_with_fallback(
-            valid_token=valid_token,
-            model_max_budget_limiter=limiter,
-            model_name="gpt-4o",
-            request_data=request_data,
-            request=request,
-        )
+        await _check_key_model_budgets(valid_token, _key_over_budget_for("gpt-4o"), request_data, request)
 
         assert request_data["model"] == "gpt-4o-mini"
-        limiter.get_fallback_model_within_budget.assert_awaited_once_with(user_api_key_dict=valid_token, model="gpt-4o")
-        # the rerouted model must be visible to a later, separate
-        # `_read_request_body` call on the same `request` (route handlers
-        # re-parse the body from this cache instead of reusing the dict).
-        cached_keys, cached_body = request.scope["parsed_body"]
+        _, cached_body = request.scope["parsed_body"]
         assert cached_body["model"] == "gpt-4o-mini"
 
     @pytest.mark.asyncio
-    async def test_raises_when_every_fallback_also_exceeded(self):
-        valid_token = UserAPIKeyAuth(token="test-key", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]})
-        limiter = AsyncMock()
-        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
-        limiter.is_key_within_model_budget.side_effect = original_error
-        limiter.get_fallback_model_within_budget.return_value = None
+    @pytest.mark.parametrize(
+        ("token_fields", "over_budget"),
+        [
+            ({"budget_fallbacks": {"gpt-4o": ["gpt-4o-mini"]}}, ("gpt-4o", "gpt-4o-mini")),
+            ({"models": ["gpt-4o"], "budget_fallbacks": {"gpt-4o": ["restricted-model"]}}, ("gpt-4o",)),
+            (
+                {
+                    "models": ["gpt-4o", "restricted-model"],
+                    "team_id": "team-1",
+                    "team_models": ["gpt-4o"],
+                    "budget_fallbacks": {"gpt-4o": ["restricted-model"]},
+                },
+                ("gpt-4o",),
+            ),
+        ],
+        ids=["every_fallback_over_budget", "fallback_outside_key_models", "fallback_outside_team_models"],
+    )
+    async def test_raises_the_original_budget_error_when_no_fallback_is_usable(
+        self, token_fields: dict[str, object], over_budget: tuple[str, ...]
+    ):
+        valid_token = UserAPIKeyAuth(token="test-key", model_max_budget=_KEY_MODEL_BUDGET, **token_fields)
         request_data = {"model": "gpt-4o"}
-        request = self._make_request()
 
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
-            await _check_key_model_budget_with_fallback(
-                valid_token=valid_token,
-                model_max_budget_limiter=limiter,
-                model_name="gpt-4o",
-                request_data=request_data,
-                request=request,
+            await _check_key_model_budgets(
+                valid_token, _key_over_budget_for(*over_budget), request_data, self._make_request()
             )
 
-        assert exc_info.value is original_error
-        assert request_data["model"] == "gpt-4o"
-
-    @pytest.mark.asyncio
-    async def test_raises_when_fallback_not_authorized(self):
-        """If the fallback model is within budget but the key is not allowed
-        to call it, the original BudgetExceededError must be raised instead
-        of rerouting to an unauthorized model."""
-        valid_token = UserAPIKeyAuth(
-            token="test-key",
-            models=["gpt-4o"],
-            budget_fallbacks={"gpt-4o": ["restricted-model"]},
-        )
-        limiter = AsyncMock()
-        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
-        limiter.is_key_within_model_budget.side_effect = original_error
-        limiter.get_fallback_model_within_budget.return_value = "restricted-model"
-        request_data = {"model": "gpt-4o"}
-        request = self._make_request()
-
-        with pytest.raises(litellm.BudgetExceededError) as exc_info:
-            await _check_key_model_budget_with_fallback(
-                valid_token=valid_token,
-                model_max_budget_limiter=limiter,
-                model_name="gpt-4o",
-                request_data=request_data,
-                request=request,
-                llm_model_list=None,
-                llm_router=None,
-            )
-
-        assert exc_info.value is original_error
-        assert request_data["model"] == "gpt-4o"
-
-    @pytest.mark.asyncio
-    async def test_reroute_succeeds_when_fallback_is_authorized(self):
-        """If the fallback model is within budget AND authorized, the request
-        must be rerouted to it."""
-        valid_token = UserAPIKeyAuth(
-            token="test-key",
-            models=["gpt-4o", "gpt-4o-mini"],
-            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
-        )
-        limiter = AsyncMock()
-        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(current_cost=10, max_budget=5)
-        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
-        request_data = {"model": "gpt-4o"}
-        request = self._make_request()
-
-        await _check_key_model_budget_with_fallback(
-            valid_token=valid_token,
-            model_max_budget_limiter=limiter,
-            model_name="gpt-4o",
-            request_data=request_data,
-            request=request,
-            llm_model_list=None,
-            llm_router=None,
-        )
-
-        assert request_data["model"] == "gpt-4o-mini"
-
-    @pytest.mark.asyncio
-    async def test_raises_when_fallback_blocked_by_team_models(self):
-        """If the key allows the fallback but the team does not, the original
-        BudgetExceededError must be raised."""
-        valid_token = UserAPIKeyAuth(
-            token="test-key",
-            models=["gpt-4o", "restricted-model"],
-            team_id="team-1",
-            team_models=["gpt-4o"],
-            budget_fallbacks={"gpt-4o": ["restricted-model"]},
-        )
-        limiter = AsyncMock()
-        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
-        limiter.is_key_within_model_budget.side_effect = original_error
-        limiter.get_fallback_model_within_budget.return_value = "restricted-model"
-        request_data = {"model": "gpt-4o"}
-        request = self._make_request()
-
-        with pytest.raises(litellm.BudgetExceededError) as exc_info:
-            await _check_key_model_budget_with_fallback(
-                valid_token=valid_token,
-                model_max_budget_limiter=limiter,
-                model_name="gpt-4o",
-                request_data=request_data,
-                request=request,
-                llm_model_list=None,
-                llm_router=None,
-            )
-
-        assert exc_info.value is original_error
+        assert exc_info.value.message == "over budget for gpt-4o"
+        assert (exc_info.value.current_cost, exc_info.value.max_budget) == (10, 5)
         assert request_data["model"] == "gpt-4o"
 
     @pytest.mark.asyncio
@@ -9787,55 +9642,17 @@ class TestCheckKeyModelBudgetWithFallback:
         valid_token = UserAPIKeyAuth(
             token="test-key",
             models=["gpt-4o", "gpt-4o-mini"],
+            model_max_budget=_KEY_MODEL_BUDGET,
             budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
         )
-        limiter = AsyncMock()
-        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(current_cost=10, max_budget=5)
-        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
         request.scope["path_params"] = {"model": "gpt-4o"}
 
-        await _check_key_model_budget_with_fallback(
-            valid_token=valid_token,
-            model_max_budget_limiter=limiter,
-            model_name="gpt-4o",
-            request_data=request_data,
-            request=request,
-            llm_model_list=None,
-            llm_router=None,
-        )
+        await _check_key_model_budgets(valid_token, _key_over_budget_for("gpt-4o"), request_data, request)
 
         assert request_data["model"] == "gpt-4o-mini"
         assert request.scope["path_params"]["model"] == "gpt-4o-mini"
-
-    @pytest.mark.asyncio
-    async def test_raises_when_model_from_nested_field(self):
-        """Budget fallback must not attempt rewrite when the checked model
-        came from a nested field (e.g. session.model) rather than the
-        top-level request_data['model']."""
-        valid_token = UserAPIKeyAuth(
-            token="test-key",
-            models=["gpt-4o", "gpt-4o-mini"],
-            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
-        )
-        limiter = AsyncMock()
-        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
-        limiter.is_key_within_model_budget.side_effect = original_error
-        request_data = {"session": {"model": "gpt-4o"}}
-        request = self._make_request()
-
-        with pytest.raises(litellm.BudgetExceededError) as exc_info:
-            await _check_key_model_budget_with_fallback(
-                valid_token=valid_token,
-                model_max_budget_limiter=limiter,
-                model_name="gpt-4o",
-                request_data=request_data,
-                request=request,
-            )
-
-        assert exc_info.value is original_error
-        assert "model" not in request_data
 
 
 class TestCheckTeamMemberModelBudgetWithFallback:
@@ -10855,13 +10672,7 @@ class TestCheckTeamMemberModelBudgetWithFallback:
         request_data: Final = {"model": "gpt-4o"}
         request: Final = self._request("gpt-4o")
 
-        await _check_key_model_budget_with_fallback(
-            valid_token=valid_token,
-            model_max_budget_limiter=limiter,
-            model_name="gpt-4o",
-            request_data=request_data,
-            request=request,
-        )
+        await _check_key_model_budgets(valid_token, limiter, request_data, request)
 
         assert request_data["model"] == "gpt-4o-mini"
 
@@ -12563,7 +12374,7 @@ async def test_auth_flow_enters_virtual_key_mapping_when_only_an_issuer_configur
     ):
         result = await user_api_key_auth_builder(
             request=mock_request,
-            api_key=jwt_token,
+            api_key=f"Bearer {jwt_token}",
             azure_api_key_header="",
             anthropic_api_key_header=None,
             google_ai_studio_api_key_header=None,
@@ -13838,9 +13649,10 @@ async def test_exhausted_key_budget_spares_only_zero_spend_mcp_discovery(
         ("/mcp-rest/tools/call", {}, False),
     ],
 )
-def test_should_skip_budget_checks_spares_only_zero_spend_mcp_discovery(
+def test_model_budgets_skip_only_zero_spend_mcp_discovery(
     route: str, request_data: dict[str, object], expected: bool
 ) -> None:
-    from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+    from litellm.proxy.auth.core.model_budgets import skips_model_budgets
+    from litellm.proxy.auth.user_api_key_auth import _budget_exemption
 
-    assert _should_skip_budget_checks(request_data=request_data, route=route, request=None, llm_router=None) is expected
+    assert skips_model_budgets(_budget_exemption(request_data, route, None, None, None)) is expected

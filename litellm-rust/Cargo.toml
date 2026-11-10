@@ -29,6 +29,7 @@ litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-forward = { path = "crates/gateway-forward" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
+litellm-gateway-auth-core = { path = "crates/gateway-auth-core" }
 litellm-gateway-management = { path = "crates/gateway-management" }
 litellm-gateway-ui = { path = "crates/gateway-ui" }
 litellm-coroutine = { path = "crates/coroutine" }
@@ -118,6 +119,7 @@ rustify = "=0.7.0"
 rustify_derive = "=0.5.5"
 vaultrs = { version = "=0.8.0", default-features = false, features = ["rustls"] }
 serde = { version = "1.0", features = ["derive"] }
+ipnet = "2.12.0"
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_with = { version = "=3.21.0", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"

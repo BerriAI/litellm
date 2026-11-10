@@ -1,6 +1,6 @@
 import base64
 import os
-from typing import Final, cast
+from typing import Final
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -10,7 +10,15 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.core.answers import Introspection
+from litellm.proxy.auth.core.identity import (
+    InactiveToken,
+    IntrospectionNotConfigured,
+    OAuth2Identity,
+)
+from litellm.proxy.auth.core.inputs import OAuth2IntrospectionSettings
+from litellm.proxy.auth.selected_core import AUTH_CORE
 
 _TOKEN_INFO_RESPONSE: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
@@ -93,129 +101,93 @@ class Oauth2Handler:
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     @staticmethod
-    def _extract_user_info(
-        response_data: dict,
-        user_id_field_name: str,
-        user_role_field_name: str,
-        user_team_id_field_name: str,
-    ) -> tuple[str | None, str | None, str | None]:
-        """
-        Extract user information from OAuth2 response.
-
-        Args:
-            response_data: The response data from OAuth2 endpoint
-            user_id_field_name: Field name for user ID
-            user_role_field_name: Field name for user role
-            user_team_id_field_name: Field name for team ID
-
-        Returns:
-            Tuple of (user_id, user_role, user_team_id)
-        """
-        user_id: Final = response_data.get(user_id_field_name)
-        user_team_id: Final = response_data.get(user_team_id_field_name)
-        user_role: Final = response_data.get(user_role_field_name)
-
-        return user_id, user_role, user_team_id
-
-    @staticmethod
     async def check_oauth2_token(token: str) -> UserAPIKeyAuth:
-        """
-        Makes a request to the token introspection endpoint to validate the OAuth2 token.
+        """Validate ``token`` against the configured token-info or RFC 7662 introspection endpoint.
 
-        This function implements OAuth2 token introspection according to RFC 7662.
-        It supports both generic token info endpoints (GET) and OAuth2 introspection endpoints (POST).
+        Raises ``ValueError`` when the endpoint is not configured, and ``OAuth2TokenValidationError``
+        when the endpoint rejects the token, reports it inactive, or cannot be reached."""
+        verbose_proxy_logger.debug("Oauth2 token validation for token=[set=%s]", bool(token))
+        endpoint: Final = _TokenInfoEndpoint.from_env()
+        result: Final = await AUTH_CORE.oauth2().introspect(endpoint, token, endpoint.settings())
+        match result:
+            case OAuth2Identity(user_id=user_id, role=role, team_id=team_id):
+                return UserAPIKeyAuth.model_validate(
+                    {"api_key": token, "team_id": team_id, "user_id": user_id, "user_role": role}
+                )
+            case IntrospectionNotConfigured():
+                raise ValueError("OAUTH_TOKEN_INFO_ENDPOINT environment variable is not set")
+            case InactiveToken():
+                raise OAuth2TokenValidationError("An error occurred during token validation: Token is not active")
 
-        Args:
-            token (str): The OAuth2 token to validate.
 
-        Returns:
-            UserAPIKeyAuth: If the token is valid, containing user information.
+class _TokenInfoEndpoint:
+    def __init__(
+        self,
+        url: str | None,
+        client_id: str | None,
+        client_secret: str | None,
+        field_names: tuple[str, str, str],
+    ) -> None:
+        self._url: Final = url
+        self._client_id: Final = client_id
+        self._client_secret: Final = client_secret
+        self._field_names: Final = field_names
 
-        Raises:
-            ValueError: If the token is invalid, the request fails, or the token info endpoint is not set.
-        """
-        from litellm.proxy.proxy_server import premium_user
-
-        if premium_user is not True:
-            raise ValueError(
-                "Oauth2 token validation is only available for premium users" + CommonProxyErrors.not_premium_user.value
-            )
-
-        verbose_proxy_logger.debug("Oauth2 token validation for token=[set=%s]", token is not None)
-
-        # Get the token info endpoint from environment variable
-        token_info_endpoint: Final = os.getenv("OAUTH_TOKEN_INFO_ENDPOINT")
-        user_id_field_name: Final = os.environ.get("OAUTH_USER_ID_FIELD_NAME", "sub")
-        user_role_field_name: Final = os.environ.get("OAUTH_USER_ROLE_FIELD_NAME", "role")
-        user_team_id_field_name: Final = os.environ.get("OAUTH_USER_TEAM_ID_FIELD_NAME", "team_id")
-
-        # OAuth2 client credentials for introspection endpoint authentication
-        oauth_client_id: Final = os.environ.get("OAUTH_CLIENT_ID")
-        oauth_client_secret: Final = os.environ.get("OAUTH_CLIENT_SECRET")
-
-        if not token_info_endpoint:
-            raise ValueError("OAUTH_TOKEN_INFO_ENDPOINT environment variable is not set")
-
-        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-
-        # Determine if this is an introspection endpoint (requires POST) or token info endpoint (uses GET)
-        is_introspection_endpoint: Final = Oauth2Handler._is_introspection_endpoint(
-            token_info_endpoint=token_info_endpoint,
-            oauth_client_id=oauth_client_id,
-            oauth_client_secret=oauth_client_secret,
+    @classmethod
+    def from_env(cls) -> "_TokenInfoEndpoint":
+        return cls(
+            url=os.getenv("OAUTH_TOKEN_INFO_ENDPOINT"),
+            client_id=os.environ.get("OAUTH_CLIENT_ID"),
+            client_secret=os.environ.get("OAUTH_CLIENT_SECRET"),
+            field_names=(
+                os.environ.get("OAUTH_USER_ID_FIELD_NAME", "sub"),
+                os.environ.get("OAUTH_USER_ROLE_FIELD_NAME", "role"),
+                os.environ.get("OAUTH_USER_TEAM_ID_FIELD_NAME", "team_id"),
+            ),
         )
 
+    def _is_introspection(self) -> bool:
+        return self._url is not None and Oauth2Handler._is_introspection_endpoint(  # pyright: ignore[reportPrivateUsage]  # same module
+            token_info_endpoint=self._url,
+            oauth_client_id=self._client_id,
+            oauth_client_secret=self._client_secret,
+        )
+
+    def settings(self) -> OAuth2IntrospectionSettings:
+        return OAuth2IntrospectionSettings(
+            endpoint_configured=bool(self._url), requires_active=self._is_introspection()
+        )
+
+    async def _response(self, url: str, token: str) -> httpx.Response:
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+        if self._is_introspection():
+            verbose_proxy_logger.debug("Using OAuth2 introspection endpoint (POST)")
+            headers, data = Oauth2Handler._prepare_introspection_request(  # pyright: ignore[reportPrivateUsage]  # same module
+                token=token, oauth_client_id=self._client_id, oauth_client_secret=self._client_secret
+            )
+            return await client.post(url, headers=headers, data=data)
+        verbose_proxy_logger.debug("Using generic token info endpoint (GET)")
+        return await client.get(url, headers=Oauth2Handler._prepare_token_info_request(token=token))  # pyright: ignore[reportPrivateUsage]  # same module
+
+    async def introspect(self, token: str) -> Introspection:
+        url: Final = self._url or ""
         try:
-            if is_introspection_endpoint:
-                # OAuth2 Token Introspection (RFC 7662) - requires POST with form data
-                verbose_proxy_logger.debug("Using OAuth2 introspection endpoint (POST)")
-
-                headers, data = Oauth2Handler._prepare_introspection_request(
-                    token=token,
-                    oauth_client_id=oauth_client_id,
-                    oauth_client_secret=oauth_client_secret,
-                )
-
-                response = await client.post(token_info_endpoint, headers=headers, data=data)
-            else:
-                # Generic token info endpoint - uses GET with Bearer token
-                verbose_proxy_logger.debug("Using generic token info endpoint (GET)")
-                headers = Oauth2Handler._prepare_token_info_request(token=token)
-                response = await client.get(token_info_endpoint, headers=headers)
-
-            # if it's a bad token we expect it to raise an HTTPStatusError
+            response: Final = await self._response(url, token)
             response.raise_for_status()
-
-            # If we get here, the request was successful
-            data = _TOKEN_INFO_RESPONSE.validate_python(response.json())
-
-            verbose_proxy_logger.debug(
-                "Oauth2 token validation for token=%s, response from endpoint=%s",
-                token,
-                data,
-            )
-
-            # For introspection endpoints, check if token is active
-            if is_introspection_endpoint and not data.get("active", True):
-                raise ValueError("Token is not active")
-
-            # Extract user information from response
-            user_id, user_role, user_team_id = Oauth2Handler._extract_user_info(
-                response_data=data,
-                user_id_field_name=user_id_field_name,
-                user_role_field_name=user_role_field_name,
-                user_team_id_field_name=user_team_id_field_name,
-            )
-
-            return UserAPIKeyAuth(
-                api_key=token,
-                team_id=user_team_id,
-                user_id=user_id,
-                user_role=cast(LitellmUserRoles, user_role),
-            )
+            data: Final = _TOKEN_INFO_RESPONSE.validate_python(response.json())
         except httpx.HTTPStatusError as e:
-            # This will catch any 4xx or 5xx errors
             raise OAuth2TokenValidationError(f"Oauth 2.0 Token validation failed: {e}")
         except Exception as e:
-            # This will catch any other errors (like network issues)
             raise OAuth2TokenValidationError(f"An error occurred during token validation: {e}")
+        verbose_proxy_logger.debug(
+            "Oauth2 token validation for token=%s, response from endpoint=%s",
+            token,
+            data,
+        )
+        user_id_field, role_field, team_id_field = self._field_names
+        return Introspection(
+            active=bool(data.get("active", True)),
+            user_id=data.get(user_id_field),
+            role=data.get(role_field),
+            team_id=data.get(team_id_field),
+        )

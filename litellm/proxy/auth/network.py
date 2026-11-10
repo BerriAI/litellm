@@ -8,6 +8,7 @@ from fastapi import Request
 from pydantic import Field
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.auth.core.network import ip_in_networks as ip_in_networks  # noqa: PLC0414  # public re-export
 from litellm.types.llms.base import LiteLLMBaseModel
 
 TrustedProxyNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -49,23 +50,6 @@ def parse_trusted_proxy_ranges(
         except ValueError:
             verbose_proxy_logger.warning("Invalid CIDR in %s: %s, skipping", setting_name, cidr)
     return networks
-
-
-def _unmapped(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        return addr.ipv4_mapped
-    return addr
-
-
-def ip_in_networks(client_ip: str | None, networks: list[TrustedProxyNetwork]) -> bool:
-    if not client_ip or not networks:
-        return False
-    try:
-        addr: Final = ipaddress.ip_address(client_ip.strip())
-    except ValueError:
-        return False
-    candidates: Final = (addr, _unmapped(addr))
-    return any(candidate in network for candidate in candidates for network in networks)
 
 
 def _is_valid_ip(value: str) -> bool:
