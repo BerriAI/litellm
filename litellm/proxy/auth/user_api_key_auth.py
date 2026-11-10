@@ -1313,6 +1313,12 @@ def _apply_budget_limits_to_end_user_params(
     if budget_info.model_max_budget is not None:
         end_user_params["end_user_model_max_budget"] = budget_info.model_max_budget
 
+    if budget_info.model_tpm_limit is not None:
+        end_user_params["end_user_model_tpm_limit"] = budget_info.model_tpm_limit
+
+    if budget_info.model_rpm_limit is not None:
+        end_user_params["end_user_model_rpm_limit"] = budget_info.model_rpm_limit
+
     verbose_proxy_logger.debug("Applied budget limits to end user %s", end_user_id)
 
 
@@ -1444,6 +1450,10 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
         valid_token.end_user_model_max_budget = end_user_params["end_user_model_max_budget"]
+    if end_user_params.get("end_user_model_tpm_limit") is not None:
+        valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]
+    if end_user_params.get("end_user_model_rpm_limit") is not None:
+        valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]
     return valid_token
 
 
@@ -2985,6 +2995,8 @@ async def user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
+            valid_token.end_user_model_tpm_limit = end_user_params.get("end_user_model_tpm_limit")
+            valid_token.end_user_model_rpm_limit = end_user_params.get("end_user_model_rpm_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
 
         return await validate_resolved_virtual_key(
@@ -4134,6 +4146,10 @@ async def _apply_key_end_user_default_budget_to_token(
         valid_token.end_user_tpd_limit = default_budget.tpd_limit
     if not keep_token_limits or valid_token.end_user_model_max_budget is None:
         valid_token.end_user_model_max_budget = default_budget.model_max_budget
+    if not keep_token_limits or valid_token.end_user_model_tpm_limit is None:
+        valid_token.end_user_model_tpm_limit = default_budget.model_tpm_limit
+    if not keep_token_limits or valid_token.end_user_model_rpm_limit is None:
+        valid_token.end_user_model_rpm_limit = default_budget.model_rpm_limit
 
 
 async def _reserve_budget_after_common_checks(
