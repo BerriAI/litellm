@@ -74,7 +74,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_add,
     team_member_delete,
 )
-from litellm.proxy.management_helpers.access_group_team_sync import USER_ROWS_LOCK_SQL
+from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL, USER_ROWS_LOCK_SQL
 from litellm.proxy.management_helpers.bulk_user_creation import (
     BULK_NEW_USER_CONCURRENCY,
     _bounded,  # pyright: ignore[reportPrivateUsage]  # the bounded gather /user/bulk_new runs its row writes through
@@ -94,7 +94,6 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     team_tx_db,
     user_tx_db,
 )
-from litellm.proxy.management_helpers.utils import append_team_id_if_absent
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     PrismaClient,
     _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2699,7 +2698,19 @@ async def _add_user_to_team(user_id: str, team_id: str) -> None:
     except ProxyException as e:
         if e.type != ProxyErrorTypes.team_member_already_in_team:
             raise
-        await append_team_id_if_absent(await _get_prisma_client_or_raise_exception(), user_id, team_id)
+        await _restore_team_on_roster_member(user_id, team_id)
+
+
+async def _restore_team_on_roster_member(user_id: str, team_id: str) -> None:
+    prisma_client: Final = await _get_prisma_client_or_raise_exception()
+    async with prisma_client.tx() as tx:
+        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+        roster: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
+        if roster is not None and any(member.user_id == user_id for member in roster):
+            await user_tx_db(tx).update_many(
+                where={"user_id": user_id, "NOT": {"teams": {"has": team_id}}},
+                data={"teams": {"push": [team_id]}},
+            )
 
 
 async def _remove_user_from_team(user_id: str, team_id: str) -> None:

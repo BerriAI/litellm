@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import Final, assert_never
 from unittest.mock import ANY, AsyncMock, MagicMock, call
 
+from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
 import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
@@ -1107,8 +1108,15 @@ async def test_handle_existing_user_by_email_roster_add_failure_blocks_teams_wri
 
 
 @pytest.mark.asyncio
-async def test_handle_existing_user_by_email_roster_add_already_member_repairs_user_teams(mocker):
-    """A user already on the roster whose teams list lacks the team gets it appended, not skipped"""
+@pytest.mark.parametrize(
+    ("roster", "repaired"),
+    [([{"user_id": "uid", "role": "user"}], True), ([], False)],
+    ids=["still-on-roster", "removed-before-the-lock"],
+)
+async def test_handle_existing_user_by_email_roster_add_already_member_repairs_user_teams(
+    mocker, roster: list[dict[str, str]], repaired: bool
+):
+    """An already-on-roster user missing the team gets it back, but only if the roster still has them under the lock"""
     existing_user = mocker.MagicMock()
     existing_user.user_id = "uid"
     existing_user.user_email = "member@example.com"
@@ -1121,7 +1129,13 @@ async def test_handle_existing_user_by_email_roster_add_already_member_repairs_u
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value={})
-    mock_prisma_client.db.litellm_usertable.update_many = AsyncMock(return_value=1)
+    tx = mocker.MagicMock()
+    tx.query_raw = AsyncMock(side_effect=[[{"locked": None}], [{"members_with_roles": roster}]])
+    tx.litellm_usertable.update_many = AsyncMock(return_value=1)
+    tx_context = mocker.MagicMock()
+    tx_context.__aenter__ = AsyncMock(return_value=tx)
+    tx_context.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.tx = mocker.MagicMock(return_value=tx_context)
     mocker.patch(  # test-quality-ok: the roster helpers resolve the proxy prisma client at module level
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=mock_prisma_client),
@@ -1157,10 +1171,14 @@ async def test_handle_existing_user_by_email_roster_add_already_member_repairs_u
     )
 
     mock_team_member_add.assert_awaited_once()
-    mock_prisma_client.db.litellm_usertable.update_many.assert_awaited_once_with(
-        where={"user_id": "uid", "NOT": {"teams": {"has": "team-x"}}},
-        data={"teams": {"push": ["team-x"]}},
-    )
+    assert tx.query_raw.await_args_list[0].args == (TEAM_ADVISORY_LOCK_SQL, "team-x")
+    if repaired:
+        tx.litellm_usertable.update_many.assert_awaited_once_with(
+            where={"user_id": "uid", "NOT": {"teams": {"has": "team-x"}}},
+            data={"teams": {"push": ["team-x"]}},
+        )
+    else:
+        tx.litellm_usertable.update_many.assert_not_awaited()
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
 
