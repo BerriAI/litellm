@@ -37,7 +37,8 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.vertex_ai import GeminiFinishReason, RequestBody, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, ModelInfo, ModelResponseStream, Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map, CustomStreamWrapper
+from litellm.utils import CustomStreamWrapper
+from litellm.rust_bridge.host.model_cost import publish
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.vertex_ai.gemini.transformation import (
@@ -8163,7 +8164,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -9678,7 +9679,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-api-key")
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -9784,7 +9785,7 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "set_verbose", True)
     messages = [{"role": "user", "content": "List 5 cookie recipes"}]
     from litellm.llms.custom_httpx.http_handler import HTTPHandler

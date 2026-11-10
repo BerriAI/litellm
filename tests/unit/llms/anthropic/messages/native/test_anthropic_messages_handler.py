@@ -34,7 +34,7 @@ from litellm.types.utils import (
     StandardLoggingPayloadErrorInformation,
     StreamingChoices,
 )
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.rust_bridge.host.model_cost import publish
 import unittest.mock
 
 
@@ -1431,7 +1431,7 @@ async def test_messages_honors_a_chat_pin_on_a_prefixed_responses_deployment(
         "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
     }
     litellm.model_cost["perplexity/pin-test-model"] = {"litellm_provider": "perplexity", "mode": "chat"}
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -2856,7 +2856,7 @@ async def test_azure_messages_replay_encrypted_reasoning_only_to_responses(
             },
         },
     )
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     litellm.in_memory_llm_clients_cache.flush_cache()
     chat_reply: Final = {
         "id": "chatcmpl-azure",

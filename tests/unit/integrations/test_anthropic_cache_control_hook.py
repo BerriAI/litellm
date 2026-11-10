@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict
 
 from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
 import litellm
+from litellm.rust_bridge.host.model_cost import publish
 from litellm import Router
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
@@ -4356,9 +4357,9 @@ class TestPromptCacheBreakpointCapability:
         bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
         with open(bundled) as handle:
             monkeypatch.setattr(litellm, "model_cost", json.load(handle))
-        litellm.utils.cached_get_model_info_helper.cache_clear()
+        publish(litellm.model_cost)
         yield
-        litellm.utils.cached_get_model_info_helper.cache_clear()
+        publish(litellm.model_cost)
 
     def test_listed_model_uses_the_model_map_flag(self, monkeypatch):
         flagged = {**litellm.model_cost["gpt-4.1"], "supports_prompt_cache_breakpoint": True}
@@ -4590,9 +4591,9 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
         bundled = os.path.join(os.path.dirname(litellm.__file__), "model_prices_and_context_window_backup.json")
         with open(bundled) as handle:
             monkeypatch.setattr(litellm, "model_cost", json.load(handle))
-        litellm.utils.cached_get_model_info_helper.cache_clear()
+        publish(litellm.model_cost)
         yield
-        litellm.utils.cached_get_model_info_helper.cache_clear()
+        publish(litellm.model_cost)
 
     def test_shipped_entry_makes_the_deployment_eligible(self):
         assert supports_openai_prompt_cache_breakpoint(self.MANTLE_MODEL) is True

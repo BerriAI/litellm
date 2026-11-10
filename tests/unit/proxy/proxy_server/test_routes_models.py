@@ -57,6 +57,7 @@ def patched_models(monkeypatch):
     router.get_deployment_by_model_group_name = MagicMock(return_value=deployment)
     router.get_routable_upstream_model = MagicMock(return_value="gpt-4")
     router.get_routable_upstream_provider = MagicMock(return_value=None)
+    router.get_routable_upstreams = MagicMock(return_value=())
     router.get_configured_display_name = MagicMock(return_value=None)
     router.get_configured_service_tiers = MagicMock(return_value=())
     router.get_configured_max_input_tokens = MagicMock(return_value=())

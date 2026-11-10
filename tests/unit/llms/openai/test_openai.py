@@ -43,7 +43,7 @@ from litellm.types.utils import (
     PromptTokensDetails,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.rust_bridge.host.model_cost import publish
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from tests._support.respx_httpx2 import response_for_respx, side_effect_for_respx
@@ -1840,7 +1840,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
