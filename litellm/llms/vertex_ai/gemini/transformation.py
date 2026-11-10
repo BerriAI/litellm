@@ -29,7 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
+from litellm.llms.vertex_ai.common_utils import pop_vertex_caller_labels, pop_vertex_request_labels
 from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
@@ -1186,8 +1186,9 @@ def transform_request_body(
         optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
 
+        request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
-        labels: Final = pop_vertex_request_labels(optional_params, litellm_params)
+        labels: Final = pop_vertex_caller_labels(optional_params, request_params)
 
         filtered_params = {k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))}
 

@@ -17,6 +17,7 @@ from litellm.llms.gemini.common_utils import (
 from litellm.llms.gemini.image_usage_transformation import transform_gemini_image_usage
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, pop_vertex_request_labels
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -257,7 +258,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         optional_fields: Final = {
             "tools": params.get("tools"),
             "toolConfig": params.get("toolConfig"),
-            "labels": pop_vertex_request_labels(optional_params, litellm_params),
+            "labels": pop_vertex_request_labels(optional_params, litellm_params)
+            if vertex_request_label_fields()
+            else None,
         }
         return {**request_body, **{key: value for key, value in optional_fields.items() if value}}
 

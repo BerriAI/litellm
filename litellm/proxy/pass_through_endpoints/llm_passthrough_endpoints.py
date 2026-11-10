@@ -68,6 +68,14 @@ from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_
 from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
 from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
 from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
+from litellm.llms.vertex_ai.request_labels import (
+    VERTEX_LABELS_HEADER,
+    VERTEX_REQUEST_LABELS_MAX,
+    is_vertex_labels_header,
+    resolve_vertex_request_labels,
+    vertex_partner_labels_header,
+    vertex_request_label_fields,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse, is_provider_error
 from litellm.proxy._types import *
@@ -109,6 +117,7 @@ from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    UpstreamRequest,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -2566,6 +2575,53 @@ def _upstream_headers_for_vertex_route(endpoint: str, headers: Mapping[str, str]
     return MappingProxyType({name: value for name, value in headers.items() if name.lower() != "anthropic-beta"})
 
 
+_VERTEX_BODY_LABELLED_METHODS: Final = frozenset(
+    {"generateContent", "streamGenerateContent", "predict", "batchPredictionJobs"}
+)
+_VERTEX_HEADER_LABELLED_METHODS: Final = frozenset({"rawPredict", "streamRawPredict"})
+
+
+def _vertex_labelled_method(http_method: str, endpoint: str) -> str | None:
+    if http_method != "POST":
+        return None
+    resource: Final = endpoint.rstrip("/").rsplit("/", 1)[-1]
+    return resource.partition(":")[2] or resource
+
+
+def _with_vertex_body_labels(
+    allowed_fields: tuple[str, ...], body: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    resolved: Final = resolve_vertex_request_labels(
+        allowed_fields, body.get("labels"), litellm_params, VERTEX_REQUEST_LABELS_MAX
+    )
+    unlabelled: Final = {key: value for key, value in body.items() if key != "labels"}
+    return {**unlabelled, "labels": dict(resolved)} if resolved else unlabelled
+
+
+def _with_vertex_labels_header(
+    allowed_fields: tuple[str, ...], headers: Mapping[str, str], litellm_params: Mapping[str, object]
+) -> Mapping[str, str]:
+    labels_header: Final = vertex_partner_labels_header(allowed_fields, None, headers, litellm_params)
+    unlabelled: Final = {name: value for name, value in headers.items() if not is_vertex_labels_header(name)}
+    return unlabelled if labels_header is None else {**unlabelled, VERTEX_LABELS_HEADER: labels_header}
+
+
+def _with_vertex_request_labels(
+    vertex_method: str | None,
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> UpstreamRequest:
+    allowed_fields: Final = vertex_request_label_fields()
+    if not allowed_fields:
+        return headers, body
+    if body is not None and (vertex_method in _VERTEX_BODY_LABELLED_METHODS or "labels" in body):
+        return headers, _with_vertex_body_labels(allowed_fields, body, litellm_params)
+    if vertex_method in _VERTEX_HEADER_LABELLED_METHODS:
+        return _with_vertex_labels_header(allowed_fields, headers, litellm_params), body
+    return headers, body
+
+
 def get_vertex_pass_through_handler(
     call_type: Literal["discovery", "aiplatform"],
 ) -> BaseVertexAIPassThroughHandler:
@@ -3012,6 +3068,9 @@ async def _base_vertex_proxy_route(
         target=target,
         custom_headers=_upstream_headers_for_vertex_route(endpoint, headers),
         is_streaming_request=is_streaming_request,
+        upstream_request_filter=partial(
+            _with_vertex_request_labels, _vertex_labelled_method(request.method, encoded_endpoint)
+        ),
     )  # dynamically construct pass-through endpoint based on incoming path
 
     try:

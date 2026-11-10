@@ -28,6 +28,7 @@ from litellm.types.llms.vertex_ai import (
     PartType,
     Schema,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
@@ -173,7 +174,7 @@ _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 def vertex_request_labels_from_litellm_params(
-    litellm_params: dict | None,
+    litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """
     Build Vertex/GCP billing labels from LiteLLM user metadata on ``litellm_params``:
@@ -194,10 +195,25 @@ def vertex_request_labels_from_litellm_params(
         rm = metadata["requester_metadata"]
         if not isinstance(rm, dict):
             continue
-        labels = {k: v for k, v in rm.items() if isinstance(v, str)}
+        labels = {k: v for k, v in rm.items() if isinstance(k, str) and isinstance(v, str)}
         if labels:
             return labels
     return None
+
+
+def pop_vertex_caller_labels(
+    optional_params: dict | None,
+    litellm_params: Mapping[str, object] | None,
+) -> dict[str, str] | None:
+    """
+    Pop the caller's optional ``labels`` (Gemini-style), falling back to ``requester_metadata``
+    on ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``.
+    """
+    raw: Final = optional_params.pop("labels", None) if optional_params is not None else None
+    labels: Final = (
+        {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw, dict) else None
+    )
+    return labels or vertex_request_labels_from_litellm_params(litellm_params)
 
 
 def pop_vertex_request_labels(
@@ -205,25 +221,29 @@ def pop_vertex_request_labels(
     litellm_params: dict | None,
 ) -> dict[str, str] | None:
     """
-    Resolve labels from optional ``labels`` (Gemini-style) and/or
-    ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``
-    (``requester_metadata``), plus the proxy identity ``litellm.vertex_request_label_fields`` allows.
-    Pops ``labels`` from optional_params when present.
+    The caller's labels from ``pop_vertex_caller_labels``, plus the proxy identity
+    ``litellm.vertex_request_label_fields`` allows.
     """
-    labels: dict[str, str] | None = None
-    if optional_params is not None and "labels" in optional_params:
-        raw: Final = optional_params.pop("labels")
-        if isinstance(raw, dict):
-            labels = {k: v for k, v in raw.items() if isinstance(v, str)}
-    if not labels:
-        labels = vertex_request_labels_from_litellm_params(litellm_params)
+    request_params: Final = _LITELLM_PARAMS.validate_python(litellm_params or {})
+    labels: Final = pop_vertex_caller_labels(optional_params, request_params)
     allowed_fields: Final = vertex_request_label_fields()
     if not allowed_fields:
-        return labels if labels else None
-    resolved: Final = resolve_vertex_request_labels(
-        allowed_fields, labels, _LITELLM_PARAMS.validate_python(litellm_params or {}), VERTEX_REQUEST_LABELS_MAX
-    )
+        return labels
+    resolved: Final = resolve_vertex_request_labels(allowed_fields, labels, request_params, VERTEX_REQUEST_LABELS_MAX)
     return dict(resolved) if resolved else None
+
+
+def vertex_top_level_request_fields(
+    request_fields: Mapping[str, object] | None,
+    litellm_params: GenericLiteLLMParams,
+) -> Mapping[str, object] | None:
+    """The caller's top-level body fields with ``labels`` replaced by ``pop_vertex_request_labels`` while the setting is on."""
+    if not vertex_request_label_fields():
+        return request_fields
+    fields: Final = request_fields or {}
+    unlabelled: Final = {name: value for name, value in fields.items() if name != "labels"}
+    labels: Final = pop_vertex_request_labels({"labels": fields.get("labels")}, dict(litellm_params))
+    return {**unlabelled, "labels": labels} if labels else unlabelled
 
 
 class VertexAIModelRoute(str, Enum):

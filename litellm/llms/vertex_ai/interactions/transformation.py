@@ -4,7 +4,7 @@ from typing import Final
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
-from litellm.llms.vertex_ai.common_utils import validate_vertex_location
+from litellm.llms.vertex_ai.common_utils import validate_vertex_location, vertex_top_level_request_fields
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.router import GenericLiteLLMParams
@@ -110,6 +110,13 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         )
         collection_url: Final = self._target(api_base, params).collection_url
         return f"{collection_url}?alt=sse" if stream else collection_url
+
+    def transform_top_level_request_fields(
+        self,
+        request_fields: Mapping[str, object] | None,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object] | None:
+        return vertex_top_level_request_fields(request_fields, litellm_params)
 
     def _interaction_by_id_request(
         self,

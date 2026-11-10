@@ -131,11 +131,12 @@ def claude_labels(litellm_params: dict[str, JsonValue], optional_params: dict[st
     return decoded_labels(claude_headers(litellm_params, optional_params))
 
 
-LABELLED_SURFACES: Final = [gemini_labels, embedding_labels, imagen_labels, gemini_image_labels]
+LABELLED_SURFACES: Final = [gemini_labels, embedding_labels, imagen_labels]
 REQUESTER_METADATA_SURFACES: Final = [*LABELLED_SURFACES, rerank_labels]
-SETTING_GATED_SURFACES: Final = [multimodal_embedding_labels, google_genai_labels]
+SETTING_GATED_SURFACES: Final = [gemini_image_labels, multimodal_embedding_labels, google_genai_labels]
 ALL_SURFACES: Final = [*REQUESTER_METADATA_SURFACES, claude_labels, *SETTING_GATED_SURFACES]
 CALLER_LABEL_SURFACES: Final = [*LABELLED_SURFACES, claude_labels, *SETTING_GATED_SURFACES]
+BODY_SURFACES_ADDED_BY_THE_SETTING: Final = [gemini_image_labels, multimodal_embedding_labels]
 
 
 def metadata(key: str = "metadata", **fields: JsonValue) -> dict[str, JsonValue]:
@@ -172,13 +173,16 @@ def test_setting_off_leaves_claude_labels_as_the_caller_sent_them(setting: objec
 
 
 @pytest.mark.parametrize("setting", [None, []])
-def test_setting_off_sends_no_multimodal_embedding_labels(setting: object, monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("surface", BODY_SURFACES_ADDED_BY_THE_SETTING)
+def test_setting_off_sends_no_labels_where_none_were_sent_before(
+    setting: object, surface: LabelSource, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setattr(litellm, "vertex_request_label_fields", setting)
     params: Final = metadata(
         spend_logs_metadata={"cost-center": "cc-1"}, requester_metadata={"team": "search"}, **IDENTITY
     )
 
-    assert multimodal_embedding_labels(params, {"labels": {"app": "bot"}}) is None
+    assert surface(params, {"labels": {"app": "bot"}}) is None
 
 
 @pytest.mark.parametrize("setting", [None, []])
@@ -271,6 +275,18 @@ def test_gemini_extra_body_labels_cannot_replace_or_drop_identity(
     expected: Final = {**IDENTITY, "app": "bot"} if extra_labels else IDENTITY
 
     assert gemini_labels(metadata(**IDENTITY), {"extra_body": {"labels": extra_labels}}) == expected
+
+
+def test_gemini_extra_body_labels_outrank_spend_logs_metadata_at_the_cap(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)
+    spend_logs: Final = {f"spend-{index:02d}": "v" for index in range(64)}
+    caller_labels: Final = {"labels": {"env": "prod"}, "extra_body": {"labels": {"app": "bot"}}}
+
+    labels: Final = gemini_labels(metadata(**IDENTITY, spend_logs_metadata=spend_logs), caller_labels)
+
+    assert isinstance(labels, dict)
+    assert len(labels) == 64
+    assert {key: labels[key] for key in (*IDENTITY, "env", "app")} == {**IDENTITY, "env": "prod", "app": "bot"}
 
 
 @pytest.mark.parametrize("setting", [None, []])
