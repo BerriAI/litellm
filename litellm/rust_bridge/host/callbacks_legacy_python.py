@@ -12,7 +12,7 @@ import datetime
 import traceback
 import uuid
 import weakref
-from collections.abc import Awaitable, Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -111,6 +111,9 @@ def finalize(
 
 
 class LoggingSurface(Protocol):
+    deferred_success_result: tuple[object, datetime.datetime, datetime.datetime] | None
+    enqueue_deferred_logging: Callable[[], None] | None
+
     @property
     def model_call_details(self) -> Mapping[str, object]: ...
 
@@ -138,6 +141,10 @@ class LoggingSurface(Protocol):
         api_key: object = None,
         additional_args: dict[str, object] = ...,
     ) -> object: ...
+
+    def claim_async_success_log(self) -> bool: ...
+
+    def mark_async_success_log_enqueued(self) -> None: ...
 
     def handle_sync_success_callbacks_for_async_calls(
         self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
@@ -269,8 +276,23 @@ def defers_async_logging(logger: LoggingSurface) -> bool:
     return bool(getattr(logger, "defer_async_logging", False))
 
 
-def defer_success(logger: LoggingSurface, pending: object) -> None:
-    setattr(logger, "_native_pending_logging", pending)
+def claim_async_success_log(logger: LoggingSurface) -> bool:
+    return logger.claim_async_success_log()
+
+
+def mark_async_success_enqueued(logger: LoggingSurface) -> None:
+    logger.mark_async_success_log_enqueued()
+
+
+def defer_success(
+    logger: LoggingSurface,
+    pending: Callable[[], None],
+    response: object,
+    start: datetime.datetime,
+    end: datetime.datetime,
+) -> None:
+    logger.deferred_success_result = (response, start, end)  # rebind-ok: capture the native attempt before dispatch
+    logger.enqueue_deferred_logging = pending  # rebind-ok: the proxy releases logging here
 
 
 def _cache_hit(logger: LoggingSurface) -> Literal[True] | None:
