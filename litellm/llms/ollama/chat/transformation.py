@@ -198,8 +198,19 @@ class OllamaChatConfig(BaseConfig):
                 optional_params["seed"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
-            if param == "frequency_penalty":
-                optional_params["repeat_penalty"] = value
+            if param == "frequency_penalty" and value is not None:
+                # Fix #44641: Frequency penalty scale translation for Ollama
+                try:
+                    fp_val = float(value)
+                    if abs(fp_val) < 1e-6:
+                        # 0.0 is OpenAI default (off); do NOT send 0 to Ollama! Use 1.0 (neutral repeat_penalty)
+                        optional_params["repeat_penalty"] = 1.0
+                    elif fp_val > 0:
+                        optional_params["repeat_penalty"] = min(round(1.0 + (fp_val * 0.1), 3), 2.0)
+                    else:
+                        optional_params["repeat_penalty"] = max(round(1.0 + (fp_val * 0.25), 3), 0.5)
+                except (ValueError, TypeError):
+                    optional_params["repeat_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
             if param == "response_format" and isinstance(value, dict) and value.get("type") == "json_object":
