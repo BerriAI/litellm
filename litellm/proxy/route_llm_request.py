@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
+from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router import router_arguments
 from litellm.router_api import router_init_args
@@ -129,16 +130,31 @@ def _is_a2a_agent_model(model_name: object) -> bool:
 
 
 _PLAIN_BEDROCK_ENDPOINT: Final = re.compile(r"[A-Za-z0-9._:/-]+")
+_BEDROCK_MODEL_ACTIONS: Final = frozenset({"converse", "converse-stream", "invoke", "invoke-with-response-stream"})
 
 
 def _may_call_bedrock_without_a_deployment(route_type: str, data: Mapping[str, object]) -> bool:
     endpoint: Final = data.get("endpoint")
+    model: Final = data.get("model")
     return (
         route_type == "allm_passthrough_route"
         and data.get("custom_llm_provider") == "bedrock"
         and isinstance(endpoint, str)
+        and isinstance(model, str)
+        and endpoint in frozenset(f"model/{model}/{action}" for action in _BEDROCK_MODEL_ACTIONS)
         and _PLAIN_BEDROCK_ENDPOINT.fullmatch(endpoint) is not None
         and not {".", ".."}.intersection(endpoint.split("/"))
+    )
+
+
+def _a_deployment_serves_bedrock_model(llm_router: LitellmRouter | None, model_id: str) -> bool:
+    if llm_router is None:
+        return False
+    deployment_params: Final = (
+        deployment["litellm_params"] for deployment in llm_router.registry().deployments() or []
+    )
+    return any(
+        "model" in params and strip_bedrock_routing_prefix(params["model"]) == model_id for params in deployment_params
     )
 
 
@@ -805,6 +821,7 @@ async def route_request(
         if not loaded_by_read_through and not (
             model_registry_read_through.confirmed_missing(requested_model)
             and _may_call_bedrock_without_a_deployment(route_type, JSON_OBJECT_ADAPTER.validate_python(data))
+            and not _a_deployment_serves_bedrock_model(proxy_server.llm_router, requested_model)
         ):
             raise
         return await _route_request_single_attempt(

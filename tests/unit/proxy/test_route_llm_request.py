@@ -3217,6 +3217,12 @@ async def test_route_request_sends_a_bedrock_model_id_missing_from_the_config_to
         pytest.param({"endpoint": f"model/{_BEDROCK_MODEL_ID}/%2E%2E/other/converse"}, id="encoded-dot-segments"),
         pytest.param({"endpoint": f"model/{_BEDROCK_MODEL_ID}?x=/converse"}, id="query-in-the-path"),
         pytest.param({"custom_llm_provider": "gigachat"}, id="another-provider"),
+        pytest.param({"model": "us.amazon.nova-lite-v1:0"}, id="key-alias-renamed-the-model-in-the-path"),
+        pytest.param(
+            {"model": "version/1/apply", "endpoint": "guardrail/model/version/1/apply"},
+            id="guardrail-named-model",
+        ),
+        pytest.param({"endpoint": f"model/{_BEDROCK_MODEL_ID}/converse/extra"}, id="segment-after-the-action"),
     ],
 )
 @pytest.mark.asyncio
@@ -3382,6 +3388,46 @@ async def test_route_request_keeps_a_bedrock_model_the_router_routes_on_its_depl
     assert upstream.calls.last.request.headers["authorization"].startswith(
         "AWS4-HMAC-SHA256 Credential=AKIDDEPLOYMENT/"
     )
+
+
+@pytest.mark.parametrize(
+    "deployment_model",
+    [
+        pytest.param(f"bedrock/{_BEDROCK_MODEL_ID}", id="bedrock-prefix"),
+        pytest.param(f"bedrock/converse/{_BEDROCK_MODEL_ID}", id="converse-route-prefix"),
+    ],
+)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_does_not_call_bedrock_directly_for_a_model_id_a_configured_deployment_serves(
+    deployment_model: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-haiku",
+                "litellm_params": {
+                    "model": deployment_model,
+                    "aws_access_key_id": "AKIDDEPLOYMENT",
+                    "aws_secret_access_key": "deployment-secret",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route(host__regex=r"bedrock-runtime\..*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        with pytest.raises(ProxyModelNotFoundError):
+            await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
+
+    assert not upstream.called
 
 
 def _router_answering_hi() -> "litellm.Router":
