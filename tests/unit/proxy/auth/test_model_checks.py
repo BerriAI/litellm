@@ -2479,6 +2479,7 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_to_catalog_mo
     from litellm.utils import get_valid_models
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-partial-route-test")
+    monkeypatch.setenv("AZURE_API_KEY", "azure-partial-route-test")
     router: Final = Router(model_list=[{"model_name": model_name, "litellm_params": {"model": "*"}}])
 
     def routed_model(listed_id: str) -> object:
@@ -2486,7 +2487,7 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_to_catalog_mo
         return routed[0]["litellm_params"]["model"] if routed else None
 
     with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
-        catalog_ids: Final = frozenset(get_valid_models())
+        catalog_ids: Final = frozenset(get_valid_models()) - {AZURE_MODEL_PLACEHOLDER}
         v1_models: Final = get_complete_model_list(
             key_models=[],
             team_models=[],
@@ -2513,23 +2514,44 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_to_catalog_mo
         assert routed_model(expected_id) == _ROUTE_OPENAI_ID
 
 
-def test_partial_alias_over_a_bare_catch_all_skips_ids_a_more_specific_sibling_routes_elsewhere(
-    monkeypatch: pytest.MonkeyPatch,
+_ROUTE_OPENAI_CHAT_ID: Final = "partial-route-9-chat"
+
+
+@pytest.mark.parametrize(
+    ("alias_names", "stolen_id", "kept_ids"),
+    [
+        pytest.param(
+            ("team-partial-route/gpt-*", "team-partial-route/gpt-gpt-partial-route-*"),
+            f"team-partial-route/gpt-{_ROUTE_OPENAI_ID}",
+            (
+                f"team-partial-route/gpt-gpt-partial-route-{_ROUTE_OPENAI_ID}",
+                f"team-partial-route/gpt-{_ROUTE_OPENAI_CHAT_ID}",
+            ),
+            id="partial-name-next-to-a-longer-partial-name",
+        ),
+        pytest.param(
+            ("team-partial-route/*", "team-partial-route/gpt-*"),
+            f"team-partial-route/{_ROUTE_OPENAI_ID}",
+            (f"team-partial-route/gpt-{_ROUTE_OPENAI_ID}", f"team-partial-route/{_ROUTE_OPENAI_CHAT_ID}"),
+            id="whole-name-next-to-a-partial-name",
+        ),
+    ],
+)
+def test_alias_over_a_bare_catch_all_skips_ids_a_more_specific_sibling_routes_elsewhere(
+    monkeypatch: pytest.MonkeyPatch, alias_names: tuple[str, ...], stolen_id: str, kept_ids: tuple[str, ...]
 ) -> None:
     from litellm import Router
     from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
     from litellm.utils import get_valid_models
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-partial-route-test")
-    alias_names: Final = ("team-partial-route/gpt-*", "team-partial-route/gpt-gpt-partial-route-*")
     router: Final = Router(model_list=[{"model_name": name, "litellm_params": {"model": "*"}} for name in alias_names])
-    stolen_id: Final = f"team-partial-route/gpt-{_ROUTE_OPENAI_ID}"
 
     def routed_model(listed_id: str) -> object:
         routed: Final = router.registry().deployments(listed_id, source="wildcard")
         return routed[0]["litellm_params"]["model"] if routed else None
 
-    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
+    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai", _ROUTE_OPENAI_CHAT_ID: "openai"}):
         catalog_ids: Final = frozenset(get_valid_models())
         v1_models: Final = get_complete_model_list(
             key_models=[],
@@ -2550,4 +2572,4 @@ def test_partial_alias_over_a_bare_catch_all_skips_ids_a_more_specific_sibling_r
     listed_ids: Final = [*v1_models, *model_info_names]
     assert routed_model(stolen_id) not in catalog_ids
     assert [listed_id for listed_id in listed_ids if routed_model(listed_id) not in catalog_ids] == []
-    assert f"team-partial-route/gpt-gpt-partial-route-{_ROUTE_OPENAI_ID}" in v1_models
+    assert [kept_id for kept_id in kept_ids if kept_id not in v1_models or kept_id not in model_info_names] == []
