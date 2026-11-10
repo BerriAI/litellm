@@ -8298,6 +8298,8 @@ class _ReadOnlyReplicaPrisma:
     def __init__(self, journal: _PrismaJournal, role: str) -> None:
         self.journal = journal
         self.role = role
+        self._log_queries: Final = False
+        self._http_config: Final[dict[str, object]] = {}
 
     def is_connected(self) -> bool:
         return False
