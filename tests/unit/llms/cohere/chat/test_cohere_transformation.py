@@ -1157,6 +1157,53 @@ def test_cohere_v2_drop_params_warns_about_the_dropped_param(
     )
 
 
+SCHEMA_NOTE: Final = "internal-note-7f3a"
+RESPONSE_FORMATS_WITH_CONTENTS: Final = [
+    pytest.param(
+        "command-r-08-2024",
+        {
+            "tools": [WEATHER_TOOL],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "city", "schema": {**CITY_SCHEMA, "description": SCHEMA_NOTE}},
+            },
+        },
+        id="schema-beside-tools-on-command-r",
+    ),
+    pytest.param(JSON_SCHEMA_MODEL, {"response_format": {"type": "grammar", "grammar": SCHEMA_NOTE}}, id="unknown-type"),
+]
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(("model", "params"), RESPONSE_FORMATS_WITH_CONTENTS)
+def test_cohere_v2_drop_warning_leaves_out_the_response_format_contents(
+    respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture, model: str, params: Mapping[str, object]
+) -> None:
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        _cohere_v2_request_body(respx_mock, model, {**params, "drop_params": True})
+
+    warnings: Final = [
+        record.getMessage() for record in caplog.records if record.getMessage().startswith("Dropping response_format=")
+    ]
+    assert warnings
+    assert not any(SCHEMA_NOTE in warning for warning in warnings)
+
+
+@pytest.mark.parametrize(("model", "params"), RESPONSE_FORMATS_WITH_CONTENTS)
+def test_cohere_v2_response_format_400_leaves_out_its_contents(model: str, params: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        litellm.completion(
+            model=f"cohere_chat/{model}",
+            messages=[{"role": "user", "content": "Name one city and its country."}],
+            api_key="cohere-test-key",
+            **params,
+        )
+
+    assert "response_format" in str(error.value)
+    assert SCHEMA_NOTE not in str(error.value)
+
+
 @pytest.mark.usefixtures("_cohere_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
