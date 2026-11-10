@@ -3397,3 +3397,72 @@ async def test_vercel_ai_gateway_decisions_never_fall_back_to_the_openai_key(
         )
 
     assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "gateway_cost", "reported_cost"),
+    (
+        ("example/unpriced-decider", "0.000001386", 1.386e-06),
+        ("openai/gpt-6-luna-decisions", "0.00005722", 5.722e-05),
+        ("openai/gpt-6-luna-decisions", "not-a-number", None),
+    ),
+    ids=("unpriced_model", "cache_hit_on_priced_model", "unreadable_charge"),
+)
+async def test_vercel_ai_gateway_decisions_bill_the_charge_the_gateway_reports(
+    model: str,
+    gateway_cost: str,
+    reported_cost: float | None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": model,
+            "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+            "provider_metadata": {"gateway": {"cost": gateway_cost}},
+        }
+    )
+
+    response: Final = await litellm.adecisions(
+        model=f"vercel_ai_gateway/{model}",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    )
+
+    assert response.answers[0].probability == 0.9
+    assert get_response_cost_from_hidden_params(response.hidden_params) == reported_cost
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("typesafe-ai/jev", "typesafe-ai/jev-1.14.0"))
+async def test_vercel_ai_gateway_jev_sends_box_questions(
+    model: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
+    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
+    box_question: Final = {"type": "box", "name": "crack", "instructions": "the crack on the screen"}
+    route: Final = respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+        json={
+            "model": model,
+            "answers": [
+                {
+                    "type": "box",
+                    "name": "crack",
+                    "box": {"top": 0.1, "bottom": 0.9, "left": 0.1, "right": 0.9},
+                    "confidence": 0.8,
+                }
+            ],
+            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+        }
+    )
+
+    response: Final = await litellm.adecisions(
+        model=f"vercel_ai_gateway/{model}", input="The screen arrived cracked.", questions=[box_question]
+    )
+
+    assert json.loads(route.calls.last.request.content)["questions"] == [box_question]
+    assert response.answers[0].confidence == 0.8

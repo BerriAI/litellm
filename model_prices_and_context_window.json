@@ -51273,7 +51273,8 @@
         },
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://ai-gateway.vercel.sh/v1/models"
+        "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supports_box_questions": true
     },
     "vercel_ai_gateway/typesafe-ai/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
@@ -51305,6 +51306,7 @@
             "text",
             "image"
         ],
+        "supports_box_questions": true,
         "supports_vision": true
     },
     "vercel_ai_gateway/vercel/v0-1.0-md": {
