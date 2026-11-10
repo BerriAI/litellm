@@ -103,6 +103,18 @@ class LangfuseMapper:
         ),
     }
 
+    #: Every attribute this mapper can write on a model call.
+    LLM_CALL_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+        {
+            *_LLM_CALL_ATTRS,
+            *_BLOB_ATTRS,
+            LANGFUSE_TRACE_NAME,
+            LANGFUSE_TRACE_USER_ID,
+            LANGFUSE_TRACE_SESSION_ID,
+            LANGFUSE_TRACE_TAGS,
+        }
+    )
+
     def map(self, data: SpanData) -> AttributeMap:
         match data:
             case LLMCallSpanData():
