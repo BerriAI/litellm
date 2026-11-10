@@ -13791,7 +13791,8 @@ async def _audio_speech_chunk_generator(
         with anyio.CancelScope(shield=True):
             await on_complete()
     finally:
-        await _close_audio_speech_response(_response)
+        with anyio.CancelScope(shield=True):
+            await _close_audio_speech_response(_response)
 
 
 async def _log_audio_speech_stream_failure(
@@ -13804,6 +13805,7 @@ async def _log_audio_speech_stream_failure(
         user_api_key_dict=user_api_key_dict,
         original_exception=error,
         request_data={**request_data, "combined_usage_object": litellm.Usage(), "response_cost": response_cost},
+        dispatched_call_type=CallTypes.aspeech.value,
     )
 
 

@@ -192,7 +192,7 @@ def _assert_billed(gateway: Gateway, model: str, call_id: str, text: str) -> dic
 
 def _failure_spend(model: str, call_id: str) -> JsonValue:
     row: Final = _spend_row(call_id)
-    assert (row["status"], row["model_group"]) == ("failure", model), row
+    assert (row["status"], row["call_type"], row["model_group"]) == ("failure", "aspeech", model), row
     return row["spend"]
 
 

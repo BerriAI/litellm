@@ -22,6 +22,7 @@ from functools import partial
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import anyio.lowlevel
 import httpx
 import orjson
 import pytest
@@ -565,6 +566,43 @@ async def test_audio_speech_releases_its_upstream_when_the_client_walks_away():
     # The abandoned iterator is suspended mid-yield; it runs its cleanup once dropped.
     gc.collect()
     await asyncio.sleep(0.1)
+
+    assert stream.closed is True
+
+
+class _SilentAfterFirstChunkStream(httpx.AsyncByteStream):
+    def __init__(self, first: bytes) -> None:
+        self._first: Final = first
+        self.closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._first
+        await asyncio.Event().wait()
+
+    async def aclose(self) -> None:
+        await anyio.lowlevel.checkpoint()
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_frees_its_upstream_when_the_client_hangs_up_while_the_provider_is_silent():
+    stream: Final = _SilentAfterFirstChunkStream(b"a" * AUDIO_SPEECH_CHUNK_SIZE)
+    first_chunk_sent: Final = asyncio.Event()
+
+    async def _send(message: Mapping[str, object]) -> None:
+        if message["type"] == "http.response.body" and message.get("body"):
+            first_chunk_sent.set()
+
+    async def _receive() -> dict[str, str]:
+        await first_chunk_sent.wait()
+        return {"type": "http.disconnect"}
+
+    await StreamingResponse(
+        proxy_server._audio_speech_chunk_generator(
+            _audio_response(stream), on_upstream_error=AsyncMock(), on_complete=AsyncMock()
+        ),
+        media_type="audio/mpeg",
+    )({"type": "http", "asgi": {"spec_version": "2.3"}}, _receive, _send)
 
     assert stream.closed is True
 
