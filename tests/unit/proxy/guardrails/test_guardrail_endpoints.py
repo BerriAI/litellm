@@ -2499,10 +2499,8 @@ def test_the_authenticated_key_identity_replaces_the_caller_version() -> None:
 
 
 def test_the_bare_key_hash_cannot_come_from_the_caller() -> None:
-    from litellm.types.proxy.auth.user_api_key_auth import hash_token
-
     metadata: Final = _guardrail_request_metadata({"user_api_key": "spoof"}, {"user_api_key": "proxy-value"})
-    assert metadata == {"user_api_key": hash_token("proxy-value")}
+    assert metadata == {}
 
 
 def test_the_end_user_comes_from_the_proxy_not_the_caller() -> None:
@@ -2620,19 +2618,13 @@ def test_the_authenticated_key_object_is_left_behind() -> None:
     assert metadata == {"user_api_key_alias": "billing-app"}
 
 
-def test_a_key_field_is_hashed_before_it_leaves_whatever_it_looks_like() -> None:
-    """Under custom_auth these hold the bearer token itself, and a token can look like a digest,
-    so the shape of the string says nothing about whether it is safe to send."""
-    from litellm.types.proxy.auth.user_api_key_auth import hash_token
-
-    digest_shaped: Final = "a" * 64
+def test_no_key_field_reaches_the_guardrail_at_all() -> None:
+    """Under custom_auth these hold the bearer token itself, and nothing on the auth object says
+    whether a value was hashed, so a direct evaluation sends neither rather than a value of its own."""
     metadata: Final = _guardrail_request_metadata(
-        {}, {"user_api_key": "tok-not-an-sk-key", "user_api_key_hash": digest_shaped}
+        {}, {"user_api_key": "tok-not-an-sk-key", "user_api_key_hash": "a" * 64, "user_api_key_alias": "billing-app"}
     )
-    assert metadata == {
-        "user_api_key": hash_token("tok-not-an-sk-key"),
-        "user_api_key_hash": hash_token(digest_shaped),
-    }
+    assert metadata == {"user_api_key_alias": "billing-app"}
 
 
 def test_credential_headers_do_not_reach_the_guardrail() -> None:

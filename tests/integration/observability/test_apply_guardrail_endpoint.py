@@ -131,7 +131,7 @@ def _assert_guardrail_request(request: Request, text: str, response: httpx.Respo
     direct_request_data: Final = payload["request_data"]
     assert isinstance(direct_request_data, dict), response.text
     assert set(direct_request_data) <= _GENERIC_API_IDENTITY_FIELDS, response.text
-    assert "user_api_key_hash" in direct_request_data, response.text
+    assert "user_api_key_hash" not in direct_request_data, response.text
     request_headers: Final = payload["request_headers"]
     assert request_headers is None or isinstance(request_headers, dict), response.text
     if isinstance(request_headers, dict):
@@ -324,5 +324,6 @@ async def apply_guardrail(inputs, request_data, input_type):
         sent, omitted = (_JSON_OBJECT.validate_python(body["metadata"]) for body in bodies)
         assert sent["forbidden_topics"] == ["tax"], sent
         assert "forbidden_topics" not in omitted, omitted
-        assert sent["user_api_key_hash"] == omitted["user_api_key_hash"], (sent, omitted)
+        assert "user_api_key_hash" not in sent, sent
         assert "user_api_key_auth" not in sent, sent
+        assert sent["user_api_key_alias"] == omitted["user_api_key_alias"], (sent, omitted)
