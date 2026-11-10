@@ -220,11 +220,15 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             urlsplit(base.rstrip("/")).path.rstrip("/").rsplit("/", 1)[-1].lower()
         )
         if last_segment == "chat":
-            raise ValueError(
-                "COHERE_API_BASE points at a chat endpoint, but embeddings "
-                "need a base URL ending in /v2/embed (or a bare gateway "
-                "host). Chat and embeddings share this variable with "
-                "different semantics — configure them separately."
+            raise litellm.BadRequestError(
+                message=(
+                    "COHERE_API_BASE points at a chat endpoint, but embeddings "
+                    "need a base URL ending in /v2/embed (or a bare gateway "
+                    "host). Chat and embeddings share this variable with "
+                    "different semantics - configure them separately."
+                ),
+                model=model,
+                llm_provider="cohere",
             )
         if "embed" in last_segment:
             # The caller already named the embedding endpoint, so an explicit

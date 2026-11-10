@@ -84,7 +84,7 @@ async def test_cohere_embedding_rejects_a_chat_endpoint_as_api_base(
     monkeypatch.setenv("COHERE_API_BASE", "https://gateway.example.com/v2/chat")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
-    with pytest.raises(ValueError, match="chat endpoint"):
+    with pytest.raises(litellm.BadRequestError, match="chat endpoint"):
         await litellm.aembedding(model="cohere/embed-english-v3.0", input=["hello"], api_key="mock-key")
 
 

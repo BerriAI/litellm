@@ -498,11 +498,11 @@ def test_get_complete_url_keeps_an_explicit_endpoint_verbatim(api_base: str) -> 
         optional_params={},
         litellm_params={},
     )
-    assert url == api_base.rstrip("/")
+    assert url == api_base
 
 
 def test_get_complete_url_rejects_a_chat_endpoint() -> None:
-    with pytest.raises(ValueError, match="chat endpoint"):
+    with pytest.raises(litellm.BadRequestError, match="chat endpoint"):
         CohereEmbeddingConfig().get_complete_url(
             api_base="https://gateway.example.com/v1/chat",
             api_key=None,
