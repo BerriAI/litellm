@@ -1,8 +1,9 @@
 from collections.abc import Iterator, Mapping, MutableMapping
+from functools import cache, lru_cache
 from types import MappingProxyType
 from typing import Final, Protocol, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, create_model
 
 from litellm.types.llms.base import HiddenParams
 
@@ -58,6 +59,38 @@ def stored_attribute(obj: object, name: str) -> object:
         return values[name]
     extras: Final[Mapping[str, object]] = obj.__pydantic_extra__ or {}
     return extras.get(name)
+
+
+@cache
+def _assigned_extras_join_fields_set() -> bool:
+    probe: Final = create_model("_ExtraAssignmentProbe", __config__=ConfigDict(extra="allow"))()
+    setattr(probe, "assigned", None)
+    return "assigned" in probe.model_fields_set
+
+
+@lru_cache(maxsize=1024)
+def _writes_plain_extra(model_class: type[BaseModel], name: str) -> bool:
+    config: Final = model_class.model_config
+    return (
+        model_class.__setattr__ is BaseModel.__setattr__
+        and config.get("extra") == "allow"
+        and not config.get("frozen")
+        and not config.get("validate_assignment")
+        and not name.startswith("_")
+        and name not in model_class.__pydantic_fields__
+        and name not in model_class.__class_vars__
+        and not hasattr(model_class, name)
+        and _assigned_extras_join_fields_set()
+    )
+
+
+def set_extra_attribute(model: BaseModel, name: str, value: object) -> None:
+    extras: Final = model.__pydantic_extra__
+    if extras is None or not _writes_plain_extra(type(model), name):
+        setattr(model, name, value)
+        return
+    extras[name] = value
+    model.__pydantic_fields_set__.add(name)
 
 
 def _get_hidden_params_storage(obj: object) -> object | None:

@@ -668,12 +668,12 @@ def test_an_extra_body_that_is_not_a_populated_object_adds_nothing_to_the_body(
     assert _body(request) == {"input": [text]}, request.body
 
 
-def test_a_caller_sent_model_id_overrides_the_deployments_inference_component(proxy: Gateway, wire: Wire) -> None:
+def test_a_caller_sent_model_id_cannot_override_the_deployments_inference_component(proxy: Gateway, wire: Wire) -> None:
     text: Final = _text()
     response: Final = _embed(proxy, "sm-openai", [text], model_id="caller-chosen-component")
     assert response.status_code == 200, response.text
     request: Final = _only_request(wire)
-    assert request.headers[COMPONENT_HEADER] == "caller-chosen-component", dict(request.headers)
+    assert request.headers[COMPONENT_HEADER] == COMPONENT, dict(request.headers)
     assert _body(request) == {"input": [text], "model": SERVED_MODEL}, request.body
 
 

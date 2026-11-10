@@ -32,6 +32,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     BackgroundResponseSettlement,
 )
 from litellm.types.utils import LiteLLMBatch, Usage
+from litellm.types.videos.utils import is_video_status_call_type
 
 SPEND_EVENT_VERSION: Final = 1
 CACHE_OFF_KEY: Final = "Cache OFF"
@@ -216,9 +217,10 @@ class SpendEventDecodeError:
     reason: str
 
 
-def is_offloadable_success(response_obj: object) -> bool:
-    """Batch retrieves and interaction polls branch on the concrete response class, so they stay in-process."""
-    return not isinstance(response_obj, _NOT_OFFLOADED_RESPONSE_TYPES)
+def is_offloadable_success(response_obj: object, call_type: object) -> bool:
+    """Batch retrieves and interaction polls branch on the concrete response class, and a video status poll on
+    the status and video id the event leaves out, so they stay in-process."""
+    return not isinstance(response_obj, _NOT_OFFLOADED_RESPONSE_TYPES) and not is_video_status_call_type(call_type)
 
 
 def _json_fallback(value: object) -> str:

@@ -6,10 +6,13 @@ from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, cast, overload
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     extract_search_results_text,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
+from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -18,20 +21,31 @@ from litellm.utils import supports_reasoning, supports_vision
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 SUPPORTED_REASONING_EFFORTS: Final = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+_NO_BUDGET_REASON: Final = "DeepSeek takes thinking only as enabled or disabled, with no budget."
+
+
+def _warn_on_dropped_budget(thinking: object, model: str) -> None:
+    fields: Final = as_str_mapping(thinking)
+    if fields is None or fields.get("type") != "enabled" or "budget_tokens" not in fields:
+        return
+    warn_dropped_reasoning(
+        "thinking.budget_tokens", fields["budget_tokens"], model, _NO_BUDGET_REASON, drop_params_gated=False
+    )
 
 
 class DeepSeekChatConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def _flattens_content_lists(self) -> bool:
+        return True
+
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         DeepSeek reasoner models support thinking parameter.
         """
-        params: Final = super().get_supported_openai_params(model)
-        params.extend(["thinking", "reasoning_effort"])
-        return params
+        return [*super().get_supported_openai_params(model), "thinking", "reasoning_effort"]
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -47,12 +61,18 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         Reference: https://api-docs.deepseek.com/guides/thinking_mode
         """
         # Let parent handle standard params first
-        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        optional_params = super().map_openai_params(
+            tool_params_without_hosted_mcp(non_default_params, model=model, route="deepseek", drop_params=drop_params),
+            optional_params,
+            model,
+            drop_params,
+        )
 
         # Pop thinking/reasoning_effort from optional_params first (parent may have added them)
         # Then re-add only if valid for DeepSeek
         thinking_value: Final = optional_params.pop("thinking", None)
         reasoning_effort: Final = optional_params.pop("reasoning_effort", None)
+        _warn_on_dropped_budget(OPAQUE_VALUE.validate_python(thinking_value), model)
 
         # Handle thinking parameter - accept both enabled and disabled, ignore budget_tokens
         if isinstance(thinking_value, dict) and thinking_value.get("type") in ("enabled", "disabled"):
@@ -252,6 +272,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         tools: Final = optional_params.get("tools")
         if not isinstance(tools, list) or not tools:
             return optional_params
+        sent_tools: Final[tuple[object, ...]] = tuple(tools)
 
         def _is_function_tool(tool: object) -> bool:
             return isinstance(tool, dict) and tool.get("type") == "function"
@@ -276,14 +297,14 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
             name: Final = function.get("name")
             return isinstance(name, str) and name in function_tool_names
 
-        function_tools: Final = [tool for tool in tools if _is_function_tool(tool)]
-        if len(function_tools) == len(tools):
+        function_tools: Final = [tool for tool in sent_tools if _is_function_tool(tool)]
+        if len(function_tools) == len(sent_tools):
             return optional_params
 
         dropped_types: Final = sorted(
             {
                 str(tool.get("type")) if isinstance(tool, dict) else type(tool).__name__
-                for tool in tools
+                for tool in sent_tools
                 if not _is_function_tool(tool)
             }
         )
