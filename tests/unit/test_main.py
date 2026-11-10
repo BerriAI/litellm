@@ -4844,13 +4844,14 @@ def test_speech_gemini_tts_without_a_timeout_waits_as_long_as_the_same_chat_comp
         ({}, {}, 1),
         ({}, {"cache": {"no-cache": True}}, 2),
         ({"cache": {"no-store": True}}, {}, 2),
+        ({}, {"caching": False}, 2),
     ],
 )
 def test_speech_gemini_tts_honors_the_request_cache_controls(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
-    first_controls: Mapping[str, Mapping[str, bool]],
-    second_controls: Mapping[str, Mapping[str, bool]],
+    first_controls: Mapping[str, object],
+    second_controls: Mapping[str, object],
     expected_upstream_calls: int,
 ):
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
@@ -4868,6 +4869,29 @@ def test_speech_gemini_tts_honors_the_request_cache_controls(
     litellm.speech(**speech_kwargs, **second_controls)
 
     assert route.call_count == expected_upstream_calls
+
+
+@pytest.mark.parametrize("malformed_controls", [{"caching": "yes"}, {"caching": 1}, {"cache": {1: True}}])
+def test_speech_gemini_tts_without_a_cache_ignores_malformed_cache_controls(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    malformed_controls: Mapping[str, object],
+):
+    monkeypatch.setattr(litellm, "cache", None)
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+
+    response: Final = litellm.speech(
+        model=f"gemini/{GEMINI_TTS_MODEL}",
+        input="hello",
+        voice="Kore",
+        api_key="fake-gemini-key",
+        **malformed_controls,
+    )
+
+    assert route.call_count == 1
+    assert response.content.startswith(b"RIFF")
 
 
 FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"

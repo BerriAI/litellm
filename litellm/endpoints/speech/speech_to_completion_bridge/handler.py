@@ -2,7 +2,6 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypedDict
@@ -12,6 +11,7 @@ if TYPE_CHECKING:
 
     from litellm import LiteLLMLoggingObj
     from litellm.types.llms.openai import HttpxBinaryResponseContent
+    from litellm.types.utils import CacheControlsHint
 
 
 class SpeechToCompletionBridgeHandlerInputKwargs(TypedDict):
@@ -90,7 +90,7 @@ class SpeechToCompletionBridgeHandler:
         custom_llm_provider: str,
         api_base: str | None,
         timeout: "float | httpx.Timeout | None",
-        cache: Mapping[str, object] | None,
+        cache_controls: "CacheControlsHint",
     ) -> "HttpxBinaryResponseContent":
         received_args: Final = locals()
         from litellm import completion
@@ -110,7 +110,7 @@ class SpeechToCompletionBridgeHandler:
             model=model,
             input=input,
             optional_params=optional_params,
-            litellm_params={**litellm_params, "api_base": api_base, "timeout": timeout, "cache": cache},
+            litellm_params={**litellm_params, "api_base": api_base, "timeout": timeout, **cache_controls},
             headers=headers,
             litellm_logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
