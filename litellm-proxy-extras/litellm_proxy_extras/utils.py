@@ -185,11 +185,6 @@ def filter_partitioned_spend_logs_diff(diff_sql: str) -> str:
     return "".join(f"{statement};\n\n" for statement in kept)
 
 
-def _creates_hand_built_spend_logs_index(statement: str) -> bool:
-    match: Final = _CREATE_INDEX_RE.match(_without_sql_comments(statement))
-    return match is not None and match["index"] in HAND_BUILT_SPEND_LOGS_INDEXES
-
-
 def _migration_timestamp(name: str) -> int:
     """Extract the leading `YYYYMMDDHHMMSS` timestamp from a migration name.
 

@@ -9,6 +9,7 @@ an `UPDATE` hidden in the `DO $$ ... $$` block this repo uses for conditional DD
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -212,43 +213,43 @@ class TestIndexesOnLogTables:
     the whole build and a concurrent one fails on a partitioned parent, so the migration job
     (litellm_proxy_extras/request_log_indexes.py) builds those instead."""
 
-    def test_the_original_spend_log_index_statement_is_flagged(self, tmp_path):
-        sql = (
+    def test_the_original_spend_log_index_statement_is_flagged(self, tmp_path: Path) -> None:
+        sql: Final = (
             "-- CreateIndex\n"
             'CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx" '
             'ON "LiteLLM_SpendLogs"("api_key", "startTime");'
         )
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',)
 
-    def test_the_original_concurrent_call_id_index_statement_is_flagged(self, tmp_path):
-        sql = (
+    def test_the_original_concurrent_call_id_index_statement_is_flagged(self, tmp_path: Path) -> None:
+        sql: Final = (
             'CREATE INDEX CONCURRENTLY IF NOT EXISTS "LiteLLM_SpendLogs_litellm_call_id_idx" '
             'ON "LiteLLM_SpendLogs"("litellm_call_id");'
         )
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',)
 
-    def test_unique_index_with_if_not_exists_on_error_logs_is_flagged(self, tmp_path):
-        sql = 'CREATE UNIQUE INDEX IF NOT EXISTS "ix" ON "LiteLLM_ErrorLogs" ("request_id");'
+    def test_unique_index_with_if_not_exists_on_error_logs_is_flagged(self, tmp_path: Path) -> None:
+        sql: Final = 'CREATE UNIQUE INDEX IF NOT EXISTS "ix" ON "LiteLLM_ErrorLogs" ("request_id");'
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_ErrorLogs"',)
 
-    def test_a_unique_concurrent_index_on_error_logs_is_flagged(self, tmp_path):
-        sql = 'CREATE UNIQUE INDEX CONCURRENTLY "ix" ON "LiteLLM_ErrorLogs" ("request_id");'
+    def test_a_unique_concurrent_index_on_error_logs_is_flagged(self, tmp_path: Path) -> None:
+        sql: Final = 'CREATE UNIQUE INDEX CONCURRENTLY "ix" ON "LiteLLM_ErrorLogs" ("request_id");'
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_ErrorLogs"',)
 
-    def test_lowercase_schema_qualified_and_only_forms_are_flagged(self, tmp_path):
-        sql = (
+    def test_lowercase_schema_qualified_and_only_forms_are_flagged(self, tmp_path: Path) -> None:
+        sql: Final = (
             'create index on "public"."LiteLLM_SpendLogs" ("api_key");\n'
             'CREATE INDEX "ix" ON ONLY "LiteLLM_SpendLogs" ("api_key");\n'
             'CREATE INDEX CONCURRENTLY "iy" ON "public"."LiteLLM_SpendLogs" ("api_key");'
         )
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',) * 3
 
-    def test_a_comment_between_on_and_the_table_is_flagged(self, tmp_path):
-        sql = 'CREATE INDEX CONCURRENTLY "ix" ON /* table */ "LiteLLM_SpendLogs" ("api_key");'
+    def test_a_comment_between_on_and_the_table_is_flagged(self, tmp_path: Path) -> None:
+        sql: Final = 'CREATE INDEX CONCURRENTLY "ix" ON /* table */ "LiteLLM_SpendLogs" ("api_key");'
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',)
 
-    def test_a_concurrent_index_with_comments_and_line_breaks_is_flagged(self, tmp_path):
-        sql = (
+    def test_a_concurrent_index_with_comments_and_line_breaks_is_flagged(self, tmp_path: Path) -> None:
+        sql: Final = (
             "-- CreateIndex\n"
             'CREATE INDEX CONCURRENTLY IF NOT EXISTS "ix"\n'
             '  ON "LiteLLM_SpendLogs" /* partitioned in some deployments */\n'
@@ -256,34 +257,34 @@ class TestIndexesOnLogTables:
         )
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',)
 
-    def test_indexes_on_a_non_log_table_pass_concurrent_or_not(self, tmp_path):
-        sql = (
+    def test_indexes_on_a_non_log_table_pass_concurrent_or_not(self, tmp_path: Path) -> None:
+        sql: Final = (
             'CREATE INDEX "ix" ON "LiteLLM_VerificationToken" ("token");\n'
             'CREATE INDEX CONCURRENTLY "iy" ON "LiteLLM_VerificationToken" ("token");'
         )
         assert _keywords(tmp_path, sql) == ()
 
-    def test_an_index_run_by_execute_is_flagged(self, tmp_path):
-        sql = 'DO $$ BEGIN EXECUTE \'CREATE INDEX "ix" ON "LiteLLM_SpendLogs" ("api_key")\'; END $$;'
+    def test_an_index_run_by_execute_is_flagged(self, tmp_path: Path) -> None:
+        sql: Final = 'DO $$ BEGIN EXECUTE \'CREATE INDEX "ix" ON "LiteLLM_SpendLogs" ("api_key")\'; END $$;'
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',)
 
-    def test_a_marker_does_not_exempt_the_index(self, tmp_path):
-        sql = (
+    def test_a_marker_does_not_exempt_the_index(self, tmp_path: Path) -> None:
+        sql: Final = (
             '-- data-migration-ok: table is empty at this point\nCREATE INDEX "ix" ON "LiteLLM_SpendLogs" ("api_key");'
         )
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',)
 
-    def test_a_marker_on_a_rewrite_still_leaves_the_index_below_it_flagged(self, tmp_path):
-        sql = (
+    def test_a_marker_on_a_rewrite_still_leaves_the_index_below_it_flagged(self, tmp_path: Path) -> None:
+        sql: Final = (
             "-- data-migration-ok: one row\n"
             'UPDATE "LiteLLM_SpendLogs" SET "api_key" = \'k\' WHERE "request_id" = \'r\';\n'
             'CREATE INDEX CONCURRENTLY "ix" ON "LiteLLM_SpendLogs" ("api_key");'
         )
         assert _keywords(tmp_path, sql) == ('CREATE INDEX on "LiteLLM_SpendLogs"',)
 
-    def test_render_points_at_the_migration_job_index_list(self, tmp_path):
-        sql = 'CREATE INDEX CONCURRENTLY "ix" ON "public"."LiteLLM_SpendLogs" ("api_key");'
-        rendered = _scan(tmp_path, sql)[0].render()
+    def test_render_points_at_the_migration_job_index_list(self, tmp_path: Path) -> None:
+        sql: Final = 'CREATE INDEX CONCURRENTLY "ix" ON "public"."LiteLLM_SpendLogs" ("api_key");'
+        rendered: Final = _scan(tmp_path, sql)[0].render()
         assert "20260101000000_fixture/migration.sql:1" in rendered
         assert "blocks writes until the build finishes, or fails on a partitioned table" in rendered
         assert "REQUEST_LOG_INDEXES in litellm_proxy_extras/request_log_indexes.py" in rendered
@@ -292,7 +293,7 @@ class TestIndexesOnLogTables:
         "name",
         ("20260823000000_add_spend_logs_api_key_starttime_index", "20260831120001_spend_logs_litellm_call_id_index"),
     )
-    def test_the_inert_index_migrations_scan_clean_without_a_grandfather(self, name):
+    def test_the_inert_index_migrations_scan_clean_without_a_grandfather(self, name: str) -> None:
         assert checker.scan_migration(checker.MIGRATIONS_DIR / name) == ()
         assert name not in checker.GRANDFATHERED
 

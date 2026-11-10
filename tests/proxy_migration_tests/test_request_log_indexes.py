@@ -826,6 +826,45 @@ def _create_index(database_url: str, name: str, table: str, columns: str) -> int
 
 
 @requires_db
+@pytest.mark.parametrize(
+    ("definition", "matches"),
+    (
+        (None, False),
+        ('("litellm_call_id", "api_key")', True),
+        ('("litellm_call_id") INCLUDE ("api_key")', False),
+    ),
+    ids=("missing", "equivalent", "included-column"),
+)
+def test_equivalent_index_lookup_works_without_postgres_11_catalog_columns(
+    definition: str | None, matches: bool
+) -> None:
+    schema: Final = f"index_catalog_{uuid.uuid4().hex}"
+    target: Final = RequestLogIndex("LiteLLM_SpendLogs", "managed_lookup", '("litellm_call_id", "api_key")')
+    with psycopg.connect(_base_url(), autocommit=True) as conn:
+        if definition is not None and "INCLUDE" in definition and conn.info.server_version < 110000:
+            pytest.skip("INCLUDE indexes require PostgreSQL 11")
+        conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        try:
+            conn.execute(
+                sql.SQL('CREATE TABLE {}."LiteLLM_SpendLogs" (litellm_call_id text, api_key text)').format(
+                    sql.Identifier(schema)
+                )
+            )
+            if definition is not None:
+                conn.execute(
+                    sql.SQL('CREATE INDEX operator_lookup ON {}."LiteLLM_SpendLogs" {}').format(
+                        sql.Identifier(schema), sql.SQL(definition)
+                    )
+                )
+            found: Final = request_log_indexes._equivalent_indexes(conn, schema, target.table, target.name, target)
+            assert tuple((index.name, index.valid) for index in found) == (
+                (("operator_lookup", True),) if matches else ()
+            )
+        finally:
+            conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+@requires_db
 def test_a_valid_index_of_the_same_definition_under_another_name_is_renamed_instead_of_rebuilt(
     scratch_database: str,
 ) -> None:
