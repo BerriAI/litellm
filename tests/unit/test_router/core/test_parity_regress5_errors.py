@@ -114,12 +114,42 @@ async def test_a_providers_bad_request_falls_back_and_notes_the_failed_fallback(
 
 
 def test_a_single_attempt_endpoint_raises_with_no_note(make_core: MakeCore, host: EndpointHost) -> None:
-    core: Final = build(make_core, fallbacks=[{"a": ["b"]}])
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}], num_retries=1)
     show_router_debug(host)
     host.answer("openai/a", server_error())
     with pytest.raises(litellm.InternalServerError) as raised:
-        core.responses(model="a", input="hi")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
+        core.generate_content(model="a", contents=[])  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
     assert NOTE not in str(raised.value)
+    assert host.deployments_called() == ["a"]
+
+
+async def respond(core: RouterCore, mode: str) -> object:
+    if mode == "sync":
+        return core.responses(model="a", input="hi")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
+    return await core.aresponses(model="a", input="hi")  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # an endpoint
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_responses_retries_a_failed_attempt_with_the_router_num_retries(
+    make_core: MakeCore, host: EndpointHost, mode: str
+) -> None:
+    core: Final = build(make_core, num_retries=1)
+    recovered: Final = completion_response(content="recovered")
+    host.answer("openai/a", server_error(), recovered)
+    assert await respond(core, mode) is recovered
+    assert host.deployments_called() == ["a", "a"]
+
+
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_responses_falls_back_to_the_next_group_when_its_group_fails(
+    make_core: MakeCore, host: EndpointHost, mode: str
+) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b"]}])
+    fallback: Final = completion_response(content="from b")
+    host.answer("openai/a", server_error())
+    host.answer("openai/b", fallback)
+    assert await respond(core, mode) is fallback
+    assert host.deployments_called() == ["a", "b"]
 
 
 async def test_an_empty_request_list_says_no_fallbacks_are_configured(make_core: MakeCore, host: EndpointHost) -> None:
