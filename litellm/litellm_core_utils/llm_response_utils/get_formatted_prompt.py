@@ -11,7 +11,7 @@ def _get_prompt_from_input(input_data: object, model: str) -> str:
     if not isinstance(input_data, (list, tuple)):
         return ""
     items: Final = _INPUT_ITEMS.validate_python(input_data)
-    tokens: Final = tuple(token for token in items if isinstance(token, int))
+    tokens: Final = tuple(token for token in items if isinstance(token, int) and not isinstance(token, bool))
     if tokens and len(tokens) == len(items):
         import litellm
 

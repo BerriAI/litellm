@@ -35,6 +35,8 @@ def test_null_tool_calls_are_skipped(call_type: Literal["acompletion", "completi
         (["hello", " world"], "hello world"),
         ([["hello", " world"], "!"], "hello world!"),
         (["hello", [" world", "!"]], "hello world!"),
+        ([None, ["hello", " world"]], "hello world"),
+        ([True, False], ""),
     ],
 )
 def test_embedding_and_moderation_preserve_all_input_text(
