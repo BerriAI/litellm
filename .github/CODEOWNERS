@@ -4,3 +4,4 @@
 /litellm/deploy/helm/ @yassin-berriai
 /litellm/deploy/terraform/ @yassin-berriai
 /.github/workflows/zizmor.yml @yuneng-berri
+/.github/root-entries-allowlist.json @mateo-berri @ryan-crabbe-berri @kerry-berri @joshua-berri
