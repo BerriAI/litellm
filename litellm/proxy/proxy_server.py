@@ -15603,14 +15603,15 @@ class _TokenizerLoads:
 
 
 _TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_tokenizer_loads")
+_BASE_MODEL_TOKENIZER_LOADS: Final = anyio.lowlevel.RunVar[_TokenizerLoads]("litellm_proxy_base_model_tokenizer_loads")
 
 
-def _tokenizer_loads_for_this_loop() -> _TokenizerLoads:
-    existing: Final = _TOKENIZER_LOADS.get(None)
+def _tokenizer_loads_for_this_loop(loads: anyio.lowlevel.RunVar[_TokenizerLoads]) -> _TokenizerLoads:
+    existing: Final = loads.get(None)
     if existing is not None:
         return existing
     created: Final = _TokenizerLoads(threads=anyio.CapacityLimiter(TOKENIZER_LOAD_MAX_RUNNING))
-    _TOKENIZER_LOADS.set(created)
+    loads.set(created)
     return created
 
 
@@ -15645,7 +15646,7 @@ def _tokenizer_load_slot(
 
 
 async def _tokenizer_within_load_wait(
-    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, loads: _TokenizerLoads
 ) -> SelectTokenizerResponse | BaseException:
     loop: Final = asyncio.get_running_loop()
     try:
@@ -15659,7 +15660,7 @@ async def _tokenizer_within_load_wait(
                 auth_token=custom_tokenizer["auth_token"],
             ),
             loop,
-        ).load(_tokenizer_loads_for_this_loop(), loop)
+        ).load(loads, loop)
         if load is None:
             return _TokenizerLoadsBusy()
         outcome: Final = await asyncio.wait_for(
@@ -15674,7 +15675,9 @@ async def _tokenizer_within_load_wait(
 async def _tokenizer_or_provider_error(
     model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure
 ) -> SelectTokenizerResponse:
-    tokenizer: Final = await _tokenizer_within_load_wait(model, custom_tokenizer)
+    tokenizer: Final = await _tokenizer_within_load_wait(
+        model, custom_tokenizer, _tokenizer_loads_for_this_loop(_TOKENIZER_LOADS)
+    )
     if not isinstance(tokenizer, BaseException):
         return tokenizer
     if not _answers_provider_error(tokenizer):
@@ -15682,15 +15685,16 @@ async def _tokenizer_or_provider_error(
     raise _provider_error_after_failed_estimate(provider_failure, tokenizer) from tokenizer
 
 
-async def _tokenizer_or_tiktoken_after_load_wait(model: str) -> SelectTokenizerResponse:
-    tokenizer: Final = await _tokenizer_within_load_wait(model, None)
-    match tokenizer:
-        case asyncio.TimeoutError() | _TokenizerLoadsBusy():
-            return {"type": "openai_tokenizer", "tokenizer": litellm.utils.get_default_encoding()}
-        case BaseException():
-            raise tokenizer.with_traceback(None)
-        case _:
-            return tokenizer
+async def _tokenizer_model(model: str, base_model: str | None) -> str:
+    kind: Final = litellm.utils.huggingface_tokenizer_kind
+    if base_model is None or kind(base_model) == kind(model):
+        return model
+    if not litellm.utils.huggingface_tokenizer_may_download(base_model):
+        return base_model
+    loaded: Final = await _tokenizer_within_load_wait(
+        base_model, None, _tokenizer_loads_for_this_loop(_BASE_MODEL_TOKENIZER_LOADS)
+    )
+    return model if isinstance(loaded, BaseException) else base_model
 
 
 async def _local_token_estimate(
@@ -15701,16 +15705,11 @@ async def _local_token_estimate(
     tools: list[ChatCompletionToolParam] | None,
     custom_tokenizer: CustomHuggingfaceTokenizer | None,
     provider_failure: ProviderCountFailure | None,
-    tokenizer_from_base_model: bool,
 ) -> _LocalTokenEstimate:
     tokenizer: Final = (
-        await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
-        if provider_failure is not None
-        else await _tokenizer_or_tiktoken_after_load_wait(model)
-        if tokenizer_from_base_model
-        and custom_tokenizer is None
-        and litellm.utils.huggingface_tokenizer_may_download(model)
-        else await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
+        await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
+        if provider_failure is None
+        else await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
     )
     count: Final = offload_token_count(litellm.token_counter)(
         model=template_model,
@@ -16331,7 +16330,6 @@ async def _count_request_tokens(
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
     openai_model: Final = deployment_openai_model(deployment_view)
-    base_model_tokenizer: Final = None if openai_model else _unprefixed_base_model(deployment_view)
     template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
     tool_section: Final = chat_template_tool_section(template_model)
     counted_tools: Final = (
@@ -16373,14 +16371,16 @@ async def _count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=openai_model or base_model_tokenizer or model_to_use,
+        model=openai_model
+        or await _tokenizer_model(
+            model_to_use, None if custom_tokenizer is not None else _unprefixed_base_model(deployment_view)
+        ),
         template_model=template_model,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
         custom_tokenizer=custom_tokenizer,
         provider_failure=ladder,
-        tokenizer_from_base_model=base_model_tokenizer is not None,
     )
     template: Final = (
         0 if kimi_k3_messages is None else kimi_k3_template_tokens(len(kimi_k3_messages), bool(counted_tools))
