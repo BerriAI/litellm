@@ -2,7 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, effective_py_args, from_py, to_py};
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
@@ -77,6 +77,7 @@ pub(super) struct MessagesPythonHost {
     view: RequestView,
     cache: PythonCache,
     stream_cost_model: Option<String>,
+    asynchronous: bool,
 }
 
 impl MessagesPythonHost {
@@ -85,6 +86,7 @@ impl MessagesPythonHost {
             view,
             cache: PythonCache::new(asynchronous),
             stream_cost_model: None,
+            asynchronous,
         }
     }
 
@@ -100,6 +102,19 @@ impl MessagesPythonHost {
         )
     }
 
+    fn body_params(
+        &self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<Map<String, Value>> {
+        let request = effective_py_args(self.view.request(py)?, arguments)?;
+        from_py(
+            &py.import(ROUTE_HOST_MODULE)?
+                .getattr("body_params")?
+                .call1((request, self.asynchronous))?,
+        )
+    }
+
     fn projection(
         &self,
         py: Python<'_>,
@@ -112,10 +127,16 @@ impl MessagesPythonHost {
         };
         let model = settings.model;
         let messages = argument("messages")?.ok_or(ArgumentError::Required("messages"))?;
-        let fields = self.view.body_params(py, arguments, ROUTE_HOST_MODULE)?;
+        let mut fields = self.body_params(py, arguments)?;
+        let prepared = fields.remove("messages");
+        let presanitized = prepared.is_some();
+        let messages = match prepared {
+            Some(messages) => messages,
+            None => from_py(&messages)?,
+        };
         let body = [
             ("model".to_string(), Value::String(model.clone())),
-            ("messages".to_string(), from_py(&messages)?),
+            ("messages".to_string(), messages),
         ]
         .into_iter()
         .chain(fields)
@@ -140,6 +161,7 @@ impl MessagesPythonHost {
             capabilities: self.capabilities(py, &model, custom_llm_provider.as_deref())?,
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
+                presanitized,
                 ..settings.settings
             },
         };

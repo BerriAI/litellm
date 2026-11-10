@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
-use litellm_llms::{ErrorDetail, base_llm::messages::context::MessagesModelCapabilities};
+use litellm_llms::{
+    ErrorDetail,
+    base_llm::messages::context::{MessagesModelCapabilities, MessagesShapeOptions},
+};
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
     headers::ProviderSpecificHeaders,
@@ -75,9 +78,18 @@ pub struct MessagesSettings {
     pub mock_response: Option<Map<String, Value>>,
     #[serde(default)]
     pub whole_sse_frames: bool,
+    #[serde(default)]
+    pub presanitized: bool,
 }
 
 impl MessagesSettings {
+    pub fn shape_options(&self) -> MessagesShapeOptions {
+        MessagesShapeOptions {
+            reasoning_auto_summary: self.reasoning_auto_summary,
+            presanitized: self.presanitized,
+        }
+    }
+
     pub fn request_timeout(&self) -> Option<Duration> {
         self.request_timeout
             .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
