@@ -34,6 +34,7 @@ from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionTextObject,
     ChatCompletionThinkingBlock,
+    ChatCompletionToolMessage,
     ChatCompletionToolParam,
     ChatCompletionUserMessage,
     PromptCacheBreakpoint,
@@ -53,6 +54,15 @@ if TYPE_CHECKING:  # newer pattern to avoid importing pydantic objects on __init
 DEFAULT_USER_CONTINUE_MESSAGE: Final = ChatCompletionUserMessage(content="Please continue.", role="user")
 
 DEFAULT_ASSISTANT_CONTINUE_MESSAGE: Final = ChatCompletionAssistantMessage(content="Please continue.", role="assistant")
+
+
+def skipped_tool_result(tool_call_id: str, tool_name: str) -> ChatCompletionToolMessage:
+    return ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id=tool_call_id,
+        content=f"[System: Tool execution skipped/interrupted by user. No result provided for tool '{tool_name}'.]",
+    )
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass

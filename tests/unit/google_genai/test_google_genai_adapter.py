@@ -4,13 +4,14 @@ Test to verify the Google GenAI generate_content adapter functionality
 """
 import json
 import unittest
-from itertools import chain
+from itertools import chain, takewhile
 from typing import Final
 
 import pytest
 
 from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 from litellm.google_genai.main import agenerate_content
+from litellm.litellm_core_utils.prompt_templates.common_utils import skipped_tool_result
 
 
 
@@ -429,6 +430,33 @@ def _tagged_response(name: str, tag: str, **extra: object) -> dict[str, object]:
             ],
             id="non_string_ids",
         ),
+        pytest.param(
+            [
+                {"role": "model", "parts": [_tagged_call("get_weather", "paris", id="0")]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "paris", id="0")]},
+                {"role": "model", "parts": [_tagged_call("get_weather", "rome", id="0")]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "rome", id="0")]},
+            ],
+            id="caller_id_reused_in_a_later_turn",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "model",
+                    "parts": [_tagged_call("get_weather", "paris", id="0"), _tagged_call("get_time", "paris", id="1")],
+                },
+                {
+                    "role": "user",
+                    "parts": [
+                        _tagged_response("get_weather", "paris", id="0"),
+                        _tagged_response("get_time", "paris", id="1"),
+                    ],
+                },
+                {"role": "model", "parts": [_tagged_call("get_time", "rome", id="0")]},
+                {"role": "user", "parts": [_tagged_response("get_time", "rome", id="0")]},
+            ],
+            id="caller_ids_restarting_each_turn",
+        ),
     ],
 )
 def test_each_function_response_answers_the_call_it_was_sent_for(contents: list[dict[str, object]]):
@@ -448,23 +476,91 @@ def test_each_function_response_answers_the_call_it_was_sent_for(contents: list[
     ]
 
 
-def test_a_response_answers_the_latest_call_before_it_when_an_earlier_one_went_unanswered():
+def _call_tags(messages: list[dict[str, object]]) -> dict[str, str]:
+    return {
+        call["id"]: json.loads(call["function"]["arguments"])["tag"]
+        for call in chain.from_iterable(message.get("tool_calls") or () for message in messages)
+    }
+
+
+def _ids_answered_right_after(messages: list[dict[str, object]], index: int) -> list[str]:
+    return sorted(
+        answer["tool_call_id"] for answer in takewhile(lambda message: message["role"] == "tool", messages[index + 1 :])
+    )
+
+
+@pytest.mark.parametrize(
+    ("contents", "answered_tags"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},
+                {"role": "model", "parts": [_tagged_call("get_weather", "paris")]},
+                {"role": "user", "parts": [{"text": "Actually, only Rome"}]},
+                {"role": "model", "parts": [_tagged_call("get_weather", "rome")]},
+                {"role": "user", "parts": [_tagged_response("get_weather", "rome")]},
+            ],
+            frozenset({"rome"}),
+            id="call_skipped_by_the_next_user_turn",
+        ),
+        pytest.param(
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        _tagged_call("get_weather", "paris"),
+                        _tagged_call("get_weather", "rome"),
+                        _tagged_call("get_weather", "oslo"),
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [_tagged_response("get_weather", "paris"), _tagged_response("get_weather", "rome")],
+                },
+                {"role": "model", "parts": [{"text": "Oslo did not answer"}]},
+            ],
+            frozenset({"paris", "rome"}),
+            id="parallel_call_left_out_of_the_answers",
+        ),
+    ],
+)
+def test_a_call_a_later_turn_left_unanswered_gets_one_skipped_result_and_the_others_keep_their_answers(
+    contents: list[dict[str, object]], answered_tags: frozenset[str]
+):
+    messages: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="gpt-6-luna", contents=contents
+    )["messages"]
+
+    tag_by_call_id: Final = _call_tags(messages)
+    call_ids_per_turn: Final = {
+        index: sorted(call["id"] for call in message["tool_calls"])
+        for index, message in enumerate(messages)
+        if message.get("tool_calls")
+    }
+    answers: Final = [message for message in messages if message["role"] == "tool"]
+    assert {index: _ids_answered_right_after(messages, index) for index in call_ids_per_turn} == call_ids_per_turn
+    assert {
+        tag_by_call_id[answer["tool_call_id"]]: json.loads(answer["content"])["tag"]
+        for answer in answers
+        if tag_by_call_id[answer["tool_call_id"]] in answered_tags
+    } == {tag: tag for tag in answered_tags}
+    assert [answer for answer in answers if tag_by_call_id[answer["tool_call_id"]] not in answered_tags] == [
+        skipped_tool_result(call_id, "get_weather")
+        for call_id, tag in tag_by_call_id.items()
+        if tag not in answered_tags
+    ]
+
+
+def test_a_call_in_the_last_model_turn_gets_no_skipped_result():
     messages: Final = GoogleGenAIAdapter().translate_generate_content_to_completion(
         model="gpt-6-luna",
         contents=[
             {"role": "user", "parts": [{"text": "What is the weather in Paris?"}]},
             {"role": "model", "parts": [_tagged_call("get_weather", "paris")]},
-            {"role": "user", "parts": [{"text": "Actually, only Rome"}]},
-            {"role": "model", "parts": [_tagged_call("get_weather", "rome")]},
-            {"role": "user", "parts": [_tagged_response("get_weather", "rome")]},
         ],
     )["messages"]
 
-    call_id_by_tag: Final = {
-        json.loads(call["function"]["arguments"])["tag"]: call["id"]
-        for call in chain.from_iterable(message.get("tool_calls") or () for message in messages)
-    }
-    assert [message["tool_call_id"] for message in messages if message["role"] == "tool"] == [call_id_by_tag["rome"]]
+    assert [message["role"] for message in messages] == ["user", "assistant"]
 
 
 @pytest.mark.parametrize("parts", [pytest.param({"text": "Hi"}, id="one_object"), pytest.param("Hi", id="string")])

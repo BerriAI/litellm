@@ -102,7 +102,7 @@ def _google_error_response(request: Request, error: ProxyException) -> JSONRespo
 
 
 def _is_google_tool(tool: Mapping[str, JsonValue]) -> bool:
-    return "type" not in tool and "name" not in tool
+    return tool.keys().isdisjoint(("type", "name", "function"))
 
 
 class _TokenCountExtras(BaseModel):
