@@ -91,7 +91,6 @@ class HeldStatementRelay:
         self._upstream_port: Final = upstream_port
         self._trigger: Final = trigger
         self._after: Final = after
-        self._marker_length: Final = max(len(trigger), len(after or b""))
         self._server: Final = LoopbackServer(self.port, self._serve)
         self._loop: Final = self._server.loop
         self._released: Final = asyncio.Event()
@@ -115,27 +114,25 @@ class HeldStatementRelay:
         self.release()
         self._server.stop()
 
-    def _holds(self, window: bytes) -> bool:
+    def _holds(self, markers: frozenset[bytes]) -> bool:
         if not self._armed.is_set() or self.held.is_set():
             return False
         if self._after is not None and not self._after_seen.is_set():
-            if self._after in window:
+            if self._after in markers:
                 self._after_seen.set()
             return False
-        return self._trigger in window
+        return self._trigger in markers
 
     async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
         server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
 
         async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, inspect: bool) -> None:
-            tail = b""  # rebind-ok: carries the previous read's end so a trigger split across reads still matches
+            scanner: Final = StatementMarkerScanner((self._trigger,) + ((self._after,) if self._after else ()))
             try:
                 while chunk := await reader.read(65536):
-                    window: Final = tail + chunk
-                    if inspect and self._holds(window):
+                    if inspect and any(self._holds(markers) for markers in scanner.feed(chunk)):
                         self.held.set()
                         await self._released.wait()
-                    tail = window[-(self._marker_length - 1) :]
                     writer.write(chunk)
                     await writer.drain()
             except (ConnectionError, asyncio.IncompleteReadError):
@@ -147,6 +144,47 @@ class HeldStatementRelay:
             forward(client_reader, server_writer, True),
             forward(server_reader, client_writer, False),
         )
+
+
+class StatementMarkerScanner:
+    def __init__(self, markers: tuple[bytes, ...]) -> None:
+        self._markers: Final = markers
+        self._statements: Final[dict[bytes, frozenset[bytes]]] = {}
+        self._buffer = b""
+        self._startup = True
+
+    def feed(self, chunk: bytes) -> Generator[frozenset[bytes]]:
+        self._buffer += chunk
+        while len(self._buffer) >= (4 if self._startup else 5):
+            offset: Final = 0 if self._startup else 1
+            length: Final = int.from_bytes(self._buffer[offset : offset + 4], "big")
+            if length < 4:
+                raise ValueError("Invalid PostgreSQL message length")
+            if len(self._buffer) < length + offset:
+                return
+            message: Final = self._buffer[: length + offset]
+            self._buffer = self._buffer[length + offset :]
+            if self._startup:
+                self._startup = message[4:8] == b"\x04\xd2\x16/"
+                continue
+            payload: Final = message[5:]
+            if message[:1] == b"P":
+                name, _, query = payload.partition(b"\x00")
+                matches: Final = self._matches(query.split(b"\x00", 1)[0])
+                if name:
+                    self._statements[name] = matches
+                yield matches
+            elif message[:1] == b"B":
+                fields: Final = payload.split(b"\x00", 2)
+                prepared: Final = self._statements.get(fields[1], frozenset()) if len(fields) > 1 else frozenset()
+                yield prepared | self._matches(payload)
+            elif message[:1] == b"Q":
+                yield self._matches(payload)
+            elif message[:1] == b"C" and payload[:1] == b"S":
+                self._statements.pop(payload[1:].split(b"\x00", 1)[0], None)
+
+    def _matches(self, query: bytes) -> frozenset[bytes]:
+        return frozenset(marker for marker in self._markers if marker in query)
 
 
 class TriggerScanner:
