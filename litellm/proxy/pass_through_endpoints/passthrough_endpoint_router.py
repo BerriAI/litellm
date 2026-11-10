@@ -121,7 +121,7 @@ class PassthroughEndpointRouter:
         deployment_credentials: Final = self._get_deployment_credentials(
             custom_llm_provider=custom_llm_provider,
             region_name=region_name,
-            include_team_deployments=True,
+            include_team_deployments=False,
         )
         if deployment_credentials is not None:
             api_key: Final = _resolve_oidc_reference(deployment_credentials.api_key)

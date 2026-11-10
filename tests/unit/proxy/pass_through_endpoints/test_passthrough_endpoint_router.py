@@ -237,6 +237,36 @@ def test_tripo_region_matching_keeps_domain_and_key_paired():
     )
 
 
+@pytest.mark.parametrize("region,domain", [("cn", "openapi.tripo3d.com"), ("global", "openapi.tripo3d.ai")])
+@pytest.mark.parametrize("include_global", [False, True])
+def test_tripo_credentials_exclude_team_deployments(region: str, domain: str, include_global: bool) -> None:
+    api_base: Final = f"https://{domain}/v3"
+    team_deployment: Final = {
+        "model_name": "tripo-team",
+        "litellm_params": {
+            "model": "tripo/task", "api_key": "team-key", "api_base": api_base, "use_in_pass_through": True,
+        },
+        "model_info": {"team_id": "team-a"},
+    }
+    global_deployment: Final = {
+        "model_name": "tripo-global",
+        "litellm_params": {
+            "model": "tripo/task", "api_key": "global-key", "api_base": api_base, "use_in_pass_through": True,
+        },
+    }
+    router: Final = litellm.Router(
+        model_list=[team_deployment, global_deployment] if include_global else [team_deployment]
+    )
+
+    credentials: Final = _passthrough_router(router).get_credentials_with_api_base("tripo", region)
+
+    if not include_global:
+        assert credentials is None
+        return
+    assert credentials is not None
+    assert (credentials.api_key, credentials.api_base) == ("global-key", api_base)
+
+
 def test_azure_speech_dashboard_credential_resolves_through_flagged_deployment(monkeypatch):
     monkeypatch.delenv("AZURE_SPEECH_API_KEY", raising=False)
     CredentialAccessor.upsert_credentials([_credential("azure-speech-prod", "azure-subscription-key")])
