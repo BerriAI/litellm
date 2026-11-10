@@ -104,8 +104,7 @@ def migration_job(database_url: str, resolver: Resolver) -> subprocess.Completed
 
 
 def migration_cli(database_url: str, gateway: Gateway, resolver: Resolver) -> subprocess.CompletedProcess[str]:
-    """The proxy CLI as a migration job: `--skip_server_startup` migrates, builds the
-    indexes and exits by their result."""
+    """The proxy CLI migrates, builds the indexes and exits by the migrations result."""
     return subprocess.run(
         [
             sys.executable,
