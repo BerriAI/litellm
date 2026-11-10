@@ -429,6 +429,10 @@ def _ids_routing_to_catalog_models(
     )
 
 
+def _names_whole_models(name_pattern: str) -> bool:
+    return name_pattern.count("*") == 1 and name_pattern.endswith("/*")
+
+
 def _ids_routing_through_catch_all(
     name_pattern: str, catalog_ids: Sequence[str], routes_to_model: Callable[[str, str], bool]
 ) -> tuple[str, ...]:
@@ -577,7 +581,7 @@ def _known_models_from_wildcard(
 
     if wildcard_models is None:
         return ()
-    if litellm_params is not None and litellm_params.model == "*":
+    if litellm_params is not None and litellm_params.model == "*" and not _names_whole_models(wildcard_model):
         return _ids_routing_through_catch_all(wildcard_model, wildcard_models, routes_to_model)
     if deployment_pattern_naming_listed_ids is not None:
         return _ids_routing_to_catalog_models(

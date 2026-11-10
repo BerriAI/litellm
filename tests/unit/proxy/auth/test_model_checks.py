@@ -2511,3 +2511,43 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_to_catalog_mo
         assert expected_id in v1_models
         assert expected_id in model_info_names
         assert routed_model(expected_id) == _ROUTE_OPENAI_ID
+
+
+def test_partial_alias_over_a_bare_catch_all_skips_ids_a_more_specific_sibling_routes_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import expand_wildcard_deployments_for_model_info, get_complete_model_list
+    from litellm.utils import get_valid_models
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-partial-route-test")
+    alias_names: Final = ("team-partial-route/gpt-*", "team-partial-route/gpt-gpt-partial-route-*")
+    router: Final = Router(model_list=[{"model_name": name, "litellm_params": {"model": "*"}} for name in alias_names])
+    stolen_id: Final = f"team-partial-route/gpt-{_ROUTE_OPENAI_ID}"
+
+    def routed_model(listed_id: str) -> object:
+        routed: Final = router.registry().deployments(listed_id, source="wildcard")
+        return routed[0]["litellm_params"]["model"] if routed else None
+
+    with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
+        catalog_ids: Final = frozenset(get_valid_models())
+        v1_models: Final = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=list(alias_names),
+            user_model=None,
+            infer_model_from_keys=False,
+            llm_router=router,
+        )
+        model_info_names: Final = [
+            str(row["model_name"])
+            for row in expand_wildcard_deployments_for_model_info(
+                [dict(deployment) for deployment in router.registry().deployments() or []], router
+            )
+            if row["model_name"] not in alias_names
+        ]
+
+    listed_ids: Final = [*v1_models, *model_info_names]
+    assert routed_model(stolen_id) not in catalog_ids
+    assert [listed_id for listed_id in listed_ids if routed_model(listed_id) not in catalog_ids] == []
+    assert f"team-partial-route/gpt-gpt-partial-route-{_ROUTE_OPENAI_ID}" in v1_models
