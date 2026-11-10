@@ -6077,7 +6077,10 @@ async def test_register_bridge_with_proxy_base_url_uses_gateway_metadata(
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
     response, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(auth_type=MCPAuth(auth_type_value)),
-        {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
+        {
+            "client_name": "" if replace_stale_client else "Visual Studio Code",
+            "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT],
+        },
         replace_stale_client=replace_stale_client,
     )
 
@@ -6093,6 +6096,34 @@ async def test_register_bridge_with_proxy_base_url_uses_gateway_metadata(
 
     payload: Final = json.loads(response.body.decode("utf-8"))
     assert payload["redirect_uris"] == [_LAPTOP_LOOPBACK_REDIRECT], payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auth_type_value", ["oauth_delegate", "true_passthrough"])
+@pytest.mark.parametrize("auth_method", ["client_secret_basic", "client_secret_post"])
+async def test_admin_register_bridge_preserves_explicit_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    auth_type_value: Literal["oauth_delegate", "true_passthrough"],
+    auth_method: str,
+) -> None:
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    metadata: Final[_BridgeRegistrationPayload] = {
+        "client_name": "Custom gateway",
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": auth_method,
+    }
+    _, mock_async_client, mock_persist = await _bridge_register_response(
+        _bridge_server(auth_type=MCPAuth(auth_type_value)),
+        metadata,
+        replace_stale_client=True,
+    )
+
+    assert mock_async_client.post.call_args.kwargs["json"] == {
+        **metadata,
+        "redirect_uris": ["https://litellm.example.com/callback"],
+    }
+    mock_persist.assert_awaited_once()
 
 
 @pytest.mark.asyncio

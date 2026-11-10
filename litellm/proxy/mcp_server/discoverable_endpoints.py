@@ -2280,20 +2280,21 @@ async def register_client_with_server(
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
         }
-        if shared_client_persistable
-        and not bridge_relay
-        and (not replace_stale_client or resolved_server.is_dcr_bridge)
+        if shared_client_persistable and not replace_stale_client and not bridge_relay
         else {
             **(
                 {"application_type": client_application_type}
                 if bridge_relay and client_application_type is not None
                 else {}
             ),
-            "client_name": client_name,
+            "client_name": client_name
+            or ("LiteLLM Proxy" if resolved_server.is_dcr_bridge and not bridge_relay else ""),
             "redirect_uris": client_redirect_uris if bridge_relay else [current_redirect_uri],
-            "grant_types": grant_types or (["authorization_code", "refresh_token"] if bridge_relay else []),
-            "response_types": response_types or (["code"] if bridge_relay else []),
-            "token_endpoint_auth_method": token_endpoint_auth_method or ("none" if bridge_relay else ""),
+            "grant_types": grant_types
+            or (["authorization_code", "refresh_token"] if resolved_server.is_dcr_bridge else []),
+            "response_types": response_types or (["code"] if resolved_server.is_dcr_bridge else []),
+            "token_endpoint_auth_method": token_endpoint_auth_method
+            or ("none" if resolved_server.is_dcr_bridge else ""),
         }
     )
     response: Final = await _post_dcr_registration(

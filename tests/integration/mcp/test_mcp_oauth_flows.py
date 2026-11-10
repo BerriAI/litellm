@@ -776,12 +776,16 @@ def admin_dcr_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gate
 
 
 @pytest.mark.parametrize("auth_type", ("oauth_delegate", "true_passthrough"))
-def test_admin_dcr_bridge_registration_uses_gateway_metadata(admin_dcr_gateway: Gateway, auth_type: str) -> None:
+@pytest.mark.parametrize("auth_method", (None, "client_secret_basic", "client_secret_post"))
+def test_admin_dcr_bridge_registration_uses_gateway_metadata(
+    admin_dcr_gateway: Gateway, auth_type: str, auth_method: str | None
+) -> None:
     with mcp_peer() as peer, oauth_server() as auth, admin_dcr_gateway.scenario() as scenario:
         alias: Final = "dcr" + uuid.uuid4().hex[:8]
         identity: Final = _register_oauth(scenario, peer, auth, alias, auth_type=auth_type, dcr_bridge=True)
         auth.drain()
-        registered: Final = admin_dcr_gateway.request("POST", f"/v1/mcp/server/oauth/{identity}/register", {})
+        metadata: Final = {"token_endpoint_auth_method": auth_method} if auth_method else {}
+        registered: Final = admin_dcr_gateway.request("POST", f"/v1/mcp/server/oauth/{identity}/register", metadata)
         assert registered.status_code == 200, registered.text
         registrations: Final = tuple(
             request for request in auth.drain() if urlsplit(request.target).path == "/register"
@@ -792,9 +796,9 @@ def test_admin_dcr_bridge_registration_uses_gateway_metadata(admin_dcr_gateway: 
             "redirect_uris": ["https://gateway.example.com/callback"],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
-            "token_endpoint_auth_method": "none",
+            "token_endpoint_auth_method": auth_method or "none",
         }
-        reused: Final = admin_dcr_gateway.request("POST", f"/v1/mcp/server/oauth/{identity}/register", {})
+        reused: Final = admin_dcr_gateway.request("POST", f"/v1/mcp/server/oauth/{identity}/register", metadata)
         assert reused.status_code == 200, reused.text
         assert tuple(request for request in auth.drain() if urlsplit(request.target).path == "/register") == ()
 
