@@ -1612,6 +1612,81 @@ class TestManagedResponsesWSFirstMessage:
         assert processed == [subsequent]
 
 
+class TestResponsesWSS3MediaFrameCheck:
+    @pytest.mark.asyncio
+    async def test_managed_socket_refuses_a_non_admin_s3_image_on_every_frame_and_forwards_a_proxy_admin_frame(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm import Router
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.response_api_endpoints.endpoints import _responses_websocket_session
+
+        image_uri: Final = "s3://media-bucket/dir/cat.png"
+        frame: Final = json.dumps(
+            {
+                "type": "response.create",
+                "input": [{"role": "user", "content": [{"type": "input_image", "image_url": image_uri}]}],
+            }
+        )
+        forwarded_event: Final = {"type": "response.created", "response": {"id": "resp_admin"}}
+        provider_inputs: Final[list[object]] = []
+
+        async def fake_aresponses(**kwargs: object):
+            provider_inputs.append(kwargs["input"])
+
+            async def events():
+                yield forwarded_event
+
+            return events()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+        test_router: Final = Router(
+            model_list=[{"model_name": "nova", "litellm_params": {"model": "bedrock/us.amazon.nova-2-lite-v1:0"}}]
+        )
+
+        async def route_to_test_router(*, data: dict[str, Any], **_kwargs: object):
+            return test_router._aresponses_websocket(**data)
+
+        async def frames_sent_back(user_role: LitellmUserRoles) -> list[object]:
+            ws = MagicMock()
+            ws.scope = {"headers": []}
+            ws.url = "ws://testserver/v1/responses"
+            ws.receive_text = AsyncMock(side_effect=[frame, frame, Exception("disconnect")])
+            ws.send_text = AsyncMock()
+            ws.close = AsyncMock()
+            with (
+                patch(  # test-quality-ok: the pre-call processor needs a live proxy and is not what this test covers
+                    "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                    side_effect=lambda data: MagicMock(
+                        common_processing_pre_call_logic=AsyncMock(return_value=(data, MagicMock()))
+                    ),
+                ),
+                patch(  # test-quality-ok: routes to a router holding one Bedrock deployment instead of the proxy's
+                    "litellm.proxy.route_llm_request.route_request",
+                    side_effect=route_to_test_router,
+                ),
+            ):
+                await _responses_websocket_session(
+                    websocket=ws,
+                    model="nova",
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="user-a", user_role=user_role),
+                )
+            return [json.loads(call.args[0]) for call in ws.send_text.await_args_list]
+
+        refused: Final = await frames_sent_back(LitellmUserRoles.INTERNAL_USER)
+
+        assert provider_inputs == []
+        assert [event["type"] for event in refused] == ["error", "error"]
+        assert all("allowed_client_side_s3_buckets" in event["error"]["message"] for event in refused)
+        assert all(image_uri in event["error"]["message"] for event in refused)
+
+        admitted: Final = await frames_sent_back(LitellmUserRoles.PROXY_ADMIN)
+
+        assert admitted == [forwarded_event, forwarded_event]
+        assert len(provider_inputs) == 2
+        assert all(image_uri in json.dumps(provider_input) for provider_input in provider_inputs)
+
+
 class TestResponsesWSStreamingFirstMessage:
     @pytest.mark.asyncio
     async def test_client_to_backend_replays_first_message(self):
