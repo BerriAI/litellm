@@ -294,6 +294,7 @@ class VertexAIPartnerModels(VertexBase):
         system: object | None = None,
         tools: list[dict[str, object]] | None = None,
         count_options: Mapping[str, object] = MappingProxyType({}),
+        context_management: object = None,
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -328,7 +329,15 @@ class VertexAIPartnerModels(VertexBase):
                 "model": model,
                 "messages": messages,
                 **MappingProxyType(
-                    {key: value for key, value in (("system", system), ("tools", tools)) if value is not None}
+                    {
+                        key: value
+                        for key, value in (
+                            ("system", system),
+                            ("tools", tools),
+                            ("context_management", context_management),
+                        )
+                        if value is not None
+                    }
                 ),
                 **count_options,
             }
