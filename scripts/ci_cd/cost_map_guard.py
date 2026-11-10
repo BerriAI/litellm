@@ -2,7 +2,7 @@
 
 Every pull request whose diff against its merge base touches one of the two cost map files or the pins file gets the
 file checks: the files parse, the backup copy matches the root file, and every capability pinned in
-ci_cd/cost_map_pins.json (a value verified against a live provider call where the provider's model listing says
+scripts/ci_cd/cost_map_pins.json (a value verified against a live provider call where the provider's model listing says
 otherwise) still holds in the tree that merging the pull request into its base branch produces, so a branch cut before
 a pin was added cannot lower it, and a pull request that deletes the pins file fails too. A pull request that leaves
 all three untouched skips them, since merging it keeps the base branch's copies and its head tree only carries
@@ -27,7 +27,7 @@ from typing import Final
 
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
-PINS_PATH: Final = "ci_cd/cost_map_pins.json"
+PINS_PATH: Final = "scripts/ci_cd/cost_map_pins.json"
 PINS_PATHS: Final = (
     "litellm/scripts/ci_cd/cost_map_pins.json",
     "scripts/ci_cd/cost_map_pins.json",

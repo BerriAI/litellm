@@ -126,7 +126,7 @@ install-hooks:
 	./scripts/install_git_hooks.sh
 
 # Formatting
-# Wrap width is ruff.toml's single source of truth (line-length = 120), shared by the
+# Wrap width is pyproject.toml's single source of truth (line-length = 120), shared by the
 # formatter and the import sorter so there's no 88-vs-120 split to reconcile.
 format: install-dev
 	cd litellm && $(UV_RUN) ruff format --exclude '/enterprise/' . && cd ..
@@ -165,7 +165,7 @@ lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 lint-ruff: $(LINT_DEP_INSTALL)
 	$(UV_RUN) python scripts/check_mcp_operation_boundary.py
 	cd litellm && $(UV_RUN) ruff check . && cd ..
-	$(UV_RUN) ruff check --config ruff-tests.toml tests
+	$(UV_RUN) ruff check --config .github/linters/ruff-tests.toml tests
 
 # faster linter for developing ...
 # inspiration from:

@@ -117,6 +117,7 @@ def test_run_basedpyright_pins_import_resolution_to_the_owned_env(tmp_path):
     gate.run_basedpyright(cwd=tmp_path, env_dir=env_dir)
     argv = captured.read_text().split()
     assert argv[argv.index("--pythonpath") + 1] == str(env_dir / "bin" / "python")
+    assert argv[argv.index("--project") + 1] == str(tmp_path / "pyproject.toml")
 
 
 def test_run_basedpyright_fails_loudly_on_a_crash_exit_code(tmp_path):
@@ -173,12 +174,24 @@ def test_env_commands_sync_the_canonical_groups_then_generate_prisma():
 
 
 def test_env_interpreter_pin_tracks_pyrightconfigs_python_version():
-    configured = json.loads((ROOT / "pyrightconfig.json").read_text())[
-        "pythonVersion"
-    ]
+    configured = gate.tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pyright"]["pythonVersion"]
     assert gate.typecheck_python_version() == configured
     sync = gate.typecheck_env_commands()[0]
     assert sync[sync.index("--python") + 1] == configured
+
+
+def test_env_interpreter_pin_reads_project_toml(tmp_path):
+    config: Final = tmp_path / "pyproject.toml"
+    config.write_text('[tool.pyright]\npythonVersion = "3.12"\n')
+    assert gate.typecheck_python_version(config) == "3.12"
+
+
+def test_env_interpreter_pin_handles_missing_empty_or_invalid_config(tmp_path):
+    config: Final = tmp_path / "pyproject.toml"
+    assert gate.typecheck_python_version(config) is None
+    for content in ("", "[tool.pyright", "[tool.pyright]\npythonVersion = 312\n"):
+        config.write_text(content)
+        assert gate.typecheck_python_version(config) is None
 
 
 def test_ensure_env_targets_the_owned_dir_and_runs_sync_then_generate(tmp_path):

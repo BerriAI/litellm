@@ -8,7 +8,7 @@ on:
     paths:
       - model_prices_and_context_window.json
       - litellm/model_prices_and_context_window_backup.json
-      - ci_cd/cost_map_pins.json
+      - scripts/ci_cd/cost_map_pins.json
 
 permissions: {}
 
@@ -28,8 +28,8 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.event.after }}
           FORCED: ${{ github.event.forced }}
-          COST_MAP_PATHS: '["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json", "ci_cd/cost_map_pins.json"]'
-          PINS_PATHS: '["ci_cd/cost_map_pins.json"]'
+          COST_MAP_PATHS: '["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json", "scripts/ci_cd/cost_map_pins.json"]'
+          PINS_PATHS: '["scripts/ci_cd/cost_map_pins.json"]'
         run: |
           if [[ "$BEFORE_SHA" =~ ^0+$ || "$FORCED" == true ]] \
             || ! gh api "repos/${GITHUB_REPOSITORY}/compare/${BEFORE_SHA}...${AFTER_SHA}?per_page=1" \

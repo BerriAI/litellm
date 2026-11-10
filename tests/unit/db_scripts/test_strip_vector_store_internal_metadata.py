@@ -8,7 +8,7 @@ from typing import Final
 import httpx
 import pytest
 
-_SCRIPT: Final = Path(__file__).resolve().parents[3] / "db_scripts" / "strip_vector_store_internal_metadata.py"
+_SCRIPT: Final = Path(__file__).resolve().parents[3] / "scripts" / "db" / "strip_vector_store_internal_metadata.py"
 _spec: Final = importlib.util.spec_from_file_location("strip_vector_store_internal_metadata", _SCRIPT)
 strip_script: Final = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = strip_script

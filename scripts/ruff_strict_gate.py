@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Delta-vs-base gate for the strict ruff rules in ruff-strict.toml.
+"""Delta-vs-base gate for the strict ruff rules in .github/linters/ruff-strict.toml.
 
 Each rule is counted across the whole tree at HEAD and at the merge-base with
 the branch this change merges into, and the gate fails only when a rule grew
@@ -37,8 +37,8 @@ from lint_base_counts import (
 )
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent
-STRICT_CONFIG: Final = REPO_ROOT / "ruff-strict.toml"
-BASE_CONFIG: Final = REPO_ROOT / "ruff.toml"
+STRICT_CONFIG: Final = REPO_ROOT / ".github/linters/ruff-strict.toml"
+BASE_CONFIG: Final = REPO_ROOT / "pyproject.toml"
 TARGET: Final = "litellm"
 
 _HUNK: Final = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -100,8 +100,10 @@ def base_counts(ref: str) -> dict[str, int]:
     try:
         _run(["git", "worktree", "add", "--detach", str(worktree), ref])
         shutil.copy(BASE_CONFIG, worktree / BASE_CONFIG.name)
-        shutil.copy(STRICT_CONFIG, worktree / STRICT_CONFIG.name)
-        items: Final = _ruff_json(worktree, worktree / STRICT_CONFIG.name)
+        strict_config: Final = worktree / STRICT_CONFIG.relative_to(REPO_ROOT)
+        strict_config.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(STRICT_CONFIG, strict_config)
+        items: Final = _ruff_json(worktree, strict_config)
         return dict(Counter(item["code"] for item in items))
     finally:
         _run(["git", "worktree", "remove", "--force", str(worktree)])

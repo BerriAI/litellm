@@ -7,7 +7,7 @@ from typing import Final
 
 import pytest
 
-_SCRIPT: Final = Path(__file__).resolve().parents[2] / "ci_cd" / "spend_logs_guard.py"
+_SCRIPT: Final = Path(__file__).resolve().parents[2] / "scripts" / "ci_cd" / "spend_logs_guard.py"
 _SPEC: Final = importlib.util.spec_from_file_location("spend_logs_guard", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
 guard: Final = importlib.util.module_from_spec(_SPEC)

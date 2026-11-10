@@ -7,7 +7,7 @@ def create_baseline():
     """Create baseline migration in deploy/migrations"""
     try:
         # Get paths
-        root_dir = Path(__file__).parent.parent
+        root_dir = Path(__file__).resolve().parents[2]
         deploy_dir = root_dir / "deploy"
         migrations_dir = deploy_dir / "migrations"
         schema_path = root_dir / "schema.prisma"

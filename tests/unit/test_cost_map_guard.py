@@ -11,7 +11,7 @@ from typing import Final
 import pytest
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-CI_CD: Final = ROOT / "ci_cd"
+CI_CD: Final = ROOT / "scripts" / "ci_cd"
 
 
 def _load(name: str) -> ModuleType:
@@ -378,7 +378,7 @@ def _commit(repo: Path, cost_map: dict[str, object], message: str, pins: str | N
     text = _serialize(cost_map)
     pins_file = repo / guard.PINS_PATH
     if pins is not None or not pins_file.exists():
-        pins_file.parent.mkdir(exist_ok=True)
+        pins_file.parent.mkdir(parents=True, exist_ok=True)
         pins_file.write_text(NO_PINS if pins is None else pins)
     (repo / guard.COST_MAP_PATH).write_text(text)
     (repo / guard.BACKUP_PATH).parent.mkdir(exist_ok=True)

@@ -3,7 +3,7 @@ name: Conventional PR Title
 # Squash-merge replaces the merge commit subject with the PR title, so
 # enforcing Conventional Commits at the PR-title level is what actually gates
 # the commits that land on the default branch. The local commit-msg hook
-# (.githooks/commit-msg) is a best-effort assist; this workflow is the gate.
+# (scripts/githooks/commit-msg) is a best-effort assist; this workflow is the gate.
 #
 # See https://www.conventionalcommits.org/en/v1.0.0/
 
@@ -28,7 +28,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Must mirror the type list in .githooks/commit-msg.
+          # Must mirror the type list in scripts/githooks/commit-msg.
           types: |
             feat
             fix

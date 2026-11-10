@@ -26,7 +26,7 @@
 --    such buckets keep the writer's numbers and skip the backfill's.
 --
 -- Usage:
---   psql "$DATABASE_URL" -v cutover="'2026-07-25T00:00:00Z'" -f db_scripts/backfill_daily_tool_spend.sql
+--   psql "$DATABASE_URL" -v cutover="'2026-07-25T00:00:00Z'" -f scripts/db/backfill_daily_tool_spend.sql
 
 SET TIME ZONE 'UTC';
 

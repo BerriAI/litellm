@@ -37,7 +37,7 @@ def test_schema_migration_in_sync():
 
         if not any(migrations_dir.iterdir()):
             pytest.fail(
-                "No existing migrations found. Run `python litellm/ci_cd/baseline_db_migration.py`."
+                "No existing migrations found. Run `python scripts/ci_cd/baseline_db.py`."
             )
 
         subprocess.run(
@@ -67,7 +67,7 @@ def test_schema_migration_in_sync():
             if drift.strip():
                 pytest.fail(
                     "Schema changes detected that no migration captures. Run "
-                    "`python litellm/ci_cd/run_migration.py <migration_name>`.\n\n"
+                    "`python scripts/ci_cd/run_migration.py <migration_name>`.\n\n"
                     + drift
                 )
         else:

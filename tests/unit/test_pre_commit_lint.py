@@ -13,10 +13,10 @@ from tests._process_helpers import process_is_gone
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "pre_commit_lint.sh"
-WHOLE_TREE_RUFF = "run --no-sync ruff check --config ruff-tests.toml tests"
-TEST_TREE_RAN = "ran:     test-tree lint (ruff-tests.toml + test-quality gate)"
+WHOLE_TREE_RUFF = "run --no-sync ruff check --config .github/linters/ruff-tests.toml tests"
+TEST_TREE_RAN = "ran:     test-tree lint (.github/linters/ruff-tests.toml + test-quality gate)"
 TEST_TREE_SKIPPED = (
-    "skipped: test-tree lint (ruff-tests.toml + test-quality gate) "
+    "skipped: test-tree lint (.github/linters/ruff-tests.toml + test-quality gate) "
     "(no tests/ Python files or test-tree lint inputs in scope)"
 )
 
@@ -81,7 +81,7 @@ case "$*" in
     *orjson*)
         [ -n "${STUB_BARRIER_DIR:-}" ] && barrier_sync genapi "python dashboard"
         ;;
-    "run --no-sync ruff check --config ruff-tests.toml"*)
+    "run --no-sync ruff check --config .github/linters/ruff-tests.toml"*)
         [ -n "${STUB_ARGS_DIR:-}" ] && echo "$*" >> "$STUB_ARGS_DIR/ruff_tests.args"
         [ "${STUB_FAIL:-}" = "tests-ruff" ] && exit 1
         ;;
@@ -497,7 +497,7 @@ def test_tests_only_change_runs_the_whole_test_tree_ruff_and_the_quality_gate(tm
 @pytest.mark.parametrize(
     "changed",
     [
-        "ruff-tests.toml",
+        ".github/linters/ruff-tests.toml",
         "scripts/check_test_quality.py",
         "scripts/test_quality_gate.py",
         "tests/e2e/test_x.py",
@@ -593,7 +593,7 @@ def test_partial_staging_warns_when_test_files_are_left_unstaged(tmp_path: Path)
     (repo / "tests" / "test_a.py").write_text("def test_a() -> None:\n    assert True\n")
     proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir)})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "SKIPPED test-tree lint (ruff-tests.toml + test-quality gate)" in proc.stdout
+    assert "SKIPPED test-tree lint (.github/linters/ruff-tests.toml + test-quality gate)" in proc.stdout
     assert "tests/test_a.py" in proc.stdout
     assert _recorded(args_dir, "ruff_tests.args") == []
     assert _recorded(args_dir, "make.args") == []
