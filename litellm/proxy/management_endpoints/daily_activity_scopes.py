@@ -17,6 +17,7 @@ from litellm.proxy.management_endpoints.organization_endpoints import resolve_or
 from litellm.proxy.management_endpoints.tag_management_endpoints import get_tag_daily_activity_api_key_filter
 from litellm.proxy.management_endpoints.team_endpoints import resolve_team_daily_activity_scope
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.daily_activity_buckets import raw_api_key_filter
 from litellm.types.repositories.daily_activity import DailyActivityScope, DailyActivityTable
 
 
@@ -30,6 +31,7 @@ class EntityQuery:
     model: str | None
     timezone_offset_minutes: int | None
     include_current_utc_day: bool
+    team_ids: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,13 +79,7 @@ def _build_scope(
 ) -> ResolvedScope:
     start_date: Final[str] = query.start_date or ""
     end_date: Final[str] = query.end_date or ""
-    api_keys: Final[tuple[str, ...] | None] = (
-        None
-        if api_key_filter is None or api_key_filter == ""
-        else (api_key_filter,)
-        if isinstance(api_key_filter, str)
-        else tuple(api_key_filter)
-    )
+    api_keys: Final = raw_api_key_filter(api_key_filter)
     return ResolvedScope(
         scope=DailyActivityScope(
             table=resolver.table,
@@ -96,6 +92,7 @@ def _build_scope(
             model=query.model,
             timezone_offset_minutes=query.timezone_offset_minutes,
             include_current_utc_day=query.include_current_utc_day,
+            team_ids=query.team_ids,
         ),
         entity_metadata=entity_metadata,
     )
@@ -221,7 +218,11 @@ def _user_query(
     start_date: str | None = Query(default=None, description="Start date in YYYY-MM-DD format"),
     end_date: str | None = Query(default=None, description="End date in YYYY-MM-DD format"),
     model: str | None = Query(default=None, description="Filter by specific model"),
-    api_key: str | None = Query(default=None, description="Filter by specific API key"),
+    api_key: str | None = Query(
+        default=None,
+        description="Filter by reporting API key ID. Missing keys are reported as unattributed. "
+        "For a literal key unattributed or a key starting with raw:, add an extra raw: prefix",
+    ),
     user_id: str | None = Query(
         default=None,
         description="Filter by specific user ID. Admins can filter by any user or omit for global view. "
@@ -322,9 +323,11 @@ def _customer_query(
     api_key: str | None = None,
     exclude_end_user_ids: str | None = None,
     timezone: int | None = None,
+    team_ids: str | None = None,
 ) -> EntityQuery:
     return EntityQuery(
         entity_ids=_query_ids(end_user_ids),
+        team_ids=_query_ids(team_ids),
         exclude_entity_ids=_query_excluded_ids(exclude_end_user_ids),
         api_key=api_key,
         start_date=start_date,
@@ -364,7 +367,7 @@ USER_RESOLVER = EntityScopeResolver(
     tags=("Budget & Spend Tracking", "Internal User management"),
     query=_user_query,
     resolve=_resolve_user,
-    include_entity_breakdown=False,
+    include_entity_breakdown=True,
     include_guardrail_breakdown=True,
     operation_names=MappingProxyType(
         {

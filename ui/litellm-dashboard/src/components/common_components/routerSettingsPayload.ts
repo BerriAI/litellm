@@ -15,6 +15,7 @@ const EDITOR_OWNED_FIELDS: Record<keyof RouterSettings, true> = {
   model_group_alias: true,
   enable_tag_filtering: true,
   routing_strategy_args: true,
+  weights: true,
 };
 
 const EDITOR_OWNED_KEYS = Object.keys(EDITOR_OWNED_FIELDS) as Array<keyof RouterSettings>;

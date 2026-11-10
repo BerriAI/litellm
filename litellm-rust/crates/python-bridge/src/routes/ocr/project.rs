@@ -1,4 +1,3 @@
-use litellm_auth::SecretValue;
 use litellm_auth::VertexParams;
 use litellm_host_python::{from_py, present};
 use litellm_inference_ocr::{
@@ -6,6 +5,7 @@ use litellm_inference_ocr::{
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
 use litellm_llms::base_llm::ocr::{error::Error, transformation::DROP_PARAMS_PARAM};
+use litellm_secret_value::SecretValue;
 use pyo3::{prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 

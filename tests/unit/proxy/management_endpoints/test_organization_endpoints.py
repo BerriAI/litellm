@@ -1,14 +1,14 @@
-import asyncio
 import json
+from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from types import MappingProxyType, SimpleNamespace
-from typing import Final, Mapping, Optional, cast
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from litellm._uuid import uuid
 from tests.unit.proxy.management_endpoints.jwt_key_mapping_doubles import (
     CascadingJWTMappingTable,
     JWTMappingRow,
@@ -25,8 +25,6 @@ async def test_organization_update_object_permissions_existing_permission(monkey
     with the new permissions and the object_permission_id remains the same.
     """
     from unittest.mock import AsyncMock, MagicMock
-
-    import pytest
 
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionBase,
@@ -261,8 +259,6 @@ async def test_organization_update_object_permissions_no_existing_permission(
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    import pytest
-
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionBase,
         LiteLLM_OrganizationTable,
@@ -325,8 +321,6 @@ async def test_organization_update_object_permissions_missing_permission_record(
     a new entry is created in the LiteLLM_ObjectPermissionTable with the new permissions.
     """
     from unittest.mock import AsyncMock, MagicMock
-
-    import pytest
 
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionBase,
@@ -647,6 +641,7 @@ async def test_organization_member_add_budget_omission_and_null_leave_budget_uns
     from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 
     user = LiteLLM_UserTable(user_id="user-1", user_role="internal_user")
+
     async def create_membership(data):
         return LiteLLM_OrganizationMembershipTable(
             user_id="user-1",
@@ -1189,6 +1184,27 @@ async def _run_legacy_update_organization(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("body", "twin_after"),
+    [
+        ({"organization_id": "org-1", "spend": 0.0}, None),
+        ({"organization_id": "org-1", "organization_alias": "renamed"}, 7.0),
+    ],
+)
+async def test_legacy_update_drops_the_committed_org_spend_only_when_it_writes_the_stored_spend(
+    monkeypatch, body, twin_after
+):
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis=None, memory={"spend:committed:org:org-1": 7.0})
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+
+    await _run_legacy_update_organization(monkeypatch, body=body, existing_budget_id="budget-1")
+
+    assert spend.memory.get("spend:committed:org:org-1") == twin_after
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "body",
     [
         {"organization_id": "org-1", "tpm_limit": None},
@@ -1423,6 +1439,43 @@ async def test_new_organization_temp_budget_fields_go_to_budget_row_not_metadata
     assert json.loads(org_write.get("metadata", "{}")) == {}
 
 
+@pytest.mark.asyncio
+async def test_new_organization_keeps_per_model_limits_in_org_metadata_not_the_budget_row(monkeypatch):
+    """The rate limiter reads an organization's model_tpm_limit / model_rpm_limit from the org metadata.
+    Budgets gained columns of the same name for customers, so /organization/new must still write the maps
+    to metadata and leave them off the budget row."""
+    from litellm.proxy._types import LitellmUserRoles, NewOrganizationRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import new_organization
+    from litellm.proxy.utils import PrismaClient
+
+    prisma_client: Final = MagicMock()
+    prisma_client.jsonify_object = MagicMock(side_effect=lambda data: PrismaClient.jsonify_object(prisma_client, data))
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    prisma_client.db.litellm_organizationtable.create = AsyncMock(return_value={"organization_id": "org-1"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+
+    response: Final = await new_organization(
+        data=NewOrganizationRequest(
+            organization_alias="org",
+            model_tpm_limit={"gpt-4o": 400000},
+            model_rpm_limit={"gpt-4o": 200},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response == {"organization_id": "org-1"}
+    budget_write: Final = prisma_client.db.litellm_budgettable.create.await_args.kwargs["data"]
+    assert "model_tpm_limit" not in budget_write and "model_rpm_limit" not in budget_write, budget_write
+    org_write: Final = prisma_client.db.litellm_organizationtable.create.await_args.kwargs["data"]
+    assert json.loads(org_write["metadata"]) == {
+        "model_tpm_limit": {"gpt-4o": 400000},
+        "model_rpm_limit": {"gpt-4o": 200},
+    }, org_write
+
+
 def test_v2_update_organization_is_in_openapi_schema():
     """PATCH /v2/organization/{organization_id} is documented in the generated OpenAPI spec."""
     from fastapi import FastAPI
@@ -1489,7 +1542,7 @@ def _organization_test_client() -> TestClient:
 @pytest.mark.parametrize(("method", "path"), _organization_route_targets())
 def test_organization_routes_are_blocked_without_enterprise_license(monkeypatch, method, path):
     """Every /organization route is enterprise-only, even for a proxy admin sending a valid request."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "premium_user", False, raising=False)
     monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
@@ -1503,7 +1556,7 @@ def test_organization_routes_are_blocked_without_enterprise_license(monkeypatch,
 @pytest.mark.parametrize(("method", "path"), _organization_route_targets())
 def test_organization_routes_reach_their_handler_with_enterprise_license(monkeypatch, method, path):
     """The same request a license refuses above now reaches the handler, which is the code reporting the missing database."""
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import CommonProxyErrors
 
     monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
@@ -1560,6 +1613,12 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     prisma_client.db.litellm_jwtkeymapping = jwt_table
     prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
 
+    @asynccontextmanager
+    async def transaction():
+        yield prisma_client.db
+
+    prisma_client.tx = transaction
+
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
@@ -1573,6 +1632,49 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
     assert jwt_table.rows == (kept_row,)
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_drops_the_committed_spend_of_the_org_and_its_teams(monkeypatch):
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None,
+        memory={
+            "spend:committed:org:org-doomed": 7.0,
+            "spend:committed:team:team-in-org": 5.0,
+            "spend:committed:org:org-kept": 3.0,
+            "spend:committed:team:team-elsewhere": 2.0,
+        },
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(team_id="team-in-org", organization_id="org-doomed")]
+    )
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_jwtkeymapping.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
+
+    @asynccontextmanager
+    async def transaction():
+        yield prisma_client.db
+
+    prisma_client.tx = transaction
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    await delete_organization(
+        data=DeleteOrganizationRequest(organization_ids=["org-doomed"]),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert spend.memory == {"spend:committed:org:org-kept": 3.0, "spend:committed:team:team-elsewhere": 2.0}
 
 
 @pytest.mark.asyncio
@@ -1618,7 +1720,9 @@ async def test_delete_organization_is_refused_while_one_of_its_teams_holds_a_ptu
 
 
 @pytest.mark.asyncio
-async def test_organization_member_add_reports_an_unknown_org_as_a_request_error_not_an_auth_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_organization_member_add_reports_an_unknown_org_as_a_request_error_not_an_auth_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from fastapi import Request
 
     from litellm.proxy._types import (

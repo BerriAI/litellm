@@ -1,7 +1,7 @@
 from collections.abc import Mapping
-from typing import Literal
+from typing import Annotated, Final, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AfterValidator, Field, field_validator, model_validator
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
@@ -15,7 +15,17 @@ class NewUserRequestTeam(LiteLLMPydanticObjectBase):
     user_role: Literal["user", "admin"] = "user"
 
 
+def _validate_custom_user_id(value: str) -> str:
+    normalized: Final = value.strip()
+    if not normalized:
+        raise ValueError("user_id must not be empty or contain only whitespace")
+    if "\x00" in normalized:
+        raise ValueError("user_id must not contain NUL characters")
+    return normalized
+
+
 class NewUserRequest(GenerateRequestBase):
+    user_id: Annotated[str, AfterValidator(_validate_custom_user_id)] | None = None
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     max_budget: float | None = None
