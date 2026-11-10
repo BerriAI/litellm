@@ -1629,12 +1629,13 @@ async def _listing_through_the_gateway(
     granted_toolsets: GrantedToolsetIds,
     toolset_table: types.SimpleNamespace | None = None,
     agent_permission: LiteLLM_ObjectPermissionTable | None = None,
+    servers: Sequence[MCPServer] = GATEWAY_SERVERS,
 ) -> tuple[list[MCPTool], list[str]]:
     async def upstream_listing(_client: object, server_name: str) -> list[MCPTool]:
         return list(UPSTREAM_TOOLS[server_name])
 
     manager: Final = MCPServerManager()
-    manager.registry = {server.server_id: server for server in GATEWAY_SERVERS}
+    manager.registry = {server.server_id: server for server in servers}
     manager.config_mcp_servers = dict(manager.registry)
     manager.create_mcp_client = AsyncMock(return_value=object())
     manager._fetch_tools_with_timeout = AsyncMock(side_effect=upstream_listing)
@@ -1661,7 +1662,7 @@ async def _listing_through_the_gateway(
             granted_toolsets=granted_toolsets,
         )
     finally:
-        for server in GATEWAY_SERVERS:
+        for server in servers:
             manager._drop_listed_tools(server.server_id)
 
 
@@ -1699,8 +1700,11 @@ async def _calls_the_entries_run(
     allowed_label: str,
     called: tuple[str, ...],
     unresolvable_tools: Mapping[str, str] = MappingProxyType({}),
+    servers: Sequence[MCPServer] = GATEWAY_SERVERS,
 ) -> tuple[str, ...]:
-    tools, server_names = await _listing_through_the_gateway(monkeypatch, user, mcp_tools, _team_grants("ts-granted"))
+    tools, server_names = await _listing_through_the_gateway(
+        monkeypatch, user, mcp_tools, _team_grants("ts-granted"), servers=servers
+    )
     _deduplicated, tool_server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(tools, server_names)
     tool_choice: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": allowed_label}]}
     gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
@@ -1740,10 +1744,31 @@ async def test_an_mcp_entry_allows_only_the_tools_its_labels_toolset_or_server_s
     assert ran == runs
 
 
+_READER_AND_WRITER_ON_CALC: Final = (
+    {"type": "mcp", "server_label": "reader", "server_url": "litellm_proxy/mcp/calc", "allowed_tools": ["add"]},
+    {"type": "mcp", "server_label": "writer", "server_url": "litellm_proxy/mcp/calc", "allowed_tools": ["subtract"]},
+)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("allowed_label", "runs"), [("reader", ("calc-add",)), ("writer", ("calc-subtract",))])
+@pytest.mark.parametrize(
+    ("entries", "allowed_label", "runs"),
+    [
+        (_READER_AND_WRITER_ON_CALC, "reader", ("calc-add",)),
+        (_READER_AND_WRITER_ON_CALC, "writer", ("calc-subtract",)),
+        (
+            ({"type": "mcp", "server_label": "all", "server_url": "litellm_proxy", "allowed_tools": ["add"]},),
+            "all",
+            ("calc-add",),
+        ),
+    ],
+    ids=["reader_on_a_shared_server", "writer_on_a_shared_server", "whole_gateway"],
+)
 async def test_an_mcp_entry_allows_only_the_tools_its_own_allowed_tools_lists(
-    monkeypatch: pytest.MonkeyPatch, allowed_label: str, runs: tuple[str, ...]
+    monkeypatch: pytest.MonkeyPatch,
+    entries: tuple[Mapping[str, object], ...],
+    allowed_label: str,
+    runs: tuple[str, ...],
 ):
     ran: Final = await _calls_the_entries_run(
         monkeypatch,
@@ -1753,20 +1778,59 @@ async def test_an_mcp_entry_allows_only_the_tools_its_own_allowed_tools_lists(
             user_role=LitellmUserRoles.INTERNAL_USER,
             object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["srv-1"]),
         ),
-        [
-            {"type": "mcp", "server_label": "reader", "server_url": "litellm_proxy/mcp/calc", "allowed_tools": ["add"]},
+        entries,
+        allowed_label,
+        ("calc-add", "calc-subtract", "ghost-remove"),
+        MappingProxyType({"ghost-remove": "ghost"}),
+    )
+
+    assert ran == runs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("allowed_tools", "runs"), [(["add"], ("calc-add",)), (["subtract"], ())])
+async def test_a_toolset_entry_allows_only_the_toolset_tools_its_own_allowed_tools_lists(
+    monkeypatch: pytest.MonkeyPatch, allowed_tools: list[str], runs: tuple[str, ...]
+):
+    ran: Final = await _calls_the_entries_run(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        (
             {
                 "type": "mcp",
-                "server_label": "writer",
-                "server_url": "litellm_proxy/mcp/calc",
-                "allowed_tools": ["subtract"],
+                "server_label": "team",
+                "server_url": "litellm_proxy/mcp/team-toolset",
+                "allowed_tools": allowed_tools,
             },
-        ],
-        allowed_label,
+        ),
+        "team",
         ("calc-add", "calc-subtract"),
     )
 
     assert ran == runs
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_entry_allows_a_tool_its_allowed_tools_names_by_display_name(monkeypatch: pytest.MonkeyPatch):
+    calc_showing_add_as_plus: Final = GATEWAY_SERVERS[0].model_copy(
+        update={"tool_name_to_display_name": {"add": "plus"}}
+    )
+
+    ran: Final = await _calls_the_entries_run(
+        monkeypatch,
+        UserAPIKeyAuth(
+            api_key="sk-team",
+            team_id="team-1",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["srv-1"]),
+        ),
+        ({"type": "mcp", "server_label": "reader", "server_url": "litellm_proxy/mcp/calc", "allowed_tools": ["plus"]},),
+        "reader",
+        ("plus", "calc-subtract"),
+        servers=(calc_showing_add_as_plus, GATEWAY_SERVERS[1]),
+    )
+
+    assert ran == ("plus",)
 
 
 @pytest.mark.asyncio

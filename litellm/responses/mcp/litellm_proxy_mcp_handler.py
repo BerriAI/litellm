@@ -156,8 +156,8 @@ class _LabelScope:
     toolset_tools: Mapping[str, tuple[str, ...]] = field(default_factory=lambda: MappingProxyType({}))
     allowed_tools: frozenset[str] | None = None
 
-    def serves(self, server: MCPServer | None, tool_name: str) -> bool:
-        if not self._allows(server, tool_name):
+    def serves(self, server: MCPServer | None, tool_name: str, listed_name: str) -> bool:
+        if not self._allows(server, tool_name, listed_name):
             return False
         if self.whole_gateway:
             return True
@@ -168,12 +168,12 @@ class _LabelScope:
             toolset_names is not None and match_known_tool_name(tool_name, server, toolset_names) is not None
         )
 
-    def _allows(self, server: MCPServer | None, tool_name: str) -> bool:
+    def _allows(self, server: MCPServer | None, tool_name: str, listed_name: str) -> bool:
         if self.allowed_tools is None:
             return True
-        if server is None:
-            return tool_name in self.allowed_tools
-        return match_known_tool_name(tool_name, server, self.allowed_tools) is not None
+        if not self.allowed_tools.isdisjoint((tool_name, listed_name, split_server_prefix_from_name(listed_name)[0])):
+            return True
+        return server is not None and match_known_tool_name(tool_name, server, self.allowed_tools) is not None
 
 
 _OBJECT_LIST: Final = TypeAdapter(list[object])
@@ -191,7 +191,7 @@ def _gateway_tool(name: str, server: MCPServer | None, tool_name: str, scopes: I
     spellings: Final = () if server is None else tuple(iter_known_tool_name_spellings(tool_name, server))
     return GatewayTool(
         names=frozenset((name, tool_name, *spellings)),
-        server_labels=frozenset(scope.label for scope in scopes if scope.serves(server, tool_name)),
+        server_labels=frozenset(scope.label for scope in scopes if scope.serves(server, tool_name, name)),
     )
 
 
@@ -1496,13 +1496,7 @@ class LiteLLM_Proxy_MCP_Handler:
     def prepare_follow_up_call_params(
         call_params: Mapping[str, object], original_stream_setting: bool
     ) -> _AresponsesOptions:
-        """
-        Prepare call parameters for the follow-up LLM call after tool execution.
-
-        Restores the original streaming setting and keeps only an allowed_tools
-        tool_choice, in auto mode, so the follow-up keeps the caller's allowlist
-        without forcing another tool call.
-        """
+        """Prepare call parameters for the follow-up LLM call after tool execution."""
         return _AresponsesOptions(
             **{key: value for key, value in call_params.items() if key not in ("stream", "tool_choice")},
             **allowed_tools_tool_choice_kept_on_follow_up(call_params.get("tool_choice")),
