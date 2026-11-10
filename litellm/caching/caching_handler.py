@@ -822,7 +822,12 @@ class LLMCachingHandler:
             start_time (datetime): The start time of the operation.
             end_time (datetime): The end time of the operation.
             cache_hit (bool): Whether it was a cache hit.
+
+        An internal sub-call's hit fires nothing, since the parent call that folds it in logs it.
         """
+        if is_internal_call.get():
+            return
+
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
