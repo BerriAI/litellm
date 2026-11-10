@@ -116,7 +116,7 @@ class TestMCPRegistryFile:
         proxy_dir: Final = os.path.dirname(registry_path)
         built_logos_dir: Final = os.path.join(proxy_dir, "_experimental", "out", "assets", "logos")
         source_logos_dir: Final = os.path.join(
-            proxy_dir, "..", "..", "ui", "litellm-dashboard", "public", "assets", "logos"
+            proxy_dir, "..", "ui", "litellm-dashboard", "public", "assets", "logos"
         )
         bundled: Final = [s for s in data["servers"] if s.get("icon_url", "").startswith("/ui/assets/logos/")]
         assert bundled, "at least one registry entry ships its own icon"
