@@ -38,6 +38,7 @@ pub fn anthropic_model_capabilities(
     model: &str,
     custom_llm_provider: Option<&str>,
     base_model: Option<&str>,
+    declared: &dyn Fn(&str) -> Option<bool>,
 ) -> MessagesModelCapabilities {
     let (resolved, provider) = get_custom_llm_provider(model, custom_llm_provider)
         .map_or((model, "anthropic"), |resolved| {
@@ -53,6 +54,7 @@ pub fn anthropic_model_capabilities(
     };
     let probe = Probe {
         catalog,
+        declared,
         fallbacks: backstop_candidates(model),
         info: catalog.model_info(
             &candidate_names(name, provider)
@@ -70,17 +72,20 @@ pub fn anthropic_model_capabilities(
         thinking_on_by_default: thinking_always_on || probe.supports("thinking_on_by_default"),
         supports_legacy_thinking: probe.supports("supports_legacy_thinking"),
         supports_output_config: probe.supports("supports_output_config"),
-        supports_sampling_params: backstop(
-            catalog,
-            &backstop_candidates(name),
-            "supports_sampling_params",
-        )
-        .unwrap_or_else(|| {
-            let lowered = name.to_lowercase();
-            !SAMPLING_RESTRICTED_NAMES
-                .iter()
-                .any(|restricted| lowered.contains(restricted))
-        }),
+        supports_sampling_params: declared("supports_sampling_params")
+            .or_else(|| {
+                backstop(
+                    catalog,
+                    &backstop_candidates(name),
+                    "supports_sampling_params",
+                )
+            })
+            .unwrap_or_else(|| {
+                let lowered = name.to_lowercase();
+                !SAMPLING_RESTRICTED_NAMES
+                    .iter()
+                    .any(|restricted| lowered.contains(restricted))
+            }),
         supports_speed: provider == "anthropic"
             && flag(exact(catalog, name), "supports_speed") == Some(true),
         supports_mid_conversation_system: probe.supports("supports_mid_conversation_system"),
@@ -97,6 +102,7 @@ pub fn anthropic_model_capabilities(
 
 struct Probe<'a> {
     catalog: &'a Catalog,
+    declared: &'a dyn Fn(&str) -> Option<bool>,
     fallbacks: Vec<String>,
     info: Option<Fields>,
     bare: Option<&'a Fields>,
@@ -104,6 +110,9 @@ struct Probe<'a> {
 
 impl Probe<'_> {
     fn supports(&self, capability: &str) -> bool {
+        if let Some(supported) = (self.declared)(capability) {
+            return supported;
+        }
         if let Some(supported) = flag(self.info.as_ref(), capability) {
             return supported;
         }
@@ -313,7 +322,8 @@ mod tests {
         #[case] custom_llm_provider: Option<&str>,
         #[case] expected: (bool, bool, bool, bool),
     ) {
-        let capabilities = anthropic_model_capabilities(&catalog, model, custom_llm_provider, None);
+        let capabilities =
+            anthropic_model_capabilities(&catalog, model, custom_llm_provider, None, &|_| None);
 
         assert_eq!(
             (
@@ -336,17 +346,60 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(
-            anthropic_model_capabilities(&catalog, model, None, None).thinking_on_by_default,
+            anthropic_model_capabilities(&catalog, model, None, None, &|_| None)
+                .thinking_on_by_default,
             expected
         );
     }
 
     #[rstest]
     fn effort_tiers_follow_the_row(catalog: Catalog) {
-        let tiers = anthropic_model_capabilities(&catalog, "anthropic/claude-test-5", None, None)
+        let tiers =
+            anthropic_model_capabilities(&catalog, "anthropic/claude-test-5", None, None, &|_| {
+                None
+            })
             .effort_tiers;
 
         assert_eq!((tiers.xhigh, tiers.low), (true, false));
+    }
+
+    #[rstest]
+    #[case::declares_a_model_the_map_lacks(
+        "anthropic/claude-other-7",
+        &[("supports_reasoning", true)],
+        (true, true, false, true)
+    )]
+    #[case::turns_off_a_filled_flag(
+        "anthropic/claude-test-5",
+        &[("supports_adaptive_thinking", false)],
+        (true, false, true, true)
+    )]
+    #[case::turns_off_sampling("anthropic/claude-test-5", &[("supports_sampling_params", false)], (true, true, true, false))]
+    #[case::speed_still_needs_its_row("anthropic/claude-slow-5", &[("supports_speed", true)], (false, false, false, true))]
+    #[case::undeclared_keeps_the_row("anthropic/claude-test-5", &[], (true, true, true, true))]
+    fn declared_flags_win_over_the_catalog(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] declared: &[(&str, bool)],
+        #[case] expected: (bool, bool, bool, bool),
+    ) {
+        let lookup = |capability: &str| {
+            declared
+                .iter()
+                .find(|(name, _)| *name == capability)
+                .map(|(_, supported)| *supported)
+        };
+        let capabilities = anthropic_model_capabilities(&catalog, model, None, None, &lookup);
+
+        assert_eq!(
+            (
+                capabilities.supports_reasoning,
+                capabilities.supports_adaptive_thinking,
+                capabilities.supports_speed,
+                capabilities.supports_sampling_params,
+            ),
+            expected
+        );
     }
 
     const PROFILE_ARN: &str =
@@ -368,7 +421,8 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(
-            anthropic_model_capabilities(&catalog, model, None, base_model).supports_reasoning,
+            anthropic_model_capabilities(&catalog, model, None, base_model, &|_| None)
+                .supports_reasoning,
             expected
         );
     }
@@ -388,6 +442,7 @@ mod tests {
                     &format!("anthropic/{name}"),
                     None,
                     None,
+                    &|_| None,
                 );
                 [
                     ("supports_reasoning", capabilities.supports_reasoning),

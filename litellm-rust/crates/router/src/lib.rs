@@ -60,6 +60,12 @@ impl Router {
                                     .extra
                                     .get("base_model")
                                     .and_then(|value| value.as_str()),
+                                &|capability| {
+                                    model
+                                        .model_info
+                                        .get(capability)
+                                        .and_then(|value| value.as_bool())
+                                },
                             ),
                         },
                         ..Deployment::default()
@@ -138,6 +144,33 @@ mod tests {
             .shaping
             .settings
             .drop_params,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::declared("\n    model_info:\n      supports_reasoning: true", true)]
+    #[case::declared_off("\n    model_info:\n      supports_reasoning: false", false)]
+    #[case::undeclared("", false)]
+    fn model_info_flags_reach_the_deployment(#[case] model_info: &str, #[case] expected: bool) {
+        let config = Config::from_yaml(&format!(
+            "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: anthropic/claude-unlisted-9{model_info}"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Router::from_config(
+                &config,
+                &|_: &str| None,
+                &Catalog::parse(br#"{"provider-model": {"litellm_provider": "provider"}}"#)
+                    .unwrap()
+                    .value
+            )
+            .get("public-model")
+            .unwrap()
+            .shaping
+            .capabilities
+            .supports_reasoning,
             expected
         );
     }
