@@ -816,6 +816,36 @@ def test_a_failed_set_model_list_writes_no_row_for_a_box_questions_true_it_never
         _restore_model_cost_entries(model_keys)
 
 
+def test_a_failed_set_model_list_takes_back_a_box_questions_true_whose_model_comes_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend_model: Final = "perplexity/box-withdraw-on-rollback-env"
+    monkeypatch.setenv("BOX_WITHDRAW_ROLLBACK_MODEL", backend_model)
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("unflagged-id", "env-true-id", "unservable-id", backend_model)
+    }
+    unservable: Final = {
+        "model_name": "box-withdraw",
+        "litellm_params": {"model": backend_model, "input_cost_per_token": float("inf")},
+        "model_info": {"id": "unservable-id"},
+    }
+    try:
+        with _live_box_router(backend_model, (("unflagged-id", None),)) as router:
+            with pytest.raises(ValueError, match="cannot be served"):
+                router.set_model_list(
+                    [
+                        _box_flag_deployment(backend_model, "unflagged-id", None),
+                        _box_flag_deployment("os.environ/BOX_WITHDRAW_ROLLBACK_MODEL", "env-true-id", True),
+                        unservable,
+                    ]
+                )
+
+            assert litellm.supports_box_questions(model=backend_model) is False
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
 def test_a_box_questions_true_another_live_router_serves_stays_on_the_shared_key() -> None:
     backend_model: Final = "perplexity/box-withdraw-across-routers"
     model_keys: Final = {

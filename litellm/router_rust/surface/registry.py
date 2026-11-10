@@ -226,6 +226,17 @@ class _Build:
     # step is answered as invalid and the build ends, then this is raised.
     failure: Exception | None = None
 
+    def reached_entries(self) -> tuple[UntypedEntry, ...]:
+        return tuple(
+            {"model_name": entry.model_name, "litellm_params": entry.litellm_params, "model_info": entry.model_info}
+            for entry in self.entries.values()
+        )
+
+
+def _creating(model_list: Sequence[object]) -> _Build:
+    raw: Final[list[UntypedEntry]] = copy.deepcopy(list(model_list))  # pyright: ignore[reportAssignmentType]  # model_list entries  # mutable-ok: a deep copy the build consumes
+    return _Build(path="create", raw=raw)
+
 
 def model_info_is_active_for_environment(model_info: Mapping[str, object] | None) -> bool:
     """The environment-gating rule (``model_info_is_active_for_environment``): a deployment whose
@@ -943,14 +954,12 @@ class HostRegistry(HostModelInfo):
         """Replace every deployment (``set_model_list``). All or nothing: when an entry raises,
         the deployments served before the call are put back and the error is raised."""
         previous: Final = [copy.deepcopy(dict(entry)) for entry in self._core_model_list]
+        attempt: Final = _creating(model_list)
         try:
-            self._replace_model_list(model_list)
+            self._replace_model_list(attempt)
         except Exception:
-            self._replace_model_list(previous)
-            self._withdraw_shared_capabilities(
-                (entry for entry in map(as_str_mapping, model_list) if entry is not None),
-                self._served_by_live_routers(),
-            )
+            self._replace_model_list(_creating(previous))
+            self._withdraw_shared_capabilities(attempt.reached_entries(), self._served_by_live_routers())
             raise
         self._withdraw_shared_capabilities(previous, self._served_by_live_routers())
 
@@ -960,9 +969,9 @@ class HostRegistry(HostModelInfo):
         for entry in _distinct_withdrawals(entries):
             withdraw_shared_capabilities(self._host, entry, None, served)
 
-    def _replace_model_list(self, model_list: Sequence[object]) -> None:
+    def _replace_model_list(self, build: _Build) -> None:
         self._discovered_model_info_cache.flush_cache()
-        original_model_list: Final[list[UntypedEntry]] = copy.deepcopy(list(model_list))  # pyright: ignore[reportAssignmentType]  # model_list entries  # mutable-ok: a deep copy the build consumes
+        original_model_list: Final = build.raw
         if self.strategies is not None:
             self.strategies.reset()
         self._provider_unresolved_deployments = ()
@@ -983,12 +992,7 @@ class HostRegistry(HostModelInfo):
         # router-core walks the list (one deployment per organization, secrets resolved first,
         # ids assigned), asking this registry about each deployment in turn; it starts the list
         # and its id, name and team indexes over, and takes the given names as `model_names`.
-        self._run_build(
-            _Build(path="create", raw=original_model_list),
-            original_model_list,
-            resolve_secrets=True,
-            install="replace",
-        )
+        self._run_build(build, original_model_list, resolve_secrets=True, install="replace")
         if self.strategies is not None:
             self.strategies.finalize()
         self._on_change()
