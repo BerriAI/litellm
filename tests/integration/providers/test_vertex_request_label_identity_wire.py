@@ -23,6 +23,7 @@ _EMBED_BACKEND: Final = "text-embedding-005"
 _CLAUDE_BACKEND: Final = "claude-haiku-5-5"
 _MODELS_PATH: Final = f"/v1/projects/{_PROJECT}/locations/{_LOCATION}/publishers/google/models"
 _CHAT_TARGET: Final = f"{_MODELS_PATH}/{_CHAT_BACKEND}:generateContent"
+_GENAI_TARGET: Final = _CHAT_TARGET.replace("/v1/", "/v1beta1/", 1)
 _STREAM_TARGET: Final = f"{_MODELS_PATH}/{_CHAT_BACKEND}:streamGenerateContent?alt=sse"
 _EMBED_TARGET: Final = f"{_MODELS_PATH}/{_EMBED_BACKEND}:predict"
 _CLAUDE_TARGET: Final = (
@@ -58,7 +59,7 @@ def _vertex_peer(request: Request) -> Reply:
         )
     if request.target == _STREAM_TARGET:
         return Reply(content_type="text/event-stream", chunks=(f"data: {json.dumps(_GEMINI_REPLY)}\n\n".encode(),))
-    if request.target == _CHAT_TARGET:
+    if request.target in (_CHAT_TARGET, _GENAI_TARGET):
         return Reply(body=json.dumps(_GEMINI_REPLY).encode())
     if request.target == _EMBED_TARGET:
         return Reply(body=json.dumps(_EMBED_REPLY).encode())
