@@ -276,7 +276,7 @@ class MistralTokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         try:
             result: Final = await send(resolved.api_key, resolved.api_base)
-        except (httpx.RequestError, litellm.Timeout, litellm.APIConnectionError, OSError, BaseExceptionGroup) as e:
+        except (httpx.RequestError, litellm.Timeout, litellm.APIConnectionError, OSError) as e:
             verbose_logger.warning("Mistral count tokens connection error / timeout, falling back to local: %s", e)
             return None
         except MistralError as e:

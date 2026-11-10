@@ -391,9 +391,7 @@ class MistralConfig(OpenAIGPTConfig):
     @staticmethod
     def get_api_key(api_key: str | None = None, api_base: str | None = None) -> str | None:
         resolved_base: Final = (
-            api_base
-            or get_secret_str("MISTRAL_API_BASE")
-            or get_secret_str("MISTRAL_AZURE_API_BASE")
+            api_base or get_secret_str("MISTRAL_API_BASE") or get_secret_str("MISTRAL_AZURE_API_BASE")
         )
         is_azure: Final = bool(resolved_base and "azure" in resolved_base.lower())
         return (

@@ -455,7 +455,10 @@ def test_mistral_azure_key_priority(monkeypatch: pytest.MonkeyPatch):
     )
     assert "azure" in base.lower()
     assert key == "azure-mistral-key"
-    assert MistralConfig.get_api_key(api_base="https://mistral-resource.services.ai.azure.com/models") == "azure-mistral-key"
+    assert (
+        MistralConfig.get_api_key(api_base="https://mistral-resource.services.ai.azure.com/models")
+        == "azure-mistral-key"
+    )
 
     # When targeting standard Mistral, Mistral key takes precedence
     base_std, key_std = config.get_openai_compatible_provider_info(
@@ -513,3 +516,116 @@ async def test_native_responses_count_dispatches_to_mistral(monkeypatch: pytest.
         assert json.loads(route.calls.last.request.content) == {"model": "mistral-large-4", "input": "Hello world"}
 
 
+@pytest.mark.asyncio
+async def test_mistral_count_tokens_handler_raises_mistral_error_on_non_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.mistral.common_utils import MistralError
+    from litellm.llms.mistral.count_tokens.handler import MistralCountTokensHandler
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    handler: Final = MistralCountTokensHandler()
+    with respx.mock:
+        respx.post(COUNT_URL).mock(return_value=httpx.Response(400, text="Bad Request"))
+        with pytest.raises(MistralError) as exc_info:
+            await handler.post_count_request({"model": "mistral-large-4", "input": "hi"}, api_key="test-key")
+
+    assert exc_info.value.status_code == 400
+    assert "Bad Request" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_mistral_count_tokens_handler_raises_mistral_error_on_invalid_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.mistral.common_utils import MistralError
+    from litellm.llms.mistral.count_tokens.handler import MistralCountTokensHandler
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    handler: Final = MistralCountTokensHandler()
+    with respx.mock:
+        respx.post(COUNT_URL).mock(return_value=httpx.Response(200, text="not-valid-json"))
+        with pytest.raises(MistralError) as exc_info:
+            await handler.post_count_request({"model": "mistral-large-4", "input": "hi"}, api_key="test-key")
+
+    assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_mistral_count_tokens_handler_transform_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.mistral.common_utils import MistralError
+    from litellm.llms.mistral.count_tokens.handler import MistralCountTokensHandler
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    handler: Final = MistralCountTokensHandler()
+    with patch.object(handler, "transform_request_to_count_tokens", side_effect=ValueError("Invalid request")):
+        with pytest.raises(MistralError) as exc_info:
+            await handler.handle_count_tokens_request(
+                model="mistral-large-4",
+                input="hello",
+                api_key="test-key",
+            )
+
+    assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_system_blocks_instruction(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    counter: Final = MistralTokenCounter()
+    with respx.mock:
+        route: Final = respx.post(COUNT_URL).mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 12})
+        )
+        result: Final = await counter.count_tokens(
+            model_to_use="mistral-large-4",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            system=[{"type": "text", "text": "system block"}],
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="mistral/mistral-large-4",
+        )
+
+    assert result is not None
+    assert result.total_tokens == 12
+    assert route.called
+    sent_json: Final = json.loads(route.calls.last.request.content)
+    assert sent_json["instructions"] == "system block"
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_generic_http_error_returns_count_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    counter: Final = MistralTokenCounter()
+    with patch(
+        "litellm.llms.mistral.count_tokens.token_counter.mistral_count_tokens_handler.handle_count_tokens_request",
+        side_effect=httpx.HTTPError("generic http error"),
+    ):
+        result: Final = await counter.count_tokens(
+            model_to_use="mistral-large-4",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key"}},
+            request_model="mistral/mistral-large-4",
+        )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_count_responses_request_azure_returns_none() -> None:
+    counter: Final = MistralTokenCounter()
+    result: Final = await counter.count_responses_request(
+        model_to_use="mistral-large-4",
+        request={"model": "mistral-large-4", "input": "hi"},
+        policy=DropPolicy(drop_params=False, additional_drop_params=None),
+        deployment={"litellm_params": {"api_base": "https://foo.openai.azure.com", "api_key": "test-key"}},
+        request_model="mistral/mistral-large-4",
+    )
+    assert result is None
+
+
+def test_get_mistral_count_tokens_endpoint_other_path() -> None:
+    config: Final = MistralCountTokensConfig()
+    endpoint: Final = config.get_mistral_count_tokens_endpoint("https://custom.mistral.ai/api")
+    assert endpoint == "https://custom.mistral.ai/api/v1/responses/input_tokens"

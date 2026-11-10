@@ -4070,18 +4070,22 @@ async def test_gemini_messages_count_tokens_rejects_an_invalid_edit_without_drop
     assert sent_bodies == ()
 
 
-_MISTRAL_MODEL: Final = "mistral/mistral-large-latest"
+# Groq represents a bridged chat-completions provider without a native count-tokens API,
+# testing context management polyfill and fallback to local token estimation.
+# Previously this test suite used Mistral, but PR #50653 introduced native Mistral count_tokens
+# support, so Groq is used here to continue testing the local estimation fallback.
+_GROQ_MODEL: Final = "groq/llama-3.3-70b-versatile"
 
 
-def _mistral_router(
+def _groq_router(
     litellm_params: Mapping[str, JsonValue] = MappingProxyType({}),
     router_defaults: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> Router:
     return Router(
         model_list=[
             {
-                "model_name": "mistral-agent",
-                "litellm_params": {"model": _MISTRAL_MODEL, "api_key": "test-key", **litellm_params},
+                "model_name": "groq-agent",
+                "litellm_params": {"model": _GROQ_MODEL, "api_key": "test-key", **litellm_params},
             }
         ],
         default_litellm_params=dict(router_defaults),
@@ -4129,9 +4133,9 @@ async def _messages_the_inference_polyfill_sends(model: str) -> list[dict[str, J
 
 @pytest.mark.asyncio
 async def test_messages_count_tokens_counts_the_body_the_inference_polyfill_sends_on_a_bridged_provider() -> None:
-    router: Final = _mistral_router()
+    router: Final = _groq_router()
     unedited_body: Final[dict[str, JsonValue]] = {
-        "model": "mistral-agent",
+        "model": "groq-agent",
         "messages": _agent_turns_with_tool_results(3),
         "tools": [_READ_FILE_TOOL],
     }
@@ -4139,7 +4143,7 @@ async def test_messages_count_tokens_counts_the_body_the_inference_polyfill_send
     edited: Final = await _input_tokens(router, {**unedited_body, "context_management": _CLEAR_TOOL_USES})
     unedited: Final = await _input_tokens(router, unedited_body)
     polyfilled: Final = await _input_tokens(
-        router, {**unedited_body, "messages": await _messages_the_inference_polyfill_sends(_MISTRAL_MODEL)}
+        router, {**unedited_body, "messages": await _messages_the_inference_polyfill_sends(_GROQ_MODEL)}
     )
 
     assert edited < unedited
@@ -4161,9 +4165,9 @@ async def test_messages_count_tokens_on_a_bridged_provider_keeps_the_unedited_co
     router_defaults: dict[str, JsonValue],
     request_options: dict[str, JsonValue],
 ) -> None:
-    router: Final = _mistral_router(deployment_params, router_defaults)
+    router: Final = _groq_router(deployment_params, router_defaults)
     unedited_body: Final[dict[str, JsonValue]] = {
-        "model": "mistral-agent",
+        "model": "groq-agent",
         "messages": _agent_turns_with_tool_results(3),
         "tools": [_READ_FILE_TOOL],
         **request_options,
@@ -4178,9 +4182,9 @@ async def test_messages_count_tokens_on_a_bridged_provider_keeps_the_unedited_co
 async def test_messages_count_tokens_on_a_bridged_provider_rejects_an_invalid_edit_without_drop_params() -> None:
     with patch.object(litellm, "drop_params", False):
         response: Final = await _messages_endpoint_count(
-            _mistral_router(),
+            _groq_router(),
             {
-                "model": "mistral-agent",
+                "model": "groq-agent",
                 "messages": _agent_turns_with_tool_results(3),
                 "tools": [_READ_FILE_TOOL],
                 "context_management": _INVALID_COMPACT_EDIT,
@@ -4193,9 +4197,9 @@ async def test_messages_count_tokens_on_a_bridged_provider_rejects_an_invalid_ed
 
 @pytest.mark.asyncio
 async def test_messages_count_tokens_on_a_bridged_provider_counts_without_an_invalid_edit_under_drop_params() -> None:
-    router: Final = _mistral_router()
+    router: Final = _groq_router()
     unedited_body: Final[dict[str, JsonValue]] = {
-        "model": "mistral-agent",
+        "model": "groq-agent",
         "messages": _agent_turns_with_tool_results(3),
         "tools": [_READ_FILE_TOOL],
         "drop_params": True,
@@ -4220,9 +4224,9 @@ def _turns_compacted_by_the_client() -> list[dict[str, JsonValue]]:
 async def test_messages_count_tokens_on_a_bridged_provider_counts_only_what_follows_a_client_compaction_block() -> None:
     from litellm.llms.anthropic.messages.adapters.handler import prepare_context_managed_request
 
-    router: Final = _mistral_router()
+    router: Final = _groq_router()
     sent: Final = await prepare_context_managed_request(
-        model=_MISTRAL_MODEL,
+        model=_GROQ_MODEL,
         messages=[dict(message) for message in _turns_compacted_by_the_client()],
         tools=[dict(_READ_FILE_TOOL)],
         system=None,
@@ -4234,15 +4238,15 @@ async def test_messages_count_tokens_on_a_bridged_provider_counts_only_what_foll
     assert sent is not None
 
     compacted: Final = await _input_tokens(
-        router, {"model": "mistral-agent", "messages": _turns_compacted_by_the_client(), "tools": [_READ_FILE_TOOL]}
+        router, {"model": "groq-agent", "messages": _turns_compacted_by_the_client(), "tools": [_READ_FILE_TOOL]}
     )
     uncompacted: Final = await _input_tokens(
-        router, {"model": "mistral-agent", "messages": _agent_turns_with_tool_results(3), "tools": [_READ_FILE_TOOL]}
+        router, {"model": "groq-agent", "messages": _agent_turns_with_tool_results(3), "tools": [_READ_FILE_TOOL]}
     )
     sent_body_count: Final = await _input_tokens(
         router,
         {
-            "model": "mistral-agent",
+            "model": "groq-agent",
             "messages": TypeAdapter(list[dict[str, JsonValue]]).validate_python(sent.messages),
             "system": TypeAdapter(JsonValue).validate_python(sent.system),
             "tools": [_READ_FILE_TOOL],
