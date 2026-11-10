@@ -39,6 +39,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
 from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
@@ -3122,6 +3123,7 @@ class DBSpendUpdateWriter:
             caller_request: Final = not is_internal_call and not _is_billed_retry_attempt(_metadata)
             cache_read_input_tokens: Final = extract_cache_read_tokens(usage_obj)
             compression_saved_tokens: Final = extract_compression_saved_tokens(_metadata)
+            cost_breakdown: Final = _metadata.get("cost_breakdown")
             savings_spend: Final = compute_savings_spend(
                 model=payload.get("model", None),
                 custom_llm_provider=payload.get("custom_llm_provider", None),
@@ -3131,7 +3133,7 @@ class DBSpendUpdateWriter:
                 model_id=payload.get("model_id"),
                 llm_router=get_llm_router,
                 usage_object=usage_obj,
-                cost_breakdown=_metadata.get("cost_breakdown"),
+                cost_breakdown=cost_breakdown,
                 recorded_autorouter_savings=_metadata.get("autorouter_savings"),
                 recorded_autorouter_savings_estimate=_metadata.get("autorouter_savings_estimate"),
                 billed_at=payload.get("endTime"),
@@ -3164,6 +3166,10 @@ class DBSpendUpdateWriter:
                 prompt_caching_savings_spend=savings_spend.prompt_caching,
                 gateway_injected_caching_savings_spend=savings_spend.gateway_injected_caching,
                 autorouter_savings_spend=0.0 if is_internal_call else savings_spend.autorouter,
+                guardrail_spend=guardrail_share_of_spend(
+                    cost_breakdown,
+                    payload["spend"],  # pyright: ignore[reportUnknownArgumentType]  # legacy dict | SpendLogsPayload union
+                ),
                 total_response_time_ms=timed_duration_ms or 0,
                 timed_requests=0 if timed_duration_ms is None else 1,
             )

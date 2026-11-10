@@ -144,6 +144,7 @@ class RollupMetricsRow:
     prompt_caching_savings_spend: float | None
     gateway_injected_caching_savings_spend: float | None
     autorouter_savings_spend: float | None
+    guardrail_spend: float | None = field(default=None, kw_only=True)
     api_requests: int | None
     successful_requests: int | None
     failed_requests: int | None
@@ -219,6 +220,7 @@ class DailyActivityRow(Protocol):
     prompt_caching_savings_spend: float
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
+    guardrail_spend: float
     spend: float
     api_requests: int
     successful_requests: int

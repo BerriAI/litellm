@@ -417,6 +417,7 @@ async def _assert_legacy_database_parity(
                     "model_id": "deployment",
                     "response_cost": cost,
                     "autorouter_savings": 0.125,
+                    "cost_breakdown": {"guardrail_cost": 0.02},
                     "guardrail_information": [
                         {
                             "guardrail_id": "guard",
@@ -579,6 +580,7 @@ async def _assert_legacy_database_parity(
         assert daily["autorouter_savings_spend"] == pytest.approx(
             (0 if origin == "auto_router" else 0.125) + (0.2 if correction_order else 0)
         )
+        assert daily["guardrail_spend"] == pytest.approx(min(0.02, cost))
         group_spend = {row["access_group_name"]: row["spend"] for row in results[-1]["LiteLLM_ModelAccessGroupBudgetTable"]}
         assert group_spend == {"group": cost + prior_spend, **({"unserved-group": prior_spend} if fallback_narrowing else {})}
         assert results[-1]["LiteLLM_DailyGuardrailUsageUnits"]

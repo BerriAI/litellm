@@ -402,6 +402,7 @@ def _daily_tag_metrics(
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_tokens": prompt_tokens + completion_tokens,
         "successful_requests": api_requests,
         "failed_requests": 0,

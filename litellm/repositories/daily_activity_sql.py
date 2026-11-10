@@ -223,6 +223,7 @@ def _rollup_metric_select(table: DailyActivityTable) -> str:
             SUM(prompt_caching_savings_spend)::float AS prompt_caching_savings_spend,
             SUM(gateway_injected_caching_savings_spend)::float AS gateway_injected_caching_savings_spend,
             SUM(autorouter_savings_spend)::float AS autorouter_savings_spend,
+            SUM(guardrail_spend)::float AS guardrail_spend,
             SUM(api_requests)::bigint AS api_requests,
             SUM(successful_requests)::bigint AS successful_requests,
             SUM(failed_requests)::bigint AS failed_requests,

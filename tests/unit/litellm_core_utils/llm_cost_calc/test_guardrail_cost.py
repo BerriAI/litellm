@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     cost_breakdown_with_guardrail,
     guardrail_cost_total,
     guardrail_information_cost,
+    guardrail_share_of_spend,
 )
 
 
@@ -349,3 +350,11 @@ def test_native_trace_entry_redacts_the_pii_matches_before_they_reach_spend_logs
     assert entry["guardrail_status"] == "guardrail_intervened"
     assert "123-45-6789" not in json.dumps(entry["guardrail_response"])
     assert entry["guardrail_usage"]["sensitiveInformationPolicyUnits"] == 2
+
+
+@pytest.mark.parametrize(
+    "cost_breakdown",
+    [None, "0.1", {"guardrail_cost": "free"}, {"guardrail_cost": float("nan")}, {"guardrail_cost": -0.1}, {}],
+)
+def test_guardrail_share_of_spend_is_zero_for_a_missing_or_malformed_breakdown(cost_breakdown: object) -> None:
+    assert guardrail_share_of_spend(cost_breakdown, 1.0) == 0.0

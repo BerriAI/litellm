@@ -23,8 +23,11 @@ _FIELDS: Final = TypeAdapter(dict[str, object])
 @pytest.mark.parametrize("status", ["success", "failure"])
 @pytest.mark.parametrize("origin", [None, "auto_router", "billed_retry"])
 @pytest.mark.parametrize("spend", [0.0, 0.25])
+@pytest.mark.parametrize("guardrail_cost", [None, 0.1, 0.5])
 @pytest.mark.asyncio
-async def test_daily_projection_matches_legacy_writer(status: str, origin: str | None, spend: float) -> None:
+async def test_daily_projection_matches_legacy_writer(
+    status: str, origin: str | None, spend: float, guardrail_cost: float | None
+) -> None:
     payload: Final = get_logging_payload(
         kwargs={
             "model": "projection-test",
@@ -43,6 +46,7 @@ async def test_daily_projection_matches_legacy_writer(status: str, origin: str |
         **_FIELDS.validate_json(payload["metadata"]),
         **({BILLED_RETRY_ATTEMPT_METADATA_KEY: True} if origin == "billed_retry" else {}),
         **({INTERNAL_CALL_ORIGIN_METADATA_KEY: origin} if origin not in (None, "billed_retry") else {}),
+        **({"cost_breakdown": {"guardrail_cost": guardrail_cost}} if guardrail_cost is not None else {}),
     }
     row: Final = {**payload, "spend": spend, "metadata": json.dumps(metadata), "request_duration_ms": 25}
     legacy: Final = await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
@@ -60,6 +64,7 @@ async def test_daily_projection_matches_legacy_writer(status: str, origin: str |
     restored: Final = _FIELDS.validate_json(json.dumps(accounting, default=str))
     stored_daily: Final = next(item for item in project(restored) if item.table == "LiteLLM_DailyUserSpend")
     assert dict(stored_daily.increments) == {name: legacy[name] for name, _ in stored_daily.increments}
+    assert dict(stored_daily.increments)["guardrail_spend"] == min(guardrail_cost or 0.0, spend)
     assert dict(stored_daily.key)["date"] == legacy["date"]
     assert dict(stored_daily.key)["api_key"] == legacy["api_key"]
     assert not {"messages", "response", "proxy_server_request", "requester_ip_address"}.intersection(accounting)
