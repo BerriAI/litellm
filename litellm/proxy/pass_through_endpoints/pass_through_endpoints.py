@@ -134,6 +134,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
+    ROUTER_RESERVED_METADATA_FIELDS,
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
@@ -196,7 +197,11 @@ _PRICING_MODEL_OVERRIDE_PARAMS: Final = frozenset(("base_model",))
 
 
 def _is_mergeable_client_metadata(key: str, value: object) -> bool:
-    return not key.startswith("user_api_key_") and (key != "model_info" or isinstance(value, Mapping))
+    return (
+        not key.startswith("user_api_key_")
+        and key not in ROUTER_RESERVED_METADATA_FIELDS
+        and (key != "model_info" or isinstance(value, Mapping))
+    )
 
 
 def _request_body_fields(parsed: object) -> Mapping[str, object]:
