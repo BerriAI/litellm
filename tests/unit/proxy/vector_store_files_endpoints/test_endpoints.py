@@ -1063,7 +1063,9 @@ async def test_managed_file_id_on_its_upload_deployment_carries_no_options_from_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("credential_setting", [{"timeout": 30}, {"extra_headers": {"X-Proxy": "on"}}])
+@pytest.mark.parametrize(
+    "credential_setting", [{"timeout": 30}, {"extra_headers": {"X-Proxy": "on"}}, {"no-log": True}]
+)
 async def test_store_check_sends_the_upload_deployment_named_credential_options(
     monkeypatch: pytest.MonkeyPatch, credential_setting: Mapping[str, object]
 ) -> None:

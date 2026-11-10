@@ -130,7 +130,9 @@ class _ManagedFileCopy:
     provider_file_id: str
 
 
-_PROBE_ARGUMENTS: Final = frozenset({"vector_store_id", "file_id", "extra_headers", "timeout", "custom_llm_provider"})
+_PROBE_ARGUMENTS: Final = frozenset(
+    {"vector_store_id", "file_id", "extra_headers", "timeout", "custom_llm_provider", "no-log"}
+)
 _EXTRA_HEADERS: Final = TypeAdapter(dict[str, str] | None)
 
 
