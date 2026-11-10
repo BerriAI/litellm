@@ -231,10 +231,10 @@ const BudgetTable: React.FC<BudgetTableProps> = ({ list, canModify, onEditClick,
   const { t } = useTranslation();
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  const columns = useMemo(
-    () => getBudgetTableColumns({ canModify, onEditClick, onDeleteClick, onAssignClick }, t),
-    [canModify, onEditClick, onDeleteClick, onAssignClick, t],
-  );
+  const columns = useMemo(() => {
+    const dependencies = { canModify, onEditClick, onDeleteClick, onAssignClick };
+    return getBudgetTableColumns(dependencies, t);
+  }, [canModify, onEditClick, onDeleteClick, onAssignClick, t]);
 
   const filterLabels = Object.fromEntries(Object.entries(FILTER_LABELS).map(([id, labelKey]) => [id, t(labelKey)]));
   const hasQuery = list.searchValue.trim() !== "" || list.columnFilters.length > 0;

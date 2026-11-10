@@ -65,7 +65,7 @@ function BudgetRowActions({ budget, onEditClick, onDeleteClick, onAssignClick }:
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem onClick={() => onAssignClick(budget)}>
           <Users />
-          Assign budget
+          {t("budgets.assignModal.title")}
         </DropdownMenuItem>
         <DropdownMenuItem data-testid="budget-action-edit" onClick={() => onEditClick(budget)}>
           <Pencil />

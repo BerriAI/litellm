@@ -55,7 +55,7 @@ describe("budget assignment form", () => {
         "/customer/list":
           url.searchParams.get("search") === "Support"
             ? [{ user_id: "qa-end-user", alias: "Support", spend: 0, blocked: false }]
-            : [],
+            : [{ user_id: "qa-other", alias: "First page", spend: 0, blocked: false }],
         "/team/list": [{ team_id: "qa-team", team_alias: "Engineering" }],
         "/config/list": [{ field_name: "request_pattern_tag_mappings", field_value: [], editable: true }],
         "/tag/list": [],
@@ -72,6 +72,7 @@ describe("budget assignment form", () => {
   it("finds an existing customer by name outside the initial page", async () => {
     const user = userEvent.setup();
     const { onClose } = renderDialog();
+    await screen.findByText("First page", { selector: "option" });
     fireEvent.change(screen.getByLabelText("Customer name or end-user ID"), { target: { value: "Support" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Assign budget" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Assign budget" }));

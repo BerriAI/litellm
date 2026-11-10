@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId, useState, type FormEvent } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { budgetItem } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { useCustomers, type EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
@@ -22,11 +23,11 @@ import {
 } from "./budgetAssignments";
 
 const TARGETS = [
-  { value: "customer", label: "Customer / end user" },
-  { value: "team", label: "Team / group" },
-  { value: "user-agent", label: "User-agent pattern" },
-  { value: "body", label: "Request field pattern" },
-  { value: "header", label: "Request header pattern" },
+  { value: "customer", labelKey: "budgets.assignModal.targets.customer" },
+  { value: "team", labelKey: "budgets.assignModal.targets.team" },
+  { value: "user-agent", labelKey: "budgets.assignModal.targets.userAgent" },
+  { value: "body", labelKey: "budgets.assignModal.targets.body" },
+  { value: "header", labelKey: "budgets.assignModal.targets.header" },
 ] as const;
 type Target = (typeof TARGETS)[number]["value"];
 const patternKeys = ["budget-pattern-assignments"];
@@ -50,27 +51,27 @@ function CustomerField({
   customers: readonly EndUser[];
   isError: boolean;
 }) {
+  const { t } = useTranslation();
+  const datalistId = `${id}-customers`;
   return (
     <Field>
-      <FieldLabel htmlFor={`${id}-customer`}>Customer name or end-user ID</FieldLabel>
+      <FieldLabel htmlFor={`${id}-customer`}>{t("budgets.assignModal.customer.label")}</FieldLabel>
       <Input
         id={`${id}-customer`}
-        list={`${id}-customers`}
+        list={datalistId}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         required
       />
-      <datalist id={`${id}-customers`}>
+      <datalist id={datalistId}>
         {customers.map((entry) => (
           <option key={entry.user_id} value={entry.user_id}>
             {entry.alias || entry.user_id}
           </option>
         ))}
       </datalist>
-      <FieldDescription>
-        Use an existing customer name or ID, or enter a new end-user ID. Each customer has its own spend counter
-      </FieldDescription>
-      {isError && <p role="alert">Could not load customers. Try reopening this dialog</p>}
+      <FieldDescription>{t("budgets.assignModal.customer.description")}</FieldDescription>
+      {isError && <p role="alert">{t("budgets.assignModal.customer.loadFailed")}</p>}
     </Field>
   );
 }
@@ -86,13 +87,14 @@ function TeamField({
   onChange: (value: string | null) => void;
   teams: ReturnType<typeof useTeams>;
 }) {
+  const { t } = useTranslation();
   const options = (teams.data ?? []).map((team) => ({ value: team.team_id, label: team.team_alias || team.team_id }));
   return (
     <Field>
-      <FieldLabel htmlFor={`${id}-team`}>Team</FieldLabel>
+      <FieldLabel htmlFor={`${id}-team`}>{t("budgets.assignModal.team.label")}</FieldLabel>
       <Select items={options} value={value} onValueChange={onChange}>
         <SelectTrigger id={`${id}-team`} className="w-full">
-          <SelectValue placeholder="Select a team" />
+          <SelectValue placeholder={t("budgets.assignModal.team.placeholder")} />
         </SelectTrigger>
         <SelectContent>
           {options.map((option) => (
@@ -102,16 +104,17 @@ function TeamField({
           ))}
         </SelectContent>
       </Select>
-      <FieldDescription>
-        Copies these budget limits to the team. Later changes to this budget do not update the team
-      </FieldDescription>
-      {teams.isError && <p role="alert">Could not load teams. Try reopening this dialog</p>}
+      <FieldDescription>{t("budgets.assignModal.team.description")}</FieldDescription>
+      {teams.isError && <p role="alert">{t("budgets.assignModal.team.loadFailed")}</p>}
     </Field>
   );
 }
 
 export default function AssignBudgetModal({ budget, accessToken, onClose }: AssignBudgetModalProps) {
+  const { t } = useTranslation();
   const id = useId();
+  const formId = `${id}-form`;
+  const targets = TARGETS.map(({ value, labelKey }) => ({ value, label: t(labelKey) }));
   const [target, setTarget] = useState<Target>("customer");
   const [customer, setCustomer] = useState("");
   const [teamId, setTeamId] = useState<string | null>(null);
@@ -123,15 +126,16 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
   const teams = useTeams();
   const queryClient = useQueryClient();
   const patterns = useQuery({ queryKey: patternKeys, queryFn: () => loadPatternMappings(apiClient, accessToken) });
+  const patternConfiguration = patterns.data ?? { rules: [], editable: false };
   const isPattern = target !== "customer" && target !== "team";
-  const assignedPatterns = (patterns.data?.rules ?? []).filter((rule) => rule.tag === budgetTagName(budget.budget_id));
+  const assignedPatterns = patternConfiguration.rules.filter((rule) => rule.tag === budgetTagName(budget.budget_id));
   const assignment = useMutation({
     mutationFn: (value: BudgetAssignment) => assignBudget(apiClient, accessToken, budget, value),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: patternKeys });
       await queryClient.invalidateQueries({ queryKey: teamKeys.all });
       await queryClient.invalidateQueries({ queryKey: ["get", "/customer/list"] });
-      toast.success("Budget assigned");
+      toast.success(t("budgets.assignModal.assigned"));
       onClose();
     },
     onError: (reason: Error) => setError(reason.message),
@@ -139,7 +143,7 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
   const removal = useMutation({
     mutationFn: async (rule: PatternMapping) => {
       const current = await loadPatternMappings(apiClient, accessToken);
-      if (!current.editable) throw new Error("Pattern assignments are managed in the proxy configuration file");
+      if (!current.editable) throw new Error(t("budgets.assignModal.patterns.configManaged"));
       await savePatternMappings(
         apiClient,
         accessToken,
@@ -159,7 +163,7 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
       const exact = customerList.find((entry) => entry.user_id === value);
       const aliases = customerList.filter((entry) => entry.alias === value);
       if (!exact && aliases.length > 1) {
-        setError("More than one customer has this name. Enter the end-user ID instead");
+        setError(t("budgets.assignModal.customer.ambiguousName"));
         return;
       }
       const existing = exact ?? aliases[0];
@@ -183,22 +187,22 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
     if (target === "customer") return customers.isPending || customers.isError || !customer.trim();
     if (target === "team") return teams.isPending || teams.isError || !teamId;
     const patternsUnavailable = patterns.isPending || patterns.isError;
-    return patternsUnavailable || !patterns.data?.editable || budget.max_budget == null;
+    return patternsUnavailable || !patternConfiguration.editable || budget.max_budget == null;
   };
 
   return (
     <Dialog open onOpenChange={(open) => !open && !pending && onClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Assign budget</DialogTitle>
+          <DialogTitle>{t("budgets.assignModal.title")}</DialogTitle>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">Budget {budget.budget_id}</p>
-        <form id={`${id}-form`} onSubmit={submit}>
+        <p className="text-sm text-muted-foreground">{t("budgets.assignModal.budget", { id: budget.budget_id })}</p>
+        <form id={formId} onSubmit={submit}>
           <FieldGroup className="gap-4">
             <Field>
-              <FieldLabel htmlFor={`${id}-target`}>Assign to</FieldLabel>
+              <FieldLabel htmlFor={`${id}-target`}>{t("budgets.assignModal.target")}</FieldLabel>
               <Select
-                items={TARGETS}
+                items={targets}
                 value={target}
                 onValueChange={(value) => {
                   if (value) setTarget(value);
@@ -208,7 +212,7 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {TARGETS.map((option) => (
+                  {targets.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.label}
                     </SelectItem>
@@ -230,9 +234,7 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
               <>
                 {target !== "user-agent" && (
                   <Field>
-                    <FieldLabel htmlFor={`${id}-field`}>
-                      {target === "body" ? "Request field" : "Header name"}
-                    </FieldLabel>
+                    <FieldLabel htmlFor={`${id}-field`}>{t(`budgets.assignModal.fields.${target}`)}</FieldLabel>
                     <Input
                       id={`${id}-field`}
                       value={field}
@@ -244,7 +246,7 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
                   </Field>
                 )}
                 <Field>
-                  <FieldLabel htmlFor={`${id}-pattern`}>Pattern</FieldLabel>
+                  <FieldLabel htmlFor={`${id}-pattern`}>{t("budgets.assignModal.patterns.label")}</FieldLabel>
                   <Input
                     id={`${id}-pattern`}
                     value={pattern}
@@ -253,42 +255,37 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
                     required
                     maxLength={512}
                   />
-                  <FieldDescription>
-                    Case-sensitive wildcards. * matches any text and ? matches one character. Body fields must contain
-                    strings. All matching requests share this budget
-                  </FieldDescription>
+                  <FieldDescription>{t("budgets.assignModal.patterns.description")}</FieldDescription>
                 </Field>
                 {budget.max_budget == null && (
-                  <p role="alert">Set a spend limit on this budget before assigning patterns</p>
+                  <p role="alert">{t("budgets.assignModal.patterns.spendLimitRequired")}</p>
                 )}
                 {patterns.isError && <p role="alert">{patterns.error.message}</p>}
                 {patterns.data?.editable === false && (
-                  <p role="alert">Pattern assignments are managed in the proxy configuration file</p>
+                  <p role="alert">{t("budgets.assignModal.patterns.configManaged")}</p>
                 )}
               </>
             )}
           </FieldGroup>
         </form>
         {assignedPatterns.length > 0 && (
-          <section aria-label="Assigned patterns" className="space-y-2 border-t pt-4">
-            <h3 className="text-sm font-medium">Assigned patterns</h3>
+          <section aria-label={t("budgets.assignModal.patterns.assigned")} className="space-y-2 border-t pt-4">
+            <h3 className="text-sm font-medium">{t("budgets.assignModal.patterns.assigned")}</h3>
             {assignedPatterns.map((rule) => (
               <div key={JSON.stringify(rule)} className="flex items-center justify-between gap-3 text-sm">
-                <span className="break-all">
-                  {rule.source} {rule.field} matches {rule.pattern}
-                </span>
+                <span className="break-all">{t("budgets.assignModal.patterns.match", rule)}</span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  disabled={pending || !patterns.data?.editable}
+                  disabled={pending || !patternConfiguration.editable}
                   onClick={() => removal.mutate(rule)}
-                  aria-label={`Remove ${rule.field} pattern ${rule.pattern}`}
+                  aria-label={t("budgets.assignModal.patterns.removeLabel", rule)}
                 >
-                  Remove
+                  {t("budgets.assignModal.patterns.remove")}
                 </Button>
               </div>
             ))}
-            <p className="text-xs text-muted-foreground">Removing a pattern keeps the budget and its recorded spend</p>
+            <p className="text-xs text-muted-foreground">{t("budgets.assignModal.patterns.removeDescription")}</p>
           </section>
         )}
         {error && (
@@ -298,10 +295,10 @@ export default function AssignBudgetModal({ budget, accessToken, onClose }: Assi
         )}
         <DialogFooter>
           <Button variant="outline" disabled={pending} onClick={onClose}>
-            Cancel
+            {t("budgets.assignModal.cancel")}
           </Button>
-          <Button type="submit" form={`${id}-form`} disabled={pending || unavailable()}>
-            {pending ? "Saving…" : "Assign budget"}
+          <Button type="submit" form={formId} disabled={pending || unavailable()}>
+            {pending ? t("budgets.assignModal.saving") : t("budgets.assignModal.title")}
           </Button>
         </DialogFooter>
       </DialogContent>
