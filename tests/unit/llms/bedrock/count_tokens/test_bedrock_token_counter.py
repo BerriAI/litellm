@@ -472,30 +472,41 @@ def _sent_texts(body: Mapping[str, JsonValue]) -> tuple[tuple[JsonValue, str], .
 
 _DROPPED: Final = (("user", "What is 2+2?"), ("user", "And 3+3?"))
 _CONTINUED: Final = (("user", "What is 2+2?"), ("assistant", "Please continue."), ("user", "And 3+3?"))
+_EMPTY_WITH_CACHE_CONTROL: Final = {"role": "assistant", "content": "", "cache_control": {"type": "ephemeral"}}
+_ANSWER: Final = {"role": "assistant", "content": "Four."}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "assistant_turn, modify_params, expected_sent",
+    "between_users, modify_params, expected_sent",
     (
-        ({"role": "assistant", "content": ""}, False, _DROPPED),
-        ({"role": "assistant", "content": [{"type": "text", "text": ""}]}, False, _DROPPED),
+        (({"role": "assistant", "content": ""},), False, _DROPPED),
+        (({"role": "assistant", "content": [{"type": "text", "text": ""}]},), False, _DROPPED),
         (
-            {
-                "role": "assistant",
-                "content": "",
-                "thinking_blocks": [{"type": "thinking", "thinking": "Adding.", "signature": "c2lnbmF0dXJl"}],
-            },
+            (
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "thinking_blocks": [{"type": "thinking", "thinking": "Adding.", "signature": "c2lnbmF0dXJl"}],
+                },
+            ),
             False,
             _DROPPED,
         ),
-        ({"role": "assistant", "content": ""}, True, _CONTINUED),
-        ({"role": "assistant", "content": [{"type": "text", "text": " "}]}, True, _CONTINUED),
-        ({"role": "assistant", "content": ""}, None, _CONTINUED),
+        (({"role": "assistant", "content": ""},), True, _CONTINUED),
+        (({"role": "assistant", "content": [{"type": "text", "text": " "}]},), True, _CONTINUED),
+        (({"role": "assistant", "content": ""},), None, _CONTINUED),
         (
-            {"role": "assistant", "content": "", "function_call": {"name": "add", "arguments": "{}"}},
+            ({"role": "assistant", "content": "", "function_call": {"name": "add", "arguments": "{}"}},),
             True,
             _CONTINUED,
+        ),
+        ((_EMPTY_WITH_CACHE_CONTROL,), None, _DROPPED),
+        ((_EMPTY_WITH_CACHE_CONTROL,), True, _CONTINUED),
+        (
+            (_ANSWER, _EMPTY_WITH_CACHE_CONTROL),
+            True,
+            (("user", "What is 2+2?"), ("assistant", "Four."), ("user", "And 3+3?")),
         ),
     ),
     ids=(
@@ -506,10 +517,13 @@ _CONTINUED: Final = (("user", "What is 2+2?"), ("assistant", "Please continue.")
         "modify_params_blank_text_block",
         "modify_params_null_empty_string",
         "modify_params_function_call_and_empty_string",
+        "modify_params_null_empty_string_and_cache_control",
+        "modify_params_empty_string_and_cache_control",
+        "modify_params_empty_string_and_cache_control_after_an_answer",
     ),
 )
 async def test_claude_converse_count_sends_the_texts_converse_inference_sends(
-    assistant_turn: dict[str, JsonValue],
+    between_users: tuple[dict[str, JsonValue], ...],
     modify_params: bool | None,
     expected_sent: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
@@ -519,7 +533,7 @@ async def test_claude_converse_count_sends_the_texts_converse_inference_sends(
     deployment_model: Final = "bedrock/us.anthropic.claude-haiku-5-5"
     messages: Final = [
         {"role": "user", "content": "What is 2+2?"},
-        assistant_turn,
+        *between_users,
         {"role": "user", "content": "And 3+3?"},
     ]
     inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
@@ -571,7 +585,53 @@ async def test_claude_converse_count_under_modify_params_answers_for_a_text_bloc
 
     assert result is not None
     assert result.error is False
-    assert _sent_texts(_counted_body(bedrock.requests[0])) == _DROPPED
+    assert _sent_texts(_counted_body(bedrock.requests[0])) == _CONTINUED
+
+
+@pytest.mark.asyncio
+async def test_claude_converse_count_under_modify_params_sends_the_continue_turn_between_a_tool_result_and_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    deployment_model: Final = "bedrock/us.anthropic.claude-haiku-5-5"
+    tools: Final = [{"type": "function", "function": {"name": "add", "parameters": {"type": "object"}}}]
+    messages: Final = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "add", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "4"},
+        {"role": "user", "content": "And 3+3?"},
+    ]
+    inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
+    await litellm.acompletion(
+        model=deployment_model,
+        messages=messages,
+        tools=tools,
+        max_tokens=8,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-5-5",
+        messages=messages,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}},
+        request_model="claude-haiku-5-5",
+        tools=tools,
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert result.error is False
+    converse_sent: Final = _sent_texts(_JSON_BODY.validate_json(inference.requests[0].content))
+    assert _sent_texts(_counted_body(bedrock.requests[0])) == converse_sent
+    assert converse_sent == _CONTINUED
 
 
 @pytest.mark.asyncio

@@ -2469,17 +2469,42 @@ def _assistant_turn_as_converse_sends_it(message: Mapping[str, object]) -> Mappi
         continued: Final = get_assistant_message_block_or_continue_message(
             cast(ChatCompletionAssistantMessage, message)  # cast-ok: role checked above, the helper reads only content
         )
-        return continued if _converse_reads_content(continued) else DEFAULT_ASSISTANT_CONTINUE_MESSAGE
+        return continued if _converse_reads_content(continued) else None
     kept: Final = tuple(block for block in parts_of(message.get("content")) if not _is_empty_text_block(block))
     trimmed: Final = {**message, "content": list(kept) or None}
     return trimmed if _converse_reads_content(trimmed) else None
 
 
+_CONVERSE_USER_BLOCK_ROLES: Final = frozenset({"user", "tool"})
+
+
+def _role_runs_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]],
+) -> tuple[tuple[object, tuple[Mapping[str, object], ...]], ...]:
+    runs: Final = itertools.groupby(messages, key=lambda message: message.get("role"))
+    sent_runs: Final = (
+        (role, tuple(turn for turn in map(_assistant_turn_as_converse_sends_it, run) if turn is not None))
+        for role, run in runs
+    )
+    return tuple((role, turns) for role, turns in sent_runs if turns)
+
+
+def _continue_turn_between(previous_role: object, role: object) -> tuple[Mapping[str, object], ...]:
+    if litellm.modify_params is True and {previous_role, role} <= _CONVERSE_USER_BLOCK_ROLES:
+        return (DEFAULT_ASSISTANT_CONTINUE_MESSAGE,)
+    return ()
+
+
 def assistant_turns_as_converse_sends_them(
     messages: Sequence[Mapping[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
-    turns: Final = map(_assistant_turn_as_converse_sends_it, messages)
-    return tuple(turn for turn in turns if turn is not None)
+    runs: Final = _role_runs_as_converse_sends_them(messages)
+    return tuple(
+        itertools.chain.from_iterable(
+            (*_continue_turn_between(previous_role, role), *turns)
+            for (previous_role, _), (role, turns) in itertools.pairwise(((None, ()), *runs))
+        )
+    )
 
 
 def _with_placeholder_text(block: object) -> object:
