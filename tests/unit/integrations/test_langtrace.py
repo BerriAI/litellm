@@ -20,8 +20,12 @@ CHAT_MESSAGE_OBJECTS: Final = tuple(
     [
         (CHAT_MESSAGE_DICTS, list(CHAT_MESSAGE_DICTS)),
         (CHAT_MESSAGE_OBJECTS, [message.model_dump() for message in CHAT_MESSAGE_OBJECTS]),
+        (
+            ({"role": "user", "content": "before\x00after", "metadata": {1: "one"}},),
+            [{"role": "user", "content": "before\x00after", "metadata": {"1": "one"}}],
+        ),
     ],
-    ids=["dict_messages", "litellm_message_objects"],
+    ids=["dict_messages", "litellm_message_objects", "dict_message_with_nul_and_int_key"],
 )
 def test_langtrace_span_keeps_prompt_and_token_usage(
     messages: Sequence[object], expected_prompts: Sequence[object]
