@@ -1098,3 +1098,49 @@ def test_lyria_malformed_item_position_does_not_change_the_mapped_error(payload:
             custom_llm_provider="vertex_ai",
             original_exception=exc_info.value,
         )
+
+
+_PCM_AUDIO: Final = b"\x00\x00\x01\x00" * 2400
+_GENERATE_CONTENT_RESPONSE: Final = {
+    "candidates": [
+        {
+            "content": {
+                "role": "model",
+                "parts": [
+                    {
+                        "inlineData": {
+                            "mimeType": "audio/L16;codec=pcm;rate=24000",
+                            "data": base64.b64encode(_PCM_AUDIO).decode(),
+                        }
+                    }
+                ],
+            },
+            "finishReason": "STOP",
+        }
+    ],
+    "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 10, "totalTokenCount": 15},
+}
+
+
+@pytest.mark.parametrize("custom_llm_provider", ("vertex_ai", "vertex_ai_beta"))
+@pytest.mark.asyncio
+async def test_aspeech_vertex_ai_gemini_tts_routes_to_configured_api_base(
+    respx_mock: respx.MockRouter, google_token_endpoint: responses.RequestsMock, custom_llm_provider: str
+) -> None:
+    gateway_route: Final = respx_mock.post(
+        "https://vertex.gateway.internal/v1/projects/test-project/locations/global"
+        "/publishers/google/models/gemini-3.8-flash-tts:generateContent"
+    ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
+
+    response: Final = await litellm.aspeech(
+        model=f"{custom_llm_provider}/gemini-3.8-flash-tts",
+        input="Say hello",
+        voice="Kore",
+        vertex_credentials=_AUTHORIZED_USER,
+        vertex_location="global",
+        api_base="https://vertex.gateway.internal",
+    )
+
+    assert gateway_route.call_count == 1
+    assert gateway_route.calls.last.request.headers["authorization"] == "Bearer minted-google-token"
+    assert _PCM_AUDIO in response.content
