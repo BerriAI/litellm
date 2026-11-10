@@ -631,7 +631,7 @@ class HostRegistry(HostModelInfo):
         self._core_model_group_alias: dict[str, str | RouterModelGroupAliasItem] = model_group_alias  # mutable-ok: the live alias map  # fmt: skip
         # The live model_list: router-core's deployments read back, every write a changeset.
         self._core_model_list: Final[HostedModelList] = HostedModelList(
-            self._live_handle, self._hand_changes, self.live_params, self.live_info
+            self._live_handle, self._hand_changes, self.live_params, self.live_info, lock=self._deployment_index_lock
         )
         # The litellm_params values a deployment's JSON cannot carry (an Exception or model object as
         # ``mock_response``, a callable ``azure_ad_token_provider``), by deployment id: an attempt is called with them, as Python's list held them.
@@ -1353,9 +1353,10 @@ class HostRegistry(HostModelInfo):
     def _hand_changes(self, changes: Mapping[str, object]) -> None:
         if self.changes_runner is None:
             raise RuntimeError("the host registry writes deployments through its Rust core")
-        self.changes_runner(changes)
-        self._core_model_list.refresh()
-        self._drop_removed_live_values()
+        with self._deployment_index_lock:
+            self.changes_runner(changes)
+            self._core_model_list.refresh()
+            self._drop_removed_live_values()
 
     def _drop_removed_live_values(self) -> None:
         """Forget the live values of ids no deployment carries any more, so a router that rotates
@@ -1546,10 +1547,11 @@ class HostRegistry(HostModelInfo):
         return handle is not None and key is not None and handle.has_model_id(key)
 
     def _core_get_model_info(self, id: str) -> UntypedEntry | None:
-        handle: Final = self._live_handle()
-        key: Final = _index_key(id)
-        idx: Final[object] = None if handle is None or key is None else handle.id_position(key)
-        return None if idx is None else self._core_model_list[idx]  # pyright: ignore[reportArgumentType, reportCallIssue]  # a position, or what a caller wrote, read as Python reads it
+        with self._deployment_index_lock:
+            handle: Final = self._live_handle()
+            key: Final = _index_key(id)
+            idx: Final[object] = None if handle is None or key is None else handle.id_position(key)
+            return None if idx is None else self._core_model_list[idx]  # pyright: ignore[reportArgumentType, reportCallIssue]  # a position, or what a caller wrote, read as Python reads it
 
     def live_params(self, model_id: object) -> Mapping[str, object]:
         """The litellm_params values of deployment ``model_id`` that its JSON record cannot carry."""
@@ -1564,21 +1566,23 @@ class HostRegistry(HostModelInfo):
         return None if entry is None else Deployment(**entry)  # pyright: ignore[reportArgumentType]  # a stored entry
 
     def _core_get_deployment_by_model_group_name(self, model_group_name: str) -> Deployment | None:
-        handle: Final = self._live_handle()
-        key: Final = _index_key(model_group_name)
-        indices: Final[object] = None if handle is None or key is None else handle.named_positions(key)
-        model: Final = self._core_model_list[indices[0]] if indices else None  # pyright: ignore[reportIndexIssue, reportArgumentType, reportCallIssue]  # positions, or what a caller wrote, read as Python reads them
-        return None if model is None else Deployment(**model)  # pyright: ignore[reportArgumentType]  # a stored entry
+        with self._deployment_index_lock:
+            handle: Final = self._live_handle()
+            key: Final = _index_key(model_group_name)
+            indices: Final[object] = None if handle is None or key is None else handle.named_positions(key)
+            model: Final = self._core_model_list[indices[0]] if indices else None  # pyright: ignore[reportIndexIssue, reportArgumentType, reportCallIssue]  # positions, or what a caller wrote, read as Python reads them
+            return None if model is None else Deployment(**model)  # pyright: ignore[reportArgumentType]  # a stored entry
 
     def _at(self, indices: object) -> tuple[UntypedEntry, ...]:
         """The entries at ``indices`` (what an index holds), read as Python's list reads them."""
         return tuple(self._core_model_list[idx] for idx in indices)  # pyright: ignore[reportGeneralTypeIssues, reportArgumentType, reportCallIssue]  # positions, or what a caller wrote
 
     def _core_deployments_named(self, model_name: str) -> tuple[UntypedEntry, ...] | None:
-        handle: Final = self._live_handle()
-        key: Final = _index_key(model_name)
-        indices: Final[object] = None if handle is None or key is None else handle.named_positions(key)
-        return None if indices is None else self._at(indices)
+        with self._deployment_index_lock:
+            handle: Final = self._live_handle()
+            key: Final = _index_key(model_name)
+            indices: Final[object] = None if handle is None or key is None else handle.named_positions(key)
+            return None if indices is None else self._at(indices)
 
     def team_public_model_names_of(self, team_id: object) -> frozenset[str]:
         handle: Final = self._live_handle()
@@ -1587,13 +1591,14 @@ class HostRegistry(HostModelInfo):
         return frozenset(handle.team_public_names_of(team_id))
 
     def _team_deployments_named(self, team_id: str, public_model_name: str) -> tuple[UntypedEntry, ...] | None:
-        handle: Final = self._live_handle()
-        team: Final = _index_key(team_id)
-        public: Final = _index_key(public_model_name)
-        indices: Final[object] = (
-            None if handle is None or team is None or public is None else handle.team_positions(team, public)
-        )
-        return None if indices is None else self._at(indices)
+        with self._deployment_index_lock:
+            handle: Final = self._live_handle()
+            team: Final = _index_key(team_id)
+            public: Final = _index_key(public_model_name)
+            indices: Final[object] = (
+                None if handle is None or team is None or public is None else handle.team_positions(team, public)
+            )
+            return None if indices is None else self._at(indices)
 
     # -- lookups (router-core `lookup.rs`): rows read at the stored entries --------------------
 
@@ -1709,24 +1714,26 @@ class HostRegistry(HostModelInfo):
 
     def _team_deployments_across_teams(self, model: str) -> list[UntypedEntry]:  # mutable-ok: a fresh list
         """Every team's deployments under public name ``model``, for a proxy admin calling without a team."""
-        rows, teams = self._lookup().lookup_across_teams(model)
-        team_deployments: Final = self._rows(rows)
-        if teams > 1:
-            raise litellm_exceptions.BadRequestError(
-                message=(
-                    f"Model name '{model}' matches deployments from multiple teams. "
-                    "Specify the deployment ID directly to disambiguate."
-                ),
-                model=model,
-                llm_provider="",
-            )
-        return team_deployments
+        with self._deployment_index_lock:
+            rows, teams = self._lookup().lookup_across_teams(model)
+            team_deployments: Final = self._rows(rows)
+            if teams > 1:
+                raise litellm_exceptions.BadRequestError(
+                    message=(
+                        f"Model name '{model}' matches deployments from multiple teams. "
+                        "Specify the deployment ID directly to disambiguate."
+                    ),
+                    model=model,
+                    llm_provider="",
+                )
+            return team_deployments
 
     def _core_get_all_deployments(
         self, model_name: str, model_alias: str | None = None, team_id: str | None = None
     ) -> list[UntypedEntry]:  # mutable-ok: a fresh list, as the core returns it
-        key: Final = _index_key(model_name)
-        return [] if key is None else self._rows(self._lookup().lookup_all(key, team_id, model_alias))
+        with self._deployment_index_lock:
+            key: Final = _index_key(model_name)
+            return [] if key is None else self._rows(self._lookup().lookup_all(key, team_id, model_alias))
 
     def get_routing_group(self, model_name: str) -> RoutingGroup | None:
         """The routing group callable as ``model_name``: a deployment model_name or an alias of the
@@ -1745,61 +1752,70 @@ class HostRegistry(HostModelInfo):
 
     def _core_routing_group_has_alternatives(self, model_group: str | None) -> bool:
         """A callable routing group whose member union spans more than one deployment."""
-        if model_group is None:
-            return False
-        resolved: Final = self._core_get_model_from_alias(model=model_group) or model_group
-        group: Final = self.get_routing_group(resolved)
-        if group is None:
-            return False
-        handle: Final = self._lookup()
+        with self._deployment_index_lock:
+            if model_group is None:
+                return False
+            resolved: Final = self._core_get_model_from_alias(model=model_group) or model_group
+            group: Final = self.get_routing_group(resolved)
+            if group is None:
+                return False
+            handle: Final = self._lookup()
 
-        def held(member: str) -> Sequence[object]:
-            return cast(Sequence[object], handle.named_positions(member) or ())  # cast-ok: positions, or junk
+            def held(member: str) -> Sequence[object]:
+                return cast(Sequence[object], handle.named_positions(member) or ())  # cast-ok: positions, or junk
 
-        return sum(len(held(member)) for member in group.models) > 1
+            return sum(len(held(member)) for member in group.models) > 1
 
     def _core_get_model_list_from_model_alias(
         self, model_name: str | None = None
     ) -> list[UntypedEntry]:  # mutable-ok: a fresh list
-        return self._rows(
-            self._lookup().lookup_model_list(model_name, None, self._list_scope(model_name, only="aliases"))
-        )
+        with self._deployment_index_lock:
+            return self._rows(
+                self._lookup().lookup_model_list(model_name, None, self._list_scope(model_name, only="aliases"))
+            )
 
     def _core_get_model_list_from_routing_groups(self, model_name: str | None = None) -> Sequence[UntypedEntry]:
         """Callable routing groups as model-list rows: each member deployment under the group's name."""
-        if model_name is None and self._routing_group_rows is not None:
-            return self._routing_group_rows
-        rows: Final = tuple(
-            self._rows(self._lookup().lookup_model_list(model_name, None, self._list_scope(model_name, only="groups")))
-        )
-        if model_name is None:
-            self._routing_group_rows = rows
-        return rows
+        with self._deployment_index_lock:
+            if model_name is None and self._routing_group_rows is not None:
+                return self._routing_group_rows
+            rows: Final = tuple(
+                self._rows(
+                    self._lookup().lookup_model_list(model_name, None, self._list_scope(model_name, only="groups"))
+                )
+            )
+            if model_name is None:
+                self._routing_group_rows = rows
+            return rows
 
     def _core_get_model_list(
         self, model_name: str | None = None, team_id: str | None = None
     ) -> list[UntypedEntry] | None:  # mutable-ok: a fresh list, as get_model_list returns
-        if model_name is not None and _index_key(model_name) is None:
-            # No index holds it, so `_get_wildcard_deployments` reads it: what the pattern routers raise.
-            team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
-            return [
-                *self._core_pattern_router.get_deployments_by_pattern(model=model_name),
-                *(team_router.get_deployments_by_pattern(model=model_name) if team_router is not None else ()),
-            ]
-        return self._rows(self._lookup().lookup_model_list(model_name, team_id, self._list_scope(model_name)))
+        with self._deployment_index_lock:
+            if model_name is not None and _index_key(model_name) is None:
+                # No index holds it, so `_get_wildcard_deployments` reads it: what the pattern routers raise.
+                team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
+                return [
+                    *self._core_pattern_router.get_deployments_by_pattern(model=model_name),
+                    *(team_router.get_deployments_by_pattern(model=model_name) if team_router is not None else ()),
+                ]
+            return self._rows(self._lookup().lookup_model_list(model_name, team_id, self._list_scope(model_name)))
 
     def _core_wildcard_route_deployments(self, model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
-        from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+        with self._deployment_index_lock:
+            from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 
-        if not isinstance(model, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # a caller's non-string model reads the base routers
-            team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
-            team_owned: Final = team_router.get_deployments_by_pattern(model=model) if team_router is not None else ()
-            return team_owned or self._core_pattern_router.get_deployments_by_pattern(model=model)
-        rows: Final = self._lookup().lookup_wildcard_route(
-            model, team_id, [model, f"{inferred_provider(model)}/{model}"]
-        )
-        routed: Final = cast(Sequence[Mapping[str, object]], rows)  # cast-ok: router-core's wildcard rows
-        return [cast(Mapping[str, object], row["pattern"]) for row in routed]  # cast-ok: each carries its routed copy
+            if not isinstance(model, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # a caller's non-string model reads the base routers
+                team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
+                team_owned: Final = (
+                    team_router.get_deployments_by_pattern(model=model) if team_router is not None else ()
+                )
+                return team_owned or self._core_pattern_router.get_deployments_by_pattern(model=model)
+            rows: Final = self._lookup().lookup_wildcard_route(
+                model, team_id, [model, f"{inferred_provider(model)}/{model}"]
+            )
+            routed: Final = cast(Sequence[Mapping[str, object]], rows)  # cast-ok: router-core's wildcard rows
+            return [cast(Mapping[str, object], row["pattern"]) for row in routed]  # cast-ok: its routed copy
 
     def _core_wildcard_routed_models(self, model: str, team_id: str | None) -> frozenset[str]:
         team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
@@ -1810,23 +1826,27 @@ class HostRegistry(HostModelInfo):
 
     def _core_config_deployments(self) -> Iterator[Mapping[str, object]]:
         """A generator, as the Python core's: the rows are read when iteration starts."""
-        yield from self._rows(self._lookup().lookup_config())
+        with self._deployment_index_lock:
+            rows: Final = self._rows(self._lookup().lookup_config())
+        yield from rows
 
     # -- names ------------------------------------------------------------------------------------
 
     def _core_get_model_names(self, team_id: str | None = None) -> list[str]:  # mutable-ok: a fresh list
-        names, raw = self._lookup().lookup_model_names(team_id, self._list_scope(None))
-        self._raise_at(raw)
-        return names
+        with self._deployment_index_lock:
+            names, raw = self._lookup().lookup_model_names(team_id, self._list_scope(None))
+            self._raise_at(raw)
+            return names
 
     def _core_get_model_ids(
         self, model_name: str | None = None, exclude_team_models: bool = False
     ) -> list[str]:  # mutable-ok: a fresh list
-        if model_name is not None and _index_key(model_name) is None:
-            return []
-        ids, raw = self._lookup().lookup_model_ids(model_name, exclude_team_models)
-        self._raise_at(raw)
-        return ids
+        with self._deployment_index_lock:
+            if model_name is not None and _index_key(model_name) is None:
+                return []
+            ids, raw = self._lookup().lookup_model_ids(model_name, exclude_team_models)
+            self._raise_at(raw)
+            return ids
 
     # -- resolving a name -------------------------------------------------------------------------
 
@@ -1885,12 +1905,6 @@ class HostRegistry(HostModelInfo):
             return provider_prefixed
         return None
 
-    def _get_deployment_by_litellm_model(self, model: object) -> list[UntypedEntry]:  # mutable-ok: a fresh list
-        handle: Final = self._live_handle()
-        if handle is None or not isinstance(model, str):
-            return []
-        return list(self._at(handle.litellm_model_positions(model)))
-
     # -- credentials ------------------------------------------------------------------------------
 
     @staticmethod
@@ -1909,18 +1923,20 @@ class HostRegistry(HostModelInfo):
     def _get_model_group_deployment_usable_by_team(
         self, model_group_name: str, team_id: str | None
     ) -> Deployment | None:
-        if _index_key(model_group_name) is None:
-            return None
-        position, raw = self._lookup().lookup_group_usable_by_team(model_group_name, team_id)
-        self._raise_at(raw)
-        return None if position is None else Deployment(**self._core_model_list[position])  # pyright: ignore[reportArgumentType]  # a stored entry
+        with self._deployment_index_lock:
+            if _index_key(model_group_name) is None:
+                return None
+            position, raw = self._lookup().lookup_group_usable_by_team(model_group_name, team_id)
+            self._raise_at(raw)
+            return None if position is None else Deployment(**self._core_model_list[position])  # pyright: ignore[reportArgumentType]  # a stored entry
 
     def _get_team_public_name_deployment(self, model_id: str, team_id: str | None) -> Deployment | None:
-        if team_id is None or _index_key(model_id) is None:
-            return None
-        position, raw = self._lookup().lookup_team_public_name(model_id, team_id)
-        self._raise_at(raw)
-        return None if position is None else Deployment(**self._core_model_list[position])  # pyright: ignore[reportArgumentType]  # a stored entry
+        with self._deployment_index_lock:
+            if team_id is None or _index_key(model_id) is None:
+                return None
+            position, raw = self._lookup().lookup_team_public_name(model_id, team_id)
+            self._raise_at(raw)
+            return None if position is None else Deployment(**self._core_model_list[position])  # pyright: ignore[reportArgumentType]  # a stored entry
 
     def _get_wildcard_deployment_usable_by_team(self, model_id: str, team_id: str | None) -> Deployment | None:
         team_router: Final = self._core_team_pattern_routers.get(team_id) if team_id is not None else None
@@ -1973,7 +1989,10 @@ class HostRegistry(HostModelInfo):
     # -- routable names ---------------------------------------------------------------------------
 
     def _routable_deployments(self, model_name: str, team_id: str | None) -> tuple[UntypedEntry, ...]:
-        return tuple(self._rows(self._lookup().lookup_routable(self._core_routable_model_group(model_name), team_id)))
+        with self._deployment_index_lock:
+            return tuple(
+                self._rows(self._lookup().lookup_routable(self._core_routable_model_group(model_name), team_id))
+            )
 
     def _core_team_ptu_ceiling(self, team_id: str, model_group: str) -> "PTUTeamCeiling | None":
         """The per-minute ceiling ``team_id``'s PTU shares set on the group serving ``model_group``,
@@ -2037,24 +2056,26 @@ class HostRegistry(HostModelInfo):
         """The deployment ids that could serve ``model`` for ``team_id``: the alias target, then a
         routing group, then a team public name or wildcard route for a name that is no model
         group, then the model group (``get_candidate_model_ids_for_route``). Read-only."""
-        from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
+        with self._deployment_index_lock:
+            from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 
-        resolved: Final = self._core_get_model_from_alias(model=model) or model
-        group: Final = self.get_routing_group(resolved) if self._core_routing_groups else None
-        ids, raw = self._lookup().lookup_candidate_ids(
-            resolved,
-            team_id,
-            None if group is None else list(group.models),
-            [resolved, f"{inferred_provider(resolved)}/{resolved}"],
-        )
-        self._raise_at(raw)
-        return frozenset(ids)
+            resolved: Final = self._core_get_model_from_alias(model=model) or model
+            group: Final = self.get_routing_group(resolved) if self._core_routing_groups else None
+            ids, raw = self._lookup().lookup_candidate_ids(
+                resolved,
+                team_id,
+                None if group is None else list(group.models),
+                [resolved, f"{inferred_provider(resolved)}/{resolved}"],
+            )
+            self._raise_at(raw)
+            return frozenset(ids)
 
     def _core_team_model_has_alternatives(self, deployment_id: str) -> bool:
         """Whether a team deployment's public name has another unpaused deployment of that team."""
-        found, raw = self._lookup().lookup_team_model_has_alternatives(deployment_id)
-        self._raise_at(raw)
-        return found
+        with self._deployment_index_lock:
+            found, raw = self._lookup().lookup_team_model_has_alternatives(deployment_id)
+            self._raise_at(raw)
+            return found
 
     def _core_resolve_served_model_name(self, model_name: str, served_model: str) -> str:
         """``served_model`` when ``model_name`` routes to it (the alias target, a routing group
@@ -2174,17 +2195,18 @@ class HostRegistry(HostModelInfo):
     def _core_get_model_access_groups(
         self, model_name: str | None = None, model_access_group: str | None = None, team_id: str | None = None
     ) -> Mapping[str, Sequence[str]]:
-        use_cache: Final = model_name is None and model_access_group is None and team_id is None
-        if use_cache and self._access_groups_cache is not None:
-            return self._access_groups_cache
-        pairs, raw = self._lookup().lookup_access_groups(
-            model_name, model_access_group, team_id, self._list_scope(model_name)
-        )
-        self._raise_at(raw)
-        groups: Final[dict[str, list[str]]] = {g: list(n) for g, n in pairs}  # mutable-ok: as a defaultdict
-        if use_cache:
-            self._access_groups_cache = groups
-        return groups
+        with self._deployment_index_lock:
+            use_cache: Final = model_name is None and model_access_group is None and team_id is None
+            if use_cache and self._access_groups_cache is not None:
+                return self._access_groups_cache
+            pairs, raw = self._lookup().lookup_access_groups(
+                model_name, model_access_group, team_id, self._list_scope(model_name)
+            )
+            self._raise_at(raw)
+            groups: Final[dict[str, list[str]]] = {g: list(n) for g, n in pairs}  # mutable-ok: as a defaultdict
+            if use_cache:
+                self._access_groups_cache = groups
+            return groups
 
     def _core_is_model_access_group_for_wildcard_route(self, model_access_group: str) -> bool:
         groups: Final = self._core_get_model_access_groups(model_access_group=model_access_group)
