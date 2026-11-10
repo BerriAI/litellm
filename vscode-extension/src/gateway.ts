@@ -1,7 +1,8 @@
-import OpenAI from "openai";
+import OpenAI, { APIError } from "openai";
 import type { ChatCompletionChunk, ChatCompletionCreateParamsStreaming } from "openai/resources/chat/completions";
+import type { ResponseCreateParamsStreaming, ResponseStreamEvent } from "openai/resources/responses/responses";
 import packageJson from "../package.json";
-import { parseModelGroups, type ConfigurationValues, type ModelGroupInfo } from "./models";
+import { MODE_CHAT, MODE_RESPONSES, parseModelGroups, type ConfigurationValues, type ModelGroupInfo } from "./models";
 
 export interface GatewayConfig {
   readonly baseUrl: string;
@@ -26,6 +27,11 @@ export interface GatewayClient {
     params: ChatCompletionCreateParamsStreaming,
     signal: AbortSignal,
   ): Promise<AsyncIterable<ChatCompletionChunk>>;
+  streamResponsesCompletion(
+    config: GatewayConfig,
+    params: ResponseCreateParamsStreaming,
+    signal: AbortSignal,
+  ): Promise<AsyncIterable<ResponseStreamEvent>>;
 }
 
 export const USER_AGENT = `litellm-vscode/${packageJson.version}`;
@@ -109,6 +115,35 @@ export const createGatewayClient = (fetchImpl: typeof fetch = fetch): GatewayCli
       fetch: fetchImpl,
       maxRetries: 0,
     });
-    return client.chat.completions.create(params, { signal });
+    return retryGatewayTimeout(
+      () => client.chat.completions.create(params, { signal }) as Promise<AsyncIterable<ChatCompletionChunk>>,
+      signal,
+    );
+  },
+  streamResponsesCompletion(config, params, signal) {
+    const client = new OpenAI({
+      apiKey: config.apiKey,
+      baseURL: openAiBaseUrl(config.baseUrl),
+      defaultHeaders: { "User-Agent": USER_AGENT },
+      fetch: fetchImpl,
+      maxRetries: 0,
+    });
+    return retryGatewayTimeout(
+      () => client.responses.create(params, { signal }) as Promise<AsyncIterable<ResponseStreamEvent>>,
+      signal,
+    );
   },
 });
+
+const retryGatewayTimeout = async <T>(request: () => Promise<T>, signal: AbortSignal): Promise<T> => {
+  try {
+    return await request();
+  } catch (error) {
+    if (signal.aborted || !(error instanceof APIError) || error.status !== 504) {
+      throw error;
+    }
+    return request();
+  }
+};
+
+export const isResponsesMode = (mode: string | undefined): boolean => mode === MODE_RESPONSES;
