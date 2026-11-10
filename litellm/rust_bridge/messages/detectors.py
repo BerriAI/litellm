@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.core_helpers import (
     stream_cost_injection_requested,
 )
 from litellm.llms.opencode.common_utils import is_opencode_api_base
-from litellm.rust_bridge.detectors import api_base, overridden, present, streaming
+from litellm.rust_bridge.detectors import api_base, overridden, streaming
 from litellm.rust_bridge.public_call import NativeCall, optional_mapping, optional_sequence, optional_str
 
 
@@ -24,22 +24,6 @@ def foundry_beta_row(request: NativeCall) -> bool:
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
     return is_foundry_api_base(AnthropicModelInfo.get_api_base(api_base(request)))
-
-
-def anthropic_workload_identity(request: NativeCall) -> bool:
-    """Python mints an Anthropic federation token when no static credential is configured."""
-    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-    from litellm.secret_managers.main import get_secret_str
-
-    def configured(param: str, env: str) -> bool:
-        return present(request, param) or get_secret_str(env) is not None
-
-    return (
-        AnthropicModelInfo.get_api_key(optional_str(request.resolved.get("api_key"))) is None
-        and AnthropicModelInfo.get_auth_token() is None
-        and configured("anthropic_federation_rule_id", "ANTHROPIC_FEDERATION_RULE_ID")
-        and configured("anthropic_organization_id", "ANTHROPIC_ORGANIZATION_ID")
-    )
 
 
 _THINKING_BLOCKS: Final = frozenset({"thinking", "redacted_thinking"})

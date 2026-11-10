@@ -140,7 +140,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
         Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
-        Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,
         Feature.STREAM_COST_INJECTION: route_detectors.stream_cost_injection,
         Feature.THINKING_SIGNATURE_RETRY: route_detectors.thinking_signature_retry,

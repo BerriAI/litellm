@@ -2,12 +2,22 @@ use litellm_llms_types::formats::messages::{
     MessagesOptionalParams, MessagesRequest, MessagesResponse,
 };
 use litellm_router_types::LitellmParams;
+use litellm_secret_value::SecretValue;
 use serde_json::Value;
 
 use super::context::MessagesTransformContext;
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
+
+pub enum FederatedEnvironment {
+    Validated(ValidatedEnvironment),
+    Unauthenticated {
+        headers: Headers,
+        missing: Error,
+        federate: fn(Headers, SecretValue) -> ValidatedEnvironment,
+    },
+}
 
 pub trait BaseMessagesConfig: Sync {
     fn shape_request(
@@ -61,6 +71,26 @@ pub trait BaseMessagesConfig: Sync {
         litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
+
+    fn validate_federated_environment(
+        &self,
+        headers: Headers,
+        api_key: Option<&str>,
+        model: &str,
+        optional_params: &MessagesOptionalParams,
+        litellm_params: &LitellmParams,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<FederatedEnvironment, Error> {
+        self.validate_environment(
+            headers,
+            api_key,
+            model,
+            optional_params,
+            litellm_params,
+            env_lookup,
+        )
+        .map(FederatedEnvironment::Validated)
+    }
 
     /// `None` relays the upstream bytes untouched, which is right for every host that already
     /// speaks Anthropic SSE. A host on another wire returns the decoder that lifts its frames

@@ -1,4 +1,5 @@
 mod host;
+pub(crate) mod workload_identity;
 
 use host::MessagesPythonHost;
 use litellm_callbacks_legacy_python::LoggingOperation;
@@ -18,7 +19,12 @@ fn run_messages(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyR
                     .map_err(crate::http::client_error)?,
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
-            );
+            )
+            .with_workload_identity(std::sync::Arc::new(
+                workload_identity::PythonWorkloadIdentity::new(
+                    litellm_host_python::PythonContext::capture(py)?,
+                ),
+            ));
             Ok(litellm_host::call::hosted_call(
                 request,
                 None,

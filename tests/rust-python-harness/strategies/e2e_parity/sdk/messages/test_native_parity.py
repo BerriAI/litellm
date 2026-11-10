@@ -35,6 +35,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.llms.base_llm.auth.token_exchange import default_token_exchange_engine
 from litellm.messages import dispatch
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.catalog import Route, RouteRule
@@ -769,7 +770,80 @@ FALLBACK_CASES: Final = (
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
 )
 
-CASES: Final = (*REQUEST_CASES, *RESPONSE_CASES, *FAILURE_CASES, *STREAM_CASES, *SYNC_CASES, *FALLBACK_CASES)
+FEDERATION_ENV: Final[Mapping[str, str]] = MappingProxyType(
+    {"ANTHROPIC_IDENTITY_TOKEN": "eyJ.parity-identity.jwt", "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS": "127.0.0.1"}
+)
+FEDERATION_IDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"anthropic_federation_rule_id": "fdrl_parity", "anthropic_organization_id": "org-parity"}
+)
+MINTED: Final = ResponseSpec(
+    body={"access_token": "sk-ant-oat01-parity-minted", "token_type": "Bearer", "expires_in": 3600}
+)
+
+WORKLOAD_IDENTITY_CASES: Final = (
+    Case("workload_identity_from_params", _kw(api_key=None, **FEDERATION_IDS), upstream=(MINTED, _ok()), env=FEDERATION_ENV),
+    Case(
+        "workload_identity_from_environment",
+        _kw(api_key=None),
+        upstream=(MINTED, _ok()),
+        env=MappingProxyType(
+            {**FEDERATION_ENV, "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_env", "ANTHROPIC_ORGANIZATION_ID": "org-env"}
+        ),
+    ),
+    Case(
+        "workload_identity_with_workspace_and_caller_beta",
+        _kw(
+            api_key=None,
+            anthropic_federation_workspace_id="wrkspc_parity",
+            anthropic_service_account_id="svac_parity",
+            extra_headers={"anthropic-beta": "files-api-2025-04-14", "x-trace-id": "trace-1"},
+            **FEDERATION_IDS,
+        ),
+        upstream=(MINTED, _ok()),
+        env=FEDERATION_ENV,
+    ),
+    Case(
+        "workload_identity_streamed",
+        _kw(api_key=None, stream=True, **FEDERATION_IDS),
+        upstream=(MINTED, _stream(TEXT_STREAM)),
+        env=FEDERATION_ENV,
+    ),
+    Case(
+        "workload_identity_exchange_denied",
+        _kw(api_key=None, **FEDERATION_IDS),
+        upstream=(_failure(401, "authentication_error", "invalid assertion"),),
+        env=FEDERATION_ENV,
+    ),
+    Case(
+        "workload_identity_untrusted_exchange_host",
+        _kw(api_key=None, **FEDERATION_IDS),
+        upstream=(),
+        env=MappingProxyType({"ANTHROPIC_IDENTITY_TOKEN": "eyJ.parity-identity.jwt"}),
+    ),
+    Case(
+        "workload_identity_requested_without_ids",
+        _kw(api_key=None, anthropic_identity_token="oidc/env/ANTHROPIC_IDENTITY_TOKEN"),
+        upstream=(),
+        env=FEDERATION_ENV,
+    ),
+    Case(
+        "workload_identity_disabled",
+        _kw(api_key=None, anthropic_disable_workload_identity_federation=True, **FEDERATION_IDS),
+        upstream=(),
+        env=FEDERATION_ENV,
+    ),
+    Case("workload_identity_shadowed_by_a_static_key", _kw(**FEDERATION_IDS), env=FEDERATION_ENV),
+)
+
+CASES: Final = (
+    *REQUEST_CASES,
+    *RESPONSE_CASES,
+    *FAILURE_CASES,
+    *STREAM_CASES,
+    *SYNC_CASES,
+    *FALLBACK_CASES,
+    *WORKLOAD_IDENTITY_CASES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -820,6 +894,12 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         *env,
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "ANTHROPIC_ORGANIZATION_ID",
+        "ANTHROPIC_IDENTITY_TOKEN",
+        "ANTHROPIC_IDENTITY_TOKEN_FILE",
+        "ANTHROPIC_IDENTITY_SOURCE",
+        "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS",
         "LITELLM_REASONING_AUTO_SUMMARY",
         "LITELLM_RUST",
     )
@@ -841,6 +921,13 @@ def _settings(settings: Mapping[str, object]) -> Generator[None]:
     finally:
         for name, value in saved.items():
             setattr(litellm, name, value)
+
+
+@contextmanager
+def _fresh_token_exchange() -> Generator[None]:
+    # The federation token cache and its on-disk store would hand the second leg the first leg's token.
+    with rebound(default_token_exchange_engine, "_entries", {}), rebound(default_token_exchange_engine, "_shared_store", None):
+        yield
 
 
 def _kwargs(case: Case, server: RecordingServer) -> dict[str, object]:
@@ -1001,7 +1088,12 @@ def _logged(recorder: RecordingLogger, events: tuple[str, ...]) -> tuple[Mapping
 
 
 async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None) -> Leg:
-    with isolated_callback_registries(), _environment(case.env), _settings(case.settings):
+    with (
+        isolated_callback_registries(),
+        _environment(case.env),
+        _settings(case.settings),
+        _fresh_token_exchange(),
+    ):
         recorder: Final = RecordingLogger()
         litellm.callbacks.append(recorder)
         for spec in case.upstream:

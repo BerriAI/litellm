@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
-    base_llm::auth::{AuthScheme, Headers},
+    base_llm::auth::{AuthScheme, Headers, ValidatedEnvironment},
 };
 
 pub const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -80,10 +80,21 @@ impl<'a> OauthToken<'a> {
     }
 
     pub fn into_auth(self) -> AuthScheme {
-        AuthScheme::Credential {
-            placement: CredentialPlacement::Bearer,
-            secret: SecretValue::new(self.0),
-        }
+        oauth_bearer(SecretValue::new(self.0))
+    }
+}
+
+fn oauth_bearer(secret: SecretValue) -> AuthScheme {
+    AuthScheme::Credential {
+        placement: CredentialPlacement::Bearer,
+        secret,
+    }
+}
+
+pub fn minted_oauth_environment(headers: Headers, token: SecretValue) -> ValidatedEnvironment {
+    ValidatedEnvironment {
+        headers: with_oauth_companions(headers, &[], BrowserAccess::Omitted),
+        auth: oauth_bearer(token),
     }
 }
 
@@ -232,14 +243,24 @@ pub fn forwarded_oauth_bearer(headers: &[(String, String)]) -> Option<OauthToken
         .and_then(OauthToken::parse)
 }
 
-fn with_oauth_companions(headers: Headers, dropped: &[&str]) -> Headers {
-    merge_beta_headers(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BrowserAccess {
+    Granted,
+    Omitted,
+}
+
+fn with_oauth_companions(headers: Headers, dropped: &[&str], browser: BrowserAccess) -> Headers {
+    let headers = merge_beta_headers(
         without_headers(headers, dropped),
         BetaSet::from_iter([AnthropicBeta::Oauth20250420]),
-    )
-    .into_iter()
-    .chain([(DIRECT_BROWSER_ACCESS_HEADER.to_string(), "true".to_string())])
-    .collect()
+    );
+    match browser {
+        BrowserAccess::Granted => headers
+            .into_iter()
+            .chain([(DIRECT_BROWSER_ACCESS_HEADER.to_string(), "true".to_string())])
+            .collect(),
+        BrowserAccess::Omitted => headers,
+    }
 }
 
 pub fn optionally_handle_anthropic_oauth(headers: Headers, api_key: Option<&str>) -> OauthHandling {
@@ -247,13 +268,17 @@ pub fn optionally_handle_anthropic_oauth(headers: Headers, api_key: Option<&str>
         forwarded_oauth_bearer(&headers).map(|token| SecretValue::new(token.as_str()))
     {
         return OauthHandling::Bearer {
-            headers: with_oauth_companions(headers, &[API_KEY_HEADER, AUTHORIZATION]),
+            headers: with_oauth_companions(
+                headers,
+                &[API_KEY_HEADER, AUTHORIZATION],
+                BrowserAccess::Granted,
+            ),
             token,
         };
     }
     if let Some(token) = api_key.and_then(OauthToken::parse) {
         return OauthHandling::Bearer {
-            headers: with_oauth_companions(headers, &[API_KEY_HEADER]),
+            headers: with_oauth_companions(headers, &[API_KEY_HEADER], BrowserAccess::Granted),
             token: SecretValue::new(token.as_str()),
         };
     }

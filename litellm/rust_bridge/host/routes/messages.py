@@ -28,12 +28,15 @@ from litellm.llms.anthropic.messages.native.handler import (
     _with_deployment_output_effort as _deployment_output_effort,  # pyright: ignore[reportPrivateUsage]  # the handler's own effort rounding
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
+from litellm.llms.anthropic.wif import get_anthropic_wif_token
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.host import callbacks_legacy_python, http_transport
 from litellm.rust_bridge.public_call import known_params, optional_str
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import anthropic_wif_litellm_params
 
 _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(
@@ -63,6 +66,8 @@ _BODY_FIELDS: Final = frozenset(
         "service_tier",
     }
 )
+
+WORKLOAD_IDENTITY_FIELDS: Final = anthropic_wif_litellm_params
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,3 +399,8 @@ def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
             request_timeout=get_configured_request_timeout(),
         )
     )
+
+
+def workload_identity_token(params: Mapping[str, object], api_base: str | None) -> str | None:
+    litellm_params: Final = GenericLiteLLMParams(**params)
+    return get_anthropic_wif_token(dict(litellm_params), api_base, "")

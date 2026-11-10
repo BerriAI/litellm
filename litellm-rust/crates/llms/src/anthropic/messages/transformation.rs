@@ -18,12 +18,14 @@ use crate::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
         has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
-        strip_encrypted_reasoning_blocks,
+        minted_oauth_environment, optionally_handle_anthropic_oauth,
+        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
     },
     base_llm::{
         auth::AuthScheme,
-        messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+        messages::transformation::{
+            BaseMessagesConfig, FederatedEnvironment, Headers, ValidatedEnvironment,
+        },
     },
 };
 
@@ -79,31 +81,22 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        let headers = match optionally_handle_anthropic_oauth(headers, api_key) {
-            OauthHandling::Bearer { headers, token } => {
-                return Ok(ValidatedEnvironment {
-                    headers,
-                    auth: AuthScheme::Credential {
-                        placement: CredentialPlacement::Bearer,
-                        secret: token,
-                    },
-                });
-            }
-            OauthHandling::Untouched(headers) => headers,
-        };
-        if has_anthropic_credential(&headers) {
-            return Ok(ValidatedEnvironment {
-                headers,
-                auth: AuthScheme::Forwarded,
-            });
+        match anthropic_environment(headers, api_key, env_lookup) {
+            FederatedEnvironment::Validated(validated) => Ok(validated),
+            FederatedEnvironment::Unauthenticated { missing, .. } => Err(missing),
         }
-        let auth = get_auth_header(api_key, env_lookup).ok_or(Error::Auth(
-            litellm_auth::Error::MissingApiKey {
-                provider: "Anthropic",
-                environment_variable: ANTHROPIC_API_KEY_ENV,
-            },
-        ))?;
-        Ok(ValidatedEnvironment { headers, auth })
+    }
+
+    fn validate_federated_environment(
+        &self,
+        headers: Headers,
+        api_key: Option<&str>,
+        _model: &str,
+        _optional_params: &MessagesOptionalParams,
+        _litellm_params: &LitellmParams,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<FederatedEnvironment, Error> {
+        Ok(anthropic_environment(headers, api_key, env_lookup))
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -115,6 +108,42 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
             headers,
             provider_feature_betas(request, BetaProvider::Anthropic),
         )
+    }
+}
+
+fn anthropic_environment(
+    headers: Headers,
+    api_key: Option<&str>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> FederatedEnvironment {
+    let headers = match optionally_handle_anthropic_oauth(headers, api_key) {
+        OauthHandling::Bearer { headers, token } => {
+            return FederatedEnvironment::Validated(ValidatedEnvironment {
+                headers,
+                auth: AuthScheme::Credential {
+                    placement: CredentialPlacement::Bearer,
+                    secret: token,
+                },
+            });
+        }
+        OauthHandling::Untouched(headers) => headers,
+    };
+    if has_anthropic_credential(&headers) {
+        return FederatedEnvironment::Validated(ValidatedEnvironment {
+            headers,
+            auth: AuthScheme::Forwarded,
+        });
+    }
+    match get_auth_header(api_key, env_lookup) {
+        Some(auth) => FederatedEnvironment::Validated(ValidatedEnvironment { headers, auth }),
+        None => FederatedEnvironment::Unauthenticated {
+            headers,
+            missing: Error::Auth(litellm_auth::Error::MissingApiKey {
+                provider: "Anthropic",
+                environment_variable: ANTHROPIC_API_KEY_ENV,
+            }),
+            federate: minted_oauth_environment,
+        },
     }
 }
 
