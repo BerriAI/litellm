@@ -9250,7 +9250,7 @@ class PythonCore(DeprecatedRouterMembers):
                         to fallbacks, if available.{error_message}"
                     )
 
-                    if self._host.dynamic().expose_router_debug_in_errors:
+                    if self._host.dynamic().expose_router_debug_in_errors and not nested_fallback_hop:
                         e.message += f"\n{error_message}"
             elif isinstance(e, litellm_exceptions.ContentPolicyViolationError):
                 if content_policy_fallbacks is not None:
@@ -9284,7 +9284,7 @@ class PythonCore(DeprecatedRouterMembers):
                         to fallbacks, if available.{error_message}"
                     )
 
-                    if self._host.dynamic().expose_router_debug_in_errors:
+                    if self._host.dynamic().expose_router_debug_in_errors and not nested_fallback_hop:
                         e.message += f"\n{error_message}"
             if fallbacks is not None and lookup_groups:
                 verbose_router_logger.debug("inside model fallbacks: %s", mask_sensitive_structure(fallbacks))
