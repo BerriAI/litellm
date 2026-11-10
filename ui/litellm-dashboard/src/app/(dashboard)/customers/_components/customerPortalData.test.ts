@@ -37,7 +37,8 @@ describe("usageByCustomer", () => {
       day("2026-11-01", { acme: entity(1.5, {}, 2) }),
       day("2026-11-02", { acme: entity(2.25, {}, 3) }),
     ]);
-    expect(usage.get("acme")).toMatchObject({ spend: 3.75, requests: 5, inputTokens: 20, outputTokens: 10 });
+    const expected = { spend: 3.75, requests: 5, inputTokens: 20, outputTokens: 10 };
+    expect(usage.get("acme")).toMatchObject(expected);
   });
 
   test("keeps customers separate", () => {
@@ -51,10 +52,9 @@ describe("usageByCustomer", () => {
       day("2026-11-01", { acme: entity(3, { h1: key("prod", 1), h2: key("staging", 2) }) }),
       day("2026-11-02", { acme: entity(5, { h1: key("prod", 5) }) }),
     ]);
-    expect(usage.get("acme")?.keys).toEqual([
-      expect.objectContaining({ hash: "h1", alias: "prod", spend: 6, requests: 2 }),
-      expect.objectContaining({ hash: "h2", alias: "staging", spend: 2, requests: 1 }),
-    ]);
+    const prod = { hash: "h1", alias: "prod", spend: 6, requests: 2 };
+    const staging = { hash: "h2", alias: "staging", spend: 2, requests: 1 };
+    expect(usage.get("acme")?.keys).toEqual([expect.objectContaining(prod), expect.objectContaining(staging)]);
   });
 
   test("keeps the first non-null alias seen for a key", () => {

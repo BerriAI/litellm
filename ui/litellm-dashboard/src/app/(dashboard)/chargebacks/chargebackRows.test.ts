@@ -81,7 +81,8 @@ describe("rowsByCustomerAndModel", () => {
 
 describe("sumRows and toCsv", () => {
   test("total row matches the sum of the rows", () => {
-    expect(sumRows(rowsByCustomer(usage))).toEqual({ spend: 15, requests: 4, inputTokens: 40, outputTokens: 20 });
+    const expected = { spend: 15, requests: 4, inputTokens: 40, outputTokens: 20 };
+    expect(sumRows(rowsByCustomer(usage))).toEqual(expected);
   });
   test("csv carries alias, optional dimension column and escaped quotes", () => {
     const rows = rowsByCustomerAndKey(usage).slice(0, 1);
