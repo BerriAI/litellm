@@ -13,7 +13,8 @@ import sysconfig
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Protocol
+from types import MappingProxyType
+from typing import Final, Protocol, TypeAlias
 
 from litellm._logging import verbose_proxy_logger
 
@@ -23,7 +24,13 @@ SHIPPED_SCHEMA_PATH: Final = Path(__file__).resolve().parent.parent / "schema.pr
 
 class PrismaRunner(Protocol):
     def __call__(
-        self, argv: Sequence[str], *, timeout: float, env: Mapping[str, str]
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        env: Mapping[str, str],
+        stdout: int | None,
+        stderr: int | None,
     ) -> "subprocess.CompletedProcess[str]": ...
 
 
@@ -42,7 +49,7 @@ class ClientGenerationFailed:
     reason: str
 
 
-PrismaClientStatus = ClientPresent | ClientGenerated | ClientGenerationFailed
+PrismaClientStatus: TypeAlias = ClientPresent | ClientGenerated | ClientGenerationFailed
 
 
 def generate_command(schema_path: Path) -> tuple[str, ...]:
@@ -53,10 +60,10 @@ def manual_generate_hint(schema_path: Path = SHIPPED_SCHEMA_PATH) -> str:
     return " ".join(generate_command(schema_path))
 
 
-def env_with_scripts_dir(env: Mapping[str, str], scripts_dir: str) -> dict[str, str]:
+def env_with_scripts_dir(env: Mapping[str, str], scripts_dir: str) -> Mapping[str, str]:
     """Put the interpreter's scripts dir first on PATH, so Prisma finds `prisma-client-py` in an unactivated venv."""
     path: Final = env.get("PATH")
-    return {**env, "PATH": os.pathsep.join((scripts_dir, path)) if path else scripts_dir}
+    return MappingProxyType({**env, "PATH": os.pathsep.join((scripts_dir, path)) if path else scripts_dir})
 
 
 def _client_is_generated(package_dir: Path) -> bool:
@@ -90,11 +97,11 @@ def ensure_prisma_client(
     if _client_is_generated(package_dir):
         return ClientPresent()
     try:
-        run(generate_command(schema_path), timeout=timeout, env=env)
+        run(generate_command(schema_path), timeout=timeout, env=env, stdout=None, stderr=None)
     except subprocess.TimeoutExpired:
         return ClientGenerationFailed(f"prisma generate timed out after {timeout}s")
     except subprocess.CalledProcessError as e:
-        return ClientGenerationFailed(f"prisma generate exited {e.returncode}: {e.stderr or e.stdout}")
+        return ClientGenerationFailed(f"prisma generate exited {e.returncode}, see its output above")
     except OSError as e:
         return ClientGenerationFailed(f"could not run prisma generate: {e}")
     if not _client_is_generated(package_dir):
@@ -109,15 +116,15 @@ def _installed_package_dir(package_name: str) -> Path | None:
     return Path(next(iter(spec.submodule_search_locations)))
 
 
-def ensure_shipped_prisma_client() -> PrismaClientStatus:
+def ensure_shipped_prisma_client() -> None:
     """Generate the client from LiteLLM's own schema if this install has none, and log the outcome."""
-    from litellm_proxy_extras.prisma_toolchain import prisma_bootstrap_timeout, run_prisma
+    from litellm_proxy_extras import prisma_toolchain  # pyright: ignore[reportUnknownVariableType]  # untyped in CI env
 
     status: Final = ensure_prisma_client(
         package_dir=_installed_package_dir(PRISMA_PACKAGE),
         schema_path=SHIPPED_SCHEMA_PATH,
-        run=run_prisma,
-        timeout=prisma_bootstrap_timeout(),
+        run=prisma_toolchain.run_prisma,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped in CI env
+        timeout=prisma_toolchain.prisma_bootstrap_timeout(),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped in CI env
         env=env_with_scripts_dir(os.environ, sysconfig.get_path("scripts")),
     )
     match status:
@@ -131,4 +138,3 @@ def ensure_shipped_prisma_client() -> PrismaClientStatus:
                 reason,
                 manual_generate_hint(),
             )
-    return status

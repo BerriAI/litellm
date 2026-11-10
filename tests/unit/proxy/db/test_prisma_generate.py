@@ -1,3 +1,4 @@
+import importlib
 import os
 import subprocess
 import sys
@@ -33,7 +34,13 @@ class FakeRunner:
     calls: list[tuple[tuple[str, ...], Mapping[str, str]]] = field(default_factory=list)  # mutable-ok: records calls
 
     def __call__(
-        self, argv: Sequence[str], *, timeout: float, env: Mapping[str, str]
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: float,
+        env: Mapping[str, str],
+        stdout: int | None,
+        stderr: int | None,
     ) -> "subprocess.CompletedProcess[str]":
         self.calls.append((tuple(argv), env))
         self.on_run()
@@ -52,7 +59,10 @@ def _ensure(package_dir: Path, runner: FakeRunner, package_name: str = "prisma")
 
 
 def _write_client(package_dir: Path) -> Callable[[], None]:
-    return lambda: (package_dir / "client.py").write_text("class Prisma:\n    pass\n")
+    def run() -> None:
+        _ = (package_dir / "client.py").write_text("class Prisma:\n    pass\n")
+
+    return run
 
 
 def _raise(error: BaseException) -> Callable[[], None]:
@@ -63,18 +73,17 @@ def _raise(error: BaseException) -> Callable[[], None]:
 
 
 @pytest.fixture
-def stub_package(tmp_path: Path) -> Generator[tuple[str, Path], None, None]:
+def stub_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[str, Path], None, None]:
     name: Final = "prisma_stub_for_generate_test"
     package_dir: Final = tmp_path / name
     package_dir.mkdir()
-    (package_dir / "__init__.py").write_text(STUB_INIT)
-    sys.path.insert(0, str(tmp_path))
+    _ = (package_dir / "__init__.py").write_text(STUB_INIT)
+    monkeypatch.setattr(sys, "path", [str(tmp_path), *sys.path])
     try:
         yield name, package_dir
     finally:
-        sys.path.remove(str(tmp_path))
-        sys.modules.pop(name, None)
-        sys.modules.pop(f"{name}.client", None)
+        _ = sys.modules.pop(name, None)
+        _ = sys.modules.pop(f"{name}.client", None)
 
 
 def test_a_missing_client_is_generated_from_the_shipped_schema(stub_package: tuple[str, Path]) -> None:
@@ -98,21 +107,18 @@ def test_an_existing_client_is_left_alone(tmp_path: Path) -> None:
 
 def test_a_package_imported_before_generation_exposes_the_new_client(stub_package: tuple[str, Path]) -> None:
     name, package_dir = stub_package
-    stub: Final = __import__(name)
+    stub: Final = importlib.import_module(name)
     with pytest.raises(RuntimeError):
-        _ = stub.Prisma
+        _ = hasattr(stub, "Prisma")
 
     assert _ensure(package_dir, FakeRunner(on_run=_write_client(package_dir)), package_name=name) == ClientGenerated()
-    assert sys.modules[name].Prisma.__name__ == "Prisma"
+    assert "Prisma" in vars(sys.modules[name])
 
 
 @pytest.mark.parametrize(
     ("error", "reason_part"),
     [
-        (
-            subprocess.CalledProcessError(1, "prisma", "", "Could not find Prisma Schema"),
-            "Could not find Prisma Schema",
-        ),
+        (subprocess.CalledProcessError(1, "prisma"), "exited 1"),
         (subprocess.TimeoutExpired("prisma", 5.0), "timed out"),
         (FileNotFoundError("prisma"), "could not run"),
     ],
@@ -150,4 +156,4 @@ def test_a_missing_prisma_package_is_a_failure() -> None:
 def test_the_venv_scripts_dir_comes_first_on_path(env: dict[str, str], expected_path: str) -> None:
     result: Final = env_with_scripts_dir(env, "/opt/litellm/.venv/bin")
 
-    assert result == {**env, "PATH": expected_path}
+    assert dict(result) == {**env, "PATH": expected_path}
