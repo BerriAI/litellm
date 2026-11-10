@@ -169,6 +169,19 @@ def _tier_name(tier: ComplexityTier | str) -> str:
     return tier.value if isinstance(tier, ComplexityTier) else tier
 
 
+def _stall_provenance_decision(
+    reason: StallDetectionReason | None,
+    original_tier: ComplexityTier | str | None,
+) -> StandardLoggingRoutingDecision:
+    if reason is not None and original_tier is not None:
+        return {
+            "stall_escalated": True,
+            "stall_escalation_reason": reason,
+            "stall_escalation_original_tier": _tier_name(original_tier),
+        }
+    return {}
+
+
 def _callers_output_cap(request_kwargs: Mapping[str, object]) -> int | None:
     """The smallest positive output ceiling the caller sent under any of its three names, read
     from the stamp when an earlier routing pass already rewrote the kwargs."""
@@ -2024,6 +2037,9 @@ class ComplexityRouter(CustomLogger):
         error: Final[StandardLoggingRoutingDecision] = (
             {"classifier_error_type": classifier_error_type} if classifier_error_type is not None else {}
         )
+        stall: Final[StandardLoggingRoutingDecision] = _stall_provenance_decision(
+            stall_escalation_reason, stall_escalation_original_tier
+        )
         decision: Final[StandardLoggingRoutingDecision] = {
             "router_model_name": self.model_name,
             "router_type": "complexity",
@@ -2032,6 +2048,7 @@ class ComplexityRouter(CustomLogger):
             "conversation_continuing": conversation_continuing,
             **failure,
             **error,
+            **stall,
         }
         if (baseline := self.savings_baseline) is not None:
             decision["savings_baseline_model"] = baseline.model
@@ -2073,10 +2090,6 @@ class ComplexityRouter(CustomLogger):
             # (classifier, keyword rule, or session pin) had placed it before physics did.
             decision["context_escalated"] = True
             decision["context_escalation_original_tier"] = _tier_name(context_escalation_original_tier)
-        if stall_escalation_reason is not None and stall_escalation_original_tier is not None:
-            decision["stall_escalated"] = True
-            decision["stall_escalation_reason"] = stall_escalation_reason
-            decision["stall_escalation_original_tier"] = _tier_name(stall_escalation_original_tier)
         if tier_litellm_params:
             masked_tier_litellm_params: Final = mask_credentials_in_payload(tier_litellm_params)
             if isinstance(masked_tier_litellm_params, Mapping):
@@ -3980,9 +3993,7 @@ class ComplexityRouter(CustomLogger):
             context_escalation_original_tier=(
                 decision.get("context_escalation_original_tier") if decision is not None else None
             ),
-            stall_escalation_reason=(
-                decision.get("stall_escalation_reason") if decision is not None else None
-            ),
+            stall_escalation_reason=(decision.get("stall_escalation_reason") if decision is not None else None),
             stall_escalation_original_tier=(
                 decision.get("stall_escalation_original_tier") if decision is not None else None
             ),
@@ -4978,9 +4989,7 @@ class ComplexityRouter(CustomLogger):
                 self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
             )
             pre_stall_tier: Final = keyword_bumped_tier
-            escalated_tier: Final = (
-                self._escalate_tier(pre_stall_tier) if stall_reason is not None else pre_stall_tier
-            )
+            escalated_tier: Final = self._escalate_tier(pre_stall_tier) if stall_reason is not None else pre_stall_tier
             stall_escalated: Final = stall_reason is not None and escalated_tier != pre_stall_tier
             keyword_escalated: Final = keyword_bumped_tier != override.tier
             routed_tier: Final = (

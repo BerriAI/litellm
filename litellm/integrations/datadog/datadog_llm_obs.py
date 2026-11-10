@@ -124,14 +124,10 @@ def _router_span_fields(
         return _EMPTY_MAPPING
     stall_escalated: Final = bool(routing_decision.get("stall_escalated"))
     escalated: Final = bool(
-        routing_decision.get("escalated")
-        or routing_decision.get("context_escalated")
-        or stall_escalated
+        routing_decision.get("escalated") or routing_decision.get("context_escalated") or stall_escalated
     )
     stall_reason: Final = routing_decision.get("stall_escalation_reason") if stall_escalated else None
-    stall_original_tier: Final = (
-        routing_decision.get("stall_escalation_original_tier") if stall_escalated else None
-    )
+    stall_original_tier: Final = routing_decision.get("stall_escalation_original_tier") if stall_escalated else None
     managed_fields: Final = frozenset(
         {
             "escalated",
