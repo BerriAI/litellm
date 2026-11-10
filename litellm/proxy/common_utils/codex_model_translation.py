@@ -148,9 +148,8 @@ def no_priced_deployment_lacks_tier(tier_id: str, deployments: Sequence[CodexDep
 @dataclass(frozen=True, slots=True)
 class CodexCapabilities:
     """What a request to a listed name can count on whichever deployment serves it: a capability is False
-    when one deployment lacks it, True when one has it and none lacks it, None when none says, and the
-    context window is the smallest one any deployment declares. Vision is True only when every deployment
-    says it reads images, since an image sent to one that says nothing can fail the request."""
+    when one deployment lacks it, True only when none lacks it, None otherwise, and the context window is
+    the smallest one any deployment declares."""
 
     context_window: int | None = None
     supports_vision: bool | None = None
@@ -164,7 +163,7 @@ def _combined(flags: Iterable[bool | None]) -> bool | None:
     return None if not said else False not in said
 
 
-def _declared_by_every(flags: Iterable[bool | None]) -> bool | None:
+def _declared_by_every_deployment(flags: Iterable[bool | None]) -> bool | None:
     said: Final = frozenset(flags)
     if False in said:
         return False
@@ -183,7 +182,7 @@ def combined_capabilities(
     )
     return CodexCapabilities(
         context_window=min(windows) if windows else listed_context_window,
-        supports_vision=_declared_by_every(deployment.supports_vision for deployment in deployments),
+        supports_vision=_declared_by_every_deployment(deployment.supports_vision for deployment in deployments),
         supports_function_calling=_combined(deployment.supports_function_calling for deployment in deployments),
         supports_parallel_function_calling=_combined(
             deployment.supports_parallel_function_calling for deployment in deployments
