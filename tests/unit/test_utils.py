@@ -88,7 +88,6 @@ from litellm.secret_managers.main import oidc_cache
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     acredential_updates,
-    _invalidate_model_cost_lowercase_map,
     add_custom_logger_callback_to_specific_event,
     check_valid_key,
     CustomStreamWrapper,
@@ -121,6 +120,7 @@ from litellm.utils import (
     validate_environment,
     validate_chat_completion_tool_choice,
 )
+from litellm.rust_bridge.host.model_cost import publish
 
 
 @pytest.mark.parametrize("root_base_model", [42, ["gemini-3.5-flash"], {"model": "gemini-3.5-flash"}])
@@ -2524,11 +2524,9 @@ def test_register_model_with_scientific_notation():
     test_model_name = f"test-scientific-notation-model-{uuid.uuid4().hex[:12]}"
 
     # Clear LRU caches that might have stale data
-    from litellm.utils import (
-        _invalidate_model_cost_lowercase_map,
-    )
+    from litellm.rust_bridge.host.model_cost import publish
 
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     model_cost_dict = {
         test_model_name: {
             "max_tokens": 8192,
@@ -2551,27 +2549,7 @@ def test_register_model_with_scientific_notation():
     # Clean up after test
     if test_model_name in litellm.model_cost:
         del litellm.model_cost[test_model_name]
-    _invalidate_model_cost_lowercase_map()
-
-
-@pytest.mark.usefixtures("isolated_openai_model_sets")
-@respx.mock
-def test_register_model_url_fetch_uses_single_attempt(monkeypatch):
-    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
-    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    before = dict(litellm.model_cost)
-    threads_before = {thread.name for thread in threading.enumerate()}
-    route = respx.get("https://example.invalid/custom_pricing.json").mock(return_value=httpx.Response(503))
-
-    litellm.register_model(model_cost="https://example.invalid/custom_pricing.json")
-
-    threads_after = {thread.name for thread in threading.enumerate()}
-    assert route.call_count == 1
-    assert not (threads_after - threads_before) & {"litellm-model-cost-map-retry"}
-    assert not any(
-        thread.name == "litellm-model-cost-map-retry" and thread.is_alive() for thread in threading.enumerate()
-    )
-    assert litellm.model_cost.keys() >= before.keys()
+    publish(litellm.model_cost)
 
 
 def test_register_model_openrouter_without_slash():
@@ -5188,15 +5166,10 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
     """
     from litellm import utils as litellm_utils
     from litellm.utils import (
-        _invalidate_model_cost_lowercase_map,
         reapply_runtime_model_cost_registrations,
     )
+    from litellm.rust_bridge.host.model_cost import publish
 
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
     # Only the recorded half is under test here; the live-router rebuild is covered
     # in test_router_model_cost_isolation.py. Routers built by earlier tests in this
     # process stay in the weak set until they are collected, so leaving the callback
@@ -5230,7 +5203,7 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
                 "max_input_tokens": 4242,
             }
         }
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
         reapply_runtime_model_cost_registrations()
 
         expected_rate: Final = rate if updated_rate is None else updated_rate
@@ -5238,8 +5211,7 @@ def test_reapply_runtime_registrations_replays_register_model_overrides(
         assert litellm.model_cost["openai/gpt-4o"]["supports_function_calling"] is False
         assert litellm.model_cost["openai/gpt-4o"]["max_input_tokens"] == 4242
     finally:
-        litellm.model_cost = saved_model_cost
-        _invalidate_model_cost_lowercase_map()
+        publish(saved_model_cost)
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
@@ -5250,17 +5222,10 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
     the catalog generation it was applied to and silently beat fresh upstream
     pricing forever, while a durable override registered alongside it survives.
     """
-    from litellm import utils as litellm_utils
     from litellm.utils import (
-        _invalidate_model_cost_lowercase_map,
         reapply_runtime_model_cost_registrations,
     )
-
-    monkeypatch.setattr(
-        litellm_utils,
-        "_runtime_registered_model_cost",
-        dict(litellm_utils._runtime_registered_model_cost),
-    )
+    from litellm.rust_bridge.host.model_cost import publish
 
     saved_model_cost = litellm.model_cost
     try:
@@ -5277,23 +5242,17 @@ def test_reapply_runtime_registrations_drops_request_scoped_registrations(monkey
             "openai/gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.000999},
             "openai/gpt-4o-mini": {"litellm_provider": "openai", "input_cost_per_token": 0.000888},
         }
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
         reapply_runtime_model_cost_registrations()
 
         assert litellm.model_cost["openai/gpt-4o"]["input_cost_per_token"] == 0.000111
         assert litellm.model_cost["openai/gpt-4o-mini"]["input_cost_per_token"] == 0.000888
     finally:
-        litellm.model_cost = saved_model_cost
-        _invalidate_model_cost_lowercase_map()
+        publish(saved_model_cost)
 
 
 def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.utils import _invalidate_model_cost_lowercase_map, _rebuild_model_cost_lowercase_map
-
-    class _KeyRegisteredMidWalk(str):
-        def lower(self) -> str:
-            litellm.model_cost.setdefault("lit-5853-registered-during-the-rebuild", {"mode": "chat"})
-            return super().lower()
+    from litellm.rust_bridge.host.model_cost import publish
 
     class _EntryRegisteredMidWalk(dict):
         def get(self, field: str, default: object = None) -> object:
@@ -5301,35 +5260,12 @@ def test_model_cost_walks_survive_a_registration_landing_mid_walk(monkeypatch: p
             return super().get(field, default)
 
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
-    litellm.model_cost[_KeyRegisteredMidWalk("LIT-5853-WALKED-LAST")] = _EntryRegisteredMidWalk(mode="chat")
+    litellm.model_cost["LIT-5853-WALKED-LAST"] = _EntryRegisteredMidWalk(mode="chat")
     try:
-        assert _rebuild_model_cost_lowercase_map()["lit-5853-walked-last"] == "LIT-5853-WALKED-LAST"
         litellm.add_known_models(model_cost_map=litellm.model_cost)
-        assert "lit-5853-registered-during-the-rebuild" in litellm.model_cost
         assert "lit-5853-registered-during-add-known-models" in litellm.model_cost
     finally:
-        _invalidate_model_cost_lowercase_map()
-
-
-class _KeyWhoseLoweringLosesTheRace(str):
-    """Lowering the key is the one Python-level step between the lookup map's rebuild and
-    its read, so another thread's registration invalidating the map lands right there."""
-
-    def lower(self) -> str:
-        from litellm.utils import _invalidate_model_cost_lowercase_map
-
-        _invalidate_model_cost_lowercase_map()
-        return super().lower()
-
-
-def test_case_insensitive_model_cost_lookup_survives_an_invalidation_mid_lookup() -> None:
-    from litellm.utils import _get_model_cost_key, _invalidate_model_cost_lowercase_map
-
-    _invalidate_model_cost_lowercase_map()
-    try:
-        assert _get_model_cost_key(_KeyWhoseLoweringLosesTheRace("GPT-4O")) == "gpt-4o"
-    finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 def _register_a_model_mid_walk() -> None:
@@ -5357,7 +5293,7 @@ class _EntryReadDuringARegistration(dict[str, object]):
         return super().__contains__(key)
 
 
-@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5", "case-insensitive scan"])
+@pytest.mark.parametrize("walk", ["fal_ai", "fireworks_ai", "ollama", "gpt-5"])
 def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     monkeypatch: pytest.MonkeyPatch, walk: str
 ) -> None:
@@ -5365,14 +5301,13 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
     from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
     from litellm.llms.ollama.common_utils import OllamaModelInfo
     from litellm.llms.openai.chat.gpt_reasoning_transformation import _catalogue_declares_default_effort
-    from litellm.utils import _handle_new_key_with_scan, _invalidate_model_cost_lowercase_map
+    from litellm.rust_bridge.host.model_cost import publish
 
     walks: Final[Mapping[str, Callable[[], object]]] = {
         "fal_ai": lambda: _keyed_rows("lit-5853-model", "standard"),
         "fireworks_ai": FireworksAIConfig._get_fireworks_index,
         "ollama": lambda: OllamaModelInfo._is_static_ollama_model("ollama/lit-5853-model"),
         "gpt-5": _catalogue_declares_default_effort,
-        "case-insensitive scan": lambda: _handle_new_key_with_scan("lit-5853-model"),
     }
     monkeypatch.setattr(
         litellm,
@@ -5384,7 +5319,7 @@ def test_request_path_cost_map_walks_survive_a_registration_mid_walk(
         walks[walk]()
         assert "lit-5853-registered-mid-walk" in litellm.model_cost
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 class _JsonCapture(logging.Handler):
@@ -7382,6 +7317,71 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     assert _credential_warnings(caplog) == []
 
 
+@pytest.mark.asyncio
+async def test_a_call_by_credential_name_leaves_its_headers_intact_for_later_uploads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="team-openai",
+                credential_values={
+                    "api_key": "team-openai-key",
+                    "api_base": "https://team-openai.example/v1",
+                    "extra_headers": {"X-Team": "team-a"},
+                },
+                credential_info={},
+            )
+        ],
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.get("https://team-openai.example/v1/vector_stores/vs-1/files/file-1").respond(
+            200,
+            json={
+                "id": "file-1",
+                "object": "vector_store.file",
+                "created_at": 1,
+                "usage_bytes": 1,
+                "vector_store_id": "vs-1",
+                "status": "completed",
+                "last_error": None,
+                "chunking_strategy": {"type": "auto"},
+                "attributes": {},
+            },
+        )
+        upload: Final = upstream.post("https://team-openai.example/v1/files").respond(
+            200,
+            json={
+                "id": "file-uploaded",
+                "object": "file",
+                "bytes": 5,
+                "created_at": 1,
+                "filename": "notes.txt",
+                "purpose": "assistants",
+                "status": "processed",
+            },
+        )
+        await litellm.avector_store_file_retrieve(
+            vector_store_id="vs-1",
+            file_id="file-1",
+            custom_llm_provider="openai",
+            litellm_credential_name="team-openai",
+        )
+        await litellm.acreate_file(
+            file=("notes.txt", b"hello", "text/plain"),
+            purpose="assistants",
+            custom_llm_provider="openai",
+            litellm_credential_name="team-openai",
+        )
+
+    assert upload.calls.last.request.headers["Content-Type"].startswith("multipart/form-data")
+    assert upload.calls.last.request.headers["X-Team"] == "team-a"
+
+
 _MISTRAL_CHAT_URL: Final = "https://api.mistral.ai/v1/chat/completions"
 _MISTRAL_REPLY: Final = {
     "id": "chatcmpl-oidc",
@@ -8506,7 +8506,7 @@ def test_get_model_info_gemini(monkeypatch):
 def test_register_model_without_a_provider_never_inherits_another_providers_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.rust_bridge.host.model_cost import publish
 
     key: Final = "azure/claude-sonnet-4-6"
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
@@ -8521,7 +8521,7 @@ def test_register_model_without_a_provider_never_inherits_another_providers_entr
         assert info["input_cost_per_token"] == 1e-07
         assert info["output_cost_per_token"] == 4e-07
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize(
@@ -8539,7 +8539,7 @@ def test_register_model_without_a_provider_never_inherits_another_providers_entr
 def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
     monkeypatch: pytest.MonkeyPatch, registered_prices: dict[str, float], billed_cache_read_rate: float
 ) -> None:
-    from litellm.utils import _invalidate_model_cost_lowercase_map
+    from litellm.rust_bridge.host.model_cost import publish
 
     key: Final = "dashscope/qwen-register-explicit-cache-test"
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
@@ -8551,7 +8551,7 @@ def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
         "cache_read_input_token_cost": 5e-07,
         "explicit_cache_read_input_token_cost": 2.5e-07,
     }
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
     try:
         litellm.register_model({key: registered_prices}, persist_across_reloads=False)
         explicit_hit: Final = ModelResponse(
@@ -8566,7 +8566,7 @@ def test_register_model_over_a_builtin_row_bills_explicit_cache_hits(
             1000 * billed_cache_read_rate
         )
     finally:
-        _invalidate_model_cost_lowercase_map()
+        publish(litellm.model_cost)
 
 
 @pytest.mark.parametrize(
@@ -8946,7 +8946,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {
@@ -11609,7 +11609,7 @@ def test_the_catalog_with_register_model_entries_lists_each_model_once_and_leave
 )
 def test_runtime_model_cost_registrations_resolve_bedrock_routing(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
     from litellm import utils as model_utils
-    from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
+    from litellm.rust_bridge.host.model_cost import AliasedCostEntry
 
     rates: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
     alias: Final = "openai.test-converse-alias"

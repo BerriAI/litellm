@@ -9,10 +9,13 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import datetime
+import inspect
+import json
+import sys
 import traceback
 import uuid
 import weakref
-from collections.abc import Awaitable, Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -111,6 +114,9 @@ def finalize(
 
 
 class LoggingSurface(Protocol):
+    deferred_success_result: tuple[object, datetime.datetime, datetime.datetime] | None
+    enqueue_deferred_logging: Callable[[], None] | None
+
     @property
     def model_call_details(self) -> Mapping[str, object]: ...
 
@@ -138,6 +144,10 @@ class LoggingSurface(Protocol):
         api_key: object = None,
         additional_args: dict[str, object] = ...,
     ) -> object: ...
+
+    def claim_async_success_log(self) -> bool: ...
+
+    def mark_async_success_log_enqueued(self) -> None: ...
 
     def handle_sync_success_callbacks_for_async_calls(
         self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
@@ -234,8 +244,31 @@ def update_logging(
     )
 
 
-def pre_call(logger: LoggingSurface, input: str, api_key: str | None, additional_args: dict[str, object]) -> None:
+def pre_call(
+    logger: LoggingSurface,
+    input: str | Sequence[Mapping[str, str]],
+    api_key: str | None,
+    additional_args: dict[str, object],
+) -> None:
     logger.pre_call(input=input, api_key=api_key, additional_args=additional_args)
+
+
+def messages_input(body: Mapping[str, object], kwargs: Mapping[str, object]) -> Sequence[Mapping[str, str]]:
+    from litellm.messages import anthropic_messages_handler
+
+    # Python's Messages handler builds its body as messages, max_tokens, model, then its own parameters in
+    # signature order and the caller's other keywords in their order, and logs that body as serialized
+    order: Final = (
+        "messages",
+        "max_tokens",
+        "model",
+        *inspect.signature(anthropic_messages_handler).parameters,
+        *kwargs,
+        *body,
+    )
+    return [
+        {"role": "user", "content": json.dumps({name: body[name] for name in dict.fromkeys(order) if name in body})}
+    ]
 
 
 def post_call(
@@ -269,8 +302,23 @@ def defers_async_logging(logger: LoggingSurface) -> bool:
     return bool(getattr(logger, "defer_async_logging", False))
 
 
-def defer_success(logger: LoggingSurface, pending: object) -> None:
-    setattr(logger, "_native_pending_logging", pending)
+def claim_async_success_log(logger: LoggingSurface) -> bool:
+    return logger.claim_async_success_log()
+
+
+def mark_async_success_enqueued(logger: LoggingSurface) -> None:
+    logger.mark_async_success_log_enqueued()
+
+
+def defer_success(
+    logger: LoggingSurface,
+    pending: Callable[[], None],
+    response: object,
+    start: datetime.datetime,
+    end: datetime.datetime,
+) -> None:
+    logger.deferred_success_result = (response, start, end)  # rebind-ok: capture the native attempt before dispatch
+    logger.enqueue_deferred_logging = pending  # rebind-ok: the proxy releases logging here
 
 
 def _cache_hit(logger: LoggingSurface) -> Literal[True] | None:
@@ -410,6 +458,14 @@ def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     )
 
 
+def _cancelling(task: asyncio.Task[object]) -> bool:
+    return task.cancelling() > 0 if sys.version_info >= (3, 11) else True
+
+
+def _proxy_request(logger: LoggingSurface) -> object:
+    return logger.litellm_params.get("proxy_server_request")
+
+
 def stream_success(
     logger: Logging,
     url_route: str,
@@ -419,6 +475,7 @@ def stream_success(
     start: datetime.datetime,
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
+    stream_teardown: bool,
 ) -> None:
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
@@ -443,7 +500,7 @@ def stream_success(
         raw_bytes=chunks,
         end_time=end,
     )
-    if getattr(logger, "_on_deferred_stream_complete", None) is not None:
+    if not stream_teardown and getattr(logger, "_on_deferred_stream_complete", None) is not None:
         logger._deferred_stream_complete_args = (coroutine,)  # pyright: ignore[reportAttributeAccessIssue]  # the proxy's deferred stream release reads this slot
         return
     try:
@@ -452,6 +509,11 @@ def stream_success(
         from litellm.litellm_core_utils.litellm_logging import executor
 
         executor.submit(contextvars.copy_context().run, asyncio.run, coroutine)
+        return
+    cancelled: Final = asyncio.current_task()
+    if stream_teardown and cancelled is not None and _cancelling(cancelled) and _proxy_request(logger):
+        # the proxy's disconnect cleanup runs later in this task and stamps the 499 error_information this row carries
+        cancelled.add_done_callback(lambda _: enqueue_logging(coroutine))
         return
     enqueue_logging(coroutine)
 
@@ -463,9 +525,15 @@ def stream_failure(
     chunks: list[bytes],
     error: Exception,
 ) -> Coroutine[object, object, None]:
+    from litellm._logging import verbose_proxy_logger
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
+    verbose_proxy_logger.error("Error in chunk_processor: %s", error)
+    # Python's stream fails before its success handler records `cache_hit`; only a cache hit
+    # stamps it earlier.
+    if logger.model_call_details.get("cache_hit") is not True:
+        logger.model_call_details.pop("cache_hit", None)
     return PassThroughStreamingHandler.schedule_stream_failure_logging(
         litellm_logging_obj=logger,
         endpoint_type=EndpointType(endpoint_type),

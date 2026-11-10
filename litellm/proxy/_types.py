@@ -15,6 +15,7 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    NonNegativeInt,
     PositiveInt,
     TypeAdapter,
     field_validator,
@@ -1826,6 +1827,14 @@ class BudgetNewRequest(LiteLLMPydanticObjectBase):
         default=None,
         description="Max budget for each model (e.g. {'gpt-4o': {'max_budget': '0.0000001', 'budget_duration': '1d', 'tpm_limit': 1000, 'rpm_limit': 1000}})",
     )
+    model_tpm_limit: Mapping[str, NonNegativeInt] | None = Field(
+        default=None,
+        description="Max tokens per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 400000})",
+    )
+    model_rpm_limit: Mapping[str, NonNegativeInt] | None = Field(
+        default=None,
+        description="Max requests per minute per model for this budget id, shared by every key, team and customer on it (e.g. {'gpt-4o': 200})",
+    )
     budget_reset_at: datetime | None = Field(
         default=None,
         description="Datetime when the budget is reset",
@@ -2101,6 +2110,11 @@ class BlockModelRequest(LiteLLMPydanticObjectBase):
     model_id: str  # required
 
 
+CALLBACK_VAR_NAMES: Final = frozenset(
+    {*StandardCallbackDynamicParams.__annotations__, CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR}
+)
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Literal["success", "failure", "success_and_failure"] | None = "success_and_failure"
@@ -2110,14 +2124,9 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @classmethod
     def validate_callback_vars(cls, values):
         callback_vars: Final = values.get("callback_vars", {})
-        valid_keys: Final = {
-            *StandardCallbackDynamicParams.__annotations__,
-            CAPTURE_MESSAGE_CONTENT_VAR,
-            EXCLUDED_SERVICES_VAR,
-        }
         for key, value in callback_vars.items():
-            if key not in valid_keys:
-                raise ValueError(f"Invalid callback variable: {key}. Must be one of {valid_keys}")
+            if key not in CALLBACK_VAR_NAMES:
+                raise ValueError(f"Invalid callback variable: {key}. Must be one of {set(CALLBACK_VAR_NAMES)}")
             if key in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR) and not isinstance(value, str):
                 raise ValueError(f"{key} must be a string, got {type(value).__name__}")
             callback_vars[key] = str(value)

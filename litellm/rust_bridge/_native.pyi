@@ -8,6 +8,7 @@ from typing_extensions import disjoint_base
 
 from litellm.redis.store_settings import RedisBreakerSettings, RedisStoreSettings
 from litellm.rust_bridge.execution import Execution
+from litellm.rust_bridge.host.settings import HttpSettings
 from litellm.rust_bridge.public_call import NativeCall
 
 _T_co = TypeVar("_T_co", covariant=True)
@@ -21,6 +22,102 @@ class NativeRedisStoreError(Exception): ...
 def trace_encode_error(message: str) -> bytes: ...
 def bundled_model_cost_map() -> bytes: ...
 def native_redis_breaker_states() -> list[str]: ...
+
+@final
+class NativeCostMapSource:
+    def __new__(cls, url: str, *, http_settings: HttpSettings | None) -> NativeCostMapSource: ...
+    def fetch(self, policy: NativeFetchPolicy) -> Future[NativeFetched | NativeFetchFailed]: ...
+    def fetch_blocking(
+        self, policy: NativeFetchPolicy, resume_from: NativeFetchFailed | None = None
+    ) -> NativeFetched | NativeFetchFailed: ...
+
+@final
+class NativeFetchPolicy:
+    def __new__(
+        cls,
+        *,
+        max_attempts: int,
+        max_wait_seconds: float,
+        timeout_seconds: float,
+        min_delay_seconds: float,
+    ) -> NativeFetchPolicy: ...
+
+@final
+class NativeFetched:
+    @property
+    def body(self) -> bytes: ...
+    @property
+    def etag(self) -> str | None: ...
+
+@final
+class NativeFetchFailed:
+    @property
+    def reason(self) -> str: ...
+    @property
+    def retryable(self) -> bool: ...
+    @property
+    def retry_after(self) -> float | None: ...
+
+@final
+class NativeInstalled:
+    @property
+    def rows(self) -> dict[str, dict[str, object]]: ...
+    @property
+    def model_count(self) -> int: ...
+    @property
+    def fallback_generalizations(self) -> JsonValue: ...
+
+@final
+class NativeRegistered:
+    @property
+    def unmatched(self) -> dict[str, Mapping[str, object]]: ...
+
+@final
+class NativeTableSwapped: ...
+
+@final
+class NativeRejected:
+    @property
+    def reason(self) -> str: ...
+    @property
+    def integrity(self) -> bool: ...
+
+@final
+class NativeProvenance:
+    @property
+    def revision(self) -> str: ...
+    @property
+    def etag(self) -> str | None: ...
+
+@final
+class NativeModelCostMap:
+    @staticmethod
+    def bundled(min_model_count: int, max_shrink_ratio: float) -> NativeModelCostMap: ...
+    def install(self, body: bytes, etag: str | None = None) -> NativeInstalled | NativeRejected: ...
+    def install_bundled(self) -> NativeInstalled: ...
+    @staticmethod
+    def finalize(body: bytes) -> NativeInstalled | NativeRejected: ...
+    def register(
+        self,
+        rows: dict[str, dict[str, object]] | None,
+        entries: Mapping[str, Mapping[str, object]],
+        persist: bool,
+        custom_llm_provider: str | None = None,
+    ) -> NativeRegistered | NativeTableSwapped: ...
+    def reapply(self, rows: dict[str, dict[str, object]]) -> NativeRegistered | NativeTableSwapped: ...
+    def registered_row(self, key: str) -> dict[str, object] | None: ...
+    def registered_keys(self) -> list[str]: ...
+    def loaded(self) -> dict[str, dict[str, object]]: ...
+    def find_key(self, rows: dict[str, dict[str, object]], name: str) -> str | None: ...
+    def keys_in(self, rows: dict[str, dict[str, object]], provider: str) -> list[str]: ...
+    def invalidate(self) -> None: ...
+    def snapshot(self) -> NativeModelCostMapState: ...
+    def restore(self, state: NativeModelCostMapState) -> None: ...
+    @property
+    def provenance(self) -> NativeProvenance: ...
+
+@final
+class NativeModelCostMapState: ...
 
 @final
 class NativeClickHouseSpendConfig:
@@ -589,19 +686,30 @@ __all__ = [
     "NativeAuthCache",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
+    "NativeCostMapSource",
     "NativeDatabase",
     "NativeDiagnosticProcessor",
+    "NativeFetchFailed",
+    "NativeFetchPolicy",
+    "NativeFetched",
+    "NativeInstalled",
+    "NativeModelCostMap",
+    "NativeModelCostMapState",
     "NativePending",
+    "NativeProvenance",
     "NativeRateLimits",
     "NativeRedisBreaker",
     "NativeRedisClient",
     "NativeRedisStoreError",
+    "NativeRegistered",
+    "NativeRejected",
     "NativeRequestRedis",
     "NativeRouterCooldowns",
     "NativeRouterUsage",
     "NativeSend",
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
+    "NativeTableSwapped",
     "PostCallSettlement",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",

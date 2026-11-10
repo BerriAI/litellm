@@ -619,6 +619,26 @@ def test_native_baseline_body_drops_a_non_numeric_budget_without_logging_a_drop(
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
+def test_native_baseline_body_leaves_out_a_listed_sampling_param_the_model_does_not_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = {
+        "model": "claude-opus-4-8",
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "hi"}],
+        "top_k": 5,
+        "additional_drop_params": ["top_k"],
+    }
+
+    body: Final = prepare_native_baseline_body(request, "anthropic/claude-opus-4-8")
+
+    assert body is not None
+    assert "top_k" not in body
+    assert body["max_tokens"] == 64
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
 def test_native_baseline_body_drops_a_non_string_reasoning_effort_without_logging_a_drop(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

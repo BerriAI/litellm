@@ -6,6 +6,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.messages.native import handler as main
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
 from litellm.rust_bridge.dispatch import PublicDispatch
@@ -18,6 +19,7 @@ from litellm.rust_bridge.public_call import (
     AsyncFlag,
     NativeCall,
     bind,
+    native_acall_hook,
     native_call,
     native_call_hook,
     optional_sequence,
@@ -25,6 +27,7 @@ from litellm.rust_bridge.public_call import (
     signature,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+from litellm.types.router import GenericLiteLLMParams
 
 __all__ = ("anthropic_messages", "anthropic_messages_handler")
 
@@ -55,10 +58,20 @@ _AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
 
 
 def _native_kwargs(fields: Mapping[str, object], kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    stream_timeout: Final = kwargs.get("stream_timeout")
-    if fields.get("stream") is not True or stream_timeout is None:
+    """The native call takes one timeout, resolved from timeout, request_timeout and stream_timeout as Python's."""
+    _, provider = _resolved_model(str(fields["model"]), optional_str(fields.get("custom_llm_provider")))
+    timeout: Final = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(  # pyright: ignore[reportPrivateUsage]  # the handler's own timeout resolution
+        litellm_params=GenericLiteLLMParams(
+            timeout=kwargs.get("timeout"),
+            request_timeout=kwargs.get("request_timeout"),
+            stream_timeout=kwargs.get("stream_timeout"),
+        ),
+        stream=fields.get("stream") is True,
+        custom_llm_provider=provider or "",
+    )
+    if timeout is None:
         return kwargs
-    return {**kwargs, "timeout": stream_timeout}
+    return {**kwargs, "timeout": timeout}
 
 
 def _public_request(
@@ -122,7 +135,7 @@ def messages_target(model: str, custom_llm_provider: str | None, model_info: obj
 
 _FEATURES: Final[detectors.Detectors] = MappingProxyType(
     {
-        **detectors.COMMON,
+        **{feature: detect for feature, detect in detectors.COMMON.items() if feature is not Feature.TIMEOUT_VARIANTS},
         Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
         Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
         Feature.RESPONSE_CACHE: detectors.response_cache,
@@ -195,7 +208,7 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
         _FLAG.dropped(kwargs),
         python=python,
         binding=NATIVE_AMESSAGES,
-        native=native_call_hook,
+        native=native_acall_hook,
     )
 
 
