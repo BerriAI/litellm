@@ -29,6 +29,7 @@ from starlette.requests import Request
 
 import litellm
 from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -331,3 +332,64 @@ def test_init_kwargs_internal_keys_resist_client_metadata(server_span_factory):
     assert md["user_api_key"] == user_api_key_dict.api_key
     assert md["user_api_key"] != "sk-SPOOFED"
     assert md["litellm_parent_otel_span"] is real_span
+
+
+
+@pytest.mark.parametrize(
+    ("headers", "caller_metadata", "expected_session"),
+    [
+        ([(b"x-litellm-session-id", b"session-123")], {}, "session-123"),
+        (
+            [(b"x-litellm-session-id", b"session-123")],
+            {"session_id": "stale-body-session", "trace_id": "stale-body-trace"},
+            "session-123",
+        ),
+        (
+            [(b"x-litellm-trace-id", b"preferred-trace"), (b"x-litellm-session-id", b"session-123")],
+            {"session_id": "stale-body-session"},
+            "preferred-trace",
+        ),
+        ([], {"session_id": "body-session"}, "body-session"),
+        ([], {}, None),
+    ],
+)
+def test_passthrough_session_header_reaches_otel_controls(headers, caller_metadata, expected_session):
+    """Both OTel V2 and spend logging should receive the header's session ID."""
+    request = _make_request()
+    request.scope["headers"] = [(b"content-type", b"application/json"), *headers]
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+    body = {
+        "model": MODEL,
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": dict(caller_metadata),
+    }
+    logging_obj = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="session-test",
+        function_id="session-test",
+    )
+    kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(
+            url=URL_ROUTE, request_body=body, request_method="POST"
+        ),
+        logging_obj=logging_obj,
+        _parsed_body=body,
+        litellm_call_id="session-test",
+    )
+
+    params = kwargs["litellm_params"]
+    assert caller_trace_controls(kwargs).session_id == expected_session
+    if headers:
+        assert params["metadata"]["session_id"] == expected_session
+        assert params["metadata"]["trace_id"] == expected_session
+        assert params["litellm_session_id"] == expected_session
+        assert params["litellm_trace_id"] == expected_session
+    else:
+        assert "litellm_session_id" not in params
+        assert "litellm_trace_id" not in params
