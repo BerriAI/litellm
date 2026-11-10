@@ -8941,7 +8941,7 @@ def speech(
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 timeout=timeout,
-                cache=_CACHE_CONTROLS_HINT.validate_python(kwargs).get("cache"),
+                cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
             )
 
         # Vertex AI Text-to-Speech (Google Cloud TTS)
@@ -8995,7 +8995,7 @@ def speech(
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             timeout=timeout,
-            cache=_CACHE_CONTROLS_HINT.validate_python(kwargs).get("cache"),
+            cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
         )
     elif custom_llm_provider == "runwayml":
         from litellm.llms.runwayml.text_to_speech.transformation import (
