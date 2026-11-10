@@ -213,7 +213,7 @@ class BaseConfig(ABC):
         message for an OpenAI-compatible model declared to reject a later system
         message, and by the o-series and Azure configs.
         """
-        return map_developer_role_to_system_role(messages=messages)
+        return map_developer_role_to_system_role(messages, model=model, llm_provider=custom_llm_provider)
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(
         self, e: httpx.HTTPStatusError, litellm_params: dict

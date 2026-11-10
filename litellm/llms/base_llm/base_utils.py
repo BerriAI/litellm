@@ -530,19 +530,28 @@ def _first_developer_message_without_content(messages: Sequence[AllMessageValues
     )
 
 
+def reject_developer_message_without_content(
+    messages: Sequence[AllMessageValues], *, model: str, llm_provider: str | None
+) -> None:
+    missing_content_index: Final = _first_developer_message_without_content(messages)
+    if missing_content_index is None:
+        return
+    param: Final = f"messages[{missing_content_index}].content"
+    raise BadRequestError(
+        message=f"Missing required parameter: '{param}'.",
+        model=model,
+        llm_provider=llm_provider or "",
+        body={"param": param},
+    )
+
+
 def map_developer_role_to_system_role(
-    messages: Sequence[AllMessageValues],
+    messages: Sequence[AllMessageValues], *, model: str, llm_provider: str | None
 ) -> list[AllMessageValues]:
     """
     Translate `developer` role to `system` role for non-OpenAI providers.
     """
-    missing_content_index: Final = _first_developer_message_without_content(messages)
-    if missing_content_index is not None:
-        raise BadRequestError(
-            message=f"Missing required parameter: 'messages[{missing_content_index}].content'.",
-            model="",
-            llm_provider="",
-        )
+    reject_developer_message_without_content(messages, model=model, llm_provider=llm_provider)
     new_messages: Final[list[AllMessageValues]] = []
     for m in messages:
         if m["role"] == "developer":

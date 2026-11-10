@@ -127,7 +127,7 @@ class AzureOpenAIConfig(BaseConfig):
         only changes role. Declared here so `AzureOpenAIGPT5Config` resolves to it
         ahead of the OpenAI-compatible hoist it also inherits.
         """
-        return map_developer_role_to_system_role(messages=messages)
+        return map_developer_role_to_system_role(messages, model=model, llm_provider=custom_llm_provider)
 
     @classmethod
     def get_config(cls):

@@ -11685,10 +11685,15 @@ def test_supplied_openai_client_base_url_decides_data_residency(monkeypatch: pyt
 
 @pytest.mark.parametrize("developer_message", [{"role": "developer"}, {"role": "developer", "content": None}])
 @pytest.mark.parametrize(
-    "model", ["openai/gpt-5.6", "fireworks_ai/accounts/fireworks/models/kimi-k3", "anthropic/claude-sonnet-5-5"]
+    ("model", "provider"),
+    [
+        ("openai/gpt-6.1-sol", "openai"),
+        ("fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro", "fireworks_ai"),
+        ("anthropic/claude-sonnet-5-5", "anthropic"),
+    ],
 )
 def test_a_developer_message_without_content_answers_a_400_before_any_provider_call(
-    respx_mock: respx.MockRouter, model: str, developer_message: Mapping[str, object]
+    respx_mock: respx.MockRouter, model: str, provider: str, developer_message: Mapping[str, object]
 ) -> None:
     with pytest.raises(litellm.BadRequestError, match=r"Missing required parameter: 'messages\[2\]\.content'\.") as rejected:
         litellm.completion(
@@ -11702,4 +11707,41 @@ def test_a_developer_message_without_content_answers_a_400_before_any_provider_c
         )
 
     assert rejected.value.status_code == 400
+    assert rejected.value.param == "messages[2].content"
+    assert rejected.value.llm_provider == provider
+    assert not respx_mock.calls
+
+
+@pytest.mark.parametrize(
+    ("earlier_turns", "litellm_system_prompt", "ensure_alternating_roles"),
+    [
+        (
+            [{"role": "user", "content": "What is the capital of France?"}, {"role": "assistant", "content": "Paris."}],
+            "Answer in one word.",
+            False,
+        ),
+        (
+            [{"role": "user", "content": "What is the capital of France?"}, {"role": "user", "content": "And Spain?"}],
+            None,
+            True,
+        ),
+    ],
+    ids=["litellm-system-prompt", "ensure-alternating-roles"],
+)
+def test_the_400_names_the_callers_message_when_litellm_adds_messages_before_it(
+    respx_mock: respx.MockRouter,
+    earlier_turns: list[Mapping[str, str]],
+    litellm_system_prompt: str | None,
+    ensure_alternating_roles: bool,
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.completion(
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro",
+            messages=[*earlier_turns, {"role": "developer"}],
+            api_key="fake-key",
+            litellm_system_prompt=litellm_system_prompt,
+            ensure_alternating_roles=ensure_alternating_roles,
+        )
+
+    assert rejected.value.param == "messages[2].content"
     assert not respx_mock.calls

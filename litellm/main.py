@@ -139,6 +139,7 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
+from litellm.llms.base_llm.base_utils import reject_developer_message_without_content
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
@@ -5610,6 +5611,9 @@ def completion(
         raise ValueError("model param not passed in.")
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
+    client_messages: Final = cast(  # cast-ok: completion types messages as a bare List
+        Sequence[AllMessageValues], messages
+    )
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
@@ -5778,7 +5782,6 @@ def completion(
         AnthropicCacheControlHook,
         routed_model_info,
     )
-    from litellm.types.llms.openai import AllMessageValues
 
     AnthropicCacheControlHook.maybe_seed_default_injection_points(
         non_default_params=non_default_params,
@@ -5975,6 +5978,7 @@ def completion(
             )
 
         if provider_config is not None:
+            reject_developer_message_without_content(client_messages, model=model, llm_provider=custom_llm_provider)
             translated_messages: Final = list(
                 provider_config.translate_developer_role_to_system_role(
                     messages=messages,

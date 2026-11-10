@@ -1076,7 +1076,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         """
         from litellm.types.utils import LlmProviders
 
-        messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
+        messages: Final = map_developer_role_to_system_role(
+            openai_request_body.get("messages", []), model=model, llm_provider="bedrock"
+        )
         request_params: Final[Mapping[str, object]] = openai_request_body
         optional_params: Final = {k: v for k, v in request_params.items() if k not in ["model", "messages"]}
 

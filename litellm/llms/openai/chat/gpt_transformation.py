@@ -112,7 +112,7 @@ def translate_developer_role_for_openai_compatible_endpoint(
     api_base: str | None,
     model_info: object,
 ) -> Sequence[AllMessageValues]:
-    in_place: Final = map_developer_role_to_system_role(messages=messages)
+    in_place: Final = map_developer_role_to_system_role(messages, model=model, llm_provider=custom_llm_provider)
     if targets_openai_hosted_endpoint(custom_llm_provider, api_base):
         return in_place
     placed: Final = hoist_developer_messages_into_leading_system_message(messages=messages)

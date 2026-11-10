@@ -861,7 +861,9 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
-    chat_messages: Final = map_developer_role_to_system_role(chat_request_body.get("messages", []))
+    chat_messages: Final = map_developer_role_to_system_role(
+        chat_request_body.get("messages", []), model=model, llm_provider="vertex_ai"
+    )
     if is_anthropic_model:
         return (
             _openai_batch_jsonl_entry_to_vertex_anthropic_row(
