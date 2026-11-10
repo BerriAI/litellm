@@ -485,30 +485,20 @@ def test_azure_tool_choice(api_version):
         )
 
 
-@pytest.mark.parametrize(
-    "model, provider, should_drop",
-    [("command-r", "cohere", True), ("gpt-3.5-turbo", "openai", False)],
-)
-def test_drop_params_parallel_tool_calls(model, provider, should_drop):
+def test_drop_params_keeps_parallel_tool_calls_the_provider_supports():
     """
     https://github.com/BerriAI/litellm/issues/4584
     """
     response = litellm.utils.get_optional_params(
-        model=model,
-        custom_llm_provider=provider,
+        model="gpt-3.5-turbo",
+        custom_llm_provider="openai",
         response_format={"type": "json"},
         parallel_tool_calls=True,
         drop_params=True,
     )
 
-    print(response)
-
-    if should_drop:
-        assert "response_format" not in response
-        assert "parallel_tool_calls" not in response
-    else:
-        assert "response_format" in response
-        assert "parallel_tool_calls" in response
+    assert "response_format" in response
+    assert "parallel_tool_calls" in response
 
 
 def test_dynamic_drop_additional_params_stream_options():

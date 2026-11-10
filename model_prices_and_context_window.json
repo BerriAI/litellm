@@ -17103,6 +17103,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "c4ai-aya-expanse-32b": {
@@ -17148,6 +17149,7 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": false
     },
     "command-r-plus-08-2024": {
@@ -17159,6 +17161,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": false
     },
     "command-r7b-12-2024": {
@@ -17170,6 +17173,112 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
         "source": "https://docs.cohere.com/v2/docs/command-r7b",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "c4ai-aya-vision-32b": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 4000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/aya-vision",
+        "supports_vision": true
+    },
+    "command-a-reasoning-08-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/command-a-reasoning",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": false
+    },
+    "command-a-translate-08-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/command-a-translate",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "command-a-vision-07-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/command-a-vision",
+        "supports_response_schema": true,
+        "supports_tool_choice": false,
+        "supports_vision": true
+    },
+    "command-r7b-arabic-02-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 128000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/models",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "north-mini-code-1.0": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.cohere.com/docs/north-mini-code-1.0",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false
+    },
+    "north-small-translate-1.0": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 16000,
+        "max_output_tokens": 16000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.cohere.com/docs/north-small-translate-1.0"
+    },
+    "tiny-aya-earth": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "tiny-aya-fire": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "tiny-aya-global": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "tiny-aya-water": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },

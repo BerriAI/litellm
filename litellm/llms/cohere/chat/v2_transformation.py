@@ -1,11 +1,13 @@
+import reprlib
 import time
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -15,7 +17,11 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.cohere import CohereV2ChatResponse
@@ -39,6 +45,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _COHERE_TOOL_CHOICE: Final = MappingProxyType({"none": "NONE", "required": "REQUIRED"})
+_COHERE_TOOL_CHOICE_VALUES: Final = frozenset(_COHERE_TOOL_CHOICE.values())
 _COHERE_THINKING_BUDGET: Final = MappingProxyType(
     {
         "minimal": DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
@@ -51,42 +58,70 @@ _COHERE_THINKING_BUDGET: Final = MappingProxyType(
 )
 _NOTHING: Final[Mapping[str, object]] = MappingProxyType({})
 _RESPONSE_FORMAT_EXCLUSIVE_PARAMS: Final = ("tools", "documents")
+_MODELS_REJECTING_RESPONSE_FORMAT_BESIDE_TOOLS: Final = frozenset({"command-r-08-2024", "command-r-plus-08-2024"})
 
 
 def _cohere_model_id(model: str) -> str:
     return model.removeprefix("v2/")
 
 
-def _drop_or_raise(reason: str, drop_params: bool) -> Mapping[str, object]:
-    if drop_params or litellm.drop_params is True:
+def _cohere_model_ids(model: str, base_model: object) -> tuple[str, ...]:
+    names: Final = (model, _cohere_model_id(model), f"v2/{_cohere_model_id(model)}", base_model)
+    return tuple(dict.fromkeys(name for name in names if isinstance(name, str)))
+
+
+def _any_model_supports(capability: Callable[..., bool], model_ids: tuple[str, ...]) -> bool:
+    return any(capability(model=model_id, custom_llm_provider="cohere_chat") for model_id in model_ids)
+
+
+def _function_name(tool: object) -> object:
+    function: Final = as_str_mapping((as_str_mapping(tool) or _NOTHING).get("function"))
+    return None if function is None else function.get("name")
+
+
+def _sole_tool_name(tools: object) -> object:
+    match as_object_list(tools):
+        case [tool]:
+            return _function_name(tool)
+        case _:
+            return None
+
+
+def _tool_choice_params(tool_choice: object, tools: object) -> Mapping[str, object]:
+    if tool_choice == "auto":
         return _NOTHING
-    raise UnsupportedParamsError(
-        message=f"{reason} To drop unsupported openai params from the call, set `litellm.drop_params = True`",
-        status_code=400,
-    )
+    if isinstance(tool_choice, str):
+        return MappingProxyType({"tool_choice": _COHERE_TOOL_CHOICE.get(tool_choice, tool_choice)})
+    named: Final = _function_name(tool_choice)
+    forces_sole_tool: Final = named is not None and named == _sole_tool_name(tools)
+    return MappingProxyType({"tool_choice": "REQUIRED" if forces_sole_tool else tool_choice})
 
 
-def _tool_choice_params(tool_choice: object, model: str) -> Mapping[str, object]:
-    cohere_tool_choice: Final = _COHERE_TOOL_CHOICE.get(tool_choice) if isinstance(tool_choice, str) else None
-    if cohere_tool_choice is None:
-        return _NOTHING
-    if not litellm.utils.supports_tool_choice(model=_cohere_model_id(model), custom_llm_provider="cohere_chat"):
-        return _NOTHING
-    return MappingProxyType({"tool_choice": cohere_tool_choice})
+def _effort_level(reasoning_effort: object) -> object:
+    fields: Final = as_str_mapping(reasoning_effort)
+    return reasoning_effort if fields is None else fields.get("effort")
 
 
-def _thinking_params(reasoning_effort: object, drop_params: bool) -> Mapping[str, object]:
-    match reasoning_effort:
+def _token_budget(effort: str, max_tokens: object) -> int:
+    budget: Final = _COHERE_THINKING_BUDGET[effort]
+    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool):
+        return min(budget, max_tokens)
+    return budget
+
+
+def _thinking_params(reasoning_effort: object, max_tokens: object) -> Mapping[str, object]:
+    effort: Final = _effort_level(reasoning_effort)
+    match effort:
         case "default":
             return _NOTHING
         case "none":
             return MappingProxyType({"thinking": {"type": "disabled"}})
-        case str() if reasoning_effort in _COHERE_THINKING_BUDGET:
+        case str() if effort in _COHERE_THINKING_BUDGET:
             return MappingProxyType(
-                {"thinking": {"type": "enabled", "token_budget": _COHERE_THINKING_BUDGET[reasoning_effort]}}
+                {"thinking": {"type": "enabled", "token_budget": _token_budget(effort, max_tokens)}}
             )
         case _:
-            return _drop_or_raise(f"Cohere does not support reasoning_effort={reasoning_effort!r}.", drop_params)
+            return MappingProxyType({"reasoning_effort": reasoning_effort})
 
 
 def _cohere_json_object(schema: object) -> Mapping[str, object]:
@@ -94,69 +129,112 @@ def _cohere_json_object(schema: object) -> Mapping[str, object]:
     return MappingProxyType({"response_format": {"type": "json_object", **schema_field}})
 
 
-def _is_cohere_schema(value: object) -> bool:
-    schema: Final = as_str_mapping(value) or _NOTHING
-    return "type" in schema and "name" not in schema and "schema" not in schema
-
-
-def _is_cohere_text_default(value: object) -> bool:
-    fields: Final = as_str_mapping(value)
-    return (
-        fields is not None
-        and "type" not in fields
-        and fields.get("json_schema") in (None, {})
-        and fields.get("schema") is None
-    )
-
-
-def _response_format_params(response_format: object, drop_params: bool) -> Mapping[str, object]:
+def _response_format_params(response_format: object) -> Mapping[str, object]:
     fields: Final = as_str_mapping(response_format) or _NOTHING
-    match fields:
-        case {"type": "text"}:
-            return MappingProxyType({"response_format": {"type": "text"}})
-        case {"type": "json_object" | "json_object_with_backticks"}:
-            return MappingProxyType({"response_format": {**fields}})
-        case {"type": "json_schema"} if _is_cohere_schema(fields.get("json_schema", fields.get("schema"))):
-            return MappingProxyType({"response_format": {**fields}})
-        case {"type": "json_schema"}:
-            wrapper: Final = as_str_mapping(fields.get("json_schema")) or _NOTHING
-            return _cohere_json_object(wrapper.get("schema"))
-        case _ if _is_cohere_text_default(response_format):
+    match fields.get("type"):
+        case "text":
             return _NOTHING
+        case "json_object":
+            return _cohere_json_object(fields.get("json_schema"))
+        case "json_schema":
+            json_schema: Final = as_str_mapping(fields.get("json_schema")) or _NOTHING
+            return _cohere_json_object(json_schema.get("schema"))
         case _:
-            return _drop_or_raise(f"Cohere does not support response_format={response_format!r}.", drop_params)
+            return MappingProxyType({"response_format": response_format})
 
 
-def _cohere_v2_native_params(
-    non_default_params: Mapping[str, object], model: str, drop_params: bool
-) -> Mapping[str, object]:
+def _cohere_v2_native_params(non_default_params: Mapping[str, object]) -> Mapping[str, object]:
     tool_choice: Final = (
-        _tool_choice_params(non_default_params["tool_choice"], model)
+        _tool_choice_params(non_default_params["tool_choice"], non_default_params.get("tools"))
         if "tool_choice" in non_default_params
         else _NOTHING
     )
+    max_tokens: Final = non_default_params.get("max_completion_tokens", non_default_params.get("max_tokens"))
     thinking: Final = (
-        _thinking_params(non_default_params["reasoning_effort"], drop_params)
+        _thinking_params(non_default_params["reasoning_effort"], max_tokens)
         if "reasoning_effort" in non_default_params
         else _NOTHING
     )
     response_format: Final = (
-        _response_format_params(non_default_params["response_format"], drop_params)
+        _response_format_params(non_default_params["response_format"])
         if "response_format" in non_default_params
         else _NOTHING
     )
     return {**tool_choice, **thinking, **response_format}
 
 
-def _without_response_format_cohere_rejects(
-    optional_params: Mapping[str, object], drop_params: object
-) -> dict[str, object]:
-    rejected: Final = "response_format" in optional_params and any(
-        optional_params.get(param) for param in _RESPONSE_FORMAT_EXCLUSIVE_PARAMS
+def _beside_tools_on_rejecting_model(optional_params: Mapping[str, object], model_ids: tuple[str, ...]) -> bool:
+    beside_tools: Final = any(optional_params.get(param) for param in _RESPONSE_FORMAT_EXCLUSIVE_PARAMS)
+    return beside_tools and any(
+        model_id.rsplit("/", 1)[-1] in _MODELS_REJECTING_RESPONSE_FORMAT_BESIDE_TOOLS for model_id in model_ids
     )
-    if not rejected or not drops_unsupported_params(drop_params):
-        return {**optional_params}
-    return {param: value for param, value in optional_params.items() if param != "response_format"}
+
+
+def _rejection(
+    param: str, value: object, optional_params: Mapping[str, object], model_ids: tuple[str, ...]
+) -> str | None:
+    model: Final = model_ids[0]
+    match param:
+        case "tool_choice" if not (isinstance(value, str) and value in _COHERE_TOOL_CHOICE_VALUES):
+            return (
+                "Cohere's tool_choice takes only 'auto', 'none', 'required', "
+                f"or a function when it is the only tool, got {value!r}."
+            )
+        case "tool_choice" if not _any_model_supports(litellm.utils.supports_tool_choice, model_ids):
+            return f"Cohere model {model} does not support tool_choice."
+        case "reasoning_effort":
+            return f"Cohere does not support reasoning_effort={value!r}."
+        case "response_format" if (as_str_mapping(value) or _NOTHING).get("type") != "json_object":
+            return f"Cohere does not support response_format={value!r}."
+        case "response_format" if not _any_model_supports(litellm.supports_response_schema, model_ids):
+            return f"Cohere model {model} does not support response_format={value!r}."
+        case "response_format" if _beside_tools_on_rejecting_model(optional_params, model_ids):
+            return f"Cohere model {model} does not take response_format beside tools or documents."
+        case _:
+            return None
+
+
+def _translated_to_thinking(param: str, value: object) -> bool:
+    return param == "reasoning_effort" and "reasoning_effort" not in _thinking_params(value, None)
+
+
+def _allowed_openai_params(litellm_params: Mapping[str, object]) -> frozenset[str]:
+    allowed: Final = as_object_list(litellm_params.get("allowed_openai_params")) or ()
+    return frozenset(param for param in allowed if isinstance(param, str))
+
+
+def _params_cohere_takes(
+    model: str, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+) -> dict[str, object]:
+    model_ids: Final = _cohere_model_ids(model, litellm_params.get("base_model"))
+    allowed: Final = _allowed_openai_params(litellm_params)
+    reasons: Final = {
+        param: _rejection(param, value, optional_params, model_ids)
+        for param, value in optional_params.items()
+        if param not in allowed
+    }
+    rejected: Final = {param: reason for param, reason in reasons.items() if reason is not None}
+    if rejected and not drops_unsupported_params(litellm_params.get("drop_params")):
+        raise UnsupportedParamsError(
+            message=(
+                f"{' '.join(rejected.values())} "
+                "To drop unsupported openai params from the call, set `litellm.drop_params = True`"
+            ),
+            status_code=400,
+        )
+    for param, reason in rejected.items():
+        verbose_logger.warning(
+            "Dropping %s=%s for model=%r (drop_params=True) because %s",
+            param,
+            reprlib.repr(optional_params[param]),
+            model_ids[0],
+            reason,
+        )
+    return {
+        param: value
+        for param, value in optional_params.items()
+        if param not in rejected and not _translated_to_thinking(param, value)
+    }
 
 
 class CohereV2ChatConfig(OpenAIGPTConfig):
@@ -250,7 +328,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         reasoning: Final = (
             ["reasoning_effort"]
-            if litellm.supports_reasoning(model=_cohere_model_id(model), custom_llm_provider="cohere_chat")
+            if _any_model_supports(litellm.supports_reasoning, _cohere_model_ids(model, None))
             else []
         )
         return [
@@ -301,7 +379,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                 optional_params["tools"] = value
             if param == "seed":
                 optional_params["seed"] = value
-        return {**optional_params, **_cohere_v2_native_params(non_default_params, model, drop_params)}
+        return {**optional_params, **_cohere_v2_native_params(non_default_params)}
 
     def transform_request(
         self,
@@ -317,7 +395,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         data: Final = super().transform_request(
             model,
             messages,
-            _without_response_format_cohere_rejects(optional_params, litellm_params.get("drop_params")),
+            _params_cohere_takes(model, optional_params, litellm_params),
             litellm_params,
             headers,
         )
