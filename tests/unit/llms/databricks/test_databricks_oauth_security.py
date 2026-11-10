@@ -6,6 +6,7 @@ Tests for security hardening of Databricks OAuth M2M credentials:
 """
 
 import pytest
+import re
 from unittest.mock import MagicMock, patch
 
 from litellm.litellm_core_utils.clientside_credential_handler import (
@@ -72,7 +73,7 @@ class TestDatabricksOAuthSecretReferenceRejection:
         ["os.environ/MY_SECRET", "oidc/env/MY_SECRET"],
     )
     def test_is_request_body_safe_rejects_top_level(self, param: str, secret_val: str):
-        with pytest.raises(ValueError, match="holds an os.environ/ or oidc/ secret reference"):
+        with pytest.raises(ValueError, match=re.escape("holds an os.environ/ or oidc/ secret reference")):
             is_request_body_safe(
                 request_body={"model": "databricks/dbrx", param: secret_val},
                 general_settings={"allow_client_side_credentials": True},
@@ -89,7 +90,7 @@ class TestDatabricksOAuthSecretReferenceRejection:
         ["os.environ/MY_SECRET", "oidc/env/MY_SECRET"],
     )
     def test_is_request_body_safe_rejects_extra_body(self, param: str, secret_val: str):
-        with pytest.raises(ValueError, match="holds an os.environ/ or oidc/ secret reference"):
+        with pytest.raises(ValueError, match=re.escape("holds an os.environ/ or oidc/ secret reference")):
             is_request_body_safe(
                 request_body={"model": "databricks/dbrx", "extra_body": {param: secret_val}},
                 general_settings={"allow_client_side_credentials": True},
@@ -106,7 +107,7 @@ class TestDatabricksOAuthSecretReferenceRejection:
         ["os.environ/MY_SECRET", "oidc/env/MY_SECRET"],
     )
     def test_is_request_body_safe_rejects_litellm_params(self, param: str, secret_val: str):
-        with pytest.raises(ValueError, match="holds an os.environ/ or oidc/ secret reference"):
+        with pytest.raises(ValueError, match=re.escape("holds an os.environ/ or oidc/ secret reference")):
             is_request_body_safe(
                 request_body={"model": "databricks/dbrx", "litellm_params": {param: secret_val}},
                 general_settings={"allow_client_side_credentials": True},
@@ -116,7 +117,7 @@ class TestDatabricksOAuthSecretReferenceRejection:
 
     def test_chat_transformation_rejects_request_secret_reference(self):
         config = DatabricksConfig()
-        with pytest.raises(DatabricksException, match="cannot be an os.environ/ or oidc/ secret reference"):
+        with pytest.raises(DatabricksException, match=re.escape("cannot be an os.environ/ or oidc/ secret reference")):
             config.validate_environment(
                 headers={},
                 model="databricks/dbrx",
@@ -126,10 +127,8 @@ class TestDatabricksOAuthSecretReferenceRejection:
             )
 
     def test_embed_handler_rejects_request_secret_reference(self):
-        from unittest.mock import MagicMock
-
         handler = DatabricksEmbeddingHandler()
-        with pytest.raises(DatabricksException, match="cannot be an os.environ/ or oidc/ secret reference"):
+        with pytest.raises(DatabricksException, match=re.escape("cannot be an os.environ/ or oidc/ secret reference")):
             handler.embedding(
                 model="databricks/bge-large-en",
                 input=["hello"],
@@ -142,7 +141,7 @@ class TestDatabricksOAuthSecretReferenceRejection:
 
     def test_messages_transformation_rejects_request_secret_reference(self):
         config = DatabricksAnthropicMessagesConfig()
-        with pytest.raises(DatabricksException, match="cannot be an os.environ/ or oidc/ secret reference"):
+        with pytest.raises(DatabricksException, match=re.escape("cannot be an os.environ/ or oidc/ secret reference")):
             config.validate_anthropic_messages_environment(
                 headers={},
                 model="databricks/claude-3-5-sonnet",
@@ -177,8 +176,6 @@ class TestDatabricksOAuthSecretReferenceRejection:
 
     @patch("litellm.llms.databricks.common_utils.DatabricksBase.get_oauth_m2m_token", return_value="mock_token")
     def test_embed_handler_unconditionally_pops_credentials(self, mock_get_token):
-        from unittest.mock import MagicMock
-
         handler = DatabricksEmbeddingHandler()
         optional_params = {
             "client_id": "opt-id",

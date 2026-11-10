@@ -447,7 +447,7 @@ async def test_multi_deployment_router_incomplete_credentials_isolated_failure(
     assert token_resp_a.call_count == 1
 
     # Broken deployment raises 400 DatabricksException without affecting valid deployment
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(Exception, match="Incomplete Databricks deployment OAuth credentials") as exc_info:
         await router.acompletion(model="broken-deployment", messages=[{"role": "user", "content": "hi"}])
     # Can be wrapped as litellm.BadRequestError or DatabricksException
     assert "Incomplete Databricks deployment OAuth credentials" in str(exc_info.value)
