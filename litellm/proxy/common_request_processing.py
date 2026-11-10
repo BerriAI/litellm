@@ -71,6 +71,7 @@ from litellm.litellm_core_utils.core_helpers import (
     is_expected_client_error,
     proxy_request_headers,
     redact_nested_match_and_regex_keys,
+    require_attributes,
     stream_cost_injection_requested,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
