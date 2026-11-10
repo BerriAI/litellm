@@ -1084,6 +1084,7 @@ from litellm.utils import (
     _select_tokenizer_helper,
     claude_json_str,
     encoding,
+    huggingface_tokenizer_may_download,
 )
 
 # Clear the cache at module load to ensure clean state
@@ -1386,6 +1387,18 @@ def _eventually(probe: Callable[[], bool]) -> bool:
             return True
         time.sleep(0.01)
     return False
+
+
+def test_a_hub_tokenizer_may_download_only_until_it_has_loaded_once():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes()
+    before_loading: Final = huggingface_tokenizer_may_download(model, outcomes)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+        _return_huggingface_tokenizer(model, outcomes)
+
+    assert before_loading
+    assert not huggingface_tokenizer_may_download(model, outcomes)
 
 
 def test_failed_download_is_retried_once_per_window_until_it_loads():

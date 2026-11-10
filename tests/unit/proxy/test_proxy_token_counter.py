@@ -11,7 +11,7 @@ import logging
 import threading
 import traceback
 import uuid
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Iterator, Mapping
 from dataclasses import replace
 from functools import partial
 from pathlib import Path
@@ -91,6 +91,7 @@ from litellm.types.utils import (
     TokenCountMessagesFormat,
     TokenCountResponse,
 )
+from litellm.utils import _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -5296,6 +5297,14 @@ async def test_token_counter_counts_a_custom_named_deployment_like_the_base_mode
     assert named.total_tokens == served.total_tokens
 
 
+@pytest.fixture
+def no_huggingface_tokenizer_loaded() -> Iterator[None]:
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    yield
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
 def test_custom_named_llama_deployment_counts_with_tiktoken_while_its_tokenizer_download_hangs(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -5342,6 +5351,106 @@ def test_custom_named_llama_deployment_counts_with_tiktoken_while_its_tokenizer_
 
     assert set(_run_on_skippable_clock(burst_past_the_wait)) == {"openai_tokenizer"}
     assert downloads == ["meta-llama/Llama-3.3-70B-Instruct"]
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_custom_named_deepseek_deployment_keeps_its_bundled_tokenizer_while_a_hub_download_fills_the_load_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "my-llama",
+                    "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"},
+                },
+                {
+                    "model_name": "my-deepseek",
+                    "litellm_params": {"model": "hosted_vllm/my-deepseek", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/deepseek-ai/DeepSeek-V4-Flash"},
+                },
+            ]
+        ),
+    )
+    real_select_tokenizer: Final = litellm.utils.select_tokenizer
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+
+    def llama_download_hangs(model: str, custom_tokenizer: object = None) -> SelectTokenizerResponse:
+        if model != "meta-llama/Llama-3.3-70B-Instruct":
+            return real_select_tokenizer(model=model)
+        download_started.set()
+        hub_released.wait(10)
+        return real_select_tokenizer(model="gpt-5.4-mini")
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", llama_download_hangs)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_MAX_RUNNING", 1)
+
+    async def tokenizer_type(model: str) -> str:
+        response: Final = await token_counter(
+            request=TokenCountRequest(model=model, messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    async def deepseek_while_the_llama_download_hangs() -> str:
+        llama: Final = asyncio.ensure_future(tokenizer_type("my-llama"))
+        try:
+            await asyncio.to_thread(download_started.wait, 10)
+            return await asyncio.wait_for(tokenizer_type("my-deepseek"), 5)
+        finally:
+            hub_released.set()
+            await llama
+
+    assert asyncio.run(deepseek_while_the_llama_download_hangs()) == "huggingface_tokenizer"
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_named_llama_deployment_keeps_waiting_for_its_slow_tokenizer_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "llama-3.3-70b",
+                    "litellm_params": {
+                        "model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct",
+                        "api_base": "http://127.0.0.1:9/v1",
+                    },
+                }
+            ]
+        ),
+    )
+    real_select_tokenizer: Final = litellm.utils.select_tokenizer
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+
+    def slow_download(model: str, custom_tokenizer: object = None) -> SelectTokenizerResponse:
+        download_started.set()
+        hub_released.wait(10)
+        return real_select_tokenizer(model="deepseek-v4-flash")
+
+    monkeypatch.setattr(litellm.utils, "select_tokenizer", slow_download)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def tokenizer_type() -> str:
+        response: Final = await token_counter(
+            request=TokenCountRequest(model="llama-3.3-70b", messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    async def count_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            count: Final = asyncio.ensure_future(tokenizer_type())
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            await asyncio.wait({count}, timeout=1)
+        finally:
+            hub_released.set()
+        return (await asyncio.wait_for(count, 8),)
+
+    assert _run_on_skippable_clock(count_past_the_wait) == ("huggingface_tokenizer",)
 
 
 _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(

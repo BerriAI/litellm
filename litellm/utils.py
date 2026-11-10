@@ -3027,6 +3027,15 @@ def _return_huggingface_tokenizer(
             return outcome
 
 
+def huggingface_tokenizer_may_download(
+    model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
+) -> bool:
+    kind: Final = huggingface_tokenizer_kind(model)
+    if kind is None or kind in _BUNDLED_TOKENIZER_LOAD_LOCKS:
+        return False
+    return (kind, _huggingface_tokenizer_backend()) not in outcomes.by_tokenizer
+
+
 def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
     match kind:
         case "cohere":

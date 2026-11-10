@@ -15701,12 +15701,15 @@ async def _local_token_estimate(
     tools: list[ChatCompletionToolParam] | None,
     custom_tokenizer: CustomHuggingfaceTokenizer | None,
     provider_failure: ProviderCountFailure | None,
+    tokenizer_from_base_model: bool,
 ) -> _LocalTokenEstimate:
     tokenizer: Final = (
         await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
         if provider_failure is not None
         else await _tokenizer_or_tiktoken_after_load_wait(model)
-        if custom_tokenizer is None
+        if tokenizer_from_base_model
+        and custom_tokenizer is None
+        and litellm.utils.huggingface_tokenizer_may_download(model)
         else await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
     )
     count: Final = offload_token_count(litellm.token_counter)(
@@ -16328,6 +16331,7 @@ async def _count_request_tokens(
         list[ChatCompletionToolParam] | None, tools if counted_messages is not None else None
     )
     openai_model: Final = deployment_openai_model(deployment_view)
+    base_model_tokenizer: Final = None if openai_model else _unprefixed_base_model(deployment_view)
     template_model: Final = openai_model or _deployment_base_model(deployment_view) or model_to_use
     tool_section: Final = chat_template_tool_section(template_model)
     counted_tools: Final = (
@@ -16369,13 +16373,14 @@ async def _count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=openai_model or _unprefixed_base_model(deployment_view) or model_to_use,
+        model=openai_model or base_model_tokenizer or model_to_use,
         template_model=template_model,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,
         tools=counted_tools,
         custom_tokenizer=custom_tokenizer,
         provider_failure=ladder,
+        tokenizer_from_base_model=base_model_tokenizer is not None,
     )
     template: Final = (
         0 if kimi_k3_messages is None else kimi_k3_template_tokens(len(kimi_k3_messages), bool(counted_tools))
