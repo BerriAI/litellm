@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -21,16 +22,19 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
-      - name: Fetch the pull request head, its merge base, and the base branch tip
+      - name: Check out the base branch tip and fetch the pull request head and its merge base
         id: revisions
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          target="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${BASE_REF}" --jq '.commit.sha')"
+          base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${EVENT_BASE_REF}" --jq .name)" || base_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .base.ref)"
+          target="$(gh api "repos/${GITHUB_REPOSITORY}/branches/${base_ref}" --jq '.commit.sha')"
           merge_base="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${target}...${HEAD_SHA}" --jq '.merge_base_commit.sha')"
           git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA" "$target"
+          git checkout -q --detach "$target"
           echo "merge_base=$merge_base" >> "$GITHUB_OUTPUT"
           echo "target=$target" >> "$GITHUB_OUTPUT"
       - name: Set up uv
@@ -46,3 +50,24 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           uv run --no-project python ci_cd/cost_map_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --head-ref "$HEAD_REF"
+      - name: Check whether the pull request changes the cost map
+        id: changed
+        env:
+          MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if git diff --quiet "$MERGE_BASE" "$HEAD_SHA" -- model_prices_and_context_window.json; then
+            echo "cost_map=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "cost_map=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changed.outputs.cost_map == 'true'
+        run: rustup toolchain install --no-self-update
+      - name: Load the cost map through model-catalog
+        if: steps.changed.outputs.cost_map == 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git show "${HEAD_SHA}:model_prices_and_context_window.json" > "$RUNNER_TEMP/model_prices_and_context_window.json"
+          cargo run --locked --quiet --manifest-path litellm-rust/Cargo.toml -p litellm-model-catalog --bin check-registry \
+            -- "$RUNNER_TEMP/model_prices_and_context_window.json"
