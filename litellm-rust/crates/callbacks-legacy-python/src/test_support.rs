@@ -53,7 +53,7 @@ def setup(call_type, args, kwargs, start, asynchronous):
 
 FAKES = {
     'setup': setup,
-    'finalize': lambda response, logger, kwargs, start, end: logger.record('finalize', response),
+    'finalize': lambda response, logger, kwargs, start, end, cache_hit: logger.record('finalize', response),
     'update_logging': lambda logger, kwargs, model, optional_params, litellm_params, provider: logger.update_from_kwargs(
         kwargs=kwargs,
         model=model,
@@ -86,6 +86,7 @@ FAKES = {
     )(error, ''.join(traceback.format_exception(error)), start, end),
     'submit_success': lambda logger, response, start, end: logger.record('submit', (response, start, end)),
     'async_success_handler': lambda logger, response, start, end: logger.async_success_handler(response, start, end),
+    'cache_hit_success': lambda logger, response, start, end: logger.record('cache_hit_success', response),
     'mark_async_success_enqueued': lambda logger: logger.record('mark_async_success_enqueued', None),
     'enqueue_logging': lambda coroutine: coroutine.enqueue(),
     'restore_context': lambda logger: logger.record('restore', None),
@@ -97,7 +98,7 @@ FAKES = {
     ),
     'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
     'stream_opened': lambda logger, head: logger.record('stream_opened', head),
-    'stamp_stream_head': lambda head, logger, kwargs, start, end: logger.record('stamp_stream_head', head),
+    'stamp_stream_head': lambda head, logger, kwargs, start, end, cache_hit: logger.record('stamp_stream_head', head),
     'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk, stream_teardown: logger.record(
         'stream_success', list(chunks)
     ),

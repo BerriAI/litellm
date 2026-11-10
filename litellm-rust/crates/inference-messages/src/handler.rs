@@ -35,7 +35,11 @@ use super::{
     route::Messages,
     types::invalid_request,
 };
-use litellm_inference::{caching::CallCache, context::CallContext, outbound::outbound_request};
+use litellm_inference::{
+    caching::{CacheRequest, CallCache},
+    context::CallContext,
+    outbound::outbound_request,
+};
 
 struct ProviderCall {
     identity: ProviderIdentity,
@@ -52,6 +56,42 @@ impl ProviderCall {
     }
 }
 
+pub(super) async fn cached(
+    route: &MessagesRoute,
+    provider: MessagesProvider,
+    model: &str,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<Option<MessagesCallResponse>, Error> {
+    let Some(cache) = caller_keyed(route) else {
+        return Ok(None);
+    };
+    let identity = ProviderIdentity {
+        model: model.to_owned(),
+        provider: provider.as_str().to_string(),
+    };
+    let Some((output, source)) = CallCache::<Messages>::new(
+        Some(cache),
+        context.cache,
+        CacheRequest::from_wire(identity.clone(), None),
+    )
+    .lookup()
+    .await
+    else {
+        return Ok(None);
+    };
+    context
+        .result_ready(execution_facts(provider, identity, &output, &source))
+        .await?;
+    Ok(Some(output))
+}
+
+fn caller_keyed(route: &MessagesRoute) -> Option<&litellm_cache_response::ScopedCache> {
+    route
+        .cache
+        .as_ref()
+        .filter(|cache| cache.service.keyed_by_caller())
+}
+
 pub(super) async fn execute(
     route: &MessagesRoute,
     provider: MessagesProvider,
@@ -60,6 +100,7 @@ pub(super) async fn execute(
     secrets: Secrets,
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
+    let caller_keyed = caller_keyed(route).is_some();
     let request = provider_call(
         &route.auth,
         provider,
@@ -71,34 +112,50 @@ pub(super) async fn execute(
     .boxed()
     .await?;
     let cache = CallCache::<Messages>::from_wire(
-        route.cache.as_ref().filter(|_| request.cacheable()),
+        route
+            .cache
+            .as_ref()
+            .filter(|_| caller_keyed || request.cacheable()),
         context.cache,
         &request.identity,
         &request.wire,
     );
     let identity = request.identity.clone();
-    let (output, source) = match cache.lookup().await {
+    let hit = match caller_keyed {
+        true => None,
+        false => cache.lookup().await,
+    };
+    let (output, source) = match hit {
         Some(hit) => hit,
         None => (
             call_provider(&route.http, request, context).await?,
             ResultSource::Provider,
         ),
     };
-    let reported = match &output {
+    context
+        .result_ready(execution_facts(provider, identity, &output, &source))
+        .await?;
+    Ok(cache.finish(output, &source).await)
+}
+
+fn execution_facts(
+    provider: MessagesProvider,
+    identity: ProviderIdentity,
+    output: &MessagesCallResponse,
+    source: &ResultSource,
+) -> ExecutionFacts {
+    let reported = match output {
         MessagesCallResponse::Complete(response) => match response {
             MessagesBody::Message(message) => provider.config().reported_cost(message),
             MessagesBody::Unchecked(_) => None,
         },
         MessagesCallResponse::Stream { .. } => None,
     };
-    context
-        .result_ready(ExecutionFacts {
-            provider: identity,
-            cost: Cost::settle(&source, reported),
-            source: source.clone(),
-        })
-        .await?;
-    Ok(cache.finish(output, &source).await)
+    ExecutionFacts {
+        provider: identity,
+        cost: Cost::settle(source, reported),
+        source: source.clone(),
+    }
 }
 
 async fn provider_call(

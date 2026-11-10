@@ -73,7 +73,7 @@ def test_cache_hit_finalization_preserves_execution_provider_attribution(explici
     )
     prepared.logger.model_call_details.update({"cache_hit": True, "cache_key": "cached-response"})
     response: Final = ModelResponse(model="cache-test-model")
-    legacy.finalize(response, prepared.logger, prepared.kwargs, now, now)
+    legacy.finalize(response, prepared.logger, prepared.kwargs, now, now, False)
     assert prepared.logger.model_call_details["custom_llm_provider"] == "azure"
     assert prepared.logger.model_call_details["model"] == "resolved-cache-model"
     assert prepared.logger.litellm_params["metadata"]["user_api_key"] == "key-hash"
@@ -334,6 +334,7 @@ def test_stream_head_is_stamped_in_place_with_the_call_hidden_params() -> None:
         {"model": "anthropic/claude-sonnet-4-5", "litellm_call_id": "messages"},
         started,
         started + datetime.timedelta(milliseconds=5),
+        False,
     )
 
     assert head["additional_headers"] == {"request-id": "req_native", "llm_provider-request-id": "req_native"}

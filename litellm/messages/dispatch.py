@@ -138,7 +138,6 @@ _FEATURES: Final[detectors.Detectors] = MappingProxyType(
         **{feature: detect for feature, detect in detectors.COMMON.items() if feature is not Feature.TIMEOUT_VARIANTS},
         Feature.PROVIDER_AFFINITY: route_detectors.provider_affinity,
         Feature.SAFEGUARDS_CLASSIFIER: route_detectors.safeguards_classifier,
-        Feature.RESPONSE_CACHE: detectors.response_cache,
         Feature.MODIFY_PARAMS: detectors.modify_params,
         Feature.WORKLOAD_IDENTITY: route_detectors.anthropic_workload_identity,
         Feature.CACHE_CONTROL_INJECTION: detectors.cache_control_injection,

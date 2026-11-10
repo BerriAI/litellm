@@ -18,6 +18,7 @@ enum Pending {
 
 pub(crate) struct PythonCache {
     cache: Option<Py<PyAny>>,
+    function: Option<Py<PyAny>>,
     arguments: Option<Py<PyDict>>,
     pending: Option<Pending>,
     asynchronous: bool,
@@ -28,6 +29,7 @@ impl PythonCache {
     pub fn new(asynchronous: bool) -> Self {
         Self {
             cache: None,
+            function: None,
             arguments: None,
             pending: None,
             asynchronous,
@@ -35,12 +37,18 @@ impl PythonCache {
         }
     }
 
+    pub(in crate::cache) fn asynchronous(&self) -> bool {
+        self.asynchronous
+    }
+
     pub(in crate::cache) fn bind(
         &mut self,
         cache: Bound<'_, PyAny>,
+        function: &Bound<'_, PyAny>,
         arguments: &Bound<'_, PyDict>,
     ) {
         self.cache = Some(cache.unbind());
+        self.function = Some(function.clone().unbind());
         self.arguments = Some(arguments.clone().unbind());
     }
 
@@ -59,7 +67,7 @@ impl PythonCache {
                 self.pending = Some(Pending::Lookup(reply));
                 (
                     if self.asynchronous {
-                        "async_get_cache"
+                        "lookup"
                     } else {
                         "get_cache"
                     },
@@ -77,7 +85,7 @@ impl PythonCache {
                 self.pending = Some(Pending::Store(reply));
                 (
                     if self.asynchronous {
-                        "async_add_cache"
+                        "store_stream"
                     } else {
                         "add_cache"
                     },
@@ -86,9 +94,20 @@ impl PythonCache {
             }
         };
         let result = match result {
+            Some(value) if self.asynchronous => py
+                .import(CACHE_HOST_MODULE)?
+                .getattr(method)?
+                .call((cache, value), Some(&arguments)),
             Some(value) => cache
                 .bind(py)
                 .call_method(method, (value,), Some(&arguments)),
+            None if self.asynchronous => py.import(CACHE_HOST_MODULE)?.getattr(method)?.call(
+                (
+                    cache,
+                    self.function.as_ref().ok_or(HandleError::Unconfigured)?,
+                ),
+                Some(&arguments),
+            ),
             None => cache.bind(py).call_method(method, (), Some(&arguments)),
         }
         .map(Bound::unbind);
@@ -148,11 +167,13 @@ impl PythonCache {
         self.pending = None;
         self.deferred = false;
         self.cache = None;
+        self.function = None;
         self.arguments = None;
     }
 
     pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.cache)?;
+        visit.call(&self.function)?;
         visit.call(&self.arguments)
     }
 }

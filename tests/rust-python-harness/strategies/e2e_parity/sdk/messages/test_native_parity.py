@@ -34,6 +34,10 @@ import pytest
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.caching.caching import Cache, CacheMode
+from litellm.caching.caching_handler import (
+    _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # a primed entry must land before the measured call reads it
+)
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.messages import dispatch
 from litellm.rust_bridge import catalog
@@ -319,6 +323,7 @@ class Case:
     env: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     settings: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     private_keys: bool = False
+    cache: Callable[[], Cache] | None = None
     gaps: Mapping[str, str | None] = field(default_factory=lambda: MappingProxyType({}))
 
     def params(self) -> Iterator[object]:
@@ -769,7 +774,45 @@ FALLBACK_CASES: Final = (
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
 )
 
-CASES: Final = (*REQUEST_CASES, *RESPONSE_CASES, *FAILURE_CASES, *STREAM_CASES, *SYNC_CASES, *FALLBACK_CASES)
+
+def _default_off_cache() -> Cache:
+    return Cache(mode=CacheMode.default_off)
+
+
+def _completion_only_cache() -> Cache:
+    return Cache(supported_call_types=["acompletion"])
+
+
+CACHE_CASES: Final = (
+    Case("cache_hit", upstream=(_ok(), _ok()), cache=Cache),
+    Case("cache_hit_stream", _kw(stream=True), upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)), cache=Cache),
+    Case("cache_no_cache", _kw(cache={"no-cache": True}), upstream=(_ok(), _ok()), cache=Cache),
+    Case("cache_no_store", _kw(cache={"no-store": True}), upstream=(_ok(), _ok()), cache=Cache),
+    Case("cache_caching_false", _kw(caching=False), upstream=(_ok(), _ok()), cache=Cache),
+    Case(
+        "cache_ttl_and_namespace", _kw(cache={"ttl": 60, "namespace": "parity"}), upstream=(_ok(), _ok()), cache=Cache
+    ),
+    Case("cache_default_off", upstream=(_ok(), _ok()), cache=_default_off_cache),
+    Case(
+        "cache_default_off_use_cache",
+        _kw(cache={"use-cache": True}),
+        upstream=(_ok(), _ok()),
+        cache=_default_off_cache,
+    ),
+    Case("cache_unsupported_call_type", upstream=(_ok(), _ok()), cache=_completion_only_cache),
+    Case("cache_hit_with_metadata", _kw(metadata={"user_id": "user-123"}), upstream=(_ok(), _ok()), cache=Cache),
+    Case("cache_sync", sync=True, upstream=(_ok(), _ok()), cache=Cache),
+)
+
+CASES: Final = (
+    *REQUEST_CASES,
+    *RESPONSE_CASES,
+    *FAILURE_CASES,
+    *STREAM_CASES,
+    *SYNC_CASES,
+    *FALLBACK_CASES,
+    *CACHE_CASES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -841,6 +884,15 @@ def _settings(settings: Mapping[str, object]) -> Generator[None]:
     finally:
         for name, value in saved.items():
             setattr(litellm, name, value)
+
+
+@contextmanager
+def _cache(cache: Callable[[], Cache] | None) -> Generator[None]:
+    if cache is None:
+        yield
+        return
+    with rebound(litellm, "cache", cache()):
+        yield
 
 
 def _kwargs(case: Case, server: RecordingServer) -> dict[str, object]:
@@ -960,21 +1012,24 @@ async def _invoke(
     }, hidden
 
 
-async def _terminal_events(recorder: RecordingLogger) -> tuple[str, ...]:
+async def _terminal_events(recorder: RecordingLogger, since: int = 0) -> tuple[str, ...]:
     for _ in range(100):
         await drain_logging()
-        if any(name in _TERMINAL_EVENTS for name in recorder.names):
+        if any(name in _TERMINAL_EVENTS for name in recorder.names[since:]):
             break
         await asyncio.sleep(0.05)
     await asyncio.sleep(0.2)
     await drain_logging()
-    return tuple(name for name in recorder.names if name in _TERMINAL_EVENTS)
+    return tuple(name for name in recorder.names[since:] if name in _TERMINAL_EVENTS)
 
 
-def _logged(recorder: RecordingLogger, events: tuple[str, ...]) -> tuple[Mapping[str, object], Mapping[str, object]]:
-    terminal: Final = [event for event in recorder.events if event.name in _TERMINAL_EVENTS]
+def _logged(
+    recorder: RecordingLogger, events: tuple[str, ...], since: int = 0
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    terminal: Final = [event for event in recorder.events[since:] if event.name in _TERMINAL_EVENTS]
+    hooks: Final = tuple(sorted(set(recorder.names[since:])))
     if not terminal:
-        return {"events": events}, {}
+        return {"events": events, "hooks": hooks}, {}
     details: Final = _mapping(terminal[-1].kwargs)
     standard: Final = _mapping(details.get("standard_logging_object"))
     error_class: Final = _mapping(standard.get("error_information")).get("error_class")
@@ -983,6 +1038,7 @@ def _logged(recorder: RecordingLogger, events: tuple[str, ...]) -> tuple[Mapping
     metadata_keys: Final = _mapping(metadata).keys()
     logged: Final[Mapping[str, object]] = {
         "events": events,
+        "hooks": hooks,
         **{name: standard.get(name) for name in _COMPARED_LOG_FIELDS},
         "error_class": error_class,
     }
@@ -1000,18 +1056,29 @@ def _logged(recorder: RecordingLogger, events: tuple[str, ...]) -> tuple[Mapping
     return logged, callback_kwargs
 
 
+async def _prime(case: Case, server: RecordingServer, recorder: RecordingLogger, native: bool) -> int:
+    if case.cache is None:
+        return 0
+    outcome: Final = await _invoke(case, _kwargs(case, server), native=native)
+    assert case.sync or outcome[0]["kind"] != "error", outcome
+    await _terminal_events(recorder)
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    return len(recorder.events)
+
+
 async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None) -> Leg:
-    with isolated_callback_registries(), _environment(case.env), _settings(case.settings):
-        recorder: Final = RecordingLogger()
-        litellm.callbacks.append(recorder)
+    with isolated_callback_registries(), _environment(case.env), _settings(case.settings), _cache(case.cache):
         for spec in case.upstream:
             server.enqueue(replace(spec))
         request_count: Final = len(server.requests)
+        recorder: Final = RecordingLogger()
+        litellm.callbacks.append(recorder)
         fallbacks_before: Final = 0 if probe is None else probe.calls
+        primed: Final = await _prime(case, server, recorder, native=probe is not None)
         outcome, hidden = await _invoke(case, _kwargs(case, server), native=probe is not None)
-        events: Final = await _terminal_events(recorder)
+        events: Final = await _terminal_events(recorder, primed)
         server.responses.clear()
-        logged, callback_kwargs = _logged(recorder, events)
+        logged, callback_kwargs = _logged(recorder, events, primed)
         return Leg(
             fell_back=probe is not None and probe.calls > fallbacks_before,
             requests=tuple(

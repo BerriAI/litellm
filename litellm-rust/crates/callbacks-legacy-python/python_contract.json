@@ -11,7 +11,8 @@
     "logger",
     "kwargs",
     "start_time",
-    "end_time"
+    "end_time",
+    "cache_hit"
   ],
   "update_logging": [
     "logger",
@@ -89,6 +90,12 @@
     "start",
     "end"
   ],
+  "cache_hit_success": [
+    "logger",
+    "response",
+    "start",
+    "end"
+  ],
   "enqueue_logging": [
     "coroutine"
   ],
@@ -120,7 +127,8 @@
     "logger",
     "kwargs",
     "start_time",
-    "end_time"
+    "end_time",
+    "cache_hit"
   ],
   "stream_success": [
     "logger",

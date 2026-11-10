@@ -18,7 +18,7 @@ from litellm.messages.dispatch import (
 )
 from litellm.proxy import proxy_server
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Feature, Route, RouteRule, Rules, Target
+from litellm.rust_bridge.catalog import MESSAGES_PYTHON_FEATURES, Feature, Route, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, NativeAmessages, NativeMessages
 from litellm.rust_bridge.public_call import NativeCall
@@ -476,7 +476,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
         ),
         (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
         (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
-        (Feature.RESPONSE_CACHE, "anthropic/claude-sonnet-4-5", {}, {"cache": Cache()}),
         (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
         (Feature.MODIFY_PARAMS, "anthropic/claude-sonnet-4-5", {}, {"modify_params": True}),
         (
@@ -601,6 +600,45 @@ async def test_strict_tools_stay_native_unless_python_could_drop_strict(
 
     async def python(*call_args: object, **python_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
         pytest.fail("Python cannot drop strict here")
+
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        return native_result
+
+    served: Final = await _ADISPATCH.arun(
+        (16, MESSAGES, "anthropic/claude-sonnet-4-5"),
+        kwargs,
+        python=python,
+        binding=amessages_binding(native),
+        native=lambda hook, request, call_args, native_kwargs: hook(request),
+        rules=rules,
+    )
+
+    assert served is native_result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        pytest.param({}, id="reads-and-writes"),
+        pytest.param({"cache": {"no-store": True}}, id="no-store"),
+        pytest.param({"cache": {"ttl": 60, "namespace": "team"}}, id="ttl-and-namespace"),
+        pytest.param({"stream": True}, id="stream"),
+    ),
+)
+async def test_a_configured_response_cache_stays_native(
+    monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object]
+) -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=MESSAGES_PYTHON_FEATURES),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    native_result: Final = response()
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "cache", Cache())
+
+    async def python(*call_args: object, **python_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        pytest.fail("Rust reads and writes the configured response cache")
 
     async def native(request: NativeCall) -> AnthropicMessagesResponse:
         return native_result

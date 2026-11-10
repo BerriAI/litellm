@@ -89,6 +89,9 @@ impl MessagesRoute {
                 <&'static str>::from(provider.provider),
             );
             let model = provider.model.to_owned();
+            if let Some(output) = handler::cached(self, config, &model, &context).await? {
+                return Ok(output);
+            }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
             handler::execute(self, config, model, call, secrets, &context)
                 .boxed()

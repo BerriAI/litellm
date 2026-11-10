@@ -227,9 +227,12 @@ impl PythonBinding for MessagesPythonHost {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
-        let selection =
-            crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
-                .map_err(InvokeError::Python)?;
+        let function = py
+            .import(ROUTE_HOST_MODULE)
+            .and_then(|module| module.call_method0("cached_function"))
+            .map_err(InvokeError::Python)?;
+        let selection = crate::cache::configure(&mut self.cache, py, arguments, &function)
+            .map_err(InvokeError::Python)?;
         self.projection(py, arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)

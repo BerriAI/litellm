@@ -90,9 +90,14 @@ pub(crate) fn configure(
     python: &mut python::PythonCache,
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
-    call_type: &str,
+    function: &Bound<'_, PyAny>,
 ) -> PyResult<Selection> {
-    let selected = selected_cache(py, arguments, call_type)?;
+    let call_type: String = function.getattr("__name__")?.extract()?;
+    let selected = if python.asynchronous() {
+        selected_cache(py, arguments, &call_type)?
+    } else {
+        None
+    };
     let Some(cache) = selected else {
         return Ok(Selection {
             backend: Backend::Disabled,
@@ -129,7 +134,7 @@ pub(crate) fn configure(
         .map(|value| value.extract())
         .transpose()?
         .unwrap_or_default();
-    python.bind(cache, arguments);
+    python.bind(cache, function, arguments);
     Ok(Selection {
         backend: if enabled {
             Backend::Python { namespace }
