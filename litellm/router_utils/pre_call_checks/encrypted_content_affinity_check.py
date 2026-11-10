@@ -695,7 +695,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 unmarked_origin=model_id,
                 clock=self._clock,
             )
-            return list(routable_peers)
+            return boundary_matches
 
         # The origin cannot serve this turn and no peer shares its encryption boundary, so its
         # encrypted reasoning can never decrypt here. Strip it, keep the readable history, and dispatch

@@ -3671,3 +3671,52 @@ async def test_routing_tag_strips_reasoning_only_a_rejected_boundary_peer_could_
 
     assert response._hidden_params["model_id"] == "b"
     assert [item.get("encrypted_content") for item in forwarded[:2]] == ["blob-from-a", None]
+
+
+def _boundary_peer(name: str, tags: list[str], model_info: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": "tagged-group",
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_base": f"https://{name}.example.invalid/v1",
+            "api_key": f"sk-{name}",
+            "tags": tags,
+        },
+        "model_info": {"id": name, "encrypted_content_boundary": "org-a", **model_info},
+    }
+
+
+@pytest.mark.asyncio
+async def test_routing_tags_that_fail_open_onto_a_boundary_peer_are_served_by_it() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            _boundary_peer("a", ["z"], {}) | {"model_name": "other-group"},
+            _boundary_peer("default-peer", ["default", "x"], {"allow_fail_open": True}),
+            _boundary_peer("y-peer", ["y"], {}),
+        ],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    handler: Final = AsyncMock(return_value=_build_mock_response(output_items=[], response_id="resp_fail_open"))
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.async_response_api_handler",
+        new=handler,
+    ):
+        response: Final = await router.aresponses(
+            model="tagged-group",
+            input=[
+                {
+                    "type": "reasoning",
+                    "summary": [],
+                    "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+                        "blob-from-a", "a"
+                    ),
+                },
+                {"role": "user", "content": "follow-up"},
+            ],
+            litellm_metadata={"tags": ["&x", "&y"], "inherited_tags": []},
+        )
+
+    assert response._hidden_params["model_id"] == "default-peer"
+    assert handler.await_args.kwargs["input"][0]["encrypted_content"] == "blob-from-a"
