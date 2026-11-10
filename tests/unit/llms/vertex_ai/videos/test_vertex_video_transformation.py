@@ -1022,3 +1022,29 @@ def test_veo_request_carries_identity_labels_only_while_the_setting_is_on(monkey
         "labels": {**_IDENTITY, "app": "bot", "cost-center": "cc-1"},
     }
     assert list(cast(Mapping[str, str], setting_on["labels"])) == [*_IDENTITY, "app", "cost-center"]
+
+
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+def _veo_request_headers() -> Mapping[str, str]:
+    headers: Final = {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"}
+    VertexAIVideoConfig().transform_video_create_request(
+        model="veo-3.1-generate-001",
+        prompt="a lighthouse at dusk",
+        api_base="https://vertex.test/models/veo-3.1-generate-001",
+        video_create_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(metadata=dict(_PROXY_METADATA)),
+        headers=headers,
+    )
+    return headers
+
+
+def test_veo_request_drops_a_caller_labels_header_only_while_the_setting_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _veo_request_headers()
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _veo_request_headers()
+
+    assert setting_off == {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"}
+    assert setting_on == {"x-trace-id": "t-1"}

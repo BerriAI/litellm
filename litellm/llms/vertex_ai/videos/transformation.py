@@ -27,7 +27,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_base_url,
     pop_vertex_request_labels,
 )
-from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
@@ -352,7 +352,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         api_base: str,
         video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[dict, RequestFiles, str]:
         """
         Transform the video creation request for Veo API.
@@ -374,6 +374,8 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             }
         }
         """
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         # Build instance with prompt
         instance_dict: Final[dict[str, object]] = {"prompt": prompt}
         params_copy: Final = video_create_optional_request_params.copy()

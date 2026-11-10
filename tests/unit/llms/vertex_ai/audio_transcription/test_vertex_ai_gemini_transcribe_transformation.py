@@ -360,3 +360,33 @@ def test_gemini_transcription_carries_identity_labels_only_while_the_setting_is_
     assert {key: value for key, value in setting_on.items() if key != "labels"} == setting_off
     assert setting_on["labels"] == {**_IDENTITY, "cost-center": "cc-1"}
     assert list(cast(dict[str, str], setting_on["labels"])) == [*_IDENTITY, "cost-center"]
+
+
+class _TokenStubbedConfig(VertexGeminiAudioTranscriptionConfig):
+    def _ensure_access_token(self, credentials, project_id, custom_llm_provider):
+        return "fake-token", "resolved-project"
+
+
+def _transcription_headers(caller_headers: dict[str, str]) -> dict[str, str]:
+    return _TokenStubbedConfig().validate_environment(
+        headers=caller_headers,
+        model="gemini-3.5-transcribe-preview",
+        messages=[],
+        optional_params={},
+        litellm_params={"vertex_project": "resolved-project"},
+    )
+
+
+def test_gemini_transcription_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forged: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+    caller_headers: Final = {"X-Vertex-AI-Labels": forged, "x-trace-id": "t-1"}
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _transcription_headers(caller_headers)
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _transcription_headers(caller_headers)
+
+    assert setting_off["X-Vertex-AI-Labels"] == forged
+    assert "X-Vertex-AI-Labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"

@@ -12438,7 +12438,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(
@@ -12545,7 +12545,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_headers:
-            headers.update(extra_headers)
+            headers.update(generate_content_provider_config.transform_caller_headers(extra_headers))
 
         # Get the request body from the provider config
         data: Final = generate_content_provider_config.transform_generate_content_request(

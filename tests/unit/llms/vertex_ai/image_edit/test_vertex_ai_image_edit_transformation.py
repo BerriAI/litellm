@@ -730,7 +730,7 @@ _SENT_BODY: Final = TypeAdapter(Mapping[str, object])
 _SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
 
 
-def _sent_gemini_edit_body() -> Mapping[str, object]:
+def _sent_gemini_edit(extra_headers: Mapping[str, str] | None = None) -> httpx.Request:
     sent: Final[list[httpx.Request]] = []
 
     def reply(request: httpx.Request) -> httpx.Response:
@@ -746,9 +746,14 @@ def _sent_gemini_edit_body() -> Mapping[str, object]:
         api_base="https://vertex.test/edit",
         metadata=dict(_PROXY_METADATA),
         labels=dict(_FORGED),
+        extra_headers=dict(extra_headers or {}),
         client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(reply))),
     )
-    return _SENT_BODY.validate_json(sent[0].content)
+    return sent[0]
+
+
+def _sent_gemini_edit_body() -> Mapping[str, object]:
+    return _SENT_BODY.validate_json(_sent_gemini_edit().content)
 
 
 def test_vertex_gemini_edit_sends_identity_labels_only_while_the_setting_is_on(monkeypatch: pytest.MonkeyPatch):
@@ -764,3 +769,20 @@ def test_vertex_gemini_edit_sends_identity_labels_only_while_the_setting_is_on(m
         ("app", "bot"),
         ("cost-center", "cc-1"),
     ]
+
+
+_FORGED_LABELS_HEADER: Final = base64.b64encode(json.dumps({"user_api_key_team_alias": "forged"}).encode()).decode()
+
+
+def test_vertex_gemini_edit_drops_a_caller_labels_header_only_while_the_setting_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    caller_headers: Final = {"X-Vertex-AI-Labels": _FORGED_LABELS_HEADER, "x-trace-id": "t-1"}
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+    setting_off: Final = _sent_gemini_edit(caller_headers).headers
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", _LABEL_FIELDS)
+    setting_on: Final = _sent_gemini_edit(caller_headers).headers
+
+    assert setting_off["x-vertex-ai-labels"] == _FORGED_LABELS_HEADER
+    assert "x-vertex-ai-labels" not in setting_on
+    assert setting_on["x-trace-id"] == "t-1"

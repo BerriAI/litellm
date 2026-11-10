@@ -16,7 +16,7 @@ from litellm.llms.vertex_ai.common_utils import (
     vertex_top_level_request_fields,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
-from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.vertex_ai import (
@@ -169,6 +169,8 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
     ) -> tuple[dict[str, object], RequestFiles | None]:
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         inline_parts: Final = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise litellm.BadRequestError(

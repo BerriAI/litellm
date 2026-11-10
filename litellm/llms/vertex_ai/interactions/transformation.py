@@ -5,6 +5,7 @@ from typing import Final
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
 from litellm.llms.vertex_ai.common_utils import validate_vertex_location, vertex_top_level_request_fields
+from litellm.llms.vertex_ai.request_labels import without_caller_labels_header
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.router import GenericLiteLLMParams
@@ -94,7 +95,7 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
-            **headers,
+            **without_caller_labels_header(headers),
         }
 
     def get_complete_url(
