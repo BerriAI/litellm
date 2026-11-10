@@ -17536,6 +17536,7 @@
         "max_input_tokens": 512,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_embedding_image_input": true
     },
@@ -17545,6 +17546,7 @@
         "max_input_tokens": 512,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
+        "output_vector_size": 1024,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_embedding_image_input": true
     },

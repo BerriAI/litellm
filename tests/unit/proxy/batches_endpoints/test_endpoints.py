@@ -1953,6 +1953,24 @@ async def test_retrieve__a_saved_batch_without_an_endpoint_keeps_the_providers(r
 
 
 @pytest.mark.asyncio
+async def test_retrieve__an_embeddings_endpoint_from_the_provider_corrects_a_saved_chat_endpoint(retrieve_harness):
+    stored = make_batch(id="batch-unified-blob", status="validating").model_copy(
+        update={"endpoint": "/v1/chat/completions"}
+    )
+    provider_batch = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
+        update={"endpoint": "/v1/embeddings"}
+    )
+    retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
+    retrieve_harness.router.aretrieve_batch.return_value = provider_batch
+
+    with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
+        resp = await call_retrieve(retrieve_harness, "batch-unified-blob")
+
+    assert resp.endpoint == "/v1/embeddings"
+    assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
 async def test_retrieve__executed_batch_served_from_db_in_every_status(retrieve_harness, status):
     db_response = make_batch(id="litellm-executed-batch", status=status)

@@ -1608,7 +1608,10 @@ def batch_cost_poller_is_active() -> bool:
 
 
 def created_batch_endpoint(provider_batch: "LiteLLMBatch", stored_batch: "LiteLLMBatch | None") -> str:
-    return stored_batch.endpoint if stored_batch is not None and stored_batch.endpoint else provider_batch.endpoint
+    if stored_batch is None or not stored_batch.endpoint:
+        return provider_batch.endpoint
+    provider_named_the_endpoint: Final = provider_batch.endpoint not in ("", "/v1/chat/completions")
+    return provider_batch.endpoint if provider_named_the_endpoint else stored_batch.endpoint
 
 
 def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:

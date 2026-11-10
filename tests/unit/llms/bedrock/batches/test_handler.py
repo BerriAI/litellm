@@ -178,7 +178,7 @@ def test_job_status_endpoint_follows_the_job_models_mode(
     fake_client, _ = patched_boto3
     fake_client.get_model_invocation_job.return_value = {**_fake_boto3_response(), "modelId": job_model_id}
 
-    batch = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
+    batch: Final = BedrockBatchesHandler.handle_model_invocation_job_status(batch_id=JOB_ARN)
 
     assert batch.endpoint == expected_endpoint
 

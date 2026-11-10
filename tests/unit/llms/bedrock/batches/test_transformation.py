@@ -14,6 +14,7 @@ URL/ARN handling, and the error class. AWS auth/sigv4 is the only external seam
 we mock; everything else runs for real.
 """
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -932,7 +933,7 @@ def test_retrieve_response_no_errors_when_no_message(config):
 def test_retrieve_response_endpoint_follows_the_job_models_mode(
     config: BedrockBatchesConfig, job_model_id: str | None, expected_endpoint: str
 ) -> None:
-    out = config.transform_retrieve_batch_response(
+    out: Final = config.transform_retrieve_batch_response(
         model=None,
         raw_response=_raw({"jobArn": ARN, "status": "InProgress", "modelId": job_model_id}),
         logging_obj=MagicMock(),
@@ -941,12 +942,19 @@ def test_retrieve_response_endpoint_follows_the_job_models_mode(
     assert out.endpoint == expected_endpoint
 
 
+def _is_bedrock_embedding_model(cost_map_entry: Mapping[str, object]) -> bool:
+    return cost_map_entry.get("litellm_provider") == "bedrock" and cost_map_entry.get("mode") == "embedding"
+
+
+@pytest.mark.parametrize(
+    "job_model_id",
+    sorted(model_id for model_id, entry in litellm.model_cost.items() if _is_bedrock_embedding_model(entry)),
+)
 def test_retrieve_response_endpoint_survives_a_batch_deployment_overriding_the_models_mode(
-    config: BedrockBatchesConfig, monkeypatch: pytest.MonkeyPatch
+    config: BedrockBatchesConfig, monkeypatch: pytest.MonkeyPatch, job_model_id: str
 ) -> None:
-    job_model_id = "amazon.titan-embed-text-v2:0"
     monkeypatch.setitem(litellm.model_cost, job_model_id, {**litellm.model_cost[job_model_id], "mode": "batch"})
-    out = config.transform_retrieve_batch_response(
+    out: Final = config.transform_retrieve_batch_response(
         model=None,
         raw_response=_raw({"jobArn": ARN, "status": "InProgress", "modelId": job_model_id}),
         logging_obj=MagicMock(),
