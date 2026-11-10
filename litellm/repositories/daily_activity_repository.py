@@ -1,11 +1,12 @@
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from itertools import groupby
 from types import MappingProxyType
 from typing import Final, Protocol
 
-from pydantic import StrictStr, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm import constants
@@ -18,7 +19,7 @@ from litellm.repositories.daily_activity_sql import (
     adjust_dates_for_timezone,
     build_aggregated_sql,
     build_cache_leakage_keys_sql,
-    build_customer_filtered_keys_sql,
+    build_customer_daily_rows_sql,
     build_customer_team_rollup_sql,
     build_entity_rollup_sql,
     build_export_sql,
@@ -106,7 +107,6 @@ class DailyActivityDatabase(Protocol):
 
 _GROUPING_ADAPTER: Final = TypeAdapter(tuple[GroupingSetsRow, ...])
 _CUSTOMER_TEAM_ADAPTER: Final = TypeAdapter(tuple[CustomerTeamRollupRow, ...])
-_FILTERED_KEYS_ADAPTER: Final = TypeAdapter(tuple[dict[str, StrictStr], ...])
 _ENTITY_ADAPTER: Final = TypeAdapter(tuple[EntityRollupRow, ...])
 _GUARDRAIL_SPEND_ADAPTER: Final = TypeAdapter(tuple[GuardrailSpendRow, ...])
 _KEY_SPEND_ADAPTER: Final = TypeAdapter(tuple[KeySpendRow, ...])
@@ -114,6 +114,44 @@ _KEY_PAGE_TOTAL_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(int)
 _USER_SPEND_ADAPTER: Final = TypeAdapter(tuple[UserSpendRow, ...])
 _EXPORT_ADAPTER: Final = TypeAdapter(tuple[ExportRow, ...])
 _METADATA_TAGS_ADAPTER: Final = TypeAdapter(list[StrictStr])
+
+
+class _CustomerDailyRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    date: str
+    api_key: str
+    end_user_id: str | None
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+    compression_saved_tokens: int
+    compression_savings_spend: float
+    prompt_caching_savings_spend: float
+    gateway_injected_caching_savings_spend: float
+    autorouter_savings_spend: float
+    spend: float
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    total_response_time_ms: int
+    timed_requests: int
+    model: str | None = None
+    model_group: str | None = None
+    custom_llm_provider: str | None = None
+    mcp_namespaced_tool_name: str | None = None
+    endpoint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _CustomerDailyRowsResult:
+    total_count: int
+    rows: tuple[_CustomerDailyRow, ...]
+
+
+_CUSTOMER_DAILY_ROWS_ADAPTER: Final = TypeAdapter(tuple[_CustomerDailyRowsResult])
 
 
 def _metadata_tags(value: object) -> tuple[str, ...]:
@@ -329,6 +367,11 @@ class DailyActivityRepository:
         )
 
     async def daily_rows(self, scope: DailyActivityScope, *, page: int, page_size: int) -> DailyRowsPage:
+        if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None:
+            result: Final = _CUSTOMER_DAILY_ROWS_ADAPTER.validate_python(
+                await self._query(build_customer_daily_rows_sql(scope, page=page, page_size=page_size))
+            )[0]
+            return DailyRowsPage(total_count=result.total_count, rows=result.rows)
         table: Final = _daily_rows_table(self._prisma_client, scope.table)
         adjusted_start, adjusted_end = adjust_dates_for_timezone(
             scope.start_date,
@@ -346,16 +389,6 @@ class DailyActivityRepository:
             if scope.exclude_entity_ids
             else {}
         )
-        filtered_keys: Final = (
-            tuple(
-                row["api_key"]
-                for row in _FILTERED_KEYS_ADAPTER.validate_python(
-                    await self._query(build_customer_filtered_keys_sql(scope))
-                )
-            )
-            if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None
-            else scope.api_keys
-        )
         conditions: Final = {
             "date": {"gte": adjusted_start, "lte": adjusted_end},
             **({scope.entity_id_field: {"in": list(scope.entity_ids)}} if scope.entity_ids is not None else {}),
@@ -367,7 +400,7 @@ class DailyActivityRepository:
                 if scope.model
                 else {}
             ),
-            **({"api_key": {"in": list(filtered_keys)}} if filtered_keys is not None else {}),
+            **({"api_key": {"in": list(scope.api_keys)}} if scope.api_keys is not None else {}),
         }
         count, rows = await asyncio.gather(
             table.count(where=conditions),

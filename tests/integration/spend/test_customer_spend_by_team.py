@@ -1,6 +1,7 @@
 import uuid
 from hashlib import sha256
 from datetime import datetime, timedelta, timezone
+from time import perf_counter
 from typing import Final
 
 import pytest
@@ -119,3 +120,66 @@ def test_customer_spend_by_current_team_and_team_filter(gateway: Gateway, route:
                 legacy_teams: Final = legacy_body.results[0].breakdown.teams or {}
                 assert set(legacy_teams) == {team}
                 assert legacy_teams[team].metrics.spend == legacy_body.metadata.total_spend
+
+
+@pytest.mark.parametrize("route", ("/customer/daily/activity", "/customer/daily/activity/aggregated"))
+def test_large_customer_team_reports_keep_filters_and_pagination(gateway: Gateway, route: str) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team(team_alias="large-customer-team")
+        customer: Final = f"large-customer-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(write_rows, 'DELETE FROM "LiteLLM_VerificationToken" WHERE team_id=%s', (team,))
+        scenario.cleanups.callback(
+            write_rows, 'DELETE FROM "LiteLLM_DailyEndUserSpend" WHERE end_user_id=%s', (customer,)
+        )
+        write_rows(
+            'INSERT INTO "LiteLLM_VerificationToken" (token,models,team_id) '
+            "SELECT encode(sha256(convert_to(%s||i,'UTF8')),'hex'),ARRAY[]::text[],%s "
+            "FROM generate_series(1,33000) i",
+            (customer, team),
+        )
+        write_rows(
+            'INSERT INTO "LiteLLM_DailyEndUserSpend" '
+            "(id,end_user_id,date,api_key,model,spend,api_requests,updated_at) "
+            "SELECT %s||lpad(i::text,5,'0'),%s,'2026-02-03',"
+            "encode(sha256(convert_to(%s||i,'UTF8')),'hex'),"
+            "CASE WHEN i%%2=1 THEN 'large-model-a' ELSE 'large-model-b' END,"
+            "CASE WHEN i%%2=1 THEN 0.25 ELSE 0.5 END,1,now() FROM generate_series(1,33000) i",
+            (customer, customer, customer),
+        )
+        write_rows('ANALYZE "LiteLLM_VerificationToken"', ())
+        write_rows('ANALYZE "LiteLLM_DeletedVerificationToken"', ())
+        write_rows('ANALYZE "LiteLLM_DailyEndUserSpend"', ())
+        key: Final = sha256(f"{customer}1".encode()).hexdigest()
+        base: Final = (
+            f"{route}?end_user_ids={customer}&team_ids={team}&start_date=2026-02-03&end_date=2026-02-03&page_size=10"
+        )
+        aggregated: Final = route.endswith("aggregated")
+        for suffix, spend, pages in (
+            ("", 12375.0 if aggregated else 3.75, 3300),
+            ("&model=large-model-a", 4125.0 if aggregated else 2.5, 1650),
+            (f"&api_key={key}", 0.25, 1),
+            (f"&api_key={key}&model=large-model-a", 0.25, 1),
+            (f"&api_key={key}&model=large-model-b", 0.0, 0),
+        ):
+            started: Final = perf_counter()
+            response: Final = gateway.request("GET", base + suffix)
+            print(f"large-team {route} {suffix!r}: {response.status_code}, {perf_counter() - started:.3f}s")
+            assert response.status_code == 200, response.text
+            body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(response.content)
+            assert body.metadata.total_spend == spend
+            assert (
+                sum(
+                    sum(bucket.metrics.spend for bucket in (day.breakdown.teams or {}).values()) for day in body.results
+                )
+                == spend
+            )
+            if not aggregated:
+                assert body.metadata.total_pages == pages
+                assert body.metadata.has_more == (pages > 1)
+        if not aggregated:
+            second: Final = gateway.request("GET", base + "&page=2")
+            assert second.status_code == 200, second.text
+            second_body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(second.content)
+            assert second_body.metadata.total_spend == 3.75
+            expected_keys: Final = {sha256(f"{customer}{i}".encode()).hexdigest() for i in range(11, 21)}
+            assert set(second_body.results[0].breakdown.api_keys) == expected_keys

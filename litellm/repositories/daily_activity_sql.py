@@ -189,11 +189,18 @@ def build_customer_team_rollup_sql(scope: DailyActivityScope, *, row_ids: tuple[
     )
 
 
-def build_customer_filtered_keys_sql(scope: DailyActivityScope) -> SqlQuery:
+def build_customer_daily_rows_sql(scope: DailyActivityScope, *, page: int, page_size: int) -> SqlQuery:
     where_clause, params = build_where_clause(scope)
     return SqlQuery(
-        sql=f'SELECT DISTINCT api_key FROM "{PRISMA_TO_PG_TABLE[scope.table]}" WHERE {where_clause}',
-        params=params,
+        sql=f'''WITH filtered AS MATERIALIZED (
+                SELECT * FROM "{PRISMA_TO_PG_TABLE[scope.table]}" WHERE {where_clause}
+            )
+            SELECT (SELECT COUNT(*) FROM filtered)::bigint AS total_count,
+                COALESCE((SELECT jsonb_agg(page_rows) FROM (
+                    SELECT * FROM filtered ORDER BY date DESC, id ASC
+                    OFFSET ${len(params) + 1} LIMIT ${len(params) + 2}
+                ) page_rows), '[]'::jsonb) AS rows''',
+        params=(*params, (page - 1) * page_size, page_size),
     )
 
 
