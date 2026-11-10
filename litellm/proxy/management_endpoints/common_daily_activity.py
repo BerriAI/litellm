@@ -287,12 +287,12 @@ def compute_tag_metadata_totals(records: Sequence[DailySpendRecord]) -> SpendMet
 
 
 def _entity_metadata(
-    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    entity_metadata_field: Mapping[str, Mapping[str, object]] | None,
     entity_id: str,
 ) -> dict[str, object]:
     """The metadata payload for one entity breakdown bucket, empty when the caller passed none."""
     stored: Final = entity_metadata_field.get(entity_id) if entity_metadata_field else None
-    return stored if stored is not None else {}
+    return dict(stored) if stored is not None else {}
 
 
 def provider_bucket_metadata(provider: str, base: Mapping[str, object]) -> Mapping[str, object]:
@@ -1039,7 +1039,7 @@ def _fold_entity_rollups_sync(
     results: Sequence[DailySpendData],
     entity_rows: Sequence[EntityRollupRow],
     api_key_metadata: Mapping[str, KeyMetadataRow],
-    entity_metadata_field: Mapping[str, dict[str, object]] | None,  # mutable-ok: shared field shape
+    entity_metadata_field: Mapping[str, Mapping[str, object]] | None,
 ) -> None:
     """Write breakdown.entities onto the already-built per-day results."""
     by_date: Final = {day.date.strftime("%Y-%m-%d"): day for day in results}
@@ -1113,6 +1113,19 @@ async def _guardrail_spend_or_empty(
         return ()
 
 
+async def _user_entity_metadata(
+    repository: DailyActivityRepository, entity_rows: Sequence[EntityRollupRow]
+) -> Mapping[str, Mapping[str, object]]:
+    user_ids: Final = frozenset(row.entity_id for row in entity_rows if row.entity_id)
+    users: Final = await repository.user_metadata(user_ids)
+    return MappingProxyType(
+        {
+            user_id: MappingProxyType({"user_email": user.user_email, "user_alias": user.user_alias})
+            for user_id, user in users.items()
+        }
+    )
+
+
 async def get_daily_activity_aggregated(
     repository: DailyActivityRepository,
     scope: DailyActivityScope,
@@ -1157,12 +1170,17 @@ async def get_daily_activity_aggregated(
                 if entity_api_keys
                 else MappingProxyType({})
             )
+            user_entity_metadata: Final[Mapping[str, Mapping[str, object]]] = (
+                await _user_entity_metadata(repository, entity_records)
+                if scope.table is DailyActivityTable.USER
+                else MappingProxyType({})
+            )
             await asyncio.to_thread(
                 _fold_entity_rollups_sync,
                 results=aggregated["results"],
                 entity_rows=entity_records,
                 api_key_metadata=entity_key_metadata,
-                entity_metadata_field=entity_metadata_field,
+                entity_metadata_field=MappingProxyType({**user_entity_metadata, **(entity_metadata_field or {})}),
             )
         results: Final = (
             list(await asyncio.to_thread(_with_guardrail_breakdown, aggregated["results"], guardrail_rows))
