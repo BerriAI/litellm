@@ -161,6 +161,7 @@ class LiteLLMBudgetTable(BaseModel):
 
 
 class KeyInfo(BaseModel):
+    user_id: str | None = None
     key_alias: str | None = None
     status: str | None = None
     metadata: KeyMetadata | None = None
@@ -183,6 +184,10 @@ class KeyInfo(BaseModel):
 
 class KeyInfoResponse(BaseModel):
     info: KeyInfo
+
+
+class BulkKeyInfoResponse(BaseModel, frozen=True):
+    info: list[KeyInfo]
 
 
 # ---------- customers ----------
