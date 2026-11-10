@@ -80,6 +80,12 @@ class CustomGuardrailPathError(Exception):
     class must stop startup instead of being skipped by init_guardrails_v2."""
 
 
+def _class_path(instance_path: str, cls: type) -> str:
+    entry_module: Final = instance_path.rsplit(".", 1)[0]
+    defined_in_entry_module: Final = entry_module == cls.__module__ or entry_module.endswith(f"/{cls.__module__}")
+    return f"{entry_module if defined_in_entry_module else cls.__module__}.{cls.__name__}"
+
+
 class _GuardrailRowLike(Protocol):
     @property
     def guardrail_id(self) -> str: ...
@@ -911,12 +917,11 @@ class InMemoryGuardrailHandler:
             guardrail_type, config_file_path=config_file_path
         )
         if isinstance(_guardrail_class, CustomLogger):
-            class_name: Final = type(_guardrail_class).__name__
             raise CustomGuardrailPathError(
-                f"Guardrail '{guardrail['guardrail_name']}' sets guardrail: {guardrail_type}, which is a {class_name} "
-                "instance, but the proxy builds each guardrail itself and needs the class. Point it at the class, "
-                f"e.g. `guardrail: {guardrail_type.rsplit('.', 1)[0]}.{class_name}`. Instances like this one belong "
-                "under litellm_settings.callbacks."
+                f"Guardrail '{guardrail['guardrail_name']}' sets guardrail: {guardrail_type}, which is a "
+                f"{type(_guardrail_class).__name__} instance, but the proxy builds each guardrail itself and needs the "
+                f"class. Point it at the class, e.g. `guardrail: {_class_path(guardrail_type, type(_guardrail_class))}`. "
+                "Instances like this one belong under litellm_settings.callbacks."
             )
 
         mode: Final = litellm_params.mode

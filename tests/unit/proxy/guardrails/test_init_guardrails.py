@@ -9,6 +9,7 @@ import pytest
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_registry import CustomGuardrailPathError, InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.guardrails import Mode, SupportedGuardrailIntegrations
 
 
@@ -431,13 +432,29 @@ def test_init_guardrails_v2_stops_boot_when_a_custom_code_guardrail_does_not_com
         init_guardrails_v2(all_guardrails=all_guardrails)
 
 
-def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_an_instance(tmp_path: Path) -> None:
-    (tmp_path / "custom_callbacks.py").write_text(
-        "from litellm.integrations.custom_logger import CustomLogger\n\n\n"
-        "class MyCustomHandler(CustomLogger):\n"
-        "    pass\n\n\n"
-        "proxy_handler_instance = MyCustomHandler()\n"
-    )
+@pytest.mark.parametrize(
+    ("module_source", "class_path"),
+    [
+        (
+            "from litellm.integrations.custom_logger import CustomLogger\n\n\n"
+            "class MyCustomHandler(CustomLogger):\n"
+            "    pass\n\n\n"
+            "proxy_handler_instance = MyCustomHandler()\n",
+            "custom_callbacks.MyCustomHandler",
+        ),
+        (
+            "from litellm.integrations.custom_logger import CustomLogger as Handler\n\n"
+            "proxy_handler_instance = Handler()\n",
+            "litellm.integrations.custom_logger.CustomLogger",
+        ),
+    ],
+    ids=["class_defined_in_module", "class_imported_under_alias"],
+)
+def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_an_instance(
+    tmp_path: Path, module_source: str, class_path: str
+) -> None:
+    (tmp_path / "custom_callbacks.py").write_text(module_source)
+    config_file_path: Final = str(tmp_path / "config.yaml")
     all_guardrails: Final = [
         {
             "guardrail_name": "my-guard",
@@ -446,13 +463,14 @@ def test_init_guardrails_v2_stops_boot_when_a_custom_guardrail_path_names_an_ins
     ]
 
     with pytest.raises(CustomGuardrailPathError) as exc_info:
-        init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=str(tmp_path / "config.yaml"))
+        init_guardrails_v2(all_guardrails=all_guardrails, config_file_path=config_file_path)
 
     message: Final = str(exc_info.value)
     assert "'my-guard'" in message
     assert "custom_callbacks.proxy_handler_instance" in message
-    assert "guardrail: custom_callbacks.MyCustomHandler" in message
+    assert f"guardrail: {class_path}`" in message
     assert "litellm_settings.callbacks" in message
+    assert isinstance(get_instance_fn(class_path, config_file_path=config_file_path), type)
 
 
 def test_init_guardrails_v2_accepts_during_call_advisory_mode():
