@@ -958,6 +958,27 @@ def test_gemini_4_argon_google_rows_carry_supports_continuation_in_both_cost_map
     assert _supports_continuation_rows(BACKUP_PRICES_PATH) == main_rows
 
 
+def test_gemini_4_carbon_rows_share_the_gemini_3_search_allowance_in_both_cost_map_copies() -> None:
+    main_rows: Final = _search_free_requests_rows(PRICES_PATH)
+    # 5,000 free grounding requests per month shared across Gemini 3 and newer:
+    # https://ai.google.dev/gemini-api/docs/pricing#gemini-4-carbon and
+    # https://cloud.google.com/vertex-ai/generative-ai/pricing (2026-11-10)
+    carbon_rows: Final = {
+        "gemini/gemini-4-carbon",
+        "vertex_ai/gemini-4-carbon",
+        "vertex_ai/gemini-4-carbon-cyber-permissive",
+    }
+    assert carbon_rows <= main_rows.keys(), sorted(main_rows)
+    gemini_3_allowances: Final = {
+        json.dumps(main_rows[key]["search_free_requests"], sort_keys=True)
+        for key in ("gemini/gemini-3.8-flash", "vertex_ai/gemini-3.8-flash")
+    }
+    assert {
+        json.dumps(main_rows[key]["search_free_requests"], sort_keys=True) for key in carbon_rows
+    } == gemini_3_allowances
+    assert _search_free_requests_rows(BACKUP_PRICES_PATH) == main_rows
+
+
 @pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
 def test_search_free_requests_rows_are_grounding_rows_with_one_allowance_per_group(path: Path) -> None:
     rows = _search_free_requests_rows(path)
