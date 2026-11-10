@@ -9554,7 +9554,13 @@ def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
+            from litellm._logging import debug_message_redaction_active
+            from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
+
+            printable: Final = (
+                redact_logged_message_content(print_statement) if debug_message_redaction_active() else print_statement
+            )
+            print(printable)  # noqa: T201  # set_verbose prints the line it logs
     except Exception:
         pass
 

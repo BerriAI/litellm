@@ -615,7 +615,13 @@ def print_verbose(
         elif log_level == "ERROR":
             verbose_logger.error(print_statement)
         if litellm.set_verbose is True and logger_only is False:
-            print(print_statement)  # noqa: T201
+            from litellm._logging import debug_message_redaction_active
+            from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
+
+            printable: Final = (
+                redact_logged_message_content(print_statement) if debug_message_redaction_active() else print_statement
+            )
+            print(printable)  # noqa: T201  # set_verbose prints the line it logs
     except Exception:
         pass
 
@@ -9110,6 +9116,19 @@ def _debug_params_repr(params: Mapping[str, object]) -> str:
     return "{" + ", ".join(f"{key!r}: {_debug_arg_repr(value)}" for key, value in params.items()) + "}"
 
 
+def _debug_kwargs_for_log(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm._logging import debug_message_redaction_active
+    from litellm.litellm_core_utils.redact_messages import (
+        call_kwargs_opt_into_message_redaction,
+        redact_debug_call_argument,
+    )
+
+    redacted: Final = redact_credentials_in_payload(kwargs)
+    if not debug_message_redaction_active() and not call_kwargs_opt_into_message_redaction(kwargs):
+        return redacted
+    return {key: redact_debug_call_argument(key, value) for key, value in redacted.items()}
+
+
 def print_args_passed_to_litellm(original_function, args, kwargs):
     if not is_debugging_on():
         return
@@ -9130,24 +9149,28 @@ def print_args_passed_to_litellm(original_function, args, kwargs):
         ):
             return
 
+        from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
+        from litellm.litellm_core_utils.redact_messages import call_kwargs_opt_into_message_redaction
+
         args_str: Final = ", ".join(map(_debug_arg_repr, args))
-        redacted_kwargs: Final = redact_credentials_in_payload(kwargs)
-        kwargs_str: Final = ", ".join(f"{key}={_debug_arg_repr(value)}" for key, value in redacted_kwargs.items())
-        print_verbose(
-            "\n",
-        )  # new line before
-        print_verbose(
-            "\033[92mRequest to litellm:\033[0m",
-        )
-        if args and kwargs:
-            print_verbose(f"\033[92mlitellm.{original_function.__name__}({args_str}, {kwargs_str})\033[0m")
-        elif args:
-            print_verbose(f"\033[92mlitellm.{original_function.__name__}({args_str})\033[0m")
-        elif kwargs:
-            print_verbose(f"\033[92mlitellm.{original_function.__name__}({kwargs_str})\033[0m")
-        else:
-            print_verbose(f"\033[92mlitellm.{original_function.__name__}()\033[0m")
-        print_verbose("\n")  # new line after
+        logged_kwargs: Final = _debug_kwargs_for_log(kwargs)
+        kwargs_str: Final = ", ".join(f"{key}={_debug_arg_repr(value)}" for key, value in logged_kwargs.items())
+        with inherit_message_logging_privacy(call_kwargs_opt_into_message_redaction(kwargs)):
+            print_verbose(
+                "\n",
+            )  # new line before
+            print_verbose(
+                "\033[92mRequest to litellm:\033[0m",
+            )
+            if args and kwargs:
+                print_verbose(f"\033[92mlitellm.{original_function.__name__}({args_str}, {kwargs_str})\033[0m")
+            elif args:
+                print_verbose(f"\033[92mlitellm.{original_function.__name__}({args_str})\033[0m")
+            elif kwargs:
+                print_verbose(f"\033[92mlitellm.{original_function.__name__}({kwargs_str})\033[0m")
+            else:
+                print_verbose(f"\033[92mlitellm.{original_function.__name__}()\033[0m")
+            print_verbose("\n")  # new line after
     except Exception:
         # This should always be non blocking
         pass

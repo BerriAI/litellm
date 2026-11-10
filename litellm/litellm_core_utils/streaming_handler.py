@@ -261,8 +261,21 @@ def is_async_iterable(obj: object) -> bool:
 
 def print_verbose(print_statement: object):
     try:
-        if litellm.set_verbose:
-            print(print_statement)  # noqa: T201
+        if not litellm.set_verbose:
+            return
+        from litellm._logging import debug_message_redaction_active
+        from litellm.constants import REDACTED_BY_LITELLM
+        from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
+
+        if not debug_message_redaction_active():
+            print(print_statement)  # noqa: T201  # set_verbose prints the streaming debug line
+            return
+        redacted: Final = redact_logged_message_content(print_statement)
+        # Callers interpolate the reply into the string before this runs, so a plain
+        # line has no message field left for the structured redactor to replace.
+        unchanged_text: Final = isinstance(redacted, str) and redacted == print_statement
+        printable: Final = REDACTED_BY_LITELLM if unchanged_text else redacted
+        print(printable)  # noqa: T201  # set_verbose prints the streaming debug line
     except Exception:
         pass
 

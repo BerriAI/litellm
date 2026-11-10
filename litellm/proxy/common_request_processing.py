@@ -78,6 +78,7 @@ from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -89,6 +90,7 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.redact_messages import proxy_request_opts_into_message_redaction
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias, resolve_served_model
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.served_output_texts import (
@@ -3160,38 +3162,42 @@ class ProxyBaseLLMRequestProcessing:
                 dispatched_call_type=self.route_type,
             )
 
-        return await open_sse_before_first_byte(
-            self._within_total_timeout(
-                request=request,
-                route_type=route_type,
-                is_streaming_request=is_streaming_request,
-                processing=self._process_llm_request(
+        with inherit_message_logging_privacy(
+            litellm.turn_off_message_logging is True
+            or proxy_request_opts_into_message_redaction(self.data, request.headers)
+        ):
+            return await open_sse_before_first_byte(
+                self._within_total_timeout(
                     request=request,
-                    fastapi_response=fastapi_response,
-                    user_api_key_dict=user_api_key_dict,
                     route_type=route_type,
-                    proxy_logging_obj=proxy_logging_obj,
-                    general_settings=general_settings,
-                    proxy_config=proxy_config,
-                    select_data_generator=select_data_generator,
-                    llm_router=llm_router,
-                    model=model,
-                    user_model=user_model,
-                    user_temperature=user_temperature,
-                    user_request_timeout=user_request_timeout,
-                    user_max_tokens=user_max_tokens,
-                    user_api_base=user_api_base,
-                    version=version,
                     is_streaming_request=is_streaming_request,
-                    contents=contents,
-                    skip_pre_call_logic=skip_pre_call_logic,
-                    first_chunk_framing=sse_framing.first_chunk,
+                    processing=self._process_llm_request(
+                        request=request,
+                        fastapi_response=fastapi_response,
+                        user_api_key_dict=user_api_key_dict,
+                        route_type=route_type,
+                        proxy_logging_obj=proxy_logging_obj,
+                        general_settings=general_settings,
+                        proxy_config=proxy_config,
+                        select_data_generator=select_data_generator,
+                        llm_router=llm_router,
+                        model=model,
+                        user_model=user_model,
+                        user_temperature=user_temperature,
+                        user_request_timeout=user_request_timeout,
+                        user_max_tokens=user_max_tokens,
+                        user_api_base=user_api_base,
+                        version=version,
+                        is_streaming_request=is_streaming_request,
+                        contents=contents,
+                        skip_pre_call_logic=skip_pre_call_logic,
+                        first_chunk_framing=sse_framing.first_chunk,
+                    ),
                 ),
-            ),
-            ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
-            on_late_failure=_audit_late_failure,
-            late_framing=ANTHROPIC_LATE_SSE_FRAMING if answers_as_anthropic else sse_framing.late,
-        )
+                ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
+                on_late_failure=_audit_late_failure,
+                late_framing=ANTHROPIC_LATE_SSE_FRAMING if answers_as_anthropic else sse_framing.late,
+            )
 
     def total_timeout_for(
         self, request: Request, route_type: ProxyRouteType, is_streaming_request: bool | None

@@ -7,9 +7,11 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
+import ast
 import asyncio
 import copy
 import inspect
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final, Protocol
@@ -25,6 +27,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     has_attributes,
 )
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.vertex_ai.common_utils import (
@@ -50,6 +53,32 @@ class _HasArguments(Protocol):
 
 
 MESSAGE_REDACTION_ENABLE_HEADERS: Final = ("litellm-enable-message-redaction", "x-litellm-enable-message-redaction")
+_LOGGED_MESSAGE_TEXT_KEYS: Final = frozenset(
+    {
+        "args",
+        "arguments",
+        "content",
+        "encrypted_content",
+        "input",
+        "inputText",
+        "instructions",
+        "message",
+        "output_text",
+        "prompt",
+        "reasoning_content",
+        "reasoning_text",
+        "refusal",
+        "response",
+        "system",
+        "text",
+        "thinking",
+        "transcript",
+    }
+)
+_DEBUG_CALL_ARGUMENT_KEYS: Final = _LOGGED_MESSAGE_TEXT_KEYS | frozenset({"messages"})
+_MAX_LOG_REDACTION_DEPTH: Final = 32
+_MAX_LOGGED_SPAN_ATTEMPTS: Final = 32
+_LOGGED_STRUCTURE: Final = TypeAdapter(object)
 
 
 def _opted_out_of_message_logging(custom_logger: CustomLogger) -> bool:
@@ -709,7 +738,279 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
         return _result
 
 
-def should_redact_message_logging(model_call_details: dict) -> bool:
+def redact_logged_message_content(value: object) -> object:
+    """Copy of a debug payload with prompt and completion text replaced.
+
+    Model names, ids, token counts, and error strings stay. The same marker callback
+    logs already use is written in place of message text, so a process log cannot
+    keep a copy of the prompt or the reply.
+    """
+    return _redact_logged_value(value, 0)
+
+
+def _redact_logged_value(value: object, depth: int) -> object:
+    if depth >= _MAX_LOG_REDACTION_DEPTH:
+        return REDACTED_BY_LITELLM
+    if isinstance(value, str):
+        return _redact_logged_string(value, depth)
+    if isinstance(value, BaseModel):
+        return _redact_logged_model(value, depth)
+    if isinstance(value, dict):
+        return {key: _redact_logged_field(key, item, depth) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_redact_logged_value(item, depth + 1) for item in value)
+    if isinstance(value, list):
+        return [_redact_logged_value(item, depth + 1) for item in value]
+    return value
+
+
+def _repr_hidden_fields(model_type: type[BaseModel]) -> frozenset[str]:
+    return frozenset(name for name, field in model_type.model_fields.items() if not field.repr)
+
+
+def _extra_mapping(value: BaseModel) -> Mapping[str, object]:
+    extra: Final = getattr(value, "__pydantic_extra__", None)
+    if not isinstance(extra, dict):
+        return {}
+    return {key: item for key, item in extra.items() if isinstance(key, str)}
+
+
+def _visible_model_mapping(value: BaseModel) -> Mapping[str, object]:
+    """Field values a log may show. ``repr=False`` fields, such as a password, stay out."""
+    hidden: Final = _repr_hidden_fields(type(value))
+    declared: Final = frozenset(type(value).model_fields)
+    extra: Final = _extra_mapping(value)
+    visible_declared: Final = {
+        name: extra[name] if name in extra else getattr(value, name, None)
+        for name in declared
+        if name not in hidden
+    }
+    visible_extra: Final = {key: item for key, item in extra.items() if _keep_logged_extra(key, declared, hidden)}
+    return {**visible_declared, **visible_extra}
+
+
+def _keep_logged_extra(key: str, declared: frozenset[str], hidden: frozenset[str]) -> bool:
+    return key not in declared and key not in hidden
+
+
+def _redact_logged_model(value: BaseModel, depth: int) -> object:
+    try:
+        visible: Final = _visible_model_mapping(value)
+    except (TypeError, ValueError):
+        return REDACTED_BY_LITELLM
+    return _redact_logged_value(visible, depth + 1)
+
+
+def _redact_logged_field(key: object, item: object, depth: int) -> object:
+    if isinstance(key, str) and key in _LOGGED_MESSAGE_TEXT_KEYS:
+        return _redact_logged_text_field(item, depth)
+    return _redact_logged_value(item, depth + 1)
+
+
+def _redact_logged_text_field(item: object, depth: int) -> object:
+    if isinstance(item, str):
+        return item if item == "" else REDACTED_BY_LITELLM
+    return _redact_text_tree(item, depth)
+
+
+def _redact_text_tree(item: object, depth: int) -> object:
+    """Every string under a message field is content, including tool arguments and tool results."""
+    if depth >= _MAX_LOG_REDACTION_DEPTH:
+        return REDACTED_BY_LITELLM
+    if isinstance(item, str):
+        return item if item == "" else REDACTED_BY_LITELLM
+    if isinstance(item, dict):
+        return {key: _redact_text_tree(child, depth + 1) for key, child in item.items()}
+    if isinstance(item, list):
+        return [_redact_text_tree(child, depth + 1) for child in item]
+    if isinstance(item, tuple):
+        return tuple(_redact_text_tree(child, depth + 1) for child in item)
+    if isinstance(item, BaseModel):
+        return _redact_text_tree(_visible_model_mapping(item), depth + 1)
+    return item
+
+
+def _redact_logged_string(value: str, depth: int) -> str:
+    if "{" not in value and "[" not in value:
+        return value
+    if "}" not in value and "]" not in value:
+        return value
+    pieces: Final[list[str]] = []  # mutable-ok: one left-to-right scan of a log line
+    cursor = 0  # rebind-ok: the scan walks the line once
+    attempts = 0  # rebind-ok: counts failed span parses so a bracket flood cannot rescan the line
+    while cursor < len(value):
+        opener: Final = _next_logged_opener(value, cursor)
+        if opener is None:
+            pieces.append(value[cursor:])
+            break
+        if _no_logged_closer_after(value, opener):
+            pieces.append(value[cursor:])
+            break
+        end: Final = _logged_span_end(value, opener)
+        parsed: Final = None if end is None else _parse_logged_structure(value[opener:end])
+        if end is None or parsed is None:
+            attempts += 1
+            if attempts >= _MAX_LOGGED_SPAN_ATTEMPTS:
+                pieces.append(value[cursor:])
+                break
+            pieces.append(value[cursor : opener + 1])
+            cursor = opener + 1
+            continue
+        redacted: Final = _redact_logged_value(parsed[0], depth + 1)
+        rendered: Final = value[opener:end] if redacted == parsed[0] else _render_logged_structure(redacted, parsed[1])
+        pieces.append(value[cursor:opener])
+        pieces.append(rendered)
+        cursor = end
+    return "".join(pieces)
+
+
+def _no_logged_closer_after(value: str, start: int) -> bool:
+    return value.find("}", start) < 0 and value.find("]", start) < 0
+
+
+def _parse_logged_structure(span: str) -> tuple[object, bool] | None:
+    loaded: Final = safe_json_loads(span, default=None)
+    if isinstance(loaded, (dict, list)):
+        return (loaded, True)
+    try:
+        literal: Final = _LOGGED_STRUCTURE.validate_python(ast.literal_eval(span))
+    except (ValueError, SyntaxError, MemoryError, TypeError):
+        return None
+    if isinstance(literal, (dict, list, tuple)):
+        return (literal, False)
+    return None
+
+
+def _render_logged_structure(value: object, as_json: bool) -> str:
+    if not as_json:
+        return str(value)
+    try:
+        return json.dumps(value)
+    except TypeError:
+        return str(value)
+
+
+def _next_logged_opener(value: str, start: int) -> int | None:
+    brace: Final = value.find("{", start)
+    bracket: Final = value.find("[", start)
+    if brace < 0:
+        return None if bracket < 0 else bracket
+    if bracket < 0:
+        return brace
+    return min(brace, bracket)
+
+
+def _logged_span_end(value: str, start: int) -> int | None:
+    closers: Final = {"}": "{", "]": "["}
+    stack: Final[list[str]] = []  # mutable-ok: brace matcher for one log span
+    quote: str | None = None  # rebind-ok: quote state while scanning one log span
+    escaped = False  # rebind-ok: escape state while scanning one log span
+    for index, char in enumerate(value[start:], start):
+        if quote is not None:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == quote:
+                quote = None
+            continue
+        if char in ("'", '"'):
+            quote = char
+            continue
+        if char in "{[":
+            stack.append(char)
+            continue
+        if char not in "}]":
+            continue
+        if not stack or stack[-1] != closers[char]:
+            return None
+        stack.pop()
+        if not stack:
+            return index + 1
+    return None
+
+
+def redact_debug_call_argument(key: str, value: object) -> object:
+    """Replacement for one argument of a ``litellm.<call>(...)`` debug line."""
+    if key not in _DEBUG_CALL_ARGUMENT_KEYS or value is None or value in ("", [], {}):
+        return value
+    return REDACTED_BY_LITELLM
+
+
+def _flag_is_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return str_to_bool(value) is True
+    return False
+
+
+def _headers_disable_message_redaction(headers: object) -> bool:
+    return isinstance(headers, Mapping) and _flag_is_true(headers.get("litellm-disable-message-redaction"))
+
+
+def _headers_enable_message_redaction(headers: object) -> bool:
+    if not isinstance(headers, Mapping) or _headers_disable_message_redaction(headers):
+        return False
+    return any(_flag_is_true(headers.get(name)) for name in MESSAGE_REDACTION_ENABLE_HEADERS)
+
+
+def _metadata_opts_into_message_redaction(metadata: object) -> bool:
+    if not isinstance(metadata, Mapping) or _headers_disable_message_redaction(metadata.get("headers")):
+        return False
+    if _flag_is_true(metadata.get("turn_off_message_logging")):
+        return True
+    return _headers_enable_message_redaction(metadata.get("headers"))
+
+
+def call_kwargs_opt_into_message_redaction(kwargs: Mapping[str, object]) -> bool:
+    """True when this call asked to keep message content out of logs."""
+    litellm_params: Final = kwargs.get("litellm_params")
+    nested_metadata: Final = litellm_params.get("metadata") if isinstance(litellm_params, Mapping) else None
+    if (
+        _headers_disable_message_redaction(_mapping_headers(kwargs.get("metadata")))
+        or _headers_disable_message_redaction(_mapping_headers(kwargs.get("litellm_metadata")))
+        or _headers_disable_message_redaction(_mapping_headers(nested_metadata))
+    ):
+        return False
+    if _flag_is_true(kwargs.get("turn_off_message_logging")):
+        return True
+    if _metadata_opts_into_message_redaction(kwargs.get("metadata")):
+        return True
+    if _metadata_opts_into_message_redaction(kwargs.get("litellm_metadata")):
+        return True
+    return _metadata_opts_into_message_redaction(nested_metadata)
+
+
+def _mapping_headers(metadata: object) -> object:
+    if not isinstance(metadata, Mapping):
+        return None
+    return metadata.get("headers")
+
+
+def proxy_request_opts_into_message_redaction(data: object, headers: Mapping[str, str]) -> bool:
+    """True when this proxy request asked to keep message content out of logs."""
+    if _headers_disable_message_redaction(headers):
+        return False
+    if isinstance(data, Mapping) and (
+        _headers_disable_message_redaction(_mapping_headers(data.get("metadata")))
+        or _headers_disable_message_redaction(_mapping_headers(data.get("litellm_metadata")))
+    ):
+        return False
+    if _headers_enable_message_redaction(headers):
+        return True
+    if not isinstance(data, Mapping):
+        return False
+    if _flag_is_true(data.get("turn_off_message_logging")):
+        return True
+    if _metadata_opts_into_message_redaction(data.get("metadata")):
+        return True
+    return _metadata_opts_into_message_redaction(data.get("litellm_metadata"))
+
+
+def should_redact_message_logging(model_call_details: Mapping[str, object]) -> bool:
     """
     Determine if message logging should be redacted.
 
@@ -767,7 +1068,7 @@ def redact_message_input_output_from_logging(model_call_details: dict, result, i
 
 
 def _get_turn_off_message_logging_from_dynamic_params(
-    model_call_details: dict,
+    model_call_details: Mapping[str, object],
 ) -> bool | None:
     """
     gets the value of `turn_off_message_logging` from the dynamic params, if it exists.

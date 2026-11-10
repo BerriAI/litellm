@@ -2332,3 +2332,73 @@ def test_perform_redaction_strips_the_matched_text_from_the_bedrock_guardrail_tr
     assert "US_SSN" in redacted.model_dump_json(), "the finding stays, only its matched text goes"
     assert "123-45-6789" not in str(redacted_dict)
     assert "123-45-6789" in response.model_dump_json(), "the caller's own response is not redacted"
+
+
+def test_logged_message_redaction_covers_provider_prompt_fields_and_nested_tool_text():
+    from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
+
+    payload: Final = {
+        "model": "command",
+        "message": "SECRET-COHERE",
+        "inputText": "SECRET-TITAN",
+        "input": {"command": "SECRET-TOOL", "count": 2},
+        "functionCall": {"args": {"q": "SECRET-ARGS"}},
+        "functionResponse": {"response": {"body": "SECRET-RESPONSE", "n": 1}},
+    }
+
+    redacted: Final = redact_logged_message_content(payload)
+
+    rendered: Final = str(redacted)
+    assert "SECRET-COHERE" not in rendered
+    assert "SECRET-TITAN" not in rendered
+    assert "SECRET-TOOL" not in rendered
+    assert "SECRET-ARGS" not in rendered
+    assert "SECRET-RESPONSE" not in rendered
+    assert isinstance(redacted, dict)
+    assert redacted["model"] == "command"
+    assert redacted["input"]["count"] == 2
+    assert redacted["functionResponse"]["response"]["n"] == 1
+
+
+def test_logged_message_redaction_drops_repr_false_fields():
+    from pydantic import BaseModel, Field
+
+    from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
+
+    class StoredUser(BaseModel):
+        user: str
+        password: str = Field(repr=False)
+
+    redacted: Final = redact_logged_message_content(StoredUser(user="ada", password="s3cret-password"))
+
+    assert isinstance(redacted, dict)
+    assert redacted["user"] == "ada"
+    assert "password" not in redacted
+    assert "s3cret-password" not in str(redacted)
+
+
+def test_unmatched_brackets_do_not_make_message_redaction_rescan_the_line():
+    import time
+
+    from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
+
+    started: Final = time.perf_counter()
+    redacted: Final = redact_logged_message_content("[" * 20000)
+    elapsed: Final = time.perf_counter() - started
+
+    assert redacted == "[" * 20000
+    assert elapsed < 1
+
+
+def test_proxy_request_opt_in_reads_the_body_flag_and_the_enable_header():
+    from litellm.litellm_core_utils.redact_messages import proxy_request_opts_into_message_redaction
+
+    assert proxy_request_opts_into_message_redaction({"turn_off_message_logging": True}, {}) is True
+    assert proxy_request_opts_into_message_redaction({}, {"litellm-enable-message-redaction": "true"}) is True
+    assert proxy_request_opts_into_message_redaction({"messages": [{"role": "user", "content": "hi"}]}, {}) is False
+    assert (
+        proxy_request_opts_into_message_redaction(
+            {"turn_off_message_logging": True}, {"litellm-disable-message-redaction": "true"}
+        )
+        is False
+    )

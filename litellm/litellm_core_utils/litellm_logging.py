@@ -145,6 +145,7 @@ from litellm.litellm_core_utils.logging_utils import (
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
+    redact_logged_message_content,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
@@ -936,6 +937,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
         self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
+        self._message_redaction_token = None
+        self._ensure_request_message_redaction()
 
     def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
         """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,
@@ -974,6 +977,7 @@ class Logging(LiteLLMLoggingBaseClass):
         new_call.deferred_success_result = None
         new_call.streaming_chunks = []
         new_call.sync_streaming_chunks = []
+        new_call._message_redaction_token = None
         return new_call
 
     def reset_caching_details(self) -> None:
@@ -1262,6 +1266,37 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+        self._ensure_request_message_redaction()
+
+    def _ensure_request_message_redaction(self) -> None:
+        from contextvars import Token
+
+        from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+            bind_message_logging_privacy,
+            message_logging_is_private,
+        )
+
+        if isinstance(getattr(self, "_message_redaction_token", None), Token) or message_logging_is_private():
+            return
+        if not should_redact_message_logging(self._message_redaction_details()):
+            return
+        self._message_redaction_token = bind_message_logging_privacy()
+
+    def _message_redaction_details(self) -> Mapping[str, object]:
+        return {
+            **self.model_call_details,
+            "litellm_params": self.litellm_params,
+            "standard_callback_dynamic_params": self.standard_callback_dynamic_params,
+        }
+
+    def __del__(self) -> None:
+        from contextvars import Token
+
+        from litellm.litellm_core_utils.initialize_dynamic_callback_params import release_message_logging_privacy
+
+        token: Final = getattr(self, "_message_redaction_token", None)
+        if isinstance(token, Token):
+            release_message_logging_privacy(token)
 
     def record_agentic_loop_params(self, params: AgenticLoopParams) -> None:
         self.model_call_details["agentic_loop_params"] = params
@@ -1848,25 +1883,29 @@ class Logging(LiteLLMLoggingBaseClass):
                     verbose_logger.debug("\x1b[92m%s\x1b[0m\n", curl_command)
 
     def _get_request_body(self, data: dict) -> str:
-        return str(data)
+        if not should_redact_message_logging(self.model_call_details):
+            return str(data)
+        redacted: Final = redact_logged_message_content(data)
+        return redacted if isinstance(redacted, str) else str(redacted)
 
     def _get_request_curl_command(self, api_base: str, headers: dict | None, additional_args: dict, data: dict) -> str:
         masked_api_base: Final = self._get_masked_api_base(api_base)
-        if headers is None:
-            headers = {}
-        curl_command = "\n\nPOST Request Sent from LiteLLM:\n"
-        curl_command += "curl -X POST \\\n"
-        curl_command += f"{masked_api_base} \\\n"
-        masked_headers: Final = self._get_masked_headers(headers)
+        masked_headers: Final = self._get_masked_headers({} if headers is None else headers)
         formatted_headers: Final = " ".join([f"-H '{k}: {v}'" for k, v in masked_headers.items()])
-        curl_command += f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
-        curl_command += f"-d '{self._get_request_body(data)}'\n"
-        if additional_args.get("request_str", None) is not None:
-            # print the sagemaker / bedrock client request
-            curl_command = "\nRequest Sent from LiteLLM:\n"
-            request_str: Final = additional_args.get("request_str", "")
-            curl_command += request_str
-        return curl_command
+        header_line: Final = f"{formatted_headers} \\\n" if formatted_headers.strip() != "" else ""
+        standard: Final = (
+            "\n\nPOST Request Sent from LiteLLM:\n"
+            "curl -X POST \\\n"
+            f"{masked_api_base} \\\n"
+            f"{header_line}"
+            f"-d '{self._get_request_body(data)}'\n"
+        )
+        request_str: Final = additional_args.get("request_str", None)
+        if request_str is None:
+            return standard
+        if should_redact_message_logging(self.model_call_details):
+            return f"\nRequest Sent from LiteLLM:\n{masked_api_base}\n{REDACTED_BY_LITELLM}\n"
+        return f"\nRequest Sent from LiteLLM:\n{request_str}"
 
     def _get_masked_headers(self, headers: dict, ignore_sensitive_headers: bool = False) -> dict:
         """
@@ -1894,11 +1933,15 @@ class Logging(LiteLLMLoggingBaseClass):
                 attr = "debug"
 
             callattr: Final = verbose_logger.warning if attr == "warning" else verbose_logger.debug
-            callattr(
-                "RAW RESPONSE:\n{}\n\n".format(
-                    self._model_call_details_view.get("original_response", self._model_call_details_view)
-                )
+            response_for_log: Final = self._model_call_details_view.get(
+                "original_response", self._model_call_details_view
             )
+            logged_response: Final = (
+                redact_logged_message_content(response_for_log)
+                if should_redact_message_logging(self.model_call_details)
+                else response_for_log
+            )
+            callattr(f"RAW RESPONSE:\n{logged_response}\n\n")
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(

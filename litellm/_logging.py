@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
 from types import FrameType
@@ -23,6 +23,7 @@ from litellm.constants import (
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
+    REDACTED_BY_LITELLM,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
@@ -198,6 +199,61 @@ class SecretRedactionFilter(logging.Filter):
 
 
 _secret_filter: Final = SecretRedactionFilter()
+
+
+def debug_message_redaction_active() -> bool:
+    """True when process logs for this call must not contain message content.
+
+    The global setting covers every call. A request that opts in, or a parent call that
+    already did, covers just that call even when the global setting is off.
+    """
+    if litellm.turn_off_message_logging is True:
+        return True
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import message_logging_is_private
+
+    return message_logging_is_private()
+
+
+class MessageContentLogFilter(logging.Filter):
+    """Applies message-logging privacy to process logs, including debug lines."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not debug_message_redaction_active():
+            return True
+        try:
+            _redact_message_content_record(record)
+        except Exception:  # noqa: BLE001  # a failed redaction must not emit the original payload
+            record.msg = REDACTED_BY_LITELLM  # rebind-ok: Filter mutates the LogRecord
+            record.args = None  # rebind-ok: drop the payload that could not be redacted
+            record.exc_text = None  # rebind-ok: drop traceback text that could not be redacted
+        return True
+
+
+def _redact_message_content_record(record: logging.LogRecord) -> None:
+    from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
+
+    redacted_args: Final = _redacted_log_args(record.args, redact_logged_message_content)
+    if redacted_args is not record.args:
+        record.args = redacted_args  # rebind-ok: Filter mutates the LogRecord
+    if isinstance(record.msg, str):
+        redacted_msg: Final = redact_logged_message_content(record.msg)
+        if isinstance(redacted_msg, str) and redacted_msg != record.msg:
+            record.msg = redacted_msg  # rebind-ok: Filter mutates the LogRecord
+    if isinstance(record.exc_text, str):
+        redacted_exc: Final = redact_logged_message_content(record.exc_text)
+        if isinstance(redacted_exc, str) and redacted_exc != record.exc_text:
+            record.exc_text = redacted_exc  # rebind-ok: Filter mutates the LogRecord
+
+
+def _redacted_log_args(args: object, redact: Callable[[object], object]) -> object:
+    if isinstance(args, tuple):
+        return tuple(redact(arg) for arg in args)
+    if isinstance(args, dict):
+        return redact(args)
+    return args
+
+
+_message_content_filter: Final = MessageContentLogFilter()
 
 
 _MAX_SCRUBBED_ACCESS_ARG: Final = 512
@@ -717,6 +773,7 @@ log_level: Final = os.getenv("LITELLM_LOG", "DEBUG")
 numeric_level: Final[int] = resolve_log_level(log_level)
 handler: Final = LevelRoutingStreamHandler()
 handler.setLevel(numeric_level)
+handler.addFilter(_message_content_filter)
 handler.addFilter(_secret_filter)
 handler.addFilter(_correlation_filter)
 
@@ -950,6 +1007,11 @@ verbose_logger.addHandler(handler)
 
 # Filters attached to the logger, not the handler, survive callers swapping in their own
 # handlers (JSON mode, uvicorn log config, a host app's root handler).
+# Message redaction runs first so a later filter cannot format the prompt into the line.
+verbose_logger.filters.insert(0, _message_content_filter)
+verbose_router_logger.filters.insert(0, _message_content_filter)
+verbose_proxy_logger.filters.insert(0, _message_content_filter)
+verbose_proxy_stdout_logger.filters.insert(0, _message_content_filter)
 verbose_router_logger.addFilter(_diagnostic_filter)
 verbose_proxy_logger.addFilter(_diagnostic_filter)
 verbose_proxy_stdout_logger.addFilter(_diagnostic_filter)
@@ -1112,6 +1174,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Adds a handler to each logger
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
+    handler.addFilter(_message_content_filter)
     handler.addFilter(_secret_filter)
     handler.addFilter(_correlation_filter)
     for lg in _get_loggers_to_initialize():
@@ -1228,9 +1291,19 @@ def print_verbose(print_statement: object, *args: object) -> None:
         if not set_verbose:
             return
         message: Final = str(print_statement) % args if args else str(print_statement)
-        print(redact_secrets(message))  # noqa: T201
+        printable: Final = _message_for_print(message)
+        print(redact_secrets(printable))  # noqa: T201  # set_verbose prints the line it logs
     except Exception:
         pass
+
+
+def _message_for_print(message: str) -> str:
+    if not debug_message_redaction_active():
+        return message
+    from litellm.litellm_core_utils.redact_messages import redact_logged_message_content
+
+    redacted: Final = redact_logged_message_content(message)
+    return redacted if isinstance(redacted, str) else message
 
 
 def is_debugging_on() -> bool:
