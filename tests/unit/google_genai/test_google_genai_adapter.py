@@ -661,9 +661,9 @@ def _call_tags(messages: list[dict[str, object]]) -> dict[str, str]:
 
 
 def _ids_answered_right_after(messages: list[dict[str, object]], index: int) -> list[str]:
-    return sorted(
+    return [
         answer["tool_call_id"] for answer in takewhile(lambda message: message["role"] == "tool", messages[index + 1 :])
-    )
+    ]
 
 
 @pytest.mark.parametrize(
@@ -710,7 +710,7 @@ def test_a_call_a_later_turn_left_unanswered_gets_one_skipped_result_and_the_oth
 
     tag_by_call_id: Final = _call_tags(messages)
     call_ids_per_turn: Final = {
-        index: sorted(call["id"] for call in message["tool_calls"])
+        index: [call["id"] for call in message["tool_calls"]]
         for index, message in enumerate(messages)
         if message.get("tool_calls")
     }

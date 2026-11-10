@@ -396,7 +396,7 @@ def _genai_answered_calls(turns: Sequence[_GenAITurn]) -> tuple[int | None, ...]
 
 
 def _genai_turn_messages(
-    turn: _GenAITurn, call_ids: Sequence[str], response_ids: Sequence[str], skipped: Sequence[bool]
+    turn: _GenAITurn, call_ids: Sequence[str], response_ids: Sequence[str]
 ) -> tuple[AllMessageValues, ...]:
     converted: Final = turn.parts
     if turn.role == "user":
@@ -416,17 +416,23 @@ def _genai_turn_messages(
     text: Final = "".join(part["text"] for part in converted if part["type"] == "text")
     calls: Final = list(map(_genai_tool_call, turn.calls, call_ids))
     assistant_content: Final = list(converted) if any(part["type"] != "text" for part in converted) else text or None
-    skipped_results: Final = (
-        skipped_tool_result(call_id, _function_name(call))
-        for call, call_id, is_skipped in zip(turn.calls, call_ids, skipped)
-        if is_skipped
-    )
     return (
-        ChatCompletionAssistantMessage(role="assistant", content=assistant_content, tool_calls=calls)
+        (ChatCompletionAssistantMessage(role="assistant", content=assistant_content, tool_calls=calls),)
         if calls
-        else ChatCompletionAssistantMessage(role="assistant", content=assistant_content),
-        *skipped_results,
+        else (ChatCompletionAssistantMessage(role="assistant", content=assistant_content),)
     )
+
+
+def _answered_by_next_turn(turns: Sequence[_GenAITurn], index: int) -> bool:
+    return index + 1 < len(turns) and bool(turns[index + 1].responses)
+
+
+def _skipped_results_after(
+    turns: Sequence[_GenAITurn], skipped_results: Sequence[tuple[ChatCompletionToolMessage, ...]], index: int
+) -> tuple[ChatCompletionToolMessage, ...]:
+    previous: Final = skipped_results[index - 1] if index > 0 and _answered_by_next_turn(turns, index - 1) else ()
+    own: Final = () if _answered_by_next_turn(turns, index) else skipped_results[index]
+    return (*previous, *own)
 
 
 def _genai_contents_messages(contents: Sequence[object]) -> tuple[AllMessageValues, ...]:
@@ -444,13 +450,23 @@ def _genai_contents_messages(contents: Sequence[object]) -> tuple[AllMessageValu
     skipped: Final = tuple(index not in answered and call_turns[index] < len(turns) - 1 for index in range(len(calls)))
     call_starts: Final = tuple(accumulate((len(turn.calls) for turn in turns), initial=0))
     response_starts: Final = tuple(accumulate((len(turn.responses) for turn in turns), initial=0))
+    skipped_results: Final = tuple(
+        tuple(
+            skipped_tool_result(call_id, _function_name(call))
+            for call, call_id, is_skipped in zip(turn.calls, call_ids[start:end], skipped[start:end])
+            if is_skipped
+        )
+        for turn, (start, end) in zip(turns, pairwise(call_starts))
+    )
     return tuple(
         chain.from_iterable(
-            _genai_turn_messages(
-                turn,
-                call_ids[call_starts[index] : call_starts[index + 1]],
-                response_ids[response_starts[index] : response_starts[index + 1]],
-                skipped[call_starts[index] : call_starts[index + 1]],
+            (
+                *_genai_turn_messages(
+                    turn,
+                    call_ids[call_starts[index] : call_starts[index + 1]],
+                    response_ids[response_starts[index] : response_starts[index + 1]],
+                ),
+                *_skipped_results_after(turns, skipped_results, index),
             )
             for index, turn in enumerate(turns)
         )
