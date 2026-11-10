@@ -46,6 +46,11 @@
 - A failure after execution starts is terminal and never triggers fallback
 - Creating an unstarted native coroutine acquires no clients or credentials and captures no execution context
 
+# The `LITELLM_RUST` switch
+
+- `decision` treats a blank or invalid `LITELLM_RUST` as unset and caches the parse by raw value. It runs inside SDK calls, so it never fails one over a switch and never validates per call
+- Strict validation belongs to startup. `litellm/proxy/rust_forward/mode.py` validates the same `RustSwitch` type and stops the CLI with one line naming the variable
+
 # Native extension
 
 - `_native` ships in every wheel and the sdist builds it, so it is always importable
