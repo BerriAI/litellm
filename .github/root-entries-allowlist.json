@@ -1,5 +1,4 @@
 {
-  ".cargo": "Cargo configuration discovered by root-invoked Cargo and maturin.",
   ".github": "GitHub workflows, repository automation, policy and ownership discovery.",
   ".gitignore": "Git ignore rules for repository worktrees.",
   "AGENTS.md": "Root instructions discovered by coding agents.",
@@ -11,7 +10,6 @@
   "policy_templates.json": "Published policy templates retained at their existing root URL.",
   "provider_endpoints_support.json": "Published provider endpoint metadata retained at its existing root URL.",
   "pyproject.toml": "Root Python package manifest and workspace configuration.",
-  "rust-toolchain.toml": "Toolchain selection discovered by root-invoked Cargo and maturin.",
   "tests": "Repository-wide test suites and test infrastructure.",
   "uv.lock": "Locked dependency graph for the root Python workspace."
 }
