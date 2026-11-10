@@ -581,15 +581,14 @@ def test_a_process_holding_the_migration_lock_makes_the_build_wait_for_the_next_
 
 @requires_db
 @RESOLVERS
-def test_a_migration_job_that_could_not_build_the_indexes_reports_failure_and_succeeds_when_rerun(
+def test_a_migration_job_that_could_not_build_the_indexes_succeeds_and_a_rerun_builds_them(
     scratch_database: str, use_v2_resolver: bool
 ) -> None:
-    """The migration job waits for the build and exits by run_migration_job's result; a job
-    that exits 0 with the indexes missing would leave the table unindexed until the next
-    deploy or until a serving proxy's background build gets to them."""
+    """The migration job exits by the migrations' result, so an index another replica's lock kept
+    it from building never fails an upgrade, and the next run builds it."""
     with psycopg.connect(scratch_database, autocommit=True) as other_replica:
         other_replica.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
-        assert _migration_job(use_v2_resolver) is False
+        assert _migration_job(use_v2_resolver) is True
         _assert_every_ledger_row_is_finished(scratch_database)
         assert _index_validity(scratch_database, "litellm_call_id_idx") == {}
 

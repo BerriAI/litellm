@@ -1587,9 +1587,7 @@ class TestBuildRequestLogIndexes:
         assert builds.get_nowait() == ("postgresql://u:p@primary:5432/db", "public")
         assert builds.empty()
 
-    def test_a_build_that_leaves_indexes_missing_is_reported_so_the_job_reruns(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_a_build_that_leaves_indexes_missing_is_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
 
         assert ProxyExtrasDBManager.build_request_log_indexes(build=lambda url, schema: False) is False
@@ -1628,8 +1626,8 @@ class TestStartRequestLogIndexBuild:
 
 
 class TestRunMigrationJob:
-    """`run_migration_job` is `setup_database` followed by the index build, each step's
-    result deciding whether the job reports success."""
+    """`run_migration_job` is `setup_database` followed by the index build, the migrations'
+    result alone deciding whether the job reports success."""
 
     @pytest.fixture
     def calls(self) -> SimpleQueue[tuple[str, bool, bool] | tuple[str]]:
@@ -1681,13 +1679,13 @@ class TestRunMigrationJob:
         assert calls.get_nowait() == ("setup", True, True)
         assert calls.empty()
 
-    def test_the_job_fails_when_an_index_could_not_be_built(
+    def test_the_job_succeeds_by_the_migrations_when_an_index_could_not_be_built(
         self,
         calls: SimpleQueue[tuple[str, bool, bool] | tuple[str]],
         setup: Callable[[bool], Callable[[bool, bool], bool]],
         build: Callable[[bool], Callable[[], bool]],
     ) -> None:
-        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(True), build=build(False)) is False
+        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(True), build=build(False)) is True
 
         assert (calls.get_nowait(), calls.get_nowait()) == (("setup", True, True), ("build",))
         assert calls.empty()
