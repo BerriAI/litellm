@@ -42,4 +42,9 @@ jobs:
           MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          uv run --no-project --with pydantic==2.14.1 python scripts/ci_cd/spend_logs_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --approver kerry-berri --reviews "$RUNNER_TEMP/reviews.json"
+          guard=scripts/ci_cd/spend_logs_guard.py
+          # TODO: Drop the legacy path after this lands on main.
+          if [ ! -f "$guard" ]; then
+            guard=ci_cd/spend_logs_guard.py
+          fi
+          uv run --no-project --with pydantic==2.14.1 python "$guard" --base "$MERGE_BASE" --head "$HEAD_SHA" --approver kerry-berri --reviews "$RUNNER_TEMP/reviews.json"

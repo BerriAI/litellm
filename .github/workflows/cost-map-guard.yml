@@ -49,7 +49,12 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          uv run --no-project python scripts/ci_cd/cost_map_guard.py --base "$MERGE_BASE" --head "$HEAD_SHA" --head-ref "$HEAD_REF"
+          guard=scripts/ci_cd/cost_map_guard.py
+          # TODO: Drop the legacy path after this lands on main.
+          if [ ! -f "$guard" ]; then
+            guard=ci_cd/cost_map_guard.py
+          fi
+          uv run --no-project python "$guard" --base "$MERGE_BASE" --head "$HEAD_SHA" --head-ref "$HEAD_REF"
       - name: Check whether the pull request changes the cost map
         id: changed
         env:
