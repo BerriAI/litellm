@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import type { TFunction } from "i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { z } from "zod";
 import { SortingState } from "@tanstack/react-table";
 import { Inbox, Plus, X } from "lucide-react";
@@ -41,12 +43,13 @@ interface MCPToolsetsTabProps {
   userRole: string | null;
 }
 
-const toolsetSchema = z.object({
-  toolset_name: z.string().min(1, "Please enter a toolset name"),
-  description: z.string(),
-});
+const buildToolsetSchema = (t: TFunction) =>
+  z.object({
+    toolset_name: z.string().min(1, t("mcpServers.toolsetsTab.form.errors.nameRequired")),
+    description: z.string(),
+  });
 
-type ToolsetFormValues = z.infer<typeof toolsetSchema>;
+type ToolsetFormValues = z.infer<ReturnType<typeof buildToolsetSchema>>;
 
 const SEARCH_DEBOUNCE_WAIT_MS = 300;
 
@@ -117,11 +120,13 @@ const selectedToolIssue = (
   tool: MCPToolsetTool,
   serverNameById: ReadonlyMap<string, string>,
   toolsByServer: ReadonlyMap<string, MCPServerToolsState>,
+  t: TFunction,
 ): string | undefined => {
-  if (!serverNameById.has(tool.server_id)) return "server not found";
+  if (!serverNameById.has(tool.server_id)) return t("mcpServers.toolsetsTab.toolIssues.serverNotFound");
   const state = toolsByServer.get(tool.server_id);
-  if (state?.status === "error") return "server unreachable";
-  if (state?.status === "success" && !state.tools.some((t) => t.name === tool.tool_name)) return "tool not found";
+  if (state?.status === "error") return t("mcpServers.toolsetsTab.toolIssues.serverUnreachable");
+  if (state?.status === "success" && !state.tools.some((entry) => entry.name === tool.tool_name))
+    return t("mcpServers.toolsetsTab.toolIssues.toolNotFound");
   return undefined;
 };
 
@@ -150,7 +155,8 @@ function ServerToolGroup({
   onToggleTool,
   onSetToolsSelected,
 }: ServerToolGroupProps) {
-  const selectedCount = selectedTools.filter((t) => t.server_id === serverId).length;
+  const { t } = useTranslation();
+  const selectedCount = selectedTools.filter((tool) => tool.server_id === serverId).length;
   const visibleRefs = visibleTools.map((tool) => ({ server_id: serverId, tool_name: tool.name }));
   const groupState = selectionState(selectedTools, visibleRefs);
 
@@ -163,12 +169,14 @@ function ServerToolGroup({
       );
     }
     if (state.status === "error") {
-      return <p className="text-xs text-destructive px-2 py-2">Couldn&apos;t load tools for this server.</p>;
+      return <p className="text-xs text-destructive px-2 py-2">{t("mcpServers.toolsetsTab.serverGroup.loadError")}</p>;
     }
     if (visibleTools.length === 0) {
       return (
         <p className="text-xs text-muted-foreground px-2 py-2">
-          {searchActive ? "No matching tools on this server." : "No tools found for this server."}
+          {searchActive
+            ? t("mcpServers.toolsetsTab.serverGroup.noMatchingTools")
+            : t("mcpServers.toolsetsTab.serverGroup.noTools")}
         </p>
       );
     }
@@ -212,7 +220,11 @@ function ServerToolGroup({
           disabled={visibleRefs.length === 0}
           // Base UI renders a span, which the global button cursor rule does not cover.
           className="cursor-pointer data-disabled:cursor-not-allowed"
-          aria-label={`${searchActive ? "Select matching tools" : "Select all tools"} on ${serverName}`}
+          aria-label={
+            searchActive
+              ? t("mcpServers.toolsetsTab.serverGroup.selectMatching", { serverName })
+              : t("mcpServers.toolsetsTab.serverGroup.selectAll", { serverName })
+          }
           onCheckedChange={(checked) => onSetToolsSelected(visibleRefs, checked)}
         />
         <button
@@ -225,7 +237,7 @@ function ServerToolGroup({
             {serverName}
             {selectedCount > 0 && (
               <span className="ml-1 text-xs text-purple-600 font-semibold dark:text-purple-400">
-                {selectedCount} selected
+                {t("mcpServers.toolsetsTab.serverGroup.selectedCount", { count: selectedCount })}
               </span>
             )}
           </span>
@@ -250,6 +262,8 @@ const toolsetFormDefaults = (toolset?: MCPToolset): ToolsetFormValues => ({
 });
 
 function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToolsetModalProps) {
+  const { t } = useTranslation();
+  const toolsetSchema = React.useMemo(() => buildToolsetSchema(t), [t]);
   const form = useZodForm(toolsetSchema, { defaultValues: toolsetFormDefaults(initialToolset) });
   const [selectedTools, setSelectedTools] = useState<MCPToolsetTool[]>(initialToolset?.tools || []);
   const [saving, setSaving] = useState(false);
@@ -321,15 +335,29 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
     <Dialog open={open} onOpenChange={(open) => !open && handleClose()}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[960px]">
         <DialogHeader>
-          <DialogTitle>{initialToolset ? "Edit Toolset" : "New Toolset"}</DialogTitle>
+          <DialogTitle>
+            {initialToolset
+              ? t("mcpServers.toolsetsTab.modal.editTitle")
+              : t("mcpServers.toolsetsTab.modal.createTitle")}
+          </DialogTitle>
         </DialogHeader>
         <form onSubmit={(event) => event.preventDefault()} className="mt-2">
           <FieldGroup className="mb-4 flex-row gap-4">
-            <FormField control={form.control} name="toolset_name" label="Toolset Name" className="flex-1">
-              {(field) => <Input {...field} placeholder="e.g. github-linear-tools" />}
+            <FormField
+              control={form.control}
+              name="toolset_name"
+              label={t("mcpServers.toolsetsTab.modal.nameLabel")}
+              className="flex-1"
+            >
+              {(field) => <Input {...field} placeholder={t("mcpServers.toolsetsTab.modal.namePlaceholder")} />}
             </FormField>
-            <FormField control={form.control} name="description" label="Description" className="flex-1">
-              {(field) => <Input {...field} placeholder="Optional description" />}
+            <FormField
+              control={form.control}
+              name="description"
+              label={t("mcpServers.toolsetsTab.modal.descriptionLabel")}
+              className="flex-1"
+            >
+              {(field) => <Input {...field} placeholder={t("mcpServers.toolsetsTab.modal.descriptionPlaceholder")} />}
             </FormField>
           </FieldGroup>
         </form>
@@ -338,18 +366,24 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
           {/* Left panel: Available Tools */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-semibold text-foreground">Available Tools</p>
+              <p className="text-sm font-semibold text-foreground">
+                {t("mcpServers.toolsetsTab.modal.availableTools")}
+              </p>
             </div>
             <InputGroup className="mb-2">
               <InputGroupInput
-                placeholder="Search tools or servers..."
-                aria-label="Search tools or servers"
+                placeholder={t("mcpServers.toolsetsTab.modal.searchPlaceholder")}
+                aria-label={t("mcpServers.toolsetsTab.modal.searchLabel")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
               {search && (
                 <InputGroupAddon align="inline-end">
-                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearch("")}>
+                  <InputGroupButton
+                    size="icon-xs"
+                    aria-label={t("mcpServers.toolsetsTab.modal.clearSearch")}
+                    onClick={() => setSearch("")}
+                  >
                     <X />
                   </InputGroupButton>
                 </InputGroupAddon>
@@ -358,9 +392,9 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
             {searchActive && (
               <div className="mb-2 flex items-center justify-between gap-2">
                 <p className="text-xs text-muted-foreground" aria-live="polite">
-                  {matchingTools.length} matching {matchingTools.length === 1 ? "tool" : "tools"}
+                  {t("mcpServers.toolsetsTab.modal.matchingTools", { count: matchingTools.length })}
                   {pendingServerCount > 0 &&
-                    ` · loading ${pendingServerCount} ${pendingServerCount === 1 ? "server" : "servers"}…`}
+                    ` · ${t("mcpServers.toolsetsTab.modal.loadingServers", { count: pendingServerCount })}`}
                 </p>
                 <div className="flex gap-1 shrink-0">
                   <Button
@@ -369,7 +403,7 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
                     disabled={matchingTools.length === 0 || matchingState === "all"}
                     onClick={() => handleSetToolsSelected(matchingTools, true)}
                   >
-                    Select all matching
+                    {t("mcpServers.toolsetsTab.modal.selectAllMatching")}
                   </Button>
                   <Button
                     size="xs"
@@ -377,7 +411,7 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
                     disabled={matchingState === "none"}
                     onClick={() => handleSetToolsSelected(matchingTools, false)}
                   >
-                    Deselect all matching
+                    {t("mcpServers.toolsetsTab.modal.deselectAllMatching")}
                   </Button>
                 </div>
               </div>
@@ -385,7 +419,9 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
             <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 300 }}>
               {serverViews.length === 0 ? (
                 <p className="text-muted-foreground text-sm">
-                  {mcpServers.length === 0 ? "No MCP servers configured" : "No tools or servers match your search"}
+                  {mcpServers.length === 0
+                    ? t("mcpServers.toolsetsTab.modal.noServers")
+                    : t("mcpServers.toolsetsTab.modal.noSearchMatches")}
                 </p>
               ) : (
                 serverViews.map(({ server, serverName, state, visibleTools }) => (
@@ -414,8 +450,10 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
           <div className="w-72 shrink-0">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-semibold text-foreground">
-                Your Toolset{" "}
-                <span className="text-xs font-normal text-muted-foreground">({selectedTools.length} tools)</span>
+                {t("mcpServers.toolsetsTab.modal.yourToolset")}{" "}
+                <span className="text-xs font-normal text-muted-foreground">
+                  {t("mcpServers.toolsetsTab.modal.toolCount", { count: selectedTools.length })}
+                </span>
               </p>
               <Button
                 size="xs"
@@ -423,21 +461,21 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
                 disabled={selectedTools.length === 0}
                 onClick={() => setSelectedTools([])}
               >
-                Clear all
+                {t("mcpServers.toolsetsTab.modal.clearAll")}
               </Button>
             </div>
             <div className="space-y-1 overflow-y-auto" style={{ maxHeight: 340 }}>
               {selectedTools.length === 0 ? (
-                <p className="text-muted-foreground text-sm">No tools added yet</p>
+                <p className="text-muted-foreground text-sm">{t("mcpServers.toolsetsTab.modal.noToolsAdded")}</p>
               ) : (
                 selectedTools.map((tool) => {
                   const toolName = displayToolName(serverPrefixById.get(tool.server_id), tool.tool_name);
-                  const issue = serversLoaded ? selectedToolIssue(tool, serverPrefixById, toolsByServer) : undefined;
+                  const issue = serversLoaded ? selectedToolIssue(tool, serverPrefixById, toolsByServer, t) : undefined;
                   return (
                     <button
                       key={`${tool.server_id}:${tool.tool_name}`}
                       type="button"
-                      aria-label={`Remove ${toolName}`}
+                      aria-label={t("mcpServers.toolsetsTab.modal.removeTool", { toolName })}
                       onClick={() => handleToggleTool(tool)}
                       className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg border border-purple-200 bg-purple-50 hover:bg-destructive/10 hover:border-destructive/20 group transition-colors dark:border-purple-800 dark:bg-purple-950"
                     >
@@ -466,11 +504,11 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
 
         <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-border">
           <Button variant="outline" onClick={handleClose}>
-            Cancel
+            {t("mcpServers.toolsetsTab.modal.cancel")}
           </Button>
           <Button onClick={() => void form.handleSubmit(handleSubmit)()} disabled={saving} aria-busy={saving}>
             {saving && <UiLoadingSpinner className="size-4" />}
-            {initialToolset ? "Save Changes" : "Create Toolset"}
+            {initialToolset ? t("mcpServers.toolsetsTab.modal.saveChanges") : t("mcpServers.toolsetsTab.modal.create")}
           </Button>
         </div>
       </DialogContent>
@@ -479,20 +517,20 @@ function CreateToolsetModal({ open, onClose, onSave, initialToolset }: CreateToo
 }
 
 function ToolsetsEmptyState() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <Inbox className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No toolsets yet</div>
-      <div className="text-sm text-muted-foreground">
-        Create a toolset to give keys and teams a curated set of MCP tools.
-      </div>
+      <div className="text-sm font-medium text-foreground">{t("mcpServers.toolsetsTab.emptyState.title")}</div>
+      <div className="text-sm text-muted-foreground">{t("mcpServers.toolsetsTab.emptyState.body")}</div>
     </div>
   );
 }
 
 function ToolsetUsageGuide() {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const gatewayBaseUrl = getGatewayBaseUrl();
 
@@ -517,13 +555,14 @@ function ToolsetUsageGuide() {
 
   return (
     <div className="mb-6 rounded-lg border border-border bg-muted px-5 py-4">
-      <p className="text-sm font-medium text-foreground mb-1">How toolsets work</p>
+      <p className="text-sm font-medium text-foreground mb-1">{t("mcpServers.toolsetsTab.usageGuide.title")}</p>
       <p className="text-sm text-muted-foreground mb-3">
-        Create a toolset, assign it to a key via{" "}
-        <span className="font-medium text-foreground">API Keys → Edit Key → MCP Servers</span>, then point your MCP
-        client at the toolset URL. The client only sees the tools you picked.
+        <Trans
+          i18nKey="mcpServers.toolsetsTab.usageGuide.body"
+          components={{ menu: <span className="font-medium text-foreground" /> }}
+        />
       </p>
-      <div className="text-xs text-muted-foreground mb-1">Claude Code / Cursor config</div>
+      <div className="text-xs text-muted-foreground mb-1">{t("mcpServers.toolsetsTab.usageGuide.configLabel")}</div>
       <div className="relative">
         <pre className="bg-card border border-border rounded-sm px-4 py-3 text-xs font-mono text-foreground overflow-x-auto leading-relaxed pr-14">
           {snippet}
@@ -533,7 +572,7 @@ function ToolsetUsageGuide() {
           onClick={copy}
           className="absolute top-2 right-2 px-2 py-1 text-xs rounded-sm border bg-card hover:bg-muted text-muted-foreground hover:text-foreground border-border transition-colors"
         >
-          {copied ? "✓" : "copy"}
+          {copied ? "✓" : t("mcpServers.toolsetsTab.usageGuide.copy")}
         </button>
       </div>
     </div>
@@ -541,6 +580,7 @@ function ToolsetUsageGuide() {
 }
 
 export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { data: toolsets = [], isLoading } = useMCPToolsets();
   const { data: mcpServers = [] } = useMCPServers();
@@ -554,14 +594,14 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
   const handleCreate = async (name: string, description: string | undefined, tools: MCPToolsetTool[]) => {
     if (!accessToken) return;
     await createMCPToolset(accessToken, { toolset_name: name, description, tools });
-    toast.success("Toolset created");
+    toast.success(t("mcpServers.toolsetsTab.toasts.created"));
     queryClient.invalidateQueries({ queryKey: ["mcpToolsets"] });
   };
 
   const handleUpdate = async (name: string, description: string | undefined, tools: MCPToolsetTool[]) => {
     if (!accessToken || !editToolset) return;
     await updateMCPToolset(accessToken, { toolset_id: editToolset.toolset_id, toolset_name: name, description, tools });
-    toast.success("Toolset updated");
+    toast.success(t("mcpServers.toolsetsTab.toasts.updated"));
     queryClient.invalidateQueries({ queryKey: ["mcpToolsets"] });
     setEditToolset(null);
   };
@@ -571,7 +611,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
     setDeleting(true);
     try {
       await deleteMCPToolset(accessToken, deleteId);
-      toast.success("Toolset deleted");
+      toast.success(t("mcpServers.toolsetsTab.toasts.deleted"));
       queryClient.invalidateQueries({ queryKey: ["mcpToolsets"] });
       setDeleteId(null);
     } finally {
@@ -590,24 +630,22 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
       serverPrefixById,
       onEditClick: setEditToolset,
       onDeleteClick: setDeleteId,
+      t,
     };
     return getMCPToolsetTableColumns(deps);
-  }, [isAdmin, serverPrefixById]);
+  }, [isAdmin, serverPrefixById, t]);
 
   return (
     <div className="mt-4">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-lg font-medium text-foreground">MCP Toolsets</h3>
-          <p className="text-muted-foreground text-sm">
-            Curated collections of tools from one or more MCP servers. Assign toolsets to keys and teams via the MCP
-            permissions dropdown.
-          </p>
+          <h3 className="text-lg font-medium text-foreground">{t("mcpServers.toolsetsTab.header.title")}</h3>
+          <p className="text-muted-foreground text-sm">{t("mcpServers.toolsetsTab.header.description")}</p>
         </div>
         {isAdmin && (
           <Button onClick={() => setCreateOpen(true)}>
             <Plus />
-            New Toolset
+            {t("mcpServers.toolsetsTab.header.newToolset")}
           </Button>
         )}
       </div>
@@ -623,7 +661,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
         sorting={sorting}
         onSortingChange={setSorting}
         isLoading={isLoading}
-        loadingMessage="Loading toolsets…"
+        loadingMessage={t("mcpServers.toolsetsTab.loading")}
         noDataMessage={<ToolsetsEmptyState />}
         size="compact"
       />
@@ -642,17 +680,15 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
       <Dialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Delete Toolset</DialogTitle>
+            <DialogTitle>{t("mcpServers.toolsetsTab.deleteDialog.title")}</DialogTitle>
           </DialogHeader>
-          <p>
-            Are you sure you want to delete this toolset? Keys and teams using it will lose access to the scoped tools.
-          </p>
+          <p>{t("mcpServers.toolsetsTab.deleteDialog.body")}</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteId(null)}>
-              Cancel
+              {t("mcpServers.toolsetsTab.deleteDialog.cancel")}
             </Button>
             <Button onClick={handleDelete} variant="destructive" disabled={deleting} aria-busy={deleting}>
-              Delete
+              {t("mcpServers.toolsetsTab.deleteDialog.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

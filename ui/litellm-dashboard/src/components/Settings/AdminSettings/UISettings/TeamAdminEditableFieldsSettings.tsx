@@ -1,8 +1,10 @@
 "use client";
 
+import type { ParseKeys } from "i18next";
 import { CircleHelp } from "lucide-react";
 import { Fragment, type ReactNode } from "react";
 import { Controller } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
@@ -32,12 +34,10 @@ type SaveEditableFields = ReturnType<typeof useUpdateUISettings>["mutate"];
 
 const MAX_BUDGET_FIELD: TeamAdminSettingsField = "max_budget";
 
-const RAISE_MAX_BUDGET_HELP_LABEL = "About raising the team's max budget";
-const RAISE_MAX_BUDGET_TOOLTIP =
-  "Lets team admins raise the budget too, capped by the organization's budget when the team has one. Only proxy admins can remove it.";
-const METADATA_HELP_LABEL = "About editing team metadata";
-const METADATA_TOOLTIP =
-  "Lets team admins add, change and remove their own metadata keys. Keys the proxy reads as settings stay with proxy admins, and keys declared in the team metadata schema can be changed but not removed.";
+const RAISE_MAX_BUDGET_HELP_LABEL: ParseKeys = "adminPanel.teamAdminEditableFields.raiseMaxBudgetHelp.ariaLabel";
+const RAISE_MAX_BUDGET_TOOLTIP: ParseKeys = "adminPanel.teamAdminEditableFields.raiseMaxBudgetHelp.tooltip";
+const METADATA_HELP_LABEL: ParseKeys = "adminPanel.teamAdminEditableFields.metadataHelp.ariaLabel";
+const METADATA_TOOLTIP: ParseKeys = "adminPanel.teamAdminEditableFields.metadataHelp.tooltip";
 const TEAM_ADMIN_FIELDS_DOCS_URL =
   "https://docs.litellm.ai/docs/proxy/access_control#choosing-what-team-admins-can-edit";
 
@@ -54,6 +54,7 @@ const toggleEditableField = (
 };
 
 export default function TeamAdminEditableFieldsSettings() {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const { data, isLoading } = useUISettings();
   const { mutate: saveSettings, isPending } = useUpdateUISettings(accessToken);
@@ -65,16 +66,16 @@ export default function TeamAdminEditableFieldsSettings() {
     <Card>
       <CardHeader>
         <div className="flex items-center gap-2">
-          <CardTitle>Team admin editable fields</CardTitle>
+          <CardTitle>{t("adminPanel.teamAdminEditableFields.title")}</CardTitle>
           <Badge variant={enabledFields.length > 0 ? "secondary" : "outline"}>
             {enabledFields.length > 0
-              ? `${enabledFields.length} field${enabledFields.length !== 1 ? "s" : ""} enabled`
-              : "Team admins cannot edit team settings"}
+              ? t("adminPanel.teamAdminEditableFields.enabledCount", { count: enabledFields.length })
+              : t("adminPanel.teamAdminEditableFields.noneEnabled")}
           </Badge>
         </div>
         <CardDescription>
           {data?.field_schema?.properties?.team_admin_editable_team_fields?.description ??
-            "Team settings fields a team admin may change on the teams they administer."}
+            t("adminPanel.teamAdminEditableFields.defaultDescription")}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -107,6 +108,7 @@ function TeamAdminEditableFieldsForm({
   isPending,
   saveSettings,
 }: TeamAdminEditableFieldsFormProps) {
+  const { t } = useTranslation();
   const form = useZodForm(editableFieldsSchema, {
     defaultValues: { team_admin_editable_team_fields: [...enabledFields] },
   });
@@ -114,7 +116,7 @@ function TeamAdminEditableFieldsForm({
     saveSettings(values, {
       onSuccess: () => {
         form.reset(values);
-        toast.success("Team admin editable fields updated successfully");
+        toast.success(t("adminPanel.teamAdminEditableFields.toasts.updated"));
       },
       onError: (error) => {
         toast.fromError(error);
@@ -124,9 +126,7 @@ function TeamAdminEditableFieldsForm({
 
   if (supportedFields.length === 0) {
     return (
-      <p className="text-sm italic text-muted-foreground">
-        This proxy version does not support enabling any team settings fields for team admins yet.
-      </p>
+      <p className="text-sm italic text-muted-foreground">{t("adminPanel.teamAdminEditableFields.unsupported")}</p>
     );
   }
 
@@ -152,7 +152,7 @@ function TeamAdminEditableFieldsForm({
                     onCheckedChange={toggle(name)}
                     help={
                       name === TEAM_ADMIN_METADATA_FIELD ? (
-                        <FieldHelp label={METADATA_HELP_LABEL} text={METADATA_TOOLTIP} />
+                        <FieldHelp label={t(METADATA_HELP_LABEL)} text={t(METADATA_TOOLTIP)} />
                       ) : undefined
                     }
                   />
@@ -163,7 +163,7 @@ function TeamAdminEditableFieldsForm({
                       disabled={isPending || !field.value.includes(MAX_BUDGET_FIELD)}
                       onCheckedChange={toggle(TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION)}
                       className="ml-6"
-                      help={<FieldHelp label={RAISE_MAX_BUDGET_HELP_LABEL} text={RAISE_MAX_BUDGET_TOOLTIP} />}
+                      help={<FieldHelp label={t(RAISE_MAX_BUDGET_HELP_LABEL)} text={t(RAISE_MAX_BUDGET_TOOLTIP)} />}
                     />
                   )}
                 </Fragment>
@@ -174,7 +174,7 @@ function TeamAdminEditableFieldsForm({
       />
       <div className="flex justify-end">
         <Button type="submit" disabled={isPending || !form.formState.isDirty}>
-          {isPending ? "Saving..." : "Save"}
+          {isPending ? t("adminPanel.teamAdminEditableFields.saving") : t("adminPanel.teamAdminEditableFields.save")}
         </Button>
       </div>
     </form>
@@ -216,6 +216,7 @@ interface FieldHelpProps {
 }
 
 function FieldHelp({ label, text }: FieldHelpProps) {
+  const { t } = useTranslation();
   return (
     <TooltipProvider>
       <Tooltip>
@@ -230,7 +231,7 @@ function FieldHelp({ label, text }: FieldHelpProps) {
           <span>
             {text}{" "}
             <a href={TEAM_ADMIN_FIELDS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
-              Learn more
+              {t("adminPanel.teamAdminEditableFields.learnMore")}
             </a>
           </span>
         </TooltipContent>

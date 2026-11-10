@@ -15,12 +15,13 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 import litellm.vector_stores.main as vector_stores_main
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.vector_stores.main import acreate, aupdate, search
+from litellm.vector_stores.main import acreate, aretrieve, aupdate, retrieve, search
 
 MOCK_SEARCH_RESPONSE = {
     "object": "vector_store.search_results.page",
@@ -200,3 +201,45 @@ async def test_direct_sdk_vector_store_writes_send_the_callers_metadata_unchange
     sent_metadata: Final = await _metadata_sent_to_provider(operation, callers_metadata)
 
     assert sent_metadata == [callers_metadata]
+
+
+def _vector_store_not_found(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        404,
+        json={
+            "error": {
+                "message": "No vector store found with id 'vs_missing'.",
+                "type": "invalid_request_error",
+                "param": "vector_store_id",
+                "code": None,
+            }
+        },
+        request=request,
+    )
+
+
+async def _retrieve_missing_openai_vector_store(is_async: bool) -> object:
+    transport: Final = httpx.MockTransport(_vector_store_not_found)
+    if is_async:
+        return await aretrieve(
+            vector_store_id="vs_missing",
+            custom_llm_provider="openai",
+            api_key="sk-test",
+            client=AsyncHTTPHandler(transport=transport),
+        )
+    return retrieve(
+        vector_store_id="vs_missing",
+        custom_llm_provider="openai",
+        api_key="sk-test",
+        client=HTTPHandler(client=httpx.Client(transport=transport)),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [True, False])
+async def test_retrieving_a_missing_openai_vector_store_raises_not_found(is_async: bool):
+    with pytest.raises(litellm.NotFoundError) as caught:
+        await _retrieve_missing_openai_vector_store(is_async)
+
+    assert caught.value.status_code == 404
+    assert "No vector store found with id 'vs_missing'." in caught.value.message

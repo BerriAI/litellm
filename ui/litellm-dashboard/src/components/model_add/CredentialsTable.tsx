@@ -4,6 +4,7 @@ import { useTerminology } from "@/contexts/TerminologyContext";
 import { SortingState } from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
 import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { CredentialItem } from "@/components/networking";
 import { DataTable } from "@/components/shared/DataTable";
@@ -21,14 +22,15 @@ interface CredentialsTableProps {
 const DEFAULT_SORTING: SortingState = [{ id: "credential_name", desc: false }];
 
 function EmptyState() {
+  const { t } = useTranslation();
   const term = useTerminology();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <KeyRound className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No credentials configured</div>
-      <div className="text-sm text-muted-foreground">{term("Add a credential to connect an AI provider.")}</div>
+      <div className="text-sm font-medium text-foreground">{t("modelAdd.credentialsTable.emptyTitle")}</div>
+      <div className="text-sm text-muted-foreground">{term(t("modelAdd.credentialsTable.emptyDescription"))}</div>
     </div>
   );
 }
@@ -40,11 +42,12 @@ const CredentialsTable: React.FC<CredentialsTableProps> = ({
   onDelete,
   isLoading = false,
 }) => {
+  const { t } = useTranslation();
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
   const columns = useMemo(
-    () => getCredentialsTableColumns({ canModifyCredentials, onEdit, onDelete }),
-    [canModifyCredentials, onEdit, onDelete],
+    () => getCredentialsTableColumns({ canModifyCredentials, onEdit, onDelete }, t),
+    [canModifyCredentials, onEdit, onDelete, t],
   );
 
   return (
@@ -57,7 +60,7 @@ const CredentialsTable: React.FC<CredentialsTableProps> = ({
       sorting={sorting}
       onSortingChange={setSorting}
       isLoading={isLoading}
-      loadingMessage="Loading credentials…"
+      loadingMessage={t("modelAdd.credentialsTable.loading")}
       noDataMessage={<EmptyState />}
       size="compact"
     />
