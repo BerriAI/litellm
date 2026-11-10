@@ -33,7 +33,7 @@ token = "test-api-key-with-high-entropy"
 
 ## Configured Ignore Patterns
 
-These patterns are in `.gitguardian.yaml` for high-entropy test keys:
+These patterns are in `.github/gitguardian.yaml` for high-entropy test keys:
 - `sk-test-*` - OpenAI-style test keys
 - `sk-mock-*` - Mock API keys  
 - `sk-fake-*` - Fake API keys

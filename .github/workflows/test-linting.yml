@@ -258,7 +258,7 @@ jobs:
           if [ -n "$GITGUARDIAN_API_KEY" ]; then
             retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
             retry git fetch --no-tags --unshallow origin
-            uv tool run --from 'ggshield==1.48.0' ggshield secret scan repo .
+            uv tool run --from 'ggshield==1.48.0' ggshield --config-path .github/gitguardian.yaml secret scan repo .
           else
             echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"
           fi
