@@ -19,7 +19,11 @@ from psycopg.types.json import Jsonb
 from pydantic import TypeAdapter
 
 from litellm.proxy.auth.authorization import AllRows, OwnedRows, ReadScope
-from litellm.proxy.spend_tracking.spend_management_endpoints import _spend_log_payload_query, read_scope_sql
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
+    _spend_log_payload_query,
+    _SpendLogWindow,
+    read_scope_sql,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,14 +166,34 @@ async def test_payload_sql_filters_foreign_collisions(
     scope: ReadScope,
     expected: tuple[str, ...],
 ) -> None:
-    query, params = _spend_log_payload_query(id_column, "foreign", scope)
+    query, params = _spend_log_payload_query(id_column, "foreign", scope, _SpendLogWindow())
     result: Final = await spend_database.query_raw(query, *params)
     assert tuple(row.request_id for row in REQUEST_IDS.validate_python(result)) == expected
 
 
+SEEDED_AT: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scope", [AllRows(), OwnedRows("caller", ("first",))])
-async def test_payload_sql_by_request_id_needs_no_call_id_index(spend_database: Prisma, scope: ReadScope) -> None:
+@pytest.mark.parametrize(
+    ("window", "expected"),
+    [
+        (_SpendLogWindow(start=SEEDED_AT - timedelta(seconds=1)), ("own",)),
+        (_SpendLogWindow(start=SEEDED_AT, end=SEEDED_AT), ("own",)),
+        (_SpendLogWindow(start=SEEDED_AT + timedelta(seconds=1)), ()),
+        (_SpendLogWindow(end=SEEDED_AT - timedelta(seconds=1)), ()),
+    ],
+)
+async def test_payload_sql_by_call_id_keeps_to_the_window(
+    spend_database: Prisma, scope: ReadScope, window: _SpendLogWindow, expected: tuple[str, ...]
+) -> None:
+    query, params = _spend_log_payload_query("litellm_call_id", "foreign", scope, window)
+    result: Final = await spend_database.query_raw(query, *params)
+    assert tuple(row.request_id for row in REQUEST_IDS.validate_python(result)) == expected
+
+
+async def _drop_call_id_indexes(spend_database: Prisma) -> None:
     await spend_database.execute_raw(
         """
         DO $$
@@ -186,11 +210,35 @@ async def test_payload_sql_by_request_id_needs_no_call_id_index(spend_database: 
         END $$
         """
     )
-    query, params = _spend_log_payload_query("request_id", "own", scope)
+
+
+async def _plan_without_seq_scans(spend_database: Prisma, query: str, params: tuple[object, ...]) -> str:
     async with spend_database.tx() as transaction:
         await transaction.execute_raw("SET LOCAL enable_seqscan = off")
-        plan: Final = await transaction.query_raw(f"EXPLAIN (FORMAT JSON) {query}", *params)
-    assert "Seq Scan" not in json.dumps(plan), plan
+        return json.dumps(await transaction.query_raw(f"EXPLAIN (FORMAT JSON) {query}", *params))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [AllRows(), OwnedRows("caller", ("first",))])
+@pytest.mark.parametrize(
+    ("id_column", "lookup_id", "window"),
+    [
+        ("request_id", "own", _SpendLogWindow()),
+        ("litellm_call_id", "foreign", _SpendLogWindow(start=SEEDED_AT)),
+    ],
+)
+async def test_payload_sql_reads_through_an_index_without_the_call_id_index(
+    spend_database: Prisma,
+    scope: ReadScope,
+    id_column: Literal["request_id", "litellm_call_id"],
+    lookup_id: str,
+    window: _SpendLogWindow,
+) -> None:
+    await _drop_call_id_indexes(spend_database)
+    query, params = _spend_log_payload_query(id_column, lookup_id, scope, window)
+    plan: Final = await _plan_without_seq_scans(spend_database, query, params)
+    assert "Seq Scan" not in plan, plan
+    assert "Index Cond" in plan, plan
 
 
 def _delete_session(session_id: str) -> None:

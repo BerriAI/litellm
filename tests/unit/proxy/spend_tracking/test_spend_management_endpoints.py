@@ -7887,10 +7887,20 @@ class _FakeRawQuery(Protocol):
     def __call__(self, statement_timeout_set: bool, sql_query: str, /, *params: object) -> Awaitable[_FakeSpendLogRows]: ...
 
 
+def _started_at_or_after(row: Mapping[str, object], start: object) -> bool:
+    started: Final = row.get("startTime")
+    return (
+        isinstance(started, datetime.datetime)
+        and isinstance(start, str)
+        and started >= datetime.datetime.fromisoformat(start)
+    )
+
+
 class _SpendLogsWithoutCallIdIndex:
     """A spend-log table missing LiteLLM_SpendLogs_litellm_call_id_idx. A read filtering on
     litellm_call_id scans the whole table, so it fails the test unless it runs under a
-    statement timeout, which Postgres cancels it at."""
+    statement timeout, which Postgres cancels it at. One that also bounds "startTime" from
+    below reads only the rows of that window, through the startTime index."""
 
     def __init__(self, rows: _FakeSpendLogRows) -> None:
         self.rows: Final = rows
@@ -7901,11 +7911,17 @@ class _SpendLogsWithoutCallIdIndex:
         return SimpleNamespace(tx=lambda **_kwargs: _StatementTimeoutTransaction(self._query_raw))
 
     async def _query_raw(self, statement_timeout_set: bool, sql_query: str, *params: object) -> _FakeSpendLogRows:
-        if "litellm_call_id" in sql_query.split("WHERE", 1)[1]:
-            if not statement_timeout_set:
-                raise AssertionError("unbounded full scan of LiteLLM_SpendLogs")
+        where: Final = sql_query.split("WHERE", 1)[1]
+        by_call_id: Final = "litellm_call_id" in where
+        if by_call_id and not statement_timeout_set:
+            raise AssertionError("unbounded full scan of LiteLLM_SpendLogs")
+        if by_call_id and '"startTime" >=' not in where:
             raise statement_timeout_error()
-        matches: Final = [row for row in self.rows if row["request_id"] == params[0]]
+        matches: Final = (
+            [row for row in self.rows if row["litellm_call_id"] == params[0] and _started_at_or_after(row, params[1])]
+            if by_call_id
+            else [row for row in self.rows if row["request_id"] == params[0]]
+        )
         if 'SELECT DISTINCT "user", team_id' in sql_query:
             return [{"user": row["user"], "team_id": row["team_id"]} for row in matches]
         return matches
@@ -7969,6 +7985,59 @@ def test_ui_view_request_response_call_id_scan_times_out_with_503(client, monkey
         response = client.get("/spend/logs/ui/call-1", headers={"Authorization": "Bearer sk-test"})
         assert response.status_code == 503, response.text
         assert "LiteLLM_SpendLogs_litellm_call_id_idx" in response.json()["detail"]["error"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize(
+    ("user_role", "start_date", "expected_status", "expected_messages"),
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "2026-11-09 11:59:59", 200, [{"role": "user", "content": "drawer prompt"}]),
+        (LitellmUserRoles.INTERNAL_USER, "2026-11-09 11:59:59", 200, [{"role": "user", "content": "drawer prompt"}]),
+        (LitellmUserRoles.PROXY_ADMIN, "2026-11-09 12:00:01", 200, None),
+        (LitellmUserRoles.INTERNAL_USER, "2026-11-09 12:00:01", 403, None),
+    ],
+)
+def test_ui_view_request_response_reads_call_id_within_start_date_without_call_id_index(
+    client, monkeypatch, user_role, start_date, expected_status, expected_messages
+):
+    """
+    Regression: the drawer passes start_date, so a call ID lookup reads only the rows from
+    then on instead of scanning the whole table, and a row from before it is not found.
+    """
+    row: Final = {
+        **_payload_row("req-1", "call-1", "user_a", "drawer prompt"),
+        "startTime": datetime.datetime(2026, 11, 9, 12, tzinfo=timezone.utc),
+    }
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _SpendLogsWithoutCallIdIndex([row]))
+    monkeypatch.setattr(
+        litellm.logging_callback_manager, "get_active_additional_logging_utils_from_custom_logger", lambda: []
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=user_role, user_id="user_a")
+    try:
+        response = client.get(
+            "/spend/logs/ui/call-1", params={"start_date": start_date}, headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == expected_status, response.text
+        if expected_status == 200:
+            assert (response.json() or {}).get("messages") == expected_messages, response.text
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+def test_ui_view_request_response_rejects_malformed_start_date_with_400(client, monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        _SpendLogsWithoutCallIdIndex([_payload_row("req-1", "call-1", "user_a", "drawer prompt")]),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="user_a"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-1", params={"start_date": "2026-11-09"}, headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 400, response.text
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
