@@ -5107,6 +5107,61 @@ class TestIsRequestBodySafeBlocksVertexTargetOverrides:
                 route="/v1/chat/completions",
             )
 
+    @pytest.mark.parametrize("model", ["chat", "chat-alias", "entry"])
+    @pytest.mark.parametrize("opted_in", [False, True])
+    def test_team_public_model_requires_the_team_deployment_opt_in(self, model: str, opted_in: bool) -> None:
+        router: Final = Router(
+            model_list=[
+                {"model_name": "chat", "litellm_params": {"model": "openai/test-model", "api_key": "test-key"}},
+                {"model_name": "entry", "litellm_params": {"model": "openai/test-model", "api_key": "test-key"}},
+                {
+                    "model_name": "team-chat",
+                    "model_info": {"team_id": "team-one", "team_public_model_name": "chat"},
+                    "litellm_params": {
+                        "model": "vertex_ai/test-model",
+                        "vertex_location": "europe-west4",
+                        "configurable_clientside_auth_params": ["vertex_location"] if opted_in else [],
+                    },
+                },
+            ],
+            model_group_alias={"chat-alias": "chat"},
+            fallbacks=[{"entry": ["chat"]}],
+        )
+        request_body: Final = {"model": model, "vertex_location": "us-central1"}
+        if opted_in:
+            assert is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions") is True
+            return
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(request_body, {}, router, model, route="/v1/chat/completions")
+
+    @pytest.mark.parametrize("fallback_setting", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+    def test_team_internal_fallback_to_another_public_name_keeps_its_pin(self, fallback_setting: str) -> None:
+        router: Final = Router(
+            model_list=[
+                {"model_name": name, "litellm_params": {"model": "openai/test-model", "api_key": "test-key"}}
+                for name in ("chat", "backup")
+            ]
+            + [
+                {
+                    "model_name": internal,
+                    "model_info": {"team_id": "team-one", "team_public_model_name": public},
+                    "litellm_params": {
+                        "model": "vertex_ai/test-model",
+                        "configurable_clientside_auth_params": opt_in,
+                    },
+                }
+                for internal, public, opt_in in (
+                    ("team-chat", "chat", ["vertex_location"]),
+                    ("team-backup", "backup", []),
+                )
+            ],
+            **{fallback_setting: [{"team-chat": ["backup"]}]},
+        )
+        with pytest.raises(ValueError, match="vertex_location"):
+            is_request_body_safe(
+                {"model": "chat", "vertex_location": "us-central1"}, {}, router, "chat", route="/v1/chat/completions"
+            )
+
     def test_model_with_no_deployment_has_no_opt_in(self) -> None:
         with pytest.raises(ValueError, match="vertex_location"):
             is_request_body_safe(

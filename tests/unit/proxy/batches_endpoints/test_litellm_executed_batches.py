@@ -260,6 +260,9 @@ class FakeRouter:
 
 
 class FakeRegistry:
+    def index(self, name: Literal["team_model"]) -> Mapping[tuple[str, str], Sequence[int]]:
+        return MappingProxyType({})
+
     def names(self, model_name: str | None = None, *, kind: str = "groups") -> list[str]:
         assert kind == "ids"
         return [DEPLOYMENT_ID] if model_name == BATCH_MODEL else []

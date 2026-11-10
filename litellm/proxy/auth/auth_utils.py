@@ -536,6 +536,30 @@ _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
 )
 
 
+def _team_public_model_groups(model_groups: frozenset[str], llm_router: Router) -> frozenset[str]:
+    registry: Final = llm_router.registry()
+    matches: Final = (key for key in registry.index("team_model") if key[1] in model_groups)
+    deployments: Final = chain.from_iterable(
+        registry.deployments(public_name, source="all", team_id=team_id) for team_id, public_name in matches
+    )
+    return frozenset(deployment["model_name"] for deployment in deployments)
+
+
+def _team_opt_in_hop(
+    frontier_and_reached: tuple[frozenset[str], frozenset[str]], llm_router: Router
+) -> tuple[frozenset[str], frozenset[str]]:
+    frontier, reached = frontier_and_reached
+    team_groups: Final = _team_public_model_groups(frontier, llm_router) - reached
+    fallbacks: Final = frozenset[str]().union(
+        *(router_fallback_model_names(name, llm_router, _EVERY_FALLBACK_TYPE) for name in team_groups)
+    )
+    registry: Final = llm_router.registry()
+    next_hop: Final = (
+        team_groups | frozenset(registry.resolve(name, kind="alias") or name for name in fallbacks)
+    ) - reached
+    return next_hop, reached | next_hop
+
+
 def _opt_in_model_groups(
     model: str, also_requested_models: tuple[str, ...], llm_router: Router | None
 ) -> frozenset[str]:
@@ -547,7 +571,10 @@ def _opt_in_model_groups(
     fallbacks: Final = frozenset[str]().union(
         *(router_fallback_model_names(name, llm_router, _EVERY_FALLBACK_TYPE) for name in requested | routed)
     )
-    return routed | frozenset(registry.resolve(name, kind="alias") or name for name in fallbacks)
+    groups: Final = routed | frozenset(registry.resolve(name, kind="alias") or name for name in fallbacks)
+    hops: Final = accumulate(repeat(llm_router), _team_opt_in_hop, initial=(groups, groups))
+    _, reached = next(hop for hop in hops if not hop[0])
+    return reached
 
 
 _MAX_OPT_IN_FALLBACK_MODELS: Final = 100
