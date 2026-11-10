@@ -48772,6 +48772,7 @@
         "output_cost_per_token": 2.5e-07,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/ibm-granite/granite-3.3-8b-instruct",
         "supports_function_calling": true,
         "supports_system_messages": true
     },
@@ -48913,7 +48914,9 @@
         "supports_response_schema": false,
         "input_cost_per_token_above_200k_tokens": 4e-06,
         "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "source": "https://replicate.com/google/gemini-3-pro",
         "supports_audio_input": true,
+        "supports_reasoning": true,
         "supports_video_input": true
     },
     "replicate/anthropic/claude-4.5-sonnet": {
@@ -48988,6 +48991,7 @@
         "output_cost_per_token": 2.5e-06,
         "litellm_provider": "replicate",
         "mode": "chat",
+        "source": "https://replicate.com/google/gemini-2.5-flash",
         "supports_function_calling": false,
         "supports_parallel_function_calling": false,
         "supports_vision": true,
@@ -97545,5 +97549,519 @@
         "mode": "audio_speech",
         "output_cost_per_second": 0.0366667,
         "source": "https://replicate.com/elevenlabs/dubbing"
+    },
+    "replicate/elevenlabs/flash-v2.5": {
+        "input_cost_per_character": 5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/flash-v2.5"
+    },
+    "replicate/elevenlabs/turbo-v2.5": {
+        "input_cost_per_character": 5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/turbo-v2.5"
+    },
+    "replicate/elevenlabs/v2-multilingual": {
+        "input_cost_per_character": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/v2-multilingual"
+    },
+    "replicate/elevenlabs/v3": {
+        "input_cost_per_character": 0.0001,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/elevenlabs/v3"
+    },
+    "replicate/flux-kontext-apps/cartoonify": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/cartoonify"
+    },
+    "replicate/flux-kontext-apps/change-haircut": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/change-haircut"
+    },
+    "replicate/flux-kontext-apps/depth-of-field": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/depth-of-field"
+    },
+    "replicate/flux-kontext-apps/face-to-many-kontext": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/face-to-many-kontext"
+    },
+    "replicate/flux-kontext-apps/filters": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/filters"
+    },
+    "replicate/flux-kontext-apps/iconic-locations": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/iconic-locations"
+    },
+    "replicate/flux-kontext-apps/impossible-scenarios": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/impossible-scenarios"
+    },
+    "replicate/flux-kontext-apps/multi-image-kontext-max": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/flux-kontext-apps/multi-image-kontext-max"
+    },
+    "replicate/flux-kontext-apps/multi-image-kontext-pro": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/multi-image-kontext-pro"
+    },
+    "replicate/flux-kontext-apps/multi-image-list": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/flux-kontext-apps/multi-image-list"
+    },
+    "replicate/flux-kontext-apps/portrait-series": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/portrait-series"
+    },
+    "replicate/flux-kontext-apps/professional-headshot": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/professional-headshot"
+    },
+    "replicate/flux-kontext-apps/restore-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/restore-image"
+    },
+    "replicate/flux-kontext-apps/restyle-video-frame": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/restyle-video-frame"
+    },
+    "replicate/flux-kontext-apps/text-removal": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/flux-kontext-apps/text-removal"
+    },
+    "replicate/google/gemini-2.5-flash-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "source": "https://replicate.com/google/gemini-2.5-flash-image"
+    },
+    "replicate/google/gemini-3-flash": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "source": "https://replicate.com/google/gemini-3-flash",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/google/gemini-3.1-flash-tts": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_token": 4e-05,
+        "source": "https://replicate.com/google/gemini-3.1-flash-tts"
+    },
+    "replicate/google/gemini-3.1-pro": {
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_200k_tokens": 4e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_200k_tokens": 1.8e-05,
+        "source": "https://replicate.com/google/gemini-3.1-pro",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/google/gemini-3.5-flash": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 9e-06,
+        "source": "https://replicate.com/google/gemini-3.5-flash",
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/google/gemini-3.8-flash-lite-tts": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_token": 6e-06,
+        "source": "https://replicate.com/google/gemini-3.8-flash-lite-tts"
+    },
+    "replicate/google/gemini-3.8-flash-tts": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "output_cost_per_token": 9e-06,
+        "source": "https://replicate.com/google/gemini-3.8-flash-tts"
+    },
+    "replicate/google/nano-banana": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "source": "https://replicate.com/google/nano-banana"
+    },
+    "replicate/google/nano-banana-2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.067,
+        "output_cost_per_image_1K": 0.067,
+        "output_cost_per_image_2K": 0.101,
+        "output_cost_per_image_4K": 0.151,
+        "source": "https://replicate.com/google/nano-banana-2"
+    },
+    "replicate/google/nano-banana-2-lite": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.034,
+        "source": "https://replicate.com/google/nano-banana-2-lite"
+    },
+    "replicate/google/nano-banana-2.1": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0336,
+        "output_cost_per_image_1K": 0.0336,
+        "output_cost_per_image_2K": 0.0504,
+        "output_cost_per_image_4K": 0.1134,
+        "source": "https://replicate.com/google/nano-banana-2.1"
+    },
+    "replicate/heygen/avatar-iv": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.075,
+        "source": "https://replicate.com/heygen/avatar-iv"
+    },
+    "replicate/heygen/avatar-v": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.075,
+        "source": "https://replicate.com/heygen/avatar-v"
+    },
+    "replicate/heygen/lipsync-precision": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0667,
+        "source": "https://replicate.com/heygen/lipsync-precision"
+    },
+    "replicate/heygen/lipsync-speed": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0333,
+        "source": "https://replicate.com/heygen/lipsync-speed"
+    },
+    "replicate/heygen/video-agent": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0333,
+        "source": "https://replicate.com/heygen/video-agent"
+    },
+    "replicate/ibm-granite/granite-20b-code-instruct-8k": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-20b-code-instruct-8k",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.0-2b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.0-2b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.0-8b-instruct": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.0-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.1-2b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.1-2b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.1-8b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.1-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-3.2-8b-instruct": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-3.2-8b-instruct",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-4.0-h-small": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-4.0-h-small",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-4.1-8b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-4.1-8b",
+        "supports_function_calling": true,
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-4.2-8b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-4.2-8b",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-8b-code-instruct-128k": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-8b-code-instruct-128k",
+        "supports_system_messages": true
+    },
+    "replicate/ibm-granite/granite-speech-3.3-8b": {
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 4.9e-06,
+        "source": "https://replicate.com/ibm-granite/granite-speech-3.3-8b"
+    },
+    "replicate/ibm-granite/granite-speech-4.1-2b": {
+        "input_cost_per_token": 3e-08,
+        "litellm_provider": "replicate",
+        "mode": "audio_transcription",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-speech-4.1-2b"
+    },
+    "replicate/ibm-granite/granite-vision-3.3-2b": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-vision-3.3-2b",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/ibm-granite/granite-vision-4.1-4b": {
+        "input_cost_per_token": 6e-08,
+        "litellm_provider": "replicate",
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-07,
+        "source": "https://replicate.com/ibm-granite/granite-vision-4.1-4b",
+        "supports_system_messages": true,
+        "supports_vision": true
+    },
+    "replicate/ideogram-ai/ideogram-v2": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.08,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2"
+    },
+    "replicate/ideogram-ai/ideogram-v2-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2-turbo"
+    },
+    "replicate/ideogram-ai/ideogram-v2a": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2a"
+    },
+    "replicate/ideogram-ai/ideogram-v2a-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v2a-turbo"
+    },
+    "replicate/ideogram-ai/ideogram-v3-balanced": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v3-balanced"
+    },
+    "replicate/ideogram-ai/ideogram-v3-quality": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v3-quality"
+    },
+    "replicate/ideogram-ai/ideogram-v3-turbo": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v3-turbo"
+    },
+    "replicate/ideogram-ai/ideogram-v4-balanced": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v4-balanced"
+    },
+    "replicate/ideogram-ai/ideogram-v4-quality": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1,
+        "source": "https://replicate.com/ideogram-ai/ideogram-v4-quality"
+    },
+    "replicate/ideogram-ai/layerize": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09,
+        "source": "https://replicate.com/ideogram-ai/layerize"
+    },
+    "replicate/intelligent-utilities/html-to-image": {
+        "litellm_provider": "replicate",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.001,
+        "source": "https://replicate.com/intelligent-utilities/html-to-image"
+    },
+    "replicate/inworld/realtime-tts-1.5-max": {
+        "input_cost_per_character": 3.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/inworld/realtime-tts-1.5-max"
+    },
+    "replicate/inworld/realtime-tts-1.5-mini": {
+        "input_cost_per_character": 1.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/inworld/realtime-tts-1.5-mini"
+    },
+    "replicate/inworld/realtime-tts-2": {
+        "input_cost_per_character": 2.5e-05,
+        "litellm_provider": "replicate",
+        "mode": "audio_speech",
+        "source": "https://replicate.com/inworld/realtime-tts-2"
+    },
+    "replicate/kwaivgi/kling-lip-sync": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.014,
+        "source": "https://replicate.com/kwaivgi/kling-lip-sync"
+    },
+    "replicate/kwaivgi/kling-v2.1-master": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.28,
+        "source": "https://replicate.com/kwaivgi/kling-v2.1-master"
+    },
+    "replicate/kwaivgi/kling-v2.5-turbo-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://replicate.com/kwaivgi/kling-v2.5-turbo-pro"
+    },
+    "replicate/lightricks/audio-to-video": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/lightricks/audio-to-video"
+    },
+    "replicate/lightricks/ltx-2-distilled": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.02,
+        "source": "https://replicate.com/lightricks/ltx-2-distilled"
+    },
+    "replicate/lightricks/ltx-2-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_1080p": 0.04,
+        "output_cost_per_second_2k": 0.08,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://replicate.com/lightricks/ltx-2-fast"
+    },
+    "replicate/lightricks/ltx-2-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.12,
+        "output_cost_per_second_4k": 0.24,
+        "source": "https://replicate.com/lightricks/ltx-2-pro"
+    },
+    "replicate/lightricks/ltx-2-retake": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://replicate.com/lightricks/ltx-2-retake"
+    },
+    "replicate/lightricks/ltx-2.3-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.12,
+        "output_cost_per_second_4k": 0.24,
+        "source": "https://replicate.com/lightricks/ltx-2.3-fast"
+    },
+    "replicate/lightricks/ltx-2.3-pro": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_1080p": 0.08,
+        "output_cost_per_second_2k": 0.16,
+        "output_cost_per_second_4k": 0.32,
+        "source": "https://replicate.com/lightricks/ltx-2.3-pro"
+    },
+    "replicate/lightricks/ltx-2.5-fast": {
+        "litellm_provider": "replicate",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.06,
+        "output_cost_per_second_2k": 0.12,
+        "output_cost_per_second_4k": 0.24,
+        "output_cost_per_second_720p": 0.03,
+        "source": "https://replicate.com/lightricks/ltx-2.5-fast"
     }
 }
