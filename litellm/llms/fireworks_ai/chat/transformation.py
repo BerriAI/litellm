@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Iterable, Iterator, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
@@ -9,6 +10,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
@@ -42,6 +44,7 @@ from litellm.utils import (
     supports_tool_choice,
 )
 
+from ...base_llm.chat.transformation import REQUEST_PARAMS
 from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
@@ -101,6 +104,21 @@ def _json_schema_response_format(schema: object, name: str) -> Mapping[str, obje
 
 EFFORT_KWARG_KEYS: Final = frozenset({"enable_thinking", "thinking", "reasoning_budget", "low_effort"})
 _NOT_A_REASONING_MODEL_REASON: Final = "litellm's model map does not list it as a reasoning model."
+ALWAYS_REASONS_REASON: Final = "litellm's model map says the model cannot turn reasoning off."
+
+
+def _turns_reasoning_off(param: str, value: object) -> bool:
+    match param, value:
+        case "reasoning_effort", _:
+            return _map_reasoning_effort(value) == "none"
+        case "thinking", {"type": "disabled"}:
+            return True
+        case _:
+            return False
+
+
+def _reasoning_off_requests(params: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({param: value for param, value in params.items() if _turns_reasoning_off(param, value)})
 
 
 def _bool_from_kwargs(kwargs: Mapping[str, object], keys: tuple[str, ...]) -> bool | None:
@@ -341,7 +359,17 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 llm_provider="fireworks_ai",
             )
 
+        dropped_reasoning_off: Final[Mapping[str, object]] = (
+            _reasoning_off_requests(REQUEST_PARAMS.validate_python(non_default_params))
+            if drops_unsupported_params(drop_params) and self.always_reasons(model)
+            else MappingProxyType({})
+        )
+        for param, value in dropped_reasoning_off.items():
+            warn_dropped_reasoning(param, value, model, ALWAYS_REASONS_REASON, drop_params_gated=True)
+
         for param, value in non_default_params.items():
+            if param in dropped_reasoning_off:
+                continue
             if param == "tool_choice":
                 if value == "required":
                     # relevant issue: https://github.com/BerriAI/litellm/issues/4416
@@ -594,6 +622,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         if not resolve_fireworks_resource_name(model).startswith(f"{firerouter_resource}/"):
             return ()
         return (f"fireworks_ai/{firerouter_resource}",)
+
+    def always_reasons(self, model: str) -> bool:
+        return self._get_model_cost_capability_exact(model=model, capability="supports_none_reasoning_effort") is False
 
     def _get_model_cost_capability_exact(self, model: str, capability: str) -> bool | None:
         short_name: Final = self._short_model_name(model)

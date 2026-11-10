@@ -271,6 +271,35 @@ def test_latest_router_alias_places_developer_items_like_the_model_it_points_to(
     assert {**alias_body, "model": target} == target_body
 
 
+# POST https://api.fireworks.ai/inference/v1/responses, 2026-11-10: glm-latest answered 400
+# "GLM-5.3 is a thinking-only model" to reasoning effort none, and kimi-latest answered 200
+_ALWAYS_REASONS: Final = "accounts/fireworks/routers/glm-latest"
+_CAN_STOP_REASONING: Final = "accounts/fireworks/routers/kimi-latest"
+
+
+def _sent_reasoning(model: str, reasoning: Mapping[str, str], drop_params: bool) -> object:
+    route: Final = _fireworks_responses_route(model)
+    litellm.responses(
+        model=f"fireworks_ai/{model}",
+        input="hi",
+        reasoning=dict(reasoning),
+        drop_params=drop_params,
+        api_key="fw-test-key",
+    )
+    return _routed_body(route).get("reasoning")
+
+
+@respx.mock
+def test_drop_params_drops_reasoning_effort_none_only_for_models_that_cannot_stop_reasoning() -> None:
+    assert _sent_reasoning(_ALWAYS_REASONS, {"effort": "none"}, drop_params=True) is None
+    assert _sent_reasoning(_ALWAYS_REASONS, {"effort": "none", "summary": "auto"}, drop_params=True) == {
+        "summary": "auto"
+    }
+    assert _sent_reasoning(_ALWAYS_REASONS, {"effort": "none"}, drop_params=False) == {"effort": "none"}
+    assert _sent_reasoning(_ALWAYS_REASONS, {"effort": "low"}, drop_params=True) == {"effort": "low"}
+    assert _sent_reasoning(_CAN_STOP_REASONING, {"effort": "none"}, drop_params=True) == {"effort": "none"}
+
+
 @respx.mock
 def test_responses_call_folds_developer_items_when_the_loaded_cost_map_turns_the_flag_off(
     declare_mid_conversation_system: Callable[[str, bool], None],

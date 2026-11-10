@@ -1,7 +1,8 @@
 import copy
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -382,6 +383,67 @@ def test_latest_router_alias_accepts_the_same_params_as_the_model_it_points_to(a
 
     assert alias_params - excluded_params == target_params - excluded_params
     assert "tool_choice" in alias_params
+
+
+def _without_source(row: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({field: value for field, value in row.items() if field != "source"})
+
+
+@pytest.mark.parametrize(("alias", "target"), LATEST_ROUTER_ALIAS_TARGETS)
+def test_latest_router_alias_row_matches_the_row_of_the_model_it_points_to(alias: str, target: str) -> None:
+    alias_row: Final = _without_source(litellm.model_cost[f"fireworks_ai/{alias}"])
+
+    assert alias_row == _without_source(litellm.model_cost[f"fireworks_ai/{target}"])
+
+
+def test_every_fireworks_model_that_takes_tools_also_takes_tool_choice() -> None:
+    config: Final = FireworksAIConfig()
+    models_with_tools: Final = tuple(
+        name
+        for name, row in litellm.model_cost.items()
+        if row.get("litellm_provider") == "fireworks_ai" and row.get("supports_function_calling")
+    )
+    missing_tool_choice: Final = tuple(
+        name for name in models_with_tools if "tool_choice" not in config.get_supported_openai_params(name)
+    )
+
+    assert models_with_tools
+    assert missing_tool_choice == ()
+
+
+# POST https://api.fireworks.ai/inference/v1/chat/completions, 2026-11-10: glm-latest answered 400
+# "GLM-5.3 is a thinking-only model" to reasoning_effort none, and kimi-latest answered 200
+_ALWAYS_REASONS: Final = "accounts/fireworks/routers/glm-latest"
+_CAN_STOP_REASONING: Final = "accounts/fireworks/routers/kimi-latest"
+
+
+@pytest.mark.parametrize(
+    "reasoning_off",
+    ({"reasoning_effort": "none"}, {"reasoning_effort": False}, {"thinking": {"type": "disabled"}}),
+)
+def test_drop_params_drops_reasoning_off_only_for_models_that_cannot_stop_reasoning(
+    reasoning_off: Mapping[str, object],
+) -> None:
+    config: Final = FireworksAIConfig()
+
+    assert config.map_openai_params(dict(reasoning_off), {}, _ALWAYS_REASONS, drop_params=True) == {}
+    assert config.map_openai_params(dict(reasoning_off), {}, _ALWAYS_REASONS, drop_params=False) != {}
+    assert config.map_openai_params(dict(reasoning_off), {}, _CAN_STOP_REASONING, drop_params=True) != {}
+
+
+def test_drop_params_keeps_reasoning_on_for_models_that_cannot_stop_reasoning() -> None:
+    config: Final = FireworksAIConfig()
+    assert config.map_openai_params({"reasoning_effort": "low"}, {}, _ALWAYS_REASONS, drop_params=True) == {
+        "reasoning_effort": "low"
+    }
+
+
+def test_global_drop_params_drops_reasoning_off_for_models_that_cannot_stop_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    config: Final = FireworksAIConfig()
+    assert config.map_openai_params({"reasoning_effort": "none"}, {}, _ALWAYS_REASONS, drop_params=False) == {}
 
 
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):

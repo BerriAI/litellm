@@ -1,16 +1,18 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # the base signature leaves the params bag untyped
 from urllib.parse import unquote
 
 import httpx
 
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.responses.transformation import (
     STANDARD_MODE_WITHOUT_CONTEXT_REASONING_FIELD_VALUES,
     ReasoningFieldValues,
 )
+from litellm.llms.fireworks_ai.chat.transformation import ALWAYS_REASONS_REASON, FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import (
     FIREWORKS_FORWARD_USER_ID_PARAM,
     get_fireworks_forwarded_user_id,
@@ -23,7 +25,11 @@ from litellm.llms.openai.responses.instruction_items import developer_items_as_s
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
+from litellm.types.llms.openai import (
+    ALL_RESPONSES_API_TOOL_PARAMS,
+    ResponseInputParam,
+    ResponsesAPIOptionalRequestParams,
+)
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -90,6 +96,30 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         base: Final = api_base or get_secret_str("FIREWORKS_API_BASE") or FIREWORKS_AI_DEFAULT_API_BASE
         return join_api_base(base, "responses")
+
+    def map_openai_params_for_deployment(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] | None,
+    ) -> Mapping[str, object]:
+        mapped: Final = super().map_openai_params_for_deployment(
+            response_api_optional_params, model, drop_params, declared_reasoning_efforts=declared_reasoning_efforts
+        )
+        reasoning: Final = as_str_mapping(mapped.get("reasoning"))
+        if (
+            reasoning is None
+            or reasoning.get("effort") != "none"
+            or not drops_unsupported_params(drop_params)
+            or not FireworksAIConfig().always_reasons(model)
+        ):
+            return mapped
+        warn_dropped_reasoning("reasoning.effort", "none", model, ALWAYS_REASONS_REASON, drop_params_gated=True)
+        kept: Final = {key: value for key, value in reasoning.items() if key != "effort"}
+        others: Final = {key: value for key, value in mapped.items() if key != "reasoning"}
+        return {**others, "reasoning": kept} if kept else others
 
     def transform_responses_api_request(
         self,
