@@ -16,6 +16,7 @@ _RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
 _HEADERS: Final = TypeAdapter(dict[str, object])
 _EVENTS: Final = TypeAdapter(list[str])
 _HITS: Final[weakref.WeakKeyDictionary[Logging, Mapping[str, object]]] = weakref.WeakKeyDictionary()
+_UNCLAMPED: Final[weakref.WeakKeyDictionary[Logging, object]] = weakref.WeakKeyDictionary()
 
 
 def configured_cache() -> Cache | None:
@@ -75,18 +76,38 @@ async def store_stream(
     )
 
 
+def remember_unclamped(logging_obj: object, max_tokens: object) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    if isinstance(logging_obj, Logging):
+        _UNCLAMPED[logging_obj] = max_tokens
+
+
 async def lookup(
     _cache: Cache,
     original_function: Callable[..., object],
     /,
     **kwargs: object,  # kwargs-ok: the cache call's own arguments
 ) -> object | None:
-    from litellm.caching.caching_handler import LLMCachingHandler
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, Logging):
         return None
+    return await _read(
+        original_function,
+        logging_obj,
+        {**kwargs, "max_tokens": _UNCLAMPED.pop(logging_obj)} if logging_obj in _UNCLAMPED else kwargs,
+    )
+
+
+async def _read(
+    original_function: Callable[..., object],
+    logging_obj: Logging,
+    kwargs: dict[str, object],  # mutable-ok: the read call's own keyword arguments, handed on as the handler takes them
+) -> object | None:
+    from litellm.caching.caching_handler import LLMCachingHandler
+
     handler: Final = LLMCachingHandler(
         original_function=original_function, request_kwargs=dict(kwargs), start_time=logging_obj.start_time
     )

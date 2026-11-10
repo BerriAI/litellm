@@ -17,6 +17,7 @@ from litellm.messages.dispatch import (
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
 )
 from litellm.proxy import proxy_server
+from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import MESSAGES_PYTHON_FEATURES, RULES, Feature, Route, RouteRule, Rules, Target
 from litellm.rust_bridge.configuration import Rollout
@@ -477,7 +478,6 @@ STRICT_TOOL: Final = {"name": "a", "input_schema": {"type": "object"}, "strict":
         (Feature.CALLER_CLIENT, "anthropic/claude-sonnet-4-5", {"client": object()}, {}),
         (Feature.AGENTIC_LOOP_HOOK, "anthropic/claude-sonnet-4-5", {}, {"callbacks": [_Agentic()]}),
         (Feature.TLS_POLICY, "anthropic/claude-sonnet-4-5", {}, {"ssl_security_level": "DEFAULT@SECLEVEL=1"}),
-        (Feature.MODIFY_PARAMS, "anthropic/claude-sonnet-4-5", {}, {"modify_params": True}),
         (
             Feature.WORKLOAD_IDENTITY,
             "anthropic/claude-sonnet-4-5",
@@ -674,6 +674,46 @@ async def test_a_configured_response_cache_stays_native(
     )
 
     assert served is native_result
+
+
+@pytest.mark.asyncio
+async def test_modify_params_stays_native(monkeypatch: pytest.MonkeyPatch) -> None:
+    rules: Final[Rules] = (
+        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=catalog.MESSAGES_PYTHON_FEATURES),
+        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
+    )
+    native_result: Final = response()
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: rejected fallback
+        pytest.fail("modify_params must not fall back to Python")
+
+    async def apython(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
+        pytest.fail("modify_params must not fall back to Python")
+
+    async def native(request: NativeCall) -> AnthropicMessagesResponse:
+        return native_result
+
+    call_args: Final = (200_000, MESSAGES, "anthropic/claude-sonnet-4-5")
+    served: Final = _DISPATCH.run(
+        call_args,
+        {},
+        python=python,
+        binding=messages_binding(lambda request: native_result),
+        native=lambda hook, request, args, kwargs: hook(request),
+        rules=rules,
+    )
+    aserved: Final = await _ADISPATCH.arun(
+        call_args,
+        {},
+        python=apython,
+        binding=amessages_binding(native),
+        native=lambda hook, request, args, kwargs: hook(request),
+        rules=rules,
+    )
+
+    assert (served, aserved) == (native_result, native_result)
 
 
 ASYNC_ONLY_FEATURES: Final = (
