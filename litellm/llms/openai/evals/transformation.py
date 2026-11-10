@@ -13,6 +13,7 @@ from litellm.llms.base_llm.evals.transformation import (
     BaseEvalsAPIConfig,
     LiteLLMLoggingObj,
 )
+from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
 from litellm.types.llms.openai_evals import (
     CancelEvalResponse,
     CancelRunResponse,
@@ -44,24 +45,14 @@ class OpenAIEvalsConfig(BaseEvalsAPIConfig):
         return LlmProviders.OPENAI
 
     def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
-        """Add OpenAI-specific headers"""
-        import litellm
-        from litellm.secret_managers.main import get_secret_str
-
-        # Get API key following OpenAI pattern
-        api_key = None
-        if litellm_params:
-            api_key = litellm_params.api_key
-
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
-
-        if not api_key:
+        params: Final = litellm_params or GenericLiteLLMParams()
+        bearer_token: Final = resolve_openai_bearer_token(
+            api_key=params.api_key, api_base=params.api_base, litellm_params=params.model_dump(exclude_none=True)
+        )
+        if not bearer_token:
             raise ValueError("OPENAI_API_KEY is required for Evals API")
-
-        # Add required headers
-        headers["Authorization"] = f"Bearer {api_key}"
+        headers["Authorization"] = f"Bearer {bearer_token}"
         headers["Content-Type"] = "application/json"
-
         return headers
 
     def get_complete_url(
