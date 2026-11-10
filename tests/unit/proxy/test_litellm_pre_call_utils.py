@@ -7376,6 +7376,51 @@ def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
     router.get_deployment_by_model_group_name.assert_not_called()
 
 
+def test_apply_overrides_non_provider_prefix_in_model_resolves_provider_from_deployment(
+    setup_test_credentials,
+):
+    """
+    A model group named like 'meta-llama/Llama-3.3-70B-Instruct' carries an org
+    prefix, not a provider, so the hint must come from the deployment instead
+    """
+    litellm.credential_list.extend(
+        [
+            CredentialItem(
+                credential_name="openai-team-1",
+                credential_info={},
+                credential_values={"api_key": "sk-openai-key-for-team-1"},
+            ),
+            CredentialItem(
+                credential_name="vllm-team-1",
+                credential_info={},
+                credential_values={"api_key": "vllm-key-for-team-1"},
+            ),
+        ]
+    )
+    team_metadata = {
+        "model_config": {
+            "defaultconfig": {
+                "openai": {"litellm_credentials": "openai-team-1"},
+                "hosted_vllm": {"litellm_credentials": "vllm-team-1"},
+            }
+        }
+    }
+
+    router = route_entry_points_to_stubs(MagicMock())
+    deployment = MagicMock()
+    deployment.litellm_params.model = "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"
+    deployment.litellm_params.custom_llm_provider = None
+    router.get_deployment_by_model_group_name.return_value = deployment
+
+    data = {"model": "meta-llama/Llama-3.3-70B-Instruct"}
+    _apply_credential_overrides_from_model_config(
+        data=data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", team_metadata=team_metadata),
+        llm_router=router,
+    )
+    assert data["api_key"] == "vllm-key-for-team-1"
+
+
 def test_apply_overrides_single_provider_default_does_not_leak_to_other_providers(
     setup_test_credentials,
 ):

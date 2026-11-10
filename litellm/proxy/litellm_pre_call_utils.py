@@ -3734,12 +3734,14 @@ def _apply_credential_overrides_from_model_config(
         return
 
     # Extract provider hint from model name (e.g. "azure/gpt-4" -> "azure").
-    # When the user-facing name has no provider prefix, fall back to the
-    # deployment's litellm_params so multi-provider defaultconfig entries
-    # don't silently match the first dict key (#27516).
+    # A prefix that is not a provider (e.g. "meta-llama/Llama-3.3-70B-Instruct")
+    # is part of a model-group name, so like an unprefixed name it resolves
+    # through the deployment's litellm_params, keeping multi-provider
+    # defaultconfig entries from silently matching the first dict key (#27516).
+    model_prefix: Final = model_name.split("/", 1)[0] if "/" in model_name else None
     provider: str | None = None
-    if "/" in model_name:
-        provider = model_name.split("/", 1)[0]
+    if model_prefix in litellm.provider_list:
+        provider = model_prefix
     elif llm_router is not None:
         provider = _resolve_provider_from_deployment(
             llm_router=llm_router,
