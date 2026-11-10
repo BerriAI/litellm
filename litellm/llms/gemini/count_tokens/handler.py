@@ -51,8 +51,7 @@ class GoogleAIStudioTokenCounter:
         cleaned_contents: Final = copy.deepcopy(contents)
 
         for content in cleaned_contents:
-            parts = content["parts"]
-            for part in parts:
+            for part in content.get("parts") or ():
                 if "functionResponse" in part:
                     function_response_data = part["functionResponse"]
                     function_response_part = FunctionResponse(**function_response_data)
