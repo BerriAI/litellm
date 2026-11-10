@@ -516,6 +516,18 @@ async def test_continuation_declines_a_fallback_target_that_overrides_request_pa
     assert host.deployments_called() == ["a"]
 
 
+async def test_continuation_reads_the_request_fallbacks_over_the_routers(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", chat_stream("he", "llo", error=rate_limit(message="request override")))
+    host.answer(PREFILL_MODEL, chat_stream(" world"))
+    core = continuation_core(make_core, fallbacks=[{"a": ["b"]}])
+    stream = await open_stream(core, fallbacks=[{"model": "b", "messages": [{"role": "user", "content": "again"}]}])
+    with pytest.raises(litellm.RateLimitError, match="request override"):
+        await collect_texts(stream)
+    assert host.deployments_called() == ["a"]
+
+
 async def test_continuation_runs_a_plain_fallback_for_an_error_before_content(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:

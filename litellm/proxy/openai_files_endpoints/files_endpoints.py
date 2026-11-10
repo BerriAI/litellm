@@ -77,7 +77,6 @@ from litellm.proxy.openai_files_endpoints.batch_guardrails import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
     deployment_drop_params,
@@ -434,7 +433,7 @@ async def route_create_file(
     )
     storage: Final = explicit_storage or (LITELLM_DB_STORAGE_BACKEND_NAME if executed_model is not None else None)
     if storage is not None:
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
             extract_file_data,
         )
         from litellm.proxy.openai_files_endpoints.storage_backend_service import (
@@ -1094,7 +1093,6 @@ async def get_file_content(
 
             model: Final = cast(str | None, data.get("model"))
             if model:
-                add_internal_model_credentials(data=data, llm_router=llm_router, model_id=model)
                 response = await llm_router.afile_content(
                     **{
                         "model": model,
@@ -1183,7 +1181,6 @@ async def get_file_content(
                     data=data,
                     credentials=credentials,
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
-                    include_internal_credentials=True,
                 )
                 response = await litellm.afile_content(
                     custom_llm_provider=credentials["custom_llm_provider"],
@@ -1357,7 +1354,6 @@ async def get_file(
                 data=data,
                 credentials=credentials,
                 file_id=original_file_id,
-                include_internal_credentials=True,
             )
 
             response = await litellm.afile_retrieve(
@@ -1571,7 +1567,6 @@ async def delete_file(
                 data=data,
                 credentials=credentials,
                 file_id=original_file_id,
-                include_internal_credentials=True,
             )
 
             response = await litellm.afile_delete(
@@ -1985,7 +1980,7 @@ async def list_files(
             )
         elif should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
+            prepare_data_with_credentials(data=data, credentials=credentials)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -2009,7 +2004,7 @@ async def list_files(
                 user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
             )
-            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
+            prepare_data_with_credentials(data=data, credentials=credentials)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,

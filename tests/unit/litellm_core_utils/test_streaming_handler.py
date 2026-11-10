@@ -276,6 +276,37 @@ def test_is_chunk_non_empty(initialized_custom_stream_wrapper: CustomStreamWrapp
     )
 
 
+def test_is_chunk_non_empty_keeps_thinking_blocks_without_other_content(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """Encrypted reasoning arrives as thinking_blocks and nothing else, so that delta has to be yielded."""
+    chunk: Final = ModelResponseStream(
+        id="chunk-thinking",
+        object="chat.completion.chunk",
+        created=1,
+        model="chatgpt/gpt-6.1-sol",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason=None,
+                delta=Delta(
+                    thinking_blocks=[
+                        {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:gAAAA"}
+                    ]
+                ),
+            )
+        ],
+    )
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={},
+            model_response=chunk,
+            response_obj={},
+        )
+        is True
+    )
+
+
 def test_is_chunk_non_empty_with_annotations(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -3523,6 +3554,34 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
     )
 
 
+@pytest.mark.parametrize(
+    ("tool_calls", "non_empty"),
+    [([{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}], True), ([], False)],
+)
+def test_is_chunk_non_empty_reads_tool_calls_from_the_completion_obj(
+    initialized_custom_stream_wrapper: CustomStreamWrapper, tool_calls: list[dict[str, object]], non_empty: bool
+):
+    assert (
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"tool_calls": tool_calls},
+            model_response=ModelResponseStream(),
+            response_obj={},
+        )
+        is non_empty
+    )
+
+
+def test_is_chunk_non_empty_rejects_completion_obj_tool_calls_without_a_length(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    with pytest.raises(TypeError, match="object of type 'generator' has no len"):
+        initialized_custom_stream_wrapper.is_chunk_non_empty(
+            completion_obj={"tool_calls": (tool_call for tool_call in ())},
+            model_response=ModelResponseStream(),
+            response_obj={},
+        )
+
+
 def _make_chunk(content: Optional[str]) -> ModelResponseStream:
     return ModelResponseStream(
         id="test",
@@ -4653,6 +4712,25 @@ def test_dispatch_triton_stream(
     assert isinstance(result, _ProviderChunkParsed)
     assert completion_obj["content"] == "triton text"
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        'data: {"text_output": "triton text", "is_finished": true, "stop_reason": "stop", "generated_token_count": 2}',
+        b'data: {"text_output": "triton text", "is_finished": true, "stop_reason": "stop", "generated_token_count": 2}',
+    ],
+)
+def test_handle_triton_stream_parses_sse_text_output_lines(
+    initialized_custom_stream_wrapper: CustomStreamWrapper, chunk: str | bytes
+):
+    assert initialized_custom_stream_wrapper.handle_triton_stream(chunk) == {
+        "text": "triton text",
+        "is_finished": True,
+        "finish_reason": "stop",
+        "prompt_tokens": 0,
+        "completion_tokens": 2,
+    }
 
 
 def test_dispatch_text_completion_openai_with_usage(
@@ -7347,6 +7425,121 @@ def test_azure_chunk_creator_streams_choice_content_filter_results_on_later_chun
 
     assert [_wire_dump(output)["choices"][0]["content_filter_results"] for output in outputs] == [filter_results]
     assert ["content_filter_results" in output.choices[0].model_fields_set for output in outputs] == [True]
+
+
+def _parsed_openai_like_chunk(
+    chunk_id: str, delta: Mapping[str, object], finish_reason: str | None = None, **choice_extras: object
+) -> ModelResponseStream:
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    return parser.chunk_parser(
+        {
+            "id": chunk_id,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "served-model",
+            "choices": [{"index": 0, "delta": dict(delta), "finish_reason": finish_reason, **choice_extras}],
+        }
+    )
+
+
+def _parsed_stream_wrapper(custom_llm_provider: str, logging_obj: Logging) -> CustomStreamWrapper:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model="served-model",
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=logging_obj,
+    )
+    wrapper.chunk_creator(chunk=_parsed_openai_like_chunk("chunk-0", {"role": "assistant", "content": ""}))
+    return wrapper
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["hosted_vllm", "deepseek", "groq"])
+def test_parsed_openai_like_chunk_creator_builds_one_delta_and_choice_and_no_dump_per_later_chunk(
+    logging_obj: Logging, custom_llm_provider: str
+) -> None:
+    wrapper: Final = _parsed_stream_wrapper(custom_llm_provider, logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "hello"}, stop_reason=None),
+        _parsed_openai_like_chunk("chunk-2", {"reasoning": "thought"}, stop_reason=None),
+        _parsed_openai_like_chunk("chunk-3", {"content": " world", "reasoning_content": None}, logprobs=None),
+    )
+    delta_init: Final = Delta.__init__.__code__
+    streaming_choices_init: Final = StreamingChoices.__init__.__code__
+    model_dump: Final = BaseModel.model_dump.__code__
+
+    outputs, calls = _chunk_creator_calls(
+        wrapper, later_chunks, frozenset({delta_init, streaming_choices_init, model_dump})
+    )
+
+    assert sum(call.code is delta_init for call in calls) == len(later_chunks)
+    assert sum(call.code is streaming_choices_init for call in calls) == len(later_chunks)
+    assert sum(call.code is model_dump for call in calls) == 0
+    assert [_wire_dump(output)["choices"] for output in outputs if output is not None] == [
+        [{"index": 0, "delta": {"content": "hello"}}],
+        [{"index": 0, "delta": {"reasoning_content": "thought"}}],
+        [{"index": 0, "delta": {"content": " world"}}],
+    ]
+
+
+def test_parsed_openai_like_chunk_creator_keeps_choice_extras_ahead_of_choice_keys(logging_obj: Logging) -> None:
+    wrapper: Final = _parsed_stream_wrapper("hosted_vllm", logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "hi"}, stop_reason=None, token_ids=[7, 8]),
+        _parsed_openai_like_chunk("chunk-2", {"content": "!"}, stop_reason=None, matched_stop=2),
+    )
+
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in later_chunks)
+
+    choice_dumps: Final = [output.choices[0].model_dump() for output in outputs if output is not None]
+    assert [list(choice_dump) for choice_dump in choice_dumps] == [
+        ["stop_reason", "token_ids", "finish_reason", "index", "delta", "logprobs"],
+        ["stop_reason", "matched_stop", "finish_reason", "index", "delta", "logprobs"],
+    ]
+    assert [choice_dump["token_ids"] for choice_dump in choice_dumps[:1]] == [[7, 8]]
+    assert [choice_dump["matched_stop"] for choice_dump in choice_dumps[1:]] == [2]
+    assert [choice_dump["delta"]["content"] for choice_dump in choice_dumps] == ["hi", "!"]
+
+
+def test_parsed_openai_like_stream_still_emits_tool_calls_and_finish_after_reused_chunks(
+    logging_obj: Logging,
+) -> None:
+    wrapper: Final = _parsed_stream_wrapper("deepseek", logging_obj)
+    later_chunks: Final = (
+        _parsed_openai_like_chunk("chunk-1", {"content": "checking"}),
+        _parsed_openai_like_chunk(
+            "chunk-2",
+            {
+                "tool_calls": [
+                    {"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": ""}}
+                ]
+            },
+        ),
+        _parsed_openai_like_chunk("chunk-3", {"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]}),
+        _parsed_openai_like_chunk("chunk-4", {}, finish_reason="tool_calls"),
+    )
+
+    outputs: Final = tuple(wrapper.chunk_creator(chunk=chunk) for chunk in later_chunks)
+
+    assert [_wire_dump(output)["choices"] for output in outputs if output is not None] == [
+        [{"index": 0, "delta": {"content": "checking"}}],
+        [
+            {
+                "index": 0,
+                "delta": {
+                    "tool_calls": [
+                        {"id": "call_1", "function": {"arguments": "", "name": "f"}, "type": "function", "index": 0}
+                    ]
+                },
+            }
+        ],
+        [
+            {
+                "index": 0,
+                "delta": {"tool_calls": [{"function": {"arguments": "{}"}, "type": "function", "index": 0}]},
+            }
+        ],
+        [{"finish_reason": "tool_calls", "index": 0, "delta": {}}],
+    ]
 
 
 @pytest.mark.parametrize(

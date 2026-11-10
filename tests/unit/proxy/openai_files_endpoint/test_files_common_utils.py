@@ -21,6 +21,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_authorized_credentials_for_model,
     get_credentials_for_model,
     get_team_provider_credentials,
+    get_team_provider_deployment,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
 )
@@ -399,74 +400,6 @@ async def test_a_caller_that_handed_off_accounting_still_leaves_the_marker_alone
     assert data["status"] == "complete"
 
 
-# =========================================================================== #
-# add_internal_model_credentials - the snapshot that lets a completed
-# batch's output file be read, and therefore its cost be recorded
-# =========================================================================== #
-
-
-def test_add_internal_model_credentials_attaches_an_immutable_snapshot():
-    """Cost accounting for a completed batch reads its output file, and Bedrock resolves
-    that bucket only from this snapshot. It must be immutable so nothing downstream can
-    redirect the bucket that managed file ids are validated against."""
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        add_internal_model_credentials,
-    )
-
-    router = route_entry_points_to_stubs(MagicMock())
-    router.get_deployment_credentials_with_provider = MagicMock(
-        return_value={"s3_bucket_name": "configured-bucket", "aws_region_name": "us-east-1"}
-    )
-    data = {"batch_id": "unified-batch-id"}
-
-    add_internal_model_credentials(data=data, llm_router=router, model_id="deployment-1")
-
-    snapshot = data["_litellm_internal_model_credentials"]
-    assert snapshot["s3_bucket_name"] == "configured-bucket"
-    assert isinstance(snapshot, MappingProxyType)
-    with pytest.raises(TypeError):
-        snapshot["s3_bucket_name"] = "attacker-bucket"
-    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id="deployment-1")
-
-
-@pytest.mark.parametrize(
-    "model_id, credentials",
-    [(None, {"s3_bucket_name": "b"}), ("deployment-1", None)],
-    ids=["no-model-id", "deployment-has-no-credentials"],
-)
-def test_add_internal_model_credentials_is_a_noop_without_a_resolvable_deployment(model_id, credentials):
-    """An unroutable batch must be left alone rather than given an empty snapshot, which
-    would look like a configured bucket of nothing."""
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        add_internal_model_credentials,
-    )
-
-    router = route_entry_points_to_stubs(MagicMock())
-    router.get_deployment_credentials_with_provider = MagicMock(return_value=credentials)
-    data = {"batch_id": "unified-batch-id"}
-
-    add_internal_model_credentials(data=data, llm_router=router, model_id=model_id)
-
-    assert "_litellm_internal_model_credentials" not in data
-
-
-def test_add_internal_model_credentials_survives_a_failing_deployment_lookup():
-    """The snapshot only enables cost accounting, so a batch whose deployment no longer
-    resolves, which happens when a model group is removed while batches are in flight,
-    must still be retrievable rather than failing the request on the lookup."""
-    from litellm.proxy.openai_files_endpoints.common_utils import (
-        add_internal_model_credentials,
-    )
-
-    router = route_entry_points_to_stubs(MagicMock())
-    router.get_deployment_credentials_with_provider = MagicMock(side_effect=KeyError("deployment-gone"))
-    data = {"batch_id": "unified-batch-id"}
-
-    add_internal_model_credentials(data=data, llm_router=router, model_id="deployment-gone")
-
-    assert data == {"batch_id": "unified-batch-id"}
-
-
 from openai.types.batch import BatchRequestCounts
 
 from litellm.proxy.openai_files_endpoints.common_utils import (
@@ -839,6 +772,61 @@ def test_a_team_keeps_its_older_openai_deployment_when_a_newer_one_has_a_lower_i
 
     assert credentials is not None
     assert credentials["api_key"] == "older-key"
+
+
+@pytest.mark.parametrize("newer_first", [True, False])
+def test_the_team_provider_deployment_is_the_one_whose_credentials_the_team_resolves(newer_first: bool):
+    older: Final = _team_openai_deployment("deployment-z", "older-key", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    newer: Final = _team_openai_deployment("deployment-a", "newer-key", datetime(2026, 6, 1, tzinfo=timezone.utc))
+    router: Final = Router(model_list=[newer, older] if newer_first else [older, newer])
+    team_member: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a")
+
+    deployment: Final = get_team_provider_deployment(
+        llm_router=router, user_api_key_dict=team_member, custom_llm_provider="openai"
+    )
+
+    assert deployment is not None
+    assert (deployment.deployment_id, deployment.public_model_name) == ("deployment-z", "team-gpt-deployment-z")
+    assert dict(deployment.credentials) == get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=team_member,
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+    assert deployment.credentials["api_key"] == "older-key"
+
+
+def test_the_team_provider_deployment_carries_the_team_public_model_name():
+    deployment: Final = get_team_provider_deployment(
+        llm_router=_team_openai_router("openai/*", "openai/*"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+    )
+
+    assert deployment is not None
+    assert (deployment.deployment_id, deployment.public_model_name) == ("team-a-openai", "openai/*")
+
+
+def test_a_key_with_only_an_accessible_non_team_deployment_has_no_team_provider_deployment():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "openai-deployment-key"},
+            }
+        ]
+    )
+    caller: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=["openai/*"])
+
+    accessible_credentials: Final = get_team_provider_credentials(
+        llm_router=router, user_api_key_dict=caller, custom_llm_provider="openai", include_accessible_deployments=True
+    )
+
+    assert accessible_credentials is not None
+    assert accessible_credentials["api_key"] == "openai-deployment-key"
+    assert (
+        get_team_provider_deployment(llm_router=router, user_api_key_dict=caller, custom_llm_provider="openai") is None
+    )
 
 
 def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones():

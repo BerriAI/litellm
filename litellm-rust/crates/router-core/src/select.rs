@@ -108,6 +108,9 @@ impl Candidates {
 pub(crate) struct SelectInputs {
     pub target_order: Option<i64>,
     pub skipped_ids: Vec<String>,
+    /// Every deployment an attempt of this request failed on, whatever the status: the callback
+    /// filters read it as `_retry_skipped_deployment_ids`, so an affinity pin can leave one.
+    pub failed_ids: Vec<String>,
     /// A weighted failover hop's `_excluded_deployment_ids`: never picked.
     pub excluded_ids: Arc<[String]>,
     /// Stop before the plugins, order and skip filters: the group less cooldowns and blocked
@@ -456,7 +459,7 @@ impl Core {
         let request_order = request.target_order.filter(|_| !inputs.fallback_hop);
         // `async_callback_filter_deployments` runs after the cooldown and blocked filters on every
         // async candidate list but a deployment named by id and a listed pass-through pick.
-        if settings.callback_filters
+        let preferred = if settings.callback_filters
             && !inputs.count_only
             && !resolution.kind.is_single()
             && request.pass_through != Some(PassThrough::Listed)
@@ -470,10 +473,14 @@ impl Core {
                 StrategyScope::Default,
             );
             ctx.excluded_ids = &inputs.excluded_ids;
-            ctx.skipped_ids = &inputs.skipped_ids;
+            ctx.skipped_ids = &inputs.failed_ids;
             ctx.target_order = inputs.target_order.or(request_order);
-            healthy = self.host.callback_filters(&ctx, healthy).await?;
-        }
+            let filtered = self.host.callback_filters(&ctx, healthy).await?;
+            healthy = filtered.kept;
+            filtered.preferred
+        } else {
+            None
+        };
         if inputs.count_only {
             return Ok(Candidates {
                 name: name.to_owned(),
@@ -648,8 +655,13 @@ impl Core {
             healthy.retain(|d| !d.cannot_run_batches());
         }
 
-        if let Some(pinned) = request.pinned_deployment_id.as_deref()
-            && healthy.iter().any(|d| d.id == pinned)
+        if let Some(pinned) = [
+            request.pinned_deployment_id.as_deref(),
+            preferred.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|id| healthy.iter().any(|d| d.id == *id))
         {
             healthy.retain(|d| d.id == pinned);
         }

@@ -6,6 +6,8 @@ pub(crate) use selection::{Cached, Selection, configure, ensure_cache_disabled};
 
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
+const CACHE_HOST_MODULE: &str = "litellm.rust_bridge.host.cache";
+
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum HandleError {
     #[error("this inference route does not support configured caches")]

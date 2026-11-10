@@ -21,6 +21,7 @@ from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     strip_litellm_internal_message_fields,
@@ -82,6 +83,7 @@ _MISTRAL_REQUEST_ROUTING: Final = TypeAdapter(MistralRequestRouting)
 _MISTRAL_CACHE_KEY_PARAMS: Final = TypeAdapter(MistralCacheKeyParams)
 _MISTRAL_REASONING_EFFORT_PARAMS: Final = TypeAdapter(MistralReasoningEffortParams)
 _MISTRAL_FILE_PART: Final = TypeAdapter(MistralFilePart)
+_DECODED_JSON: Final = TypeAdapter(object)
 _REASONING_PROMPT_REASON: Final = "litellm sends Magistral a reasoning system prompt instead of the requested level."
 _NON_LEVEL_EFFORT_REASON: Final = (
     "the Mistral API takes it only as a level such as 'high', so Mistral applies its default effort."
@@ -139,8 +141,6 @@ class MistralConfig(OpenAIGPTConfig):
 
     - `response_format` (object or null): An object specifying the format that the model must output. Setting to { "type": "json_object" } enables JSON mode, which guarantees the message the model generates is in JSON. When using JSON mode you MUST also instruct the model to produce JSON yourself with a system or a user message.
     """
-
-    _is_base_class = False
 
     temperature: int | None = None
     top_p: int | None = None
@@ -1005,9 +1005,13 @@ class MistralConfig(OpenAIGPTConfig):
         logging_obj.model_call_details["response_headers"] = raw_response.headers
 
         # Handle Mistral-specific response transformations
-        response_data = raw_response.json()
-        response_data = self._handle_empty_content_response(response_data)
-        response_data = self._handle_content_list_to_str_conversion(response_data)
+        decoded_response: Final = _DECODED_JSON.validate_python(raw_response.json())
+        if not is_str_keyed_dict(decoded_response):
+            missing_get: Final = f"{type(decoded_response).__name__!r} object has no attribute 'get'"
+            raise AttributeError(missing_get, name="get", obj=decoded_response)
+        response_data: Final = self._handle_content_list_to_str_conversion(
+            self._handle_empty_content_response(decoded_response)
+        )
 
         final_response_obj: Final = cast(
             ModelResponse,

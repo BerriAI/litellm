@@ -31,6 +31,9 @@ def normalized_audio_duration_seconds(value: object) -> float | None:
     return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
+LIBSNDFILE_UNKNOWN_FRAME_COUNT: Final = 2**63 - 1
+
+
 @dataclass
 class ProcessedAudioFile:
     """
@@ -301,9 +304,12 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                 "Pass bytes, an open file handle, a (filename, content) "
                 "tuple, or a pathlib.Path."
             )
-        elif isinstance(file, os.PathLike):
-            # File path (PathLike): SDK convenience.
-            with open(str(file), "rb") as f:
+        elif isinstance(file, os.PathLike) or (
+            isinstance(file, tuple) and len(file) >= 2 and isinstance(file[1], os.PathLike)
+        ):
+            # File path (PathLike), bare or as the content of a (filename, path) tuple: SDK convenience.
+            path: Final = file if isinstance(file, os.PathLike) else file[1]
+            with open(str(path), "rb") as f:
                 file_content = f.read()
         elif isinstance(file, tuple):
             # Tuple format: (filename, content, optional content_type)
@@ -313,7 +319,7 @@ def calculate_request_duration(file: FileTypes) -> float | None:
                     file_content = content
                 elif hasattr(content, "read") and not isinstance(content, (str, os.PathLike)):
                     # File-like object in tuple
-                    current_pos: Final = getattr(content, "tell", lambda: None)()
+                    current_pos: Final = content.tell() if hasattr(content, "tell") else None
                     # Seek to start to ensure we read the entire content
                     if hasattr(content, "seek"):
                         content.seek(0)
@@ -337,7 +343,10 @@ def calculate_request_duration(file: FileTypes) -> float | None:
         # Extract duration using soundfile
         file_object: Final = io.BytesIO(file_content)
         with sf.SoundFile(file_object) as audio:
-            duration: Final = len(audio) / audio.samplerate
+            frames: Final = len(audio)
+            if frames >= LIBSNDFILE_UNKNOWN_FRAME_COUNT:
+                return None
+            duration: Final = frames / audio.samplerate
             return duration
 
     except Exception:

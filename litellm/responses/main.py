@@ -31,14 +31,14 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params, require_attributes
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     get_provider_affinity_header,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )
@@ -82,7 +82,11 @@ from litellm.types.llms.openai import (
 
 # Handle ResponseText import with fallback
 if TYPE_CHECKING:
-    from litellm.responses.streaming_iterator import ResponsesWsFrameGuard, ResponsesWsTurnAdmission
+    from litellm.responses.streaming_iterator import (
+        ResponsesWsFrameGuard,
+        ResponsesWsTurnAdmission,
+        ResponsesWsTurnUsageRecorder,
+    )
     from litellm.types.llms.openai import ResponseText
 else:
     ResponseText = str  # Fallback for ResponseText import
@@ -1147,8 +1151,12 @@ def _apply_prompt_management_to_responses_call(
 ) -> tuple[str | ResponseInputParam, str, str | None, object]:
     """Returns the prompt-managed input, model and provider, plus the deployment metadata that still
     describes the upstream (``None`` once the prompt manager moved the request to another provider)."""
-    async_outcome: Final[_AsyncPromptManagementOutcome | None] = kwargs.pop("_async_prompt_merged_params", None)
-    if async_outcome is not None:
+    carried_outcome: Final[object] = kwargs.get("_async_prompt_merged_params")
+    kwargs.pop("_async_prompt_merged_params", None)
+    if carried_outcome is not None:
+        async_outcome: Final = require_attributes(
+            carried_outcome, _AsyncPromptManagementOutcome, "merged_optional_params"
+        )
         for key, value in async_outcome.merged_optional_params.items():
             local_vars[key] = value
         return input, model, custom_llm_provider, async_outcome.deployment_model_info
@@ -2866,6 +2874,7 @@ async def _aresponses_websocket(
     api_key: str | None = None,
     timeout: float | None = None,
     turn_admission: "ResponsesWsTurnAdmission | None" = None,
+    turn_usage_recorder: "ResponsesWsTurnUsageRecorder | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
     **kwargs,
 ) -> Exception | None:
@@ -2960,6 +2969,7 @@ async def _aresponses_websocket(
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
         turn_admission=turn_admission,
+        turn_usage_recorder=turn_usage_recorder,
         frame_guard=responses_ws_frame_guard,
         **remaining_kwargs,
     )

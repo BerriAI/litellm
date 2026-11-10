@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,6 +21,8 @@ from litellm.llms.azure_ai.anthropic.count_tokens.transformation import (
     AzureAIAnthropicCountTokensConfig,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
@@ -42,7 +44,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
         system: object = None,
         optional_params: Mapping[str, JsonValue] | None = None,
         context_management: JsonValue = None,
-    ) -> dict[str, object]:
+    ) -> object:
         """
         Handle a CountTokens request using httpx with Azure authentication.
 
@@ -126,7 +128,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                     message=error_text,
                 )
 
-            azure_response: Final = response.json()
+            azure_response: Final = _DECODED_JSON.validate_python(response.json())
 
             verbose_logger.debug("Azure AI Anthropic response: %s", azure_response)
 
@@ -145,6 +147,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
+        except litellm.Timeout as e:
+            raise AnthropicError(status_code=e.status_code, message=str(e)) from e
         except Exception as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)
             raise AnthropicError(

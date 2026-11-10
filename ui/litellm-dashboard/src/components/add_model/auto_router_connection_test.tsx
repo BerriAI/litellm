@@ -122,7 +122,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
               <span className="font-medium">{target.labels.join(", ")}</span>{" "}
               <span className="text-muted-foreground">
                 {"->"} {target.modelGroup}
-                {target.mode === "embedding" ? " (embedding)" : ""}
+                {target.mode === "embedding" ? t("addModel.autoRouterConnectionTest.embeddingSuffix") : ""}
               </span>
               {result.status === "error" && (
                 <p className="mt-1 text-xs text-destructive" data-testid="test-error-message">

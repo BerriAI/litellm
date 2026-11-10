@@ -2,6 +2,7 @@ import React from "react";
 import { Trans } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import LoggingSettings from "../team/LoggingSettings";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface PremiumLoggingSettingsProps {
   value: any[];
@@ -23,10 +24,10 @@ export function PremiumLoggingSettings({
       <div>
         <div className="flex flex-wrap gap-2 mb-3">
           <Badge variant="secondary" className="opacity-50">
-            ✨ langfuse-logging
+            {codeSamples.logging.premiumLangfuse}
           </Badge>
           <Badge variant="secondary" className="opacity-50">
-            ✨ datadog-logging
+            {codeSamples.logging.premiumDatadog}
           </Badge>
         </div>
         <div className="p-3 bg-muted border border-border rounded-lg">

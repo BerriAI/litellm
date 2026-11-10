@@ -109,7 +109,7 @@ export function ProviderSpendBreakdown({ rows }: { rows: readonly ProviderSpendD
               <div
                 key={row.provider}
                 data-testid="provider-share-segment"
-                title={`${row.provider || "unknown"} · ${shareOf(row.spend).toFixed(1)}%`}
+                title={`${row.provider || t("usage.providerSpend.unknownProvider")} · ${shareOf(row.spend).toFixed(1)}%`}
                 className="h-full first:rounded-l-full last:rounded-r-full"
                 style={{ width: `${shareOf(row.spend)}%`, backgroundColor: colorOf(index) }}
               />
@@ -119,7 +119,7 @@ export function ProviderSpendBreakdown({ rows }: { rows: readonly ProviderSpendD
             {visible.slice(0, 6).map((row, index) => (
               <span key={row.provider} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span className="size-2 rounded-[2px]" style={{ backgroundColor: colorOf(index) }} />
-                <span className="text-foreground">{row.provider || "unknown"}</span>
+                <span className="text-foreground">{row.provider || t("usage.providerSpend.unknownProvider")}</span>
                 <span className="tabular-nums">{shareOf(row.spend).toFixed(1)}%</span>
               </span>
             ))}

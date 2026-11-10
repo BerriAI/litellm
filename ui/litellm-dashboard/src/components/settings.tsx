@@ -39,6 +39,9 @@ import {
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
+
+const DEFAULT_DYNAMIC_PARAM_TYPE = "text";
+const SLACK_SERVICE = "slack";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -85,7 +88,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
     <div className="space-y-4 mt-6 p-4 bg-muted rounded-lg border">
       {params.map((param) => {
         const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
-        const paramType = paramConfig.type || "text";
+        const paramType = paramConfig.type || DEFAULT_DYNAMIC_PARAM_TYPE;
         const fieldLabel = paramConfig.ui_name || param.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
         const isRequired = paramConfig.required || false;
         const selectOptions: string[] = Array.isArray(paramConfig.options) ? paramConfig.options : [];
@@ -139,7 +142,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
                   <Switch
                     id={fieldId}
                     checked={/^(true|1)$/i.test(String(field.value ?? ""))}
-                    onCheckedChange={(checked: boolean) => field.onChange(checked ? "true" : "false")}
+                    onCheckedChange={(checked: boolean) => field.onChange(String(checked))}
                     onBlur={field.onBlur}
                   />
                 )}
@@ -717,7 +720,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               <Button
                 onClick={async () => {
                   try {
-                    await serviceHealthCheck(accessToken, "slack");
+                    await serviceHealthCheck(accessToken, SLACK_SERVICE);
                     toast.success(t("loggingAndAlerts.alertTypes.toasts.testTriggered"));
                   } catch (error) {
                     toast.fromError(parseErrorMessage(error));

@@ -182,7 +182,7 @@ class ManagedObjectCreatorAttribution:
         team_id: Final = getattr(job, "team_id", None)
         rows: Final = _CreatorRows(
             key=await self._live_key_row(api_key, job.created_by),
-            team=await self._live_team_row(team_id),
+            team=await self._live_team_row(team_id, job.created_at),
             user=await self._user_row(object_id, _creator_user_id(job.created_by)),
         )
         return ResponseCreator(
@@ -269,10 +269,15 @@ class ManagedObjectCreatorAttribution:
             verbose_proxy_logger.error(f"{self._poller_name}: could not look up team {team_id} for {object_id}: {e}")
             return None
 
-    async def _live_team_row(self, team_id: str | None) -> prisma_models.LiteLLM_TeamTable | None:
+    async def _live_team_row(
+        self, team_id: str | None, created_before: datetime | None = None
+    ) -> prisma_models.LiteLLM_TeamTable | None:
         if not team_id:
             return None
-        return await _team_table(self._prisma_client).find_unique(where={"team_id": team_id})
+        team: Final = await _team_table(self._prisma_client).find_unique(where={"team_id": team_id})
+        if team is not None and created_before is not None and team.created_at > created_before:
+            return None
+        return team
 
 
 def _response_creator_metadata(job: ManagedObjectRow, rows: _CreatorRows) -> Mapping[str, object]:

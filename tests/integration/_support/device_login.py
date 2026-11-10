@@ -378,14 +378,17 @@ def _tunnel(
 
 
 @contextmanager
-def device_login_peers(directory: Path) -> Generator[Peers]:
+def device_login_peers(
+    directory: Path, provider: Callable[[Request], Reply] | None = None
+) -> Generator[Peers]:
     cert, key = write_self_signed_cert(directory, (*AUTH_HOSTS, COPILOT_API_HOST))
     switches: Final = Switches(threading.Event(), threading.Event(), threading.Event(), threading.Event())
     authorities: Final[SimpleQueue[str]] = SimpleQueue()
     hangups: Final[SimpleQueue[Hangup]] = SimpleQueue()
+    respond: Final = provider if provider is not None else _provider_api(rv.ResponsesVendor())
     with (
-        wire_server(_provider_api(rv.ResponsesVendor())) as api,
-        wire_server(_provider_api(rv.ResponsesVendor()), tls=server_context(cert, key)) as copilot_api,
+        wire_server(respond) as api,
+        wire_server(respond, tls=server_context(cert, key)) as copilot_api,
         wire_server(_auth_hosts(api.url, switches.grant), tls=server_context(cert, key)) as auth,
         _tunnel(auth, copilot_api, switches, authorities, hangups) as tunnel,
     ):
