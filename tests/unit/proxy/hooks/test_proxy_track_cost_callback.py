@@ -13,7 +13,7 @@ import pytest
 
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -35,6 +35,7 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     run_spend_event,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import InitPassThroughEndpointHelpers
 from litellm.proxy.spend_tracking.spend_event import SpendEventDecodeError, build_spend_event, decode_spend_event
 from litellm.proxy.spend_tracking.spend_event_producer import SpendEventProducer, UnixAddress
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
@@ -905,6 +906,74 @@ async def test_async_post_call_failure_hook_non_llm_route():
 
         # Assert that update_database was NOT called for non-LLM routes
         mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "call_type", "written"),
+    [
+        ("/azure-search", CallTypes.pass_through.value, True),
+        ("/unregistered-search", CallTypes.acompletion.value, False),
+        ("/key/generate", CallTypes.pass_through.value, False),
+        ("/team/new", CallTypes.pass_through.value, False),
+        ("/unregistered-search", CallTypes.pass_through.value, False),
+        ("/azure-search/", CallTypes.pass_through.value, True),
+        ("/configured-search/indexes/docs", CallTypes.pass_through.value, True),
+        (None, CallTypes.acompletion.value, True),
+    ],
+)
+async def test_async_post_call_failure_hook_tracks_config_defined_pass_through_route(
+    route: str | None, call_type: str, written: bool
+) -> None:
+    api_base: Final = "http://upstream.example/indexes/x/docs/search"
+    request_data: Final = {
+        "model": "azure-search",
+        "call_type": call_type,
+        "litellm_params": {"api_base": api_base, "metadata": {}},
+    }
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key="test_api_key",
+        request_route=route,
+    )
+
+    spend_writer: Final = create_autospec(DBSpendUpdateWriter, instance=True)
+    with patch.dict(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes", clear=True
+    ):
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=FastAPI(),
+            path="/azure-search",
+            target=api_base,
+            custom_headers={},
+            forward_headers=False,
+            merge_query_params=False,
+            dependencies=[],
+            cost_per_request=None,
+            endpoint_id="configured-exact",
+        )
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=FastAPI(),
+            path="/configured-search",
+            target=api_base,
+            custom_headers={},
+            forward_headers=False,
+            merge_query_params=False,
+            dependencies=[],
+            cost_per_request=None,
+            endpoint_id="configured-subpath",
+        )
+        await ProxyDBLogger(spend_writer=lambda: spend_writer).async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Provider error"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert spend_writer.update_database.await_count == (1 if written else 0)
+        if not written:
+            return
+        call_args: Final = spend_writer.update_database.call_args
+        assert call_args.kwargs["kwargs"]["litellm_params"]["api_base"] == api_base
+        assert call_args.kwargs["kwargs"]["litellm_params"]["metadata"]["status"] == "failure"
 
 
 @pytest.mark.asyncio

@@ -353,12 +353,13 @@ async def new_end_user(
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-    - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+    - model_tpm_limit: Optional[dict] - Max tokens per minute per model for this customer, shared across every key the customer is sent on. Stored on the customer's budget. Example: {"gpt-4o": 400000}
+    - model_rpm_limit: Optional[dict] - Max requests per minute per model for this customer. Stored on the customer's budget. Example: {"gpt-4o": 200}
     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
     - spend: Optional[float] - Specify initial spend for a given customer.
@@ -385,7 +386,7 @@ async def new_end_user(
         --header 'Content-Type: application/json' \
         --data '{
             "user_id" : "ishaan-jaff-3",
-            "allowed_region": "eu",
+            "allowed_model_region": "eu",
             "budget_id": "free_tier",
             "models": ["gpt-4o-mini"],
             "default_model": "azure/gpt-3.5-turbo-eu"
@@ -455,7 +456,7 @@ async def new_end_user(
             try:
                 budget_record: Final = await _typed_table(BudgetRepository(prisma_client)).create(
                     data={
-                        **_new_budget.model_dump(exclude_unset=True),
+                        **prisma_client.jsonify_object(_new_budget.model_dump(exclude_unset=True)),
                         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     }
@@ -956,6 +957,7 @@ async def get_customer_daily_activity(
     page: int = 1,
     page_size: int = 10,
     exclude_end_user_ids: str | None = None,
+    team_ids: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -999,4 +1001,5 @@ async def get_customer_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+        team_ids=tuple(team_ids.split(",")) if team_ids else None,
     )

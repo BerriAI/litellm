@@ -325,6 +325,33 @@ def test_native_catalog_offers_the_declared_reasoning_efforts_the_requesting_cod
 
 
 @pytest.mark.parametrize(
+    ("query", "cut"),
+    [
+        pytest.param("?client_version=0.166.0-alpha.1", False, id="first codex that reads any size gets every model"),
+        pytest.param("?client_version=0.166.0", False, id="newer codex gets every model"),
+        pytest.param("?client_version=0.165.0", True, id="last codex with the 1 MiB limit gets a cut catalog"),
+        pytest.param("", True, id="no version gets a cut catalog"),
+    ],
+)
+def test_native_catalog_is_cut_to_1_mib_only_for_a_codex_that_drops_a_larger_catalog(
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, query: str, cut: bool
+) -> None:
+    names: Final = tuple(f"open-weights-{index}" for index in range(60))
+    monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[_open_weights(name) for name in names]))
+    respx_mock.get(f"{_BASE}/models").respond(json=_UPSTREAM_CATALOG)
+
+    response: Final = client.get(f"/backend-api/codex/models{query}", headers=_HEADERS)
+    models: Final = response.json()["models"]
+    added: Final = [model["slug"] for model in models[len(_UPSTREAM_CATALOG["models"]) :]]
+
+    assert response.status_code == 200
+    assert models[: len(_UPSTREAM_CATALOG["models"])] == _UPSTREAM_CATALOG["models"]
+    assert added == list(names[: len(added)])
+    assert (len(added) < len(names)) is cut
+    assert (len(response.content) <= 1024 * 1024) is cut
+
+
+@pytest.mark.parametrize(
     "upstream",
     [
         pytest.param(httpx.Response(503, json={"detail": "busy"}, headers={"etag": '"e"'}), id="non-200"),
