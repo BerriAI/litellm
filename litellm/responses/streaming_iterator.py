@@ -2386,16 +2386,23 @@ async def _reject_guarded_turn(
     guarded: GuardedResponsesWsFrame,
     rejection: Exception,
     request_body: Callable[[], Awaitable[Mapping[str, object]]],
+    cancelled_request_body: Mapping[str, object],
 ) -> None:
     """Answers the refused turn and leaves its guardrail records to the connection's close-time failure row, which
     runs every failure hook once per socket, like the first refusal it records. The request is built after the
-    answer, and only when that row keeps it."""
+    answer, and only when that row keeps it. A relay cancelled before then stores ``cancelled_request_body``."""
     if guarded.bill_refusal is not None:
         guarded.bill_refusal(rejection)
-    with contextlib.suppress(Exception):
-        await websocket.send_text(_turn_rejection_frame(rejection))
-    if guarded.bill_failed_request is not None and guarded.keeps_failed_request(rejection):
-        guarded.bill_failed_request(rejection, await request_body())
+    bill_failed_request: Final = guarded.bill_failed_request if guarded.keeps_failed_request(rejection) else None
+    try:
+        with contextlib.suppress(Exception):
+            await websocket.send_text(_turn_rejection_frame(rejection))
+        if bill_failed_request is not None:
+            bill_failed_request(rejection, await request_body())
+    except asyncio.CancelledError:
+        if bill_failed_request is not None:
+            bill_failed_request(rejection, cancelled_request_body)
+        raise
 
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
@@ -3164,7 +3171,11 @@ class ResponsesWebSocketStreaming:
                 if self._failure is None:
                     self._failure = rejection
                 await _reject_guarded_turn(
-                    self.websocket, guarded, rejection, partial(self._refused_turn_request_body, guarded.frame)
+                    self.websocket,
+                    guarded,
+                    rejection,
+                    partial(self._refused_turn_request_body, guarded.frame),
+                    _without_masked_fields(responses_ws_turn_request_body(guarded.frame)),
                 )
                 return None
 
@@ -3729,7 +3740,9 @@ class ManagedResponsesWebSocketHandler:
         if isinstance(verdict, _RefusedTurn):
             if self._failure is None:
                 self._failure = verdict.rejection
-            await _reject_guarded_turn(self.websocket, guarded, verdict.rejection, partial(_built, request_body))
+            await _reject_guarded_turn(
+                self.websocket, guarded, verdict.rejection, partial(_built, request_body), request_body
+            )
             return
         if guarded.pii_tokens:
             self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}

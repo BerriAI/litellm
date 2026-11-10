@@ -3256,6 +3256,18 @@ class _FakeWSGuardrail:
         return text
 
 
+class _StalledWSGuardrail(_FakeWSGuardrail):
+    """A Presidio-like guardrail whose masking never finishes, like a Presidio server that stopped answering."""
+
+    def __init__(self):
+        super().__init__()
+        self.masking_started = asyncio.Event()
+
+    async def check_pii(self, text, output_parse_pii, presidio_config, request_data):
+        self.masking_started.set()
+        await asyncio.Event().wait()
+
+
 def _make_streaming(**kwargs):
     from unittest.mock import MagicMock
 
@@ -3322,6 +3334,36 @@ class TestNativeWebSocketGuardrailMasking:
 
         backend_ws.send.assert_not_awaited()
         bill_failed_request.assert_called_once_with(refusal, {"input": "email <EMAIL_ADDRESS_1>"})
+
+    @pytest.mark.asyncio
+    async def test_a_refused_turn_cancelled_while_its_request_is_masked_stores_it_without_its_text(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.exceptions import RateLimitError
+
+        refusal = RateLimitError(message="crossed budget", llm_provider="", model="")
+        bill_failed_request = MagicMock()
+        guardrail = _StalledWSGuardrail()
+        websocket = MagicMock()
+        websocket.send_text = AsyncMock()
+        handler = _make_streaming(
+            websocket=websocket,
+            request_data={},
+            guardrail_callbacks=[guardrail],
+            frame_guard=_guard_recording(MagicMock(), bill_failed_request),
+        )
+        refused = json.dumps(
+            {"type": "response.create", "input": "card 4111", "instructions": "card 4111", "store": False}
+        )
+        turn = asyncio.ensure_future(handler._forward_guarded_frame(refused, AsyncMock(side_effect=refusal)))
+        await asyncio.wait_for(guardrail.masking_started.wait(), timeout=1)
+
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+
+        assert json.loads(websocket.send_text.await_args.args[0])["status"] == 429
+        bill_failed_request.assert_called_once_with(refusal, {"store": False})
 
     @pytest.mark.asyncio
     async def test_only_the_refused_turn_whose_request_the_failure_row_keeps_is_masked(self):
