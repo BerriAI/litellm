@@ -10,13 +10,14 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
 from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import HEALTH_CHECKS_TARGET
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -110,6 +111,16 @@ class DeploymentHealthCache:
         }
 
     @with_service_target(HEALTH_CHECKS_TARGET)
+    async def async_get_states(self) -> object:
+        """Every deployment's raw state, as the router core's health filter reads it; a failed read is None."""
+        return await self.cache.async_get_cache(key=self.CACHE_KEY)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
+
+    @with_service_target(HEALTH_CHECKS_TARGET)
+    def get_states(self) -> object:
+        """``async_get_states`` for a sync call."""
+        return self.cache.get_cache(key=self.CACHE_KEY)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # DualCache's reads are untyped
+
+    @with_service_target(HEALTH_CHECKS_TARGET)
     async def async_get_unhealthy_deployment_ids(self, parent_otel_span: Span | None = None) -> set[str]:
         """Return set of deployment IDs currently marked unhealthy and not stale."""
         try:
@@ -141,3 +152,19 @@ def _timestamp_of(state: Mapping[str, object]) -> float:
     drops out alone instead of turning health routing off for every deployment."""
     timestamp: Final = state.get("timestamp", 0)
     return float(timestamp) if isinstance(timestamp, int | float) and not isinstance(timestamp, bool) else 0.0
+
+
+class DeploymentHealthCheck(TypedDict):
+    is_healthy: ReadOnly[bool]
+    timestamp: ReadOnly[float]
+
+
+def health_states_of(raw: object) -> Mapping[str, DeploymentHealthCheck]:
+    """The cached states as ``_extract_unhealthy_ids`` reads them: any falsy ``is_healthy`` is unhealthy, a
+    record without one is healthy, and what is no record is dropped."""
+    records: Final = ((model_id, as_str_mapping(state)) for model_id, state in (as_str_mapping(raw) or {}).items())
+    return {
+        model_id: {"is_healthy": bool(state.get("is_healthy", True)), "timestamp": _timestamp_of(state)}
+        for model_id, state in records
+        if state is not None
+    }
