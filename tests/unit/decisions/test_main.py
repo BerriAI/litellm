@@ -1552,7 +1552,7 @@ async def test_databricks_decisions_router_deployment_oauth_m2m(
     monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
 
-    token = responses.post(
+    token: Final = responses.post(
         "https://workspace.example/oidc/v1/token",
         json={"access_token": "deploy-dec-token", "expires_in": 3600},
     )

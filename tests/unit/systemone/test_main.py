@@ -139,7 +139,7 @@ async def test_systemone_router_multi_deployment_oauth(
     route_a: Final = respx_mock.post(url_a).respond(json={"response": upstream_response})
     route_b: Final = respx_mock.post(url_b).respond(json={"response": upstream_response})
 
-    router = litellm.Router(
+    router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "decider-a",
@@ -162,11 +162,11 @@ async def test_systemone_router_multi_deployment_oauth(
         ]
     )
 
-    res_a = await router.asystemone(model="decider-a", state=_STATE, questions=_SYSTEMONE_QUESTIONS)
+    res_a: Final = await router.asystemone(model="decider-a", state=_STATE, questions=_SYSTEMONE_QUESTIONS)
     assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-a"
     assert token_a.call_count == 1
 
-    res_b = await router.asystemone(model="decider-b", state=_STATE, questions=_SYSTEMONE_QUESTIONS)
+    res_b: Final = await router.asystemone(model="decider-b", state=_STATE, questions=_SYSTEMONE_QUESTIONS)
     assert route_b.calls.last.request.headers["Authorization"] == "Bearer token-b"
     assert token_b.call_count == 1
 

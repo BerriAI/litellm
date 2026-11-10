@@ -817,17 +817,37 @@ def _strip_client_callback_credentials(
 _CLIENT_OAUTH_PAIR_FIELDS: Final = ("client_id", "client_secret")
 
 
-def _strip_blank_client_oauth_pair(
-    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+def _drop_blank_client_oauth_pair(
+    target: dict[str, object],  # mutable-ok: strips in place on the request body or one of its fallback entries
 ) -> None:
-    sent: Final = tuple(field for field in _CLIENT_OAUTH_PAIR_FIELDS if field in data)
-    if not sent or any(data[field] for field in sent):
+    sent: Final = tuple(field for field in _CLIENT_OAUTH_PAIR_FIELDS if field in target)
+    if not sent or any(target[field] for field in sent):
         return
     for field in sent:
-        data.pop(field)
+        target.pop(field)
     verbose_proxy_logger.debug(
         "Stripped blank client-supplied %s so the deployment's own OAuth credentials apply", ", ".join(sent)
     )
+
+
+def _drop_blank_client_oauth_pair_in_entries(entries: Sequence[object]) -> None:
+    for entry in entries:
+        if isinstance(entry, dict):
+            _drop_blank_client_oauth_pair(
+                cast("dict[str, object]", entry)  # cast-ok: a fallback entry dict is a str-keyed JSON object
+            )
+
+
+def _strip_blank_client_oauth_pair(
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    _drop_blank_client_oauth_pair(data)
+    for key in _REQUEST_FALLBACK_KEYS:
+        entries: object = data.get(key)
+        if isinstance(entries, list):
+            _drop_blank_client_oauth_pair_in_entries(
+                cast("Sequence[object]", entries)  # cast-ok: request fallback lists hold mixed entry shapes
+            )
 
 
 def _strip_client_pricing_overrides(data: dict[str, object]) -> None:

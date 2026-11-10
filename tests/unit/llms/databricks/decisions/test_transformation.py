@@ -190,8 +190,8 @@ def test_deployment_oauth_overrides_global_env_oauth(
         == "override-token"
     )
     assert token.call_count == 1
-    auth_header = token.calls[0].request.headers["Authorization"]
-    basic_creds = base64.b64decode(auth_header.split(" ")[1]).decode()
+    auth_header: Final = token.calls[0].request.headers["Authorization"]
+    basic_creds: Final = base64.b64decode(auth_header.split(" ")[1]).decode()
     assert basic_creds.startswith("override-client:")
 
 
@@ -205,7 +205,7 @@ def test_deployment_oauth_overrides_global_pat(
     config: Final = DatabricksDecisionsConfig()
     _, key = config.resolve_connection(_BASE, None)
 
-    result = config.resolve_credential(
+    result: Final = config.resolve_credential(
         key, _BASE, {"client_id": "pat-override-client", "client_secret": "pat-override-secret"}
     )
     assert result == "oauth-over-pat"
@@ -214,7 +214,7 @@ def test_deployment_oauth_overrides_global_pat(
 
 @responses.activate
 def test_deployment_static_api_key_takes_precedence_over_deployment_oauth() -> None:
-    result = DatabricksDecisionsConfig().resolve_credential(
+    result: Final = DatabricksDecisionsConfig().resolve_credential(
         "deployment-pat-wins",
         _BASE,
         {"client_id": "unused-client", "client_secret": "unused-secret"},
@@ -241,17 +241,14 @@ def test_deployment_oauth_token_cache_isolation() -> None:
     )
     config: Final = DatabricksDecisionsConfig()
 
-    # Call 1 (deployment A)
-    t1 = config.resolve_credential(None, _BASE, {"client_id": "dec-client-1", "client_secret": "dec-secret-1"})
+    t1: Final = config.resolve_credential(None, _BASE, {"client_id": "dec-client-1", "client_secret": "dec-secret-1"})
     assert t1 == "cached-dec-token"
     assert token.call_count == 1
 
-    # Call 2 (deployment A again -> cached)
-    t2 = config.resolve_credential(None, _BASE, {"client_id": "dec-client-1", "client_secret": "dec-secret-1"})
+    t2: Final = config.resolve_credential(None, _BASE, {"client_id": "dec-client-1", "client_secret": "dec-secret-1"})
     assert t2 == "cached-dec-token"
     assert token.call_count == 1
 
-    # Call 3 (deployment B -> distinct token request)
-    t3 = config.resolve_credential(None, _BASE, {"client_id": "dec-client-2", "client_secret": "dec-secret-1"})
+    t3: Final = config.resolve_credential(None, _BASE, {"client_id": "dec-client-2", "client_secret": "dec-secret-1"})
     assert t3 == "cached-dec-token"
     assert token.call_count == 2

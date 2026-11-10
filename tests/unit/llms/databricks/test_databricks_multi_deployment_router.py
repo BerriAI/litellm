@@ -70,8 +70,8 @@ _DECISIONS_RESPONSE: Final = {"response": {"answers": {"is_defect": {"type": "no
 
 def _decode_basic_auth(auth_header: str) -> tuple[str, str]:
     assert auth_header.startswith("Basic ")
-    encoded = auth_header.split(" ", 1)[1]
-    decoded = base64.b64decode(encoded).decode("utf-8")
+    encoded: Final = auth_header.split(" ", 1)[1]
+    decoded: Final = base64.b64decode(encoded).decode("utf-8")
     client_id, client_secret = decoded.split(":", 1)
     return client_id, client_secret
 
@@ -90,13 +90,13 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 @responses.activate
 @pytest.mark.asyncio
 async def test_multi_deployment_router_chat_completions(respx_mock: respx.MockRouter) -> None:
-    token_resp_a = responses.post(_TOKEN_URL_A, json={"access_token": "token-chat-a", "expires_in": 3600})
-    token_resp_b = responses.post(_TOKEN_URL_B, json={"access_token": "token-chat-b", "expires_in": 3600})
+    token_resp_a: Final = responses.post(_TOKEN_URL_A, json={"access_token": "token-chat-a", "expires_in": 3600})
+    token_resp_b: Final = responses.post(_TOKEN_URL_B, json={"access_token": "token-chat-b", "expires_in": 3600})
 
-    route_a = respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
-    route_b = respx_mock.post(_CHAT_URL_B).respond(json=_CHAT_RESPONSE_B)
+    route_a: Final = respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
+    route_b: Final = respx_mock.post(_CHAT_URL_B).respond(json=_CHAT_RESPONSE_B)
 
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "workspace-a/chat",
@@ -119,7 +119,7 @@ async def test_multi_deployment_router_chat_completions(respx_mock: respx.MockRo
         ]
     )
 
-    resp_a = await router.acompletion(
+    resp_a: Final = await router.acompletion(
         model="workspace-a/chat",
         messages=[{"role": "user", "content": "hi a"}],
     )
@@ -132,7 +132,7 @@ async def test_multi_deployment_router_chat_completions(respx_mock: respx.MockRo
     assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-chat-a"
     assert b"client-a-secret" not in route_a.calls.last.request.content
 
-    resp_b = await router.acompletion(
+    resp_b: Final = await router.acompletion(
         model="workspace-b/chat",
         messages=[{"role": "user", "content": "hi b"}],
     )
@@ -148,13 +148,13 @@ async def test_multi_deployment_router_chat_completions(respx_mock: respx.MockRo
 @responses.activate
 @pytest.mark.asyncio
 async def test_multi_deployment_router_embeddings(respx_mock: respx.MockRouter) -> None:
-    token_resp_a = responses.post(_TOKEN_URL_A, json={"access_token": "token-emb-a", "expires_in": 3600})
-    token_resp_b = responses.post(_TOKEN_URL_B, json={"access_token": "token-emb-b", "expires_in": 3600})
+    token_resp_a: Final = responses.post(_TOKEN_URL_A, json={"access_token": "token-emb-a", "expires_in": 3600})
+    token_resp_b: Final = responses.post(_TOKEN_URL_B, json={"access_token": "token-emb-b", "expires_in": 3600})
 
-    route_a = respx_mock.post(_EMBED_URL_A).respond(json=_EMBED_RESPONSE_A)
-    route_b = respx_mock.post(_EMBED_URL_B).respond(json=_EMBED_RESPONSE_B)
+    route_a: Final = respx_mock.post(_EMBED_URL_A).respond(json=_EMBED_RESPONSE_A)
+    route_b: Final = respx_mock.post(_EMBED_URL_B).respond(json=_EMBED_RESPONSE_B)
 
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "workspace-a/embed",
@@ -177,7 +177,7 @@ async def test_multi_deployment_router_embeddings(respx_mock: respx.MockRouter) 
         ]
     )
 
-    emb_a = await router.aembedding(model="workspace-a/embed", input=["text a"])
+    emb_a: Final = await router.aembedding(model="workspace-a/embed", input=["text a"])
     assert emb_a.data[0]["embedding"] == [0.1, 0.2]
     assert token_resp_a.call_count == 1
     assert _decode_basic_auth(token_resp_a.calls[0].request.headers["Authorization"]) == (
@@ -187,7 +187,7 @@ async def test_multi_deployment_router_embeddings(respx_mock: respx.MockRouter) 
     assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-emb-a"
     assert b"secret-emb-a" not in route_a.calls.last.request.content
 
-    emb_b = await router.aembedding(model="workspace-b/embed", input=["text b"])
+    emb_b: Final = await router.aembedding(model="workspace-b/embed", input=["text b"])
     assert emb_b.data[0]["embedding"] == [0.3, 0.4]
     assert token_resp_b.call_count == 1
     assert _decode_basic_auth(token_resp_b.calls[0].request.headers["Authorization"]) == (
@@ -200,17 +200,16 @@ async def test_multi_deployment_router_embeddings(respx_mock: respx.MockRouter) 
 @responses.activate
 @pytest.mark.asyncio
 async def test_multi_deployment_router_agents_cached_tokens(respx_mock: respx.MockRouter) -> None:
-    token_resp_a = responses.post(_TOKEN_URL_A, json={"access_token": "token-agent-a", "expires_in": 3600})
-    token_resp_b = responses.post(_TOKEN_URL_B, json={"access_token": "token-agent-b", "expires_in": 3600})
+    token_resp_a: Final = responses.post(_TOKEN_URL_A, json={"access_token": "token-agent-a", "expires_in": 3600})
+    token_resp_b: Final = responses.post(_TOKEN_URL_B, json={"access_token": "token-agent-b", "expires_in": 3600})
 
-    route_a = respx_mock.post(_AGENT_URL_A).respond(json=_AGENT_RESPONSE_A)
-    route_b = respx_mock.post(_AGENT_URL_B).respond(json=_AGENT_RESPONSE_B)
+    route_a: Final = respx_mock.post(_AGENT_URL_A).respond(json=_AGENT_RESPONSE_A)
+    route_b: Final = respx_mock.post(_AGENT_URL_B).respond(json=_AGENT_RESPONSE_B)
 
-    # Use unique client IDs to avoid cache hits from previous runs
-    cid_a = f"agent-client-a-{uuid4().hex}"
-    cid_b = f"agent-client-b-{uuid4().hex}"
+    cid_a: Final = f"agent-client-a-{uuid4().hex}"
+    cid_b: Final = f"agent-client-b-{uuid4().hex}"
 
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "workspace-a/agent",
@@ -233,25 +232,30 @@ async def test_multi_deployment_router_agents_cached_tokens(respx_mock: respx.Mo
         ]
     )
 
-    # Call A twice
-    resp_a1 = await router.acompletion(model="workspace-a/agent", messages=[{"role": "user", "content": "ping 1"}])
+    resp_a1: Final = await router.acompletion(
+        model="workspace-a/agent", messages=[{"role": "user", "content": "ping 1"}]
+    )
     assert resp_a1.choices[0].message.content == "agent from a"
     assert token_resp_a.call_count == 1
 
-    resp_a2 = await router.acompletion(model="workspace-a/agent", messages=[{"role": "user", "content": "ping 2"}])
+    resp_a2: Final = await router.acompletion(
+        model="workspace-a/agent", messages=[{"role": "user", "content": "ping 2"}]
+    )
     assert resp_a2.choices[0].message.content == "agent from a"
-    assert token_resp_a.call_count == 1  # Reused from cache!
+    assert token_resp_a.call_count == 1
 
-    # Call B twice
-    resp_b1 = await router.acompletion(model="workspace-b/agent", messages=[{"role": "user", "content": "ping 3"}])
+    resp_b1: Final = await router.acompletion(
+        model="workspace-b/agent", messages=[{"role": "user", "content": "ping 3"}]
+    )
     assert resp_b1.choices[0].message.content == "agent from b"
     assert token_resp_b.call_count == 1
 
-    resp_b2 = await router.acompletion(model="workspace-b/agent", messages=[{"role": "user", "content": "ping 4"}])
+    resp_b2: Final = await router.acompletion(
+        model="workspace-b/agent", messages=[{"role": "user", "content": "ping 4"}]
+    )
     assert resp_b2.choices[0].message.content == "agent from b"
-    assert token_resp_b.call_count == 1  # Reused from cache!
+    assert token_resp_b.call_count == 1
 
-    # Verify authorization headers
     assert route_a.calls[0].request.headers["Authorization"] == "Bearer token-agent-a"
     assert route_a.calls[1].request.headers["Authorization"] == "Bearer token-agent-a"
     assert route_b.calls[0].request.headers["Authorization"] == "Bearer token-agent-b"
@@ -261,16 +265,16 @@ async def test_multi_deployment_router_agents_cached_tokens(respx_mock: respx.Mo
 @responses.activate
 @pytest.mark.asyncio
 async def test_multi_deployment_router_decisions_apis(respx_mock: respx.MockRouter) -> None:
-    token_resp_a = responses.post(_TOKEN_URL_A, json={"access_token": "token-dec-a", "expires_in": 3600})
-    token_resp_b = responses.post(_TOKEN_URL_B, json={"access_token": "token-dec-b", "expires_in": 3600})
+    token_resp_a: Final = responses.post(_TOKEN_URL_A, json={"access_token": "token-dec-a", "expires_in": 3600})
+    token_resp_b: Final = responses.post(_TOKEN_URL_B, json={"access_token": "token-dec-b", "expires_in": 3600})
 
-    route_a = respx_mock.post(_DECISIONS_URL_A).respond(json=_DECISIONS_RESPONSE)
-    route_b = respx_mock.post(_DECISIONS_URL_B).respond(json=_DECISIONS_RESPONSE)
+    route_a: Final = respx_mock.post(_DECISIONS_URL_A).respond(json=_DECISIONS_RESPONSE)
+    route_b: Final = respx_mock.post(_DECISIONS_URL_B).respond(json=_DECISIONS_RESPONSE)
 
-    cid_a = f"dec-client-a-{uuid4().hex}"
-    cid_b = f"dec-client-b-{uuid4().hex}"
+    cid_a: Final = f"dec-client-a-{uuid4().hex}"
+    cid_b: Final = f"dec-client-b-{uuid4().hex}"
 
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "workspace-a/decider",
@@ -293,8 +297,7 @@ async def test_multi_deployment_router_decisions_apis(respx_mock: respx.MockRout
         ]
     )
 
-    # Route /v1/systemone on Deployment A
-    res_a = await router.asystemone(
+    res_a: Final = await router.asystemone(
         model="workspace-a/decider",
         state="review",
         questions={"is_defect": {"type": "noul", "instructions": "defect?"}},
@@ -303,8 +306,7 @@ async def test_multi_deployment_router_decisions_apis(respx_mock: respx.MockRout
     assert token_resp_a.call_count == 1
     assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-dec-a"
 
-    # Route /v1/decisions on Deployment B
-    res_b = await router.adecisions(
+    res_b: Final = await router.adecisions(
         model="workspace-b/decider",
         input="review",
         questions=[{"type": "predicate", "name": "is_defect", "instructions": "defect?"}],
@@ -317,13 +319,13 @@ async def test_multi_deployment_router_decisions_apis(respx_mock: respx.MockRout
 @responses.activate
 @pytest.mark.asyncio
 async def test_multi_deployment_router_static_api_key_precedence(respx_mock: respx.MockRouter) -> None:
-    token_resp_a = responses.post(_TOKEN_URL_A, json={"access_token": "token-a", "expires_in": 3600})
-    token_resp_b = responses.post(_TOKEN_URL_B, json={"access_token": "token-b", "expires_in": 3600})
+    token_resp_a: Final = responses.post(_TOKEN_URL_A, json={"access_token": "token-a", "expires_in": 3600})
+    token_resp_b: Final = responses.post(_TOKEN_URL_B, json={"access_token": "token-b", "expires_in": 3600})
 
-    route_a = respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
-    route_b = respx_mock.post(_CHAT_URL_B).respond(json=_CHAT_RESPONSE_B)
+    route_a: Final = respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
+    route_b: Final = respx_mock.post(_CHAT_URL_B).respond(json=_CHAT_RESPONSE_B)
 
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "deployment-oauth",
@@ -340,7 +342,6 @@ async def test_multi_deployment_router_static_api_key_precedence(respx_mock: res
                     "model": "databricks/dbrx-instruct",
                     "api_base": _BASE_B,
                     "api_key": "static-pat-key-b",
-                    # Even if client_id/secret are also provided, static api_key must take precedence
                     "client_id": "ignored-client-id",
                     "client_secret": "ignored-client-secret",
                 },
@@ -348,12 +349,10 @@ async def test_multi_deployment_router_static_api_key_precedence(respx_mock: res
         ]
     )
 
-    # Deployment A uses OAuth
     await router.acompletion(model="deployment-oauth", messages=[{"role": "user", "content": "hello a"}])
     assert token_resp_a.call_count == 1
     assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-a"
 
-    # Deployment B uses static API key; no OAuth token exchange occurs
     await router.acompletion(model="deployment-static-key", messages=[{"role": "user", "content": "hello b"}])
     assert token_resp_b.call_count == 0
     assert route_b.calls.last.request.headers["Authorization"] == "Bearer static-pat-key-b"
@@ -362,17 +361,15 @@ async def test_multi_deployment_router_static_api_key_precedence(respx_mock: res
 @responses.activate
 @pytest.mark.asyncio
 async def test_multi_deployment_router_credential_rotation(respx_mock: respx.MockRouter) -> None:
-    # Token mock allowing multiple distinct token calls
-    token_resp = responses.post(
+    token_resp: Final = responses.post(
         _TOKEN_URL_A,
         json={"access_token": "token-rotated", "expires_in": 3600},
     )
     respx_mock.post(_AGENT_URL_A).respond(json=_AGENT_RESPONSE_A)
 
-    cid = f"rot-client-{uuid4().hex}"
+    cid: Final = f"rot-client-{uuid4().hex}"
 
-    # Initial deployment
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "agent-rot",
@@ -389,12 +386,10 @@ async def test_multi_deployment_router_credential_rotation(respx_mock: respx.Moc
     assert token_resp.call_count == 1
     assert _decode_basic_auth(token_resp.calls[0].request.headers["Authorization"]) == (cid, "secret-v1")
 
-    # Second call with same secret hits cache
     await router.acompletion(model="agent-rot", messages=[{"role": "user", "content": "v1 again"}])
     assert token_resp.call_count == 1
 
-    # Rotated deployment credentials
-    router_rotated = Router(
+    router_rotated: Final = Router(
         model_list=[
             {
                 "model_name": "agent-rot",
@@ -408,7 +403,6 @@ async def test_multi_deployment_router_credential_rotation(respx_mock: respx.Moc
         ]
     )
     await router_rotated.acompletion(model="agent-rot", messages=[{"role": "user", "content": "v2"}])
-    # Rotated secret produces different cache key -> fresh token exchange!
     assert token_resp.call_count == 2
     assert _decode_basic_auth(token_resp.calls[1].request.headers["Authorization"]) == (cid, "secret-v2-rotated")
 
@@ -418,10 +412,10 @@ async def test_multi_deployment_router_credential_rotation(respx_mock: respx.Moc
 async def test_multi_deployment_router_incomplete_credentials_isolated_failure(
     respx_mock: respx.MockRouter,
 ) -> None:
-    token_resp_a = responses.post(_TOKEN_URL_A, json={"access_token": "token-a", "expires_in": 3600})
+    token_resp_a: Final = responses.post(_TOKEN_URL_A, json={"access_token": "token-a", "expires_in": 3600})
     respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
 
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "valid-deployment",
@@ -443,16 +437,14 @@ async def test_multi_deployment_router_incomplete_credentials_isolated_failure(
         ]
     )
 
-    # Valid deployment works
-    resp = await router.acompletion(model="valid-deployment", messages=[{"role": "user", "content": "hi"}])
+    resp: Final = await router.acompletion(model="valid-deployment", messages=[{"role": "user", "content": "hi"}])
     assert resp.choices[0].message.content == "from workspace a"
     assert token_resp_a.call_count == 1
 
     with pytest.raises(litellm.BadRequestError, match="Incomplete Databricks OAuth credentials"):
         await router.acompletion(model="broken-deployment", messages=[{"role": "user", "content": "hi"}])
 
-    # Calling valid deployment again still works cleanly
-    resp2 = await router.acompletion(model="valid-deployment", messages=[{"role": "user", "content": "hi"}])
+    resp2: Final = await router.acompletion(model="valid-deployment", messages=[{"role": "user", "content": "hi"}])
     assert resp2.choices[0].message.content == "from workspace a"
 
 
@@ -465,10 +457,10 @@ async def test_multi_deployment_router_os_environ_resolution(
     monkeypatch.setenv("ENV_CLIENT_ID_A", "dyn-client-id-a")
     monkeypatch.setenv("ENV_CLIENT_SECRET_A", "dyn-secret-a")
 
-    token_resp = responses.post(_TOKEN_URL_A, json={"access_token": "dyn-token-a", "expires_in": 3600})
-    route_a = respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
+    token_resp: Final = responses.post(_TOKEN_URL_A, json={"access_token": "dyn-token-a", "expires_in": 3600})
+    route_a: Final = respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
 
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "dyn-model",
@@ -482,7 +474,7 @@ async def test_multi_deployment_router_os_environ_resolution(
         ]
     )
 
-    resp = await router.acompletion(model="dyn-model", messages=[{"role": "user", "content": "hi"}])
+    resp: Final = await router.acompletion(model="dyn-model", messages=[{"role": "user", "content": "hi"}])
     assert resp.choices[0].message.content == "from workspace a"
     assert token_resp.call_count == 1
     assert _decode_basic_auth(token_resp.calls[0].request.headers["Authorization"]) == (
@@ -498,13 +490,12 @@ async def test_multi_deployment_router_deployment_oauth_overrides_ambient_global
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
-    # Set ambient global DATABRICKS_API_KEY that would otherwise be picked up
     monkeypatch.setenv("DATABRICKS_API_KEY", "ambient-global-pat-leak")
 
-    token_resp = responses.post(_TOKEN_URL_A, json={"access_token": "token-dep-oauth", "expires_in": 3600})
-    route_a = respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
+    token_resp: Final = responses.post(_TOKEN_URL_A, json={"access_token": "token-dep-oauth", "expires_in": 3600})
+    route_a: Final = respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
 
-    router = Router(
+    router: Final = Router(
         model_list=[
             {
                 "model_name": "oauth-model",
@@ -518,11 +509,9 @@ async def test_multi_deployment_router_deployment_oauth_overrides_ambient_global
         ]
     )
 
-    resp = await router.acompletion(model="oauth-model", messages=[{"role": "user", "content": "hi"}])
+    resp: Final = await router.acompletion(model="oauth-model", messages=[{"role": "user", "content": "hi"}])
     assert resp.choices[0].message.content == "from workspace a"
-    # Token endpoint must have been called
     assert token_resp.call_count == 1
-    # Auth header must use the OAuth token, not the ambient DATABRICKS_API_KEY
     assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-dep-oauth"
 
 

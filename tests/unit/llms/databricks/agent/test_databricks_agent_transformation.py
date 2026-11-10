@@ -735,8 +735,8 @@ def test_validate_environment_with_deployment_oauth_credentials(
     monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
     monkeypatch.setenv("DATABRICKS_HOST", "https://adb-2.azuredatabricks.net")
-    token = responses.post(TOKEN_URL, json={"access_token": "deploy-token", "expires_in": 3600})
-    headers = DatabricksAgentConfig().validate_environment(
+    token: Final = responses.post(TOKEN_URL, json={"access_token": "deploy-token", "expires_in": 3600})
+    headers: Final = DatabricksAgentConfig().validate_environment(
         headers={},
         model="my-agent",
         messages=[],
@@ -754,8 +754,8 @@ def test_validate_environment_deployment_oauth_overrides_global_env(
 ) -> None:
     import base64
 
-    token = responses.post(TOKEN_URL, json={"access_token": "deploy-override-token", "expires_in": 3600})
-    headers = DatabricksAgentConfig().validate_environment(
+    token: Final = responses.post(TOKEN_URL, json={"access_token": "deploy-override-token", "expires_in": 3600})
+    headers: Final = DatabricksAgentConfig().validate_environment(
         headers={},
         model="my-agent",
         messages=[],
@@ -764,8 +764,8 @@ def test_validate_environment_deployment_oauth_overrides_global_env(
         api_base=WORKSPACE,
     )
     assert headers["Authorization"] == "Bearer deploy-override-token"
-    auth_header = token.calls[0].request.headers["Authorization"]
-    basic_creds = base64.b64decode(auth_header.split(" ")[1]).decode()
+    auth_header: Final = token.calls[0].request.headers["Authorization"]
+    basic_creds: Final = base64.b64decode(auth_header.split(" ")[1]).decode()
     assert basic_creds.startswith("override-id:")
 
 
@@ -790,7 +790,7 @@ def test_validate_environment_deployment_oauth_incomplete_credentials_raises_400
 def test_validate_environment_static_api_key_takes_precedence_over_deployment_oauth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    headers = DatabricksAgentConfig().validate_environment(
+    headers: Final = DatabricksAgentConfig().validate_environment(
         headers={},
         model="my-agent",
         messages=[],
@@ -827,8 +827,8 @@ def test_validate_environment_deployment_oauth_app_url_with_databricks_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
-    token = responses.post(TOKEN_URL, json={"access_token": "app-deploy-token", "expires_in": 3600})
-    headers = DatabricksAgentConfig().validate_environment(
+    token: Final = responses.post(TOKEN_URL, json={"access_token": "app-deploy-token", "expires_in": 3600})
+    headers: Final = DatabricksAgentConfig().validate_environment(
         headers={},
         model="my-agent",
         messages=[],
@@ -842,11 +842,10 @@ def test_validate_environment_deployment_oauth_app_url_with_databricks_host(
 
 @responses.activate
 def test_validate_environment_deployment_oauth_cache_isolation() -> None:
-    token = responses.post(TOKEN_URL, json={"access_token": "cached-token", "expires_in": 3600})
-    config = DatabricksAgentConfig()
+    token: Final = responses.post(TOKEN_URL, json={"access_token": "cached-token", "expires_in": 3600})
+    config: Final = DatabricksAgentConfig()
 
-    # Deploy 1 call 1
-    h1 = config.validate_environment(
+    h1: Final = config.validate_environment(
         headers={},
         model="my-agent",
         messages=[],
@@ -857,8 +856,7 @@ def test_validate_environment_deployment_oauth_cache_isolation() -> None:
     assert h1["Authorization"] == "Bearer cached-token"
     assert token.call_count == 1
 
-    # Deploy 1 call 2 (cached)
-    h2 = config.validate_environment(
+    h2: Final = config.validate_environment(
         headers={},
         model="my-agent",
         messages=[],
@@ -869,8 +867,7 @@ def test_validate_environment_deployment_oauth_cache_isolation() -> None:
     assert h2["Authorization"] == "Bearer cached-token"
     assert token.call_count == 1
 
-    # Deploy 2 call 1 (different client_id -> new token minted)
-    h3 = config.validate_environment(
+    h3: Final = config.validate_environment(
         headers={},
         model="my-agent",
         messages=[],
@@ -890,9 +887,9 @@ async def test_acompletion_with_deployment_oauth_credentials(
     monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
     monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
-    token = responses.post(TOKEN_URL, json={"access_token": "agent-deploy-token", "expires_in": 3600})
-    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
-    response = await litellm.acompletion(
+    token: Final = responses.post(TOKEN_URL, json={"access_token": "agent-deploy-token", "expires_in": 3600})
+    route: Final = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    response: Final = await litellm.acompletion(
         model="databricks_agent/my-agent",
         messages=[{"role": "user", "content": "ping"}],
         api_base=WORKSPACE,
@@ -911,8 +908,8 @@ async def test_acompletion_deployment_oauth_credentials_win_over_ambient_global_
 ) -> None:
     monkeypatch.setattr(litellm, "api_key", "ambient-litellm-key")
     monkeypatch.setenv("DATABRICKS_API_KEY", "ambient-env-pat")
-    token = responses.post(TOKEN_URL, json={"access_token": "agent-deploy-token", "expires_in": 3600})
-    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    token: Final = responses.post(TOKEN_URL, json={"access_token": "agent-deploy-token", "expires_in": 3600})
+    route: Final = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
     await litellm.acompletion(
         model="databricks_agent/my-agent",
         messages=[{"role": "user", "content": "ping"}],

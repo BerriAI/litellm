@@ -22,9 +22,7 @@ from litellm.llms.databricks.common_utils import (
     DatabricksBase,
     DatabricksException,
 )
-from litellm.llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from litellm.llms.databricks.messages.transformation import DatabricksAnthropicMessagesConfig
-from litellm.types.router import GenericLiteLLMParams
 
 
 def test_databricks_validate_environment():
@@ -297,7 +295,9 @@ def test_chat_validate_environment_rejects_half_deployment_pair_instead_of_mixin
     monkeypatch.setenv("DATABRICKS_CLIENT_ID", "global-id")
     monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-secret")
 
-    with pytest.raises(DatabricksException, match=rf"Incomplete Databricks OAuth credentials: missing {missing}\.") as exc_info:
+    with pytest.raises(
+        DatabricksException, match=rf"Incomplete Databricks OAuth credentials: missing {missing}\."
+    ) as exc_info:
         DatabricksConfig().validate_environment(
             headers={},
             model="databricks/dbrx-instruct",
@@ -381,13 +381,13 @@ def test_resolve_api_key_skips_ambient_keys_only_when_the_deployment_sets_oauth_
 
 @responses.activate
 def test_chat_validate_environment_deployment_oauth() -> None:
-    config = DatabricksConfig()
+    config: Final = DatabricksConfig()
     responses.post(
         f"{SDK_HOST}/oidc/v1/token",
         json={"access_token": "chat-oauth-token", "expires_in": 3600},
     )
 
-    headers = config.validate_environment(
+    headers: Final = config.validate_environment(
         headers={},
         model="databricks/dbrx-instruct",
         messages=[],
@@ -404,9 +404,8 @@ def test_chat_validate_environment_deployment_oauth() -> None:
 
 @responses.activate
 def test_chat_validate_environment_static_api_key_precedence() -> None:
-    config = DatabricksConfig()
-    # If static api_key is present, it must win and not call OAuth
-    headers = config.validate_environment(
+    config: Final = DatabricksConfig()
+    headers: Final = config.validate_environment(
         headers={},
         model="databricks/dbrx-instruct",
         messages=[],
@@ -427,13 +426,13 @@ def test_chat_validate_environment_global_fallback(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("DATABRICKS_CLIENT_ID", "global-chat-client")
     monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-chat-secret")
 
-    config = DatabricksConfig()
+    config: Final = DatabricksConfig()
     responses.post(
         f"{SDK_HOST}/oidc/v1/token",
         json={"access_token": "global-chat-token", "expires_in": 3600},
     )
 
-    headers = config.validate_environment(
+    headers: Final = config.validate_environment(
         headers={},
         model="databricks/dbrx-instruct",
         messages=[],
@@ -446,7 +445,7 @@ def test_chat_validate_environment_global_fallback(monkeypatch: pytest.MonkeyPat
 
 @responses.activate
 def test_embeddings_validate_environment_deployment_oauth() -> None:
-    base = DatabricksBase()
+    base: Final = DatabricksBase()
     responses.post(
         f"{SDK_HOST}/oidc/v1/token",
         json={"access_token": "embed-oauth-token", "expires_in": 3600},
@@ -467,7 +466,7 @@ def test_embeddings_validate_environment_deployment_oauth() -> None:
 
 @responses.activate
 def test_embeddings_validate_environment_static_api_key_precedence() -> None:
-    base = DatabricksBase()
+    base: Final = DatabricksBase()
     url, headers = base.databricks_validate_environment(
         api_key="embed-static-key",
         api_base=f"{SDK_HOST}/serving-endpoints",
@@ -483,7 +482,7 @@ def test_embeddings_validate_environment_static_api_key_precedence() -> None:
 
 @responses.activate
 def test_messages_validate_environment_deployment_oauth() -> None:
-    config = DatabricksAnthropicMessagesConfig()
+    config: Final = DatabricksAnthropicMessagesConfig()
     responses.post(
         f"{SDK_HOST}/oidc/v1/token",
         json={"access_token": "messages-oauth-token", "expires_in": 3600},
@@ -506,7 +505,7 @@ def test_messages_validate_environment_deployment_oauth() -> None:
 
 @responses.activate
 def test_messages_validate_environment_static_api_key_precedence() -> None:
-    config = DatabricksAnthropicMessagesConfig()
+    config: Final = DatabricksAnthropicMessagesConfig()
     headers, workspace = config.validate_anthropic_messages_environment(
         headers={},
         model="databricks-claude-3-5-sonnet",

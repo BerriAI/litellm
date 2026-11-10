@@ -8177,9 +8177,9 @@ async def test_add_litellm_data_to_request_strips_caller_supplied_callback_crede
     assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "team-dd-key"}
 
 
-async def _pre_call_body(oauth_fields: dict[str, object]) -> dict:
+async def _pre_call_body(body_fields: dict[str, object]) -> dict[str, object]:
     return await add_litellm_data_to_request(
-        data={"model": "databricks-model", "messages": [{"role": "user", "content": "hello"}], **oauth_fields},
+        data={"model": "databricks-model", "messages": [{"role": "user", "content": "hello"}], **body_fields},
         request=_callback_credential_request_mock(),
         user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
         proxy_config=MagicMock(),
@@ -8198,9 +8198,9 @@ async def _pre_call_body(oauth_fields: dict[str, object]) -> dict:
         {"client_id": ""},
     ],
 )
-async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair(oauth_fields):
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair(oauth_fields: dict[str, object]):
     """A blank caller pair would blank the deployment's own and fall back to the proxy's ambient identity."""
-    updated = await _pre_call_body(oauth_fields)
+    updated: Final = await _pre_call_body(oauth_fields)
 
     assert "client_id" not in updated
     assert "client_secret" not in updated
@@ -8215,10 +8215,30 @@ async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair(oauth_f
         {"client_id": None, "client_secret": "caller-secret"},
     ],
 )
-async def test_add_litellm_data_to_request_keeps_caller_oauth_pair_with_a_value(oauth_fields):
-    updated = await _pre_call_body(oauth_fields)
+async def test_add_litellm_data_to_request_keeps_caller_oauth_pair_with_a_value(oauth_fields: dict[str, object]):
+    updated: Final = await _pre_call_body(oauth_fields)
 
     assert {field: updated[field] for field in oauth_fields} == oauth_fields
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_key", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair_in_fallback_entries(fallback_key: str):
+    updated: Final = await _pre_call_body(
+        {
+            fallback_key: [
+                "plain-model",
+                {"model": "blank-pair-model", "client_id": "", "client_secret": None},
+                {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},
+            ]
+        }
+    )
+
+    assert updated[fallback_key] == [
+        "plain-model",
+        {"model": "blank-pair-model"},
+        {"model": "caller-pair-model", "client_id": "caller-id", "client_secret": "caller-secret"},
+    ]
 
 
 @pytest.mark.asyncio

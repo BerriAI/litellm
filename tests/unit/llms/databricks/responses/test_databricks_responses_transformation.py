@@ -1,3 +1,4 @@
+from typing import Final
 import pytest
 import responses
 
@@ -98,12 +99,12 @@ class TestDatabricksResponsesAPIConfig:
     @responses.activate
     def test_validate_environment_with_deployment_oauth(self, monkeypatch):
         monkeypatch.setenv("DATABRICKS_API_KEY", "ambient-env-pat")
-        config = DatabricksResponsesAPIConfig()
+        config: Final = DatabricksResponsesAPIConfig()
         responses.post(
             "https://my-workspace.cloud.databricks.com/oidc/v1/token",
             json={"access_token": "responses-oauth-token", "expires_in": 3600},
         )
-        headers = config.validate_environment(
+        headers: Final = config.validate_environment(
             headers={},
             model="databricks-gpt-5-nano",
             litellm_params=GenericLiteLLMParams(
@@ -117,8 +118,8 @@ class TestDatabricksResponsesAPIConfig:
 
     @responses.activate
     def test_validate_environment_static_api_key_precedence(self):
-        config = DatabricksResponsesAPIConfig()
-        headers = config.validate_environment(
+        config: Final = DatabricksResponsesAPIConfig()
+        headers: Final = config.validate_environment(
             headers={},
             model="databricks-gpt-5-nano",
             litellm_params=GenericLiteLLMParams(
@@ -136,12 +137,12 @@ class TestDatabricksResponsesAPIConfig:
         monkeypatch.setenv("DATABRICKS_CLIENT_ID", "global-resp-cid")
         monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-resp-csec")
 
-        config = DatabricksResponsesAPIConfig()
+        config: Final = DatabricksResponsesAPIConfig()
         responses.post(
             "https://my-workspace.cloud.databricks.com/oidc/v1/token",
             json={"access_token": "global-responses-token", "expires_in": 3600},
         )
-        headers = config.validate_environment(
+        headers: Final = config.validate_environment(
             headers={},
             model="databricks-gpt-5-nano",
             litellm_params=GenericLiteLLMParams(
@@ -151,7 +152,7 @@ class TestDatabricksResponsesAPIConfig:
         assert headers["Authorization"] == "Bearer global-responses-token"
 
     def test_validate_environment_partial_deployment_credentials_raises(self):
-        config = DatabricksResponsesAPIConfig()
+        config: Final = DatabricksResponsesAPIConfig()
         with pytest.raises(DatabricksException) as exc_info:
             config.validate_environment(
                 headers={},
