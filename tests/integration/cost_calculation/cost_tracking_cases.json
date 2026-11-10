@@ -26184,6 +26184,31 @@
       }
     },
     {
+      "name": "whisper-next-transcriptions-unsized-flac-no-usage",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "whisper-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "upload": {
+        "kind": "unsized_flac"
+      },
+      "request": {
+        "response_format": "json"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "text": "hello"
+        }
+      },
+      "expected": {
+        "spend": 0,
+        "input_cost": 0,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
       "name": "whisper-verbose-next-transcriptions-duration",
       "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
       "model": "whisper-verbose-next",
