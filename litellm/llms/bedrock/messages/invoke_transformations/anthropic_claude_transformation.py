@@ -80,6 +80,7 @@ else:
 
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_MESSAGE_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -565,9 +566,8 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
         """
-        if isinstance(anthropic_messages_request.get("compaction"), dict) or carries_signed_compaction_block(
-            anthropic_messages_request.get("messages") or ()
-        ):
+        messages: Final = _MESSAGE_LIST.validate_python(anthropic_messages_request.get("messages") or ())
+        if isinstance(anthropic_messages_request.get("compaction"), dict) or carries_signed_compaction_block(messages):
             beta_set.add("compact-2026-09-04")
 
     def strips_beta_gated_fields_from_final_headers(self) -> bool:
@@ -637,7 +637,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request=anthropic_messages_request,
             beta_set=beta_set,
         )
-        self._add_compaction_beta_for_bedrock_invoke(anthropic_messages_request, beta_set)
+        self._add_compaction_beta_for_bedrock_invoke(anthropic_messages_request, beta_set)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
 
         self._get_tool_search_beta_header_for_bedrock(
             model=model,
@@ -858,7 +858,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             verbose_logger.debug(
                 "Bedrock Invoke: dropping `compaction`; compact-2026-09-04 is not served on this route"
             )
-            anthropic_messages_request.pop("compaction")
+            del anthropic_messages_request["compaction"]
 
         final_request: Final = OBJECT_MAPPING_ADAPTER.validate_python(anthropic_messages_request)  # pyright: ignore[reportUnknownArgumentType]  # built from the base signature's bare dict
         gated: Final = strip_beta_gated_native_request(
