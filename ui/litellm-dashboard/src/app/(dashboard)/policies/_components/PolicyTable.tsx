@@ -3,18 +3,21 @@
 import { SortingState } from "@tanstack/react-table";
 import { Inbox } from "lucide-react";
 import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { DataTable } from "@/components/shared/DataTable";
+import i18n from "@/i18n/i18n";
 import { Policy } from "@/components/policies/types";
 
 import { getPolicyTableColumns, PolicyRow } from "./PolicyTableColumns";
 
 /** One row per DB policy name plus one row per config policy, so a config policy never hides same-named DB versions; primaryPolicy is used for display and for Edit (FlowBuilder loads all versions) */
 function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
+  const unnamed = i18n.t("policies.policyTable.unnamed");
   const dbPolicies = policies.filter((policy) => policy.definition_location !== "config");
-  const names = Array.from(new Set(dbPolicies.map((policy) => policy.policy_name || "(unnamed)")));
+  const names = Array.from(new Set(dbPolicies.map((policy) => policy.policy_name || unnamed)));
   const dbRows = names.map((policyName) => {
-    const versions = dbPolicies.filter((policy) => (policy.policy_name || "(unnamed)") === policyName);
+    const versions = dbPolicies.filter((policy) => (policy.policy_name || unnamed) === policyName);
     const primary =
       versions.find((version) => version.version_status === "production") ??
       [...versions].sort((a, b) => (b.version_number ?? 0) - (a.version_number ?? 0))[0];
@@ -22,7 +25,7 @@ function groupPoliciesByName(policies: Policy[]): PolicyRow[] {
   });
   const configRows = policies
     .filter((policy) => policy.definition_location === "config")
-    .map((policy) => ({ policy_name: policy.policy_name || "(unnamed)", primaryPolicy: policy, versionCount: 1 }));
+    .map((policy) => ({ policy_name: policy.policy_name || unnamed, primaryPolicy: policy, versionCount: 1 }));
   return [...dbRows, ...configRows];
 }
 
@@ -38,15 +41,14 @@ interface PolicyTableProps {
 const DEFAULT_SORTING: SortingState = [{ id: "policy_name", desc: false }];
 
 function EmptyState() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-1 py-6">
       <div className="mb-1 flex size-10 items-center justify-center rounded-lg bg-muted">
         <Inbox className="size-5 text-muted-foreground" />
       </div>
-      <div className="text-sm font-medium text-foreground">No policies found</div>
-      <div className="text-sm text-muted-foreground">
-        Create a policy to bundle guardrails and apply them across teams.
-      </div>
+      <div className="text-sm font-medium text-foreground">{t("policies.policyTable.empty.title")}</div>
+      <div className="text-sm text-muted-foreground">{t("policies.policyTable.empty.description")}</div>
     </div>
   );
 }
@@ -59,14 +61,15 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
   onViewClick,
   isAdmin = false,
 }) => {
+  const { t } = useTranslation();
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
 
   const rows = useMemo(() => groupPoliciesByName(policies), [policies]);
 
   const columns = useMemo(() => {
-    const deps = { isAdmin, onViewClick, onEditClick, onDeleteClick };
+    const deps = { isAdmin, onViewClick, onEditClick, onDeleteClick, t };
     return getPolicyTableColumns(deps);
-  }, [isAdmin, onViewClick, onEditClick, onDeleteClick]);
+  }, [isAdmin, onViewClick, onEditClick, onDeleteClick, t]);
 
   return (
     <DataTable
@@ -78,7 +81,7 @@ const PolicyTable: React.FC<PolicyTableProps> = ({
       sorting={sorting}
       onSortingChange={setSorting}
       isLoading={isLoading}
-      loadingMessage="Loading policies…"
+      loadingMessage={t("policies.policyTable.loading")}
       noDataMessage={<EmptyState />}
       size="compact"
     />
