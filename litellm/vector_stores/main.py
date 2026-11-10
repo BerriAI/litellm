@@ -293,7 +293,6 @@ async def asearch(
     max_num_results: int | None = None,
     ranking_options: dict | None = None,
     rewrite_query: bool | None = None,
-    query_image: VectorStoreSearchQueryImage | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -303,6 +302,8 @@ async def asearch(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     router: "Router | None" = None,
+    *,
+    query_image: VectorStoreSearchQueryImage | None = None,
     **kwargs,
 ) -> VectorStoreSearchResponse:
     """
@@ -368,7 +369,6 @@ def search(
     max_num_results: int | None = None,
     ranking_options: dict | None = None,
     rewrite_query: bool | None = None,
-    query_image: VectorStoreSearchQueryImage | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
     extra_headers: dict[str, object] | None = None,
@@ -378,6 +378,8 @@ def search(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     router: "Router | None" = None,
+    *,
+    query_image: VectorStoreSearchQueryImage | None = None,
     **kwargs,
 ) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
     """

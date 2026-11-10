@@ -863,22 +863,6 @@ def test_get_vector_store_request_for_spend_logs_payload_store_prompts_false(
     assert result[0]["vector_store_search_response"]["data"][0]["content"][0]["type"] == "text"
 
 
-def test_get_vector_store_request_for_spend_logs_payload_redacts_image_hit_data(monkeypatch: pytest.MonkeyPatch):
-    from litellm.proxy import proxy_server
-
-    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": False})
-    image_hit: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQ"}}
-
-    stored: Final = _get_vector_store_request_for_spend_logs_payload(
-        [{"vector_store_search_response": {"data": [{"content": [image_hit]}]}}]
-    )
-
-    assert stored is not None
-    assert stored[0]["vector_store_search_response"]["data"][0]["content"] == [
-        {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": REDACTED_BY_LITELM_STRING}}
-    ]
-
-
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_get_vector_store_request_for_spend_logs_payload_null_input(mock_should_store):
     # When input is None

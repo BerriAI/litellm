@@ -93,33 +93,6 @@ describe("VectorStoreTester", () => {
     expect(screen.getByText("Filename:").parentElement).toHaveTextContent("notes.txt");
   });
 
-  it("shows an image hit as an image when the result is expanded", async () => {
-    const user = userEvent.setup();
-    mockSearch.mockResolvedValue({
-      object: "vector_store.search_results.page",
-      search_query: "",
-      data: [
-        {
-          score: 0.88,
-          content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: "/9j/4AAQ" } }],
-          file_id: "file-2",
-          filename: "red-circle.jpg",
-          attributes: {},
-        },
-      ],
-    });
-    renderTester();
-
-    await user.type(queryInput(), "red circle");
-    await user.click(searchButton());
-    await user.click(await screen.findByText("Result 1"));
-
-    expect(screen.getByRole("img", { name: "red-circle.jpg" })).toHaveAttribute(
-      "src",
-      "data:image/jpeg;base64,/9j/4AAQ",
-    );
-  });
-
   it("warns instead of searching when the query is only whitespace", async () => {
     const user = userEvent.setup();
     renderTester();

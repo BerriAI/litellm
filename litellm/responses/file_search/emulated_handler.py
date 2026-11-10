@@ -166,7 +166,7 @@ async def _run_vector_searches(
                 )
                 results_data = response.get("data") if isinstance(response, dict) else getattr(response, "data", None)
                 if results_data:
-                    all_results.extend(result for result in results_data if not _is_image_only_hit(result))
+                    all_results.extend(results_data)
             except Exception as exc:
                 verbose_logger.warning(
                     "file_search emulated: search failed for query='%s', vector_store_id='%s': %s",
@@ -190,22 +190,11 @@ def _get_field(result: object, key: str, default: object = None) -> object:
     return getattr(result, key, default)
 
 
-def _content_items(result: object) -> Iterable[object]:
-    return cast(Iterable[object], _get_field(result, "content") or [])  # cast-ok: iterated as today
-
-
 def _joined_content_text(result: object) -> str:
     """Concatenate the text of every content chunk on a search result."""
-    text_chunks: Final = [
-        c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in _content_items(result)
-    ]
+    content_items: Final = cast(Iterable[object], _get_field(result, "content") or [])  # cast-ok: iterated as today
+    text_chunks: Final = [c.get("text", "") if isinstance(c, dict) else getattr(c, "text", "") for c in content_items]
     return " ".join(t for t in text_chunks if t)
-
-
-def _is_image_only_hit(result: object) -> bool:
-    return not _joined_content_text(result) and any(
-        _get_field(item, "type") == "image" for item in _content_items(result)
-    )
 
 
 def _format_search_results_as_tool_output(

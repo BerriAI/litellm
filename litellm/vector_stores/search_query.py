@@ -49,10 +49,17 @@ SearchQuery: TypeAlias = TextSearchQuery[_Query] | ImageSearchQuery
 SearchQueryError: TypeAlias = QueryAndImageBothSent | NoQuerySent | InvalidQueryImage | QueryImageUnsupported
 
 
-def _has_text(query: str | Sequence[str]) -> bool:
+def _as_object_list(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, list) else None
+
+
+def _has_text(query: object) -> bool:
     if isinstance(query, str):
         return bool(query.strip())
-    return any(item.strip() for item in query)
+    items: Final = _as_object_list(query)
+    if items is None:
+        return True
+    return any(not isinstance(item, str) or item.strip() for item in items)
 
 
 def _problem(detail: ErrorDetails) -> str:

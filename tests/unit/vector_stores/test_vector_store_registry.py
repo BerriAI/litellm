@@ -378,6 +378,25 @@ def test_vector_store_ids_to_run_reads_every_store_id_a_malformed_vector_store_i
 
 
 @pytest.mark.parametrize(
+    ("tool_field", "tool_value"),
+    [("query_image", {"type": "base64", "media_type": "image/jpeg", "data": "/9j/"}), ("rewrite_query", True)],
+)
+def test_file_search_tool_with_a_field_the_store_search_does_not_take_still_runs_its_store(
+    tool_field: str, tool_value: object
+) -> None:
+    now: Final = datetime.now(timezone.utc)
+    registry: Final = VectorStoreRegistry(
+        [LiteLLM_ManagedVectorStore(vector_store_id="vs_kb", created_at=now, updated_at=now)]
+    )
+    tools: Final = [{"type": "file_search", "vector_store_ids": ["vs_kb"], "max_num_results": 3, tool_field: tool_value}]
+
+    to_run: Final = registry.pop_vector_stores_to_run(non_default_params={}, tools=tools)
+
+    assert [store["vector_store_id"] for store in to_run] == ["vs_kb"]
+    assert to_run[0]["litellm_params"] == {"max_num_results": 3}
+
+
+@pytest.mark.parametrize(
     "vector_store_ids",
     ["vs_allowed", ["vs_allowed", 12345], [12345], ["vs_allowed"]],
     ids=["string", "list_with_a_non_string", "only_non_strings", "list_of_strings"],

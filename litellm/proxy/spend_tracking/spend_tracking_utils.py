@@ -80,7 +80,6 @@ from litellm.types.utils import (
     StandardLoggingVectorStoreRequest,
     VectorStoreSearchResponse,
 )
-from litellm.types.vector_stores import VectorStoreResultContent
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
@@ -1844,18 +1843,10 @@ def _get_vector_store_request_for_spend_logs_payload(
         )
         response_data = vector_store_search_response.get("data", []) or []
         for response_item in response_data:
-            response_item["content"] = [
-                _redacted_vector_store_content(content_item) for content_item in response_item.get("content", []) or []
-            ]
+            for content_item in response_item.get("content", []) or []:
+                if "text" in content_item:
+                    content_item["text"] = REDACTED_BY_LITELM_STRING
     return vector_store_request_metadata
-
-
-def _redacted_vector_store_content(content: VectorStoreResultContent) -> VectorStoreResultContent:
-    without_text: Final[VectorStoreResultContent] = (
-        {**content, "text": REDACTED_BY_LITELM_STRING} if "text" in content else content
-    )
-    source: Final = content.get("source")
-    return without_text if source is None else {**without_text, "source": {**source, "data": REDACTED_BY_LITELM_STRING}}
 
 
 def _get_response_for_spend_logs_payload(
