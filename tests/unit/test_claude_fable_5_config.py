@@ -172,3 +172,38 @@ def test_fable_5_2_accepts_the_speed_param_on_the_anthropic_api(local_model_cost
 
     assert AnthropicModelInfo.supports_fast_mode("claude-fable-5-2", "anthropic") is True
     assert AnthropicConfig._model_supports_speed_param("claude-fable-5-2", "anthropic") is True
+
+
+MYTHOS_5_2_VERTEX_ROWS: Final = (
+    ("vertex_ai/claude-mythos-5-2", "vertex_ai/claude-fable-5-2"),
+    ("vertex_ai/claude-mythos-5-2@default", "vertex_ai/claude-fable-5-2@default"),
+)
+
+
+def _without_source(row: dict[str, object]) -> dict[str, object]:
+    return {k: v for k, v in row.items() if k != "source"}
+
+
+def test_mythos_5_2_vertex_rows_present_in_bundled_backup() -> None:
+    backup = GetModelCostMap.load_local_model_cost_map()
+    root = _load_root_cost_map()
+    for model_name, _ in MYTHOS_5_2_VERTEX_ROWS:
+        assert model_name in backup, f"Missing from backup cost map: {model_name}"
+        assert backup[model_name] == root[model_name], model_name
+
+
+@pytest.mark.parametrize(("mythos_row", "fable_row"), MYTHOS_5_2_VERTEX_ROWS)
+def test_mythos_5_2_vertex_rows_match_fable_5_2(mythos_row: str, fable_row: str) -> None:
+    """Anthropic ships Mythos 5.2 as a verified-access twin of Fable 5.2 with "the same
+    specifications and pricing" (platform.claude.com/docs/en/models/mythos-5-2/overview,
+    read 2026-11-10), so the Vertex rows must stay identical apart from their source."""
+    root = _load_root_cost_map()
+    assert _without_source(root[mythos_row]) == _without_source(root[fable_row])
+    assert root[mythos_row]["source"] == "https://platform.claude.com/docs/en/models/mythos-5-2/overview"
+
+
+@pytest.mark.parametrize("model", [row for row, _ in MYTHOS_5_2_VERTEX_ROWS])
+def test_adaptive_thinking_detected_for_mythos_5_2_on_vertex(local_model_cost_map, model: str) -> None:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    assert AnthropicModelInfo.is_adaptive_thinking_model(model, "anthropic") is True
