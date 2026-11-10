@@ -3575,36 +3575,65 @@ async def test_vercel_ai_gateway_jev_sends_box_questions(
     assert response.answers[0].confidence == 0.8
 
 
+_UPSTREAM_SPLIT: Final[Mapping[str, int]] = {"cached_tokens": _INPUT_TOKENS - 20, "cache_write_tokens": 20}
+_TOP_LEVEL_SPLIT: Final[Mapping[str, int]] = {"cached_tokens": 300, "cache_write_tokens": 7}
+
+
+def _upstream_usage(input_tokens: int, details: Mapping[str, int] | None) -> Mapping[str, object]:
+    return {
+        "usage": {
+            "input_tokens": input_tokens,
+            **({} if details is None else {"input_tokens_details": details}),
+            "output_tokens": 0,
+            "total_tokens": input_tokens,
+        }
+    }
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
 @pytest.mark.parametrize(
-    ("upstream_input_tokens", "cached_tokens", "cache_write_tokens"),
-    ((_INPUT_TOKENS, _INPUT_TOKENS - 20, 20), (_INPUT_TOKENS + 1, 0, 0)),
-    ids=("upstream_reports_this_call", "upstream_count_disagrees"),
+    ("top_level_split", "served_by", "upstream", "expected_split"),
+    (
+        (None, "openai", _upstream_usage(_INPUT_TOKENS, _UPSTREAM_SPLIT), _UPSTREAM_SPLIT),
+        (None, "openai", _upstream_usage(_INPUT_TOKENS + 1, _UPSTREAM_SPLIT), {"cached_tokens": 0, "cache_write_tokens": 0}),
+        (_TOP_LEVEL_SPLIT, "openai", _upstream_usage(_INPUT_TOKENS, None), _TOP_LEVEL_SPLIT),
+        (None, "anthropic", _upstream_usage(_INPUT_TOKENS, _UPSTREAM_SPLIT), {"cached_tokens": 0, "cache_write_tokens": 0}),
+    ),
+    ids=(
+        "serving_provider_reports_this_call",
+        "upstream_count_disagrees",
+        "upstream_omits_the_split",
+        "report_from_a_provider_that_did_not_serve",
+    ),
 )
 async def test_vercel_ai_gateway_decisions_report_the_upstream_cache_split(
-    upstream_input_tokens: int,
-    cached_tokens: int,
-    cache_write_tokens: int,
-    monkeypatch: pytest.MonkeyPatch,
+    top_level_split: Mapping[str, int] | None,
+    served_by: str,
+    upstream: Mapping[str, object],
+    expected_split: Mapping[str, int],
     respx_mock: respx.MockRouter,
 ) -> None:
-    monkeypatch.delenv("VERCEL_AI_GATEWAY_API_BASE", raising=False)
-    monkeypatch.setenv("VERCEL_AI_GATEWAY_API_KEY", "gateway-key")
-    respx_mock.post("https://ai-gateway.vercel.sh/v1/decisions").respond(
+    respx_mock.post(_VERCEL_DECISIONS_URL).respond(
         json={
             "model": "openai/gpt-6-luna-decisions",
             "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
-            "usage": {"input_tokens": _INPUT_TOKENS, "output_tokens": 0, "total_tokens": _INPUT_TOKENS},
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                **({} if top_level_split is None else {"input_tokens_details": top_level_split}),
+                "output_tokens": 0,
+                "total_tokens": _INPUT_TOKENS,
+            },
             "provider_metadata": {
-                "openai": {
-                    "usage": {
-                        "input_tokens": upstream_input_tokens,
-                        "input_tokens_details": {"cached_tokens": _INPUT_TOKENS - 20, "cache_write_tokens": 20},
-                        "output_tokens": 0,
-                        "total_tokens": upstream_input_tokens,
-                    }
+                "openai": upstream,
+                "gateway": {
+                    "cost": "0.00005722",
+                    "routing": {
+                        "modelAttempts": [
+                            {"providerAttempts": [{"provider": served_by, "credentialType": "system", "success": True}]}
+                        ]
+                    },
                 },
-                "gateway": {"cost": "0.00005722"},
             },
         }
     )
@@ -3612,9 +3641,9 @@ async def test_vercel_ai_gateway_decisions_report_the_upstream_cache_split(
     response: Final = await litellm.adecisions(
         model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
         input="The package arrived broken.",
-        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        questions=_PREDICATE_QUESTIONS,
     )
 
-    assert response.usage.input_tokens_details.cached_tokens == cached_tokens
-    assert response.usage.input_tokens_details.cache_write_tokens == cache_write_tokens
+    assert response.usage.input_tokens_details.cached_tokens == expected_split["cached_tokens"]
+    assert response.usage.input_tokens_details.cache_write_tokens == expected_split["cache_write_tokens"]
     assert get_response_cost_from_hidden_params(response.hidden_params) == pytest.approx(5.722e-05)

@@ -1,13 +1,18 @@
 from collections.abc import Mapping
 from dataclasses import replace
 from itertools import chain
-from typing import Final, Literal, TypeVar
+from typing import Final, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from litellm.llms.base_llm.decisions.transformation import usage_reported_cost
 from litellm.llms.openai.decisions.transformation import OpenAIDecisionsConfig
-from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse, DecisionsIRUsage, OpenAIDecisionUsage
+from litellm.types.decisions import (
+    DecisionsIRRequest,
+    DecisionsIRResponse,
+    DecisionsIRUsage,
+    OpenAIDecisionInputTokensDetails,
+)
 
 _Model: Final = TypeVar("_Model", bound=BaseModel)
 
@@ -15,7 +20,8 @@ _Model: Final = TypeVar("_Model", bound=BaseModel)
 class _ProviderAttempt(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    credential_type: Literal["system", "byok"] | None = Field(default=None, alias="credentialType")
+    provider: str | None = None
+    credential_type: str | None = Field(default=None, alias="credentialType")
     success: bool = False
 
 
@@ -30,28 +36,40 @@ class _Routing(BaseModel):
 
     model_attempts: tuple[_ModelAttempt, ...] = Field(default=(), alias="modelAttempts")
 
+    def served_by(self) -> _ProviderAttempt | None:
+        attempts: Final = chain.from_iterable(model.provider_attempts for model in self.model_attempts)
+        return next((attempt for attempt in attempts if attempt.success), None)
+
+
+class _GatewayRouting(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    routing: _Routing = _Routing()
+
 
 class _GatewayCharge(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     cost: float
     market_cost: float | None = Field(default=None, alias="marketCost")
-    routing: _Routing = _Routing()
 
-    def served_with_own_key(self) -> bool:
-        attempts: Final = chain.from_iterable(model.provider_attempts for model in self.routing.model_attempts)
-        return any(attempt.success and attempt.credential_type == "byok" for attempt in attempts)
-
-    def billed_cost(self) -> float:
-        if self.market_cost is None or not self.served_with_own_key():
+    def billed_cost(self, served_by: _ProviderAttempt | None) -> float:
+        if self.market_cost is None or served_by is None or served_by.credential_type != "byok":
             return self.cost
         return self.cost + self.market_cost
+
+
+class _UpstreamUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    input_tokens: int
+    input_tokens_details: OpenAIDecisionInputTokensDetails
 
 
 class _UpstreamReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    usage: OpenAIDecisionUsage
+    usage: _UpstreamUsage
 
 
 class _GatewayDecisionResponse(BaseModel):
@@ -67,15 +85,27 @@ def _validated(model: type[_Model], value: object) -> _Model | None:
         return None
 
 
+def _served_by(gateway: object) -> _ProviderAttempt | None:
+    gateway_routing: Final = _validated(_GatewayRouting, gateway)
+    return None if gateway_routing is None else gateway_routing.routing.served_by()
+
+
+def _upstream_usage(metadata: Mapping[str, object], served_by: _ProviderAttempt | None) -> _UpstreamUsage | None:
+    if served_by is None or served_by.provider is None:
+        return None
+    report: Final = _validated(_UpstreamReport, metadata.get(served_by.provider))
+    return None if report is None else report.usage
+
+
 def _gateway_usage(usage: DecisionsIRUsage, metadata: Mapping[str, object]) -> DecisionsIRUsage:
-    charge: Final = _validated(_GatewayCharge, metadata.get("gateway"))
-    reports: Final = (_validated(_UpstreamReport, entry) for entry in metadata.values())
-    upstream: Final = next(
-        (report.usage for report in reports if report is not None and report.usage.input_tokens == usage.input_tokens),
-        None,
+    gateway: Final = metadata.get("gateway")
+    served_by: Final = _served_by(gateway)
+    charge: Final = _validated(_GatewayCharge, gateway)
+    priced: Final = (
+        usage if charge is None else replace(usage, extra={**usage.extra, "cost": charge.billed_cost(served_by)})
     )
-    priced: Final = usage if charge is None else replace(usage, extra={**usage.extra, "cost": charge.billed_cost()})
-    if upstream is None:
+    upstream: Final = _upstream_usage(metadata, served_by)
+    if upstream is None or upstream.input_tokens != usage.input_tokens:
         return priced
     return replace(
         priced,
