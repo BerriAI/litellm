@@ -1,12 +1,15 @@
 import os
 import threading
+import time
 import uuid
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Final
 
 import pytest
-from litellm_proxy_extras.utils import INDEX_REPAIR_ADVISORY_LOCK_KEY, ProxyExtrasDBManager
+from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY
+from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES
+from litellm_proxy_extras.utils import INDEX_REPAIR_ADVISORY_LOCK_KEY, ProxyExtrasDBManager, _InvalidIndex
 
 psycopg = pytest.importorskip("psycopg")
 
@@ -20,6 +23,7 @@ requires_db: Final = pytest.mark.skipif(
 HEALTH_TABLE: Final = "LiteLLM_HealthCheckTable"
 HEALTH_INDEX: Final = "LiteLLM_HealthCheckTable_model_id_model_name_checked_at_idx"
 HEALTH_INDEX_COLUMNS: Final = '"model_id", "model_name", "checked_at" DESC'
+SECOND_HEALTH_INDEX: Final = "LiteLLM_HealthCheckTable_model_name_idx"
 LOOKALIKE_TABLE: Final = "LiteLLMLookalikeTable"
 LOOKALIKE_INDEX: Final = "LiteLLMLookalikeTable_id_idx"
 PARTITIONED_TABLE: Final = "LiteLLM_PartitionedTable"
@@ -113,6 +117,48 @@ def test_repair_rebuilds_invalid_litellm_indexes_and_leaves_lookalike_tables_alo
 
 
 @requires_db
+@pytest.mark.parametrize("partitioned", (False, True))
+def test_startup_repair_defers_managed_indexes_but_repairs_other_indexes(
+    scratch_schema: str, partitioned: bool
+) -> None:
+    table: Final = "LiteLLM_DifferentlyNamedLeaf" if partitioned else "LiteLLM_SpendLogs"
+    managed: Final = REQUEST_LOG_INDEXES[0]
+    name: Final = managed.partition_index_name(table) if partitioned else managed.name
+    with psycopg.connect(_base_url(), autocommit=True) as connection:
+        connection.execute(
+            f'CREATE TABLE "{scratch_schema}"."LiteLLM_SpendLogs" '
+            '(api_key TEXT, "startTime" TIMESTAMPTZ, litellm_call_id TEXT)'
+            + (' PARTITION BY RANGE ("startTime")' if partitioned else '')
+        )
+        if partitioned:
+            connection.execute(
+                f'CREATE TABLE "{scratch_schema}"."{table}" PARTITION OF '
+                f'"{scratch_schema}"."LiteLLM_SpendLogs" FOR VALUES FROM (MINVALUE) TO (MAXVALUE)'
+            )
+    _leave_invalid_index(scratch_schema, table, name, managed.definition.strip("()"))
+    _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes(skip_request_log_indexes=True) is True
+    assert _index_validity(scratch_schema) == {name: False, HEALTH_INDEX: True}
+
+    assert ProxyExtrasDBManager.build_request_log_indexes() is True
+    assert all(_index_validity(scratch_schema).values())
+
+
+@requires_db
+def test_database_setup_leaves_managed_repair_to_the_request_log_builder(fresh_database: str) -> None:
+    assert ProxyExtrasDBManager.setup_database(use_migrate=True) is True
+    managed: Final = REQUEST_LOG_INDEXES[0]
+    _leave_invalid_index(fresh_database, managed.table, managed.name, managed.definition.strip("()"))
+
+    assert ProxyExtrasDBManager.setup_database(use_migrate=True) is True
+    assert _index_validity(fresh_database)[managed.name] is False
+
+    assert ProxyExtrasDBManager.build_request_log_indexes() is True
+    assert all(_index_validity(fresh_database)[index.name] for index in REQUEST_LOG_INDEXES)
+
+
+@requires_db
 def test_repair_drops_leftovers_of_interrupted_rebuilds(scratch_schema: str) -> None:
     _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)
     _leave_invalid_reindex_leftover(scratch_schema, HEALTH_TABLE, HEALTH_INDEX)
@@ -167,7 +213,74 @@ def test_repair_yields_to_the_replica_holding_the_repair_lock(scratch_schema: st
 
 
 @requires_db
-def test_repair_gives_up_on_a_blocked_rebuild_and_finishes_it_on_the_next_startup(scratch_schema: str) -> None:
+def test_repair_yields_to_the_migration_job_building_indexes_under_the_migration_lock(scratch_schema: str) -> None:
+    """A migration job's index build holds the migration lock while its CREATE INDEX CONCURRENTLY
+    is cataloged as invalid; the repair must not rebuild that in-flight index."""
+    _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)
+
+    with psycopg.connect(_base_url(), autocommit=True) as index_builder:
+        index_builder.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
+        assert ProxyExtrasDBManager.repair_invalid_indexes() is False
+        assert _index_validity(scratch_schema) == {HEALTH_INDEX: False}
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes() is True
+    assert _index_validity(scratch_schema) == {HEALTH_INDEX: True}
+
+
+def _hold_migration_lock_once_free(release: threading.Event) -> None:
+    with psycopg.connect(_base_url(), autocommit=True) as resolver:
+        resolver.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
+        release.wait(timeout=60)
+
+
+def _wait_until_a_session_queues_for_the_migration_lock() -> None:
+    with psycopg.connect(_base_url(), autocommit=True) as conn:
+        for _ in range(200):
+            queued: Final = conn.execute(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted "
+                "AND classid = %s AND objid = %s",
+                (MIGRATION_LOCK_KEY >> 32, MIGRATION_LOCK_KEY & 0xFFFFFFFF),
+            ).fetchone()
+            if queued is not None and queued[0]:
+                return
+            time.sleep(0.05)
+    pytest.fail("no session queued for the migration lock")
+
+
+@requires_db
+def test_repair_releases_the_migration_lock_between_indexes_so_a_booting_resolver_gets_in(
+    scratch_schema: str,
+) -> None:
+    """A v2 resolver on another replica waits for the migration lock; with two invalid
+    indexes to rebuild it must get the lock after the first REINDEX, not after both."""
+    _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)
+    _leave_invalid_index(scratch_schema, HEALTH_TABLE, SECOND_HEALTH_INDEX, '"model_name"')
+    release: Final = threading.Event()
+    resolver: Final = threading.Thread(target=_hold_migration_lock_once_free, args=(release,))
+
+    def repair_then_let_a_resolver_queue_for_the_lock(
+        conn: "psycopg.Connection[tuple[str, str, str]]", index: _InvalidIndex
+    ) -> None:
+        ProxyExtrasDBManager._repair_index(conn, index)
+        if not resolver.is_alive():
+            resolver.start()
+            _wait_until_a_session_queues_for_the_migration_lock()
+
+    try:
+        assert (
+            ProxyExtrasDBManager.repair_invalid_indexes(repair=repair_then_let_a_resolver_queue_for_the_lock) is False
+        )
+        assert sorted(_index_validity(scratch_schema).values()) == [False, True]
+    finally:
+        release.set()
+        resolver.join()
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes() is True
+    assert _index_validity(scratch_schema) == {HEALTH_INDEX: True, SECOND_HEALTH_INDEX: True}
+
+
+@requires_db
+def test_repair_gives_up_on_a_blocked_rebuild_and_finishes_it_on_the_next_boot(scratch_schema: str) -> None:
     _leave_invalid_index(scratch_schema, HEALTH_TABLE, HEALTH_INDEX, HEALTH_INDEX_COLUMNS)
 
     with psycopg.connect(_base_url()) as pin:

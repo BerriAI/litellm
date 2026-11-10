@@ -7,9 +7,10 @@ import re
 import subprocess
 import sys
 import urllib.parse as urlparse
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import click
 import httpx
@@ -666,6 +667,33 @@ class ProxyInitializationHelpers:
         action: Final = "Using existing" if configured_dir else "Auto-created"
         print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
         return multiproc_dir
+
+
+class _DatabaseSetup(Protocol):
+    def __call__(self, *, use_migrate: bool, use_v2_resolver: bool) -> bool: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _DatabaseStartupDependencies:
+    setup: _DatabaseSetup
+    build: Callable[[], bool]
+    start: Callable[[], None]
+
+
+def _setup_database_with_request_log_indexes(
+    skip_server_startup: bool,
+    *,
+    setup: Callable[[], bool],
+    build: Callable[[], bool],
+    start: Callable[[], None],
+) -> bool:
+    if not setup():
+        return False
+    if skip_server_startup:
+        build()
+        return True
+    start()
+    return True
 
 
 @click.command()
@@ -1360,9 +1388,21 @@ def run_server(
                             "diff-and-force recovery that caused the thrash).\033[0m"
                         )
                     try:
-                        setup_ok: Final = PrismaManager.setup_database(
-                            use_migrate=not use_prisma_db_push,
-                            use_v2_resolver=use_v2_migration_resolver,
+                        dependencies: Final = click.get_current_context().find_object(_DatabaseStartupDependencies) or (
+                            _DatabaseStartupDependencies(
+                                setup=PrismaManager.setup_database,
+                                build=PrismaManager.build_request_log_indexes,
+                                start=PrismaManager.start_request_log_index_build,
+                            )
+                        )
+                        setup_ok: Final = _setup_database_with_request_log_indexes(
+                            skip_server_startup,
+                            setup=lambda: dependencies.setup(
+                                use_migrate=not use_prisma_db_push,
+                                use_v2_resolver=use_v2_migration_resolver,
+                            ),
+                            build=dependencies.build,
+                            start=dependencies.start,
                         )
                     except RuntimeError as e:
                         # Raised on unrecoverable migration errors: the v2

@@ -978,6 +978,28 @@ class PrismaManager:
                 os.chdir(original_dir)
         return False
 
+    @staticmethod
+    def build_request_log_indexes() -> bool:
+        """Build request-log indexes after migrations and report whether all were built."""
+        try:
+            from litellm_proxy_extras.utils import ProxyExtrasDBManager
+        except ImportError as e:
+            verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+            return False
+        return ProxyExtrasDBManager.build_request_log_indexes()
+
+    @staticmethod
+    def start_request_log_index_build() -> None:
+        """Build the request-log indexes on a daemon thread, for a serving proxy that ran the
+        migrations itself (`DISABLE_SCHEMA_UPDATE` unset), so a long build never delays
+        readiness. A build that could not finish is logged and retried on the next boot."""
+        try:
+            from litellm_proxy_extras.utils import ProxyExtrasDBManager
+        except ImportError as e:
+            verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+            return
+        ProxyExtrasDBManager.start_request_log_index_build()
+
 
 def should_update_prisma_schema(
     disable_updates: bool | str | None = None,

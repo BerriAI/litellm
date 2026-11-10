@@ -2,7 +2,12 @@ import glob
 import os
 import re
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+import threading
 from pathlib import Path
+from queue import SimpleQueue
+from typing import Final
 
 import pytest
 
@@ -13,10 +18,10 @@ sys.path.insert(
     ),
 )
 
+from litellm_proxy_extras.request_log_indexes import filter_request_log_index_diff
 from litellm_proxy_extras.utils import (
     PARTITIONED_SPEND_LOGS_PUSH_ERROR,
     ProxyExtrasDBManager,
-    filter_hand_built_spend_logs_index_diff,
     filter_partitioned_spend_logs_diff,
 )
 
@@ -27,6 +32,122 @@ _MIGRATIONS_DIR = os.path.abspath(
         "../../litellm-proxy-extras/litellm_proxy_extras/migrations",
     )
 )
+
+
+def test_coordination_failure_does_not_misclassify_fatal_password_as_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import psycopg
+    from litellm_proxy_extras.migration_lock import _coordination_failure
+
+    database_url: Final = "postgresql://u:FATAL@127.0.0.1:5432/db"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    error: Final = psycopg.OperationalError(
+        'connection failed: connection to server at "127.0.0.1", port 5432 failed: '
+        'FATAL:  password authentication failed for user "u"'
+    )
+
+    result: Final = _coordination_failure(database_url, error, connecting=True)
+
+    assert result.startswith("Lost or could not establish v2 migration coordination with the database: ")
+    assert "P1001" not in result
+
+
+@pytest.mark.parametrize(
+    ("message", "detail"),
+    [
+        (
+            'connection failed: connection to server at "127.0.0.1", port 5432 failed: SSL error: '
+            "certificate verify failed",
+            "certificate verify failed",
+        ),
+        (
+            'connection failed: connection to server at "127.0.0.1", port 5432 failed: server certificate '
+            'for "db.internal" does not match host name "127.0.0.1"',
+            "does not match host name",
+        ),
+        (
+            'connection failed: connection to server at "127.0.0.1", port 5432 failed: server does not support '
+            "SSL, but SSL was required",
+            "SSL was required",
+        ),
+    ],
+)
+def test_coordination_failure_does_not_label_tls_failures_as_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    detail: str,
+) -> None:
+    import psycopg
+    from litellm_proxy_extras.migration_lock import _coordination_failure
+
+    database_url: Final = "postgresql://u:pw@127.0.0.1:5432/db"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    error: Final = psycopg.OperationalError(message)
+
+    result: Final = _coordination_failure(database_url, error, connecting=True)
+
+    assert result.startswith("Lost or could not establish v2 migration coordination with the database: ")
+    assert "P1001" not in result
+    assert detail in result
+
+
+@pytest.mark.parametrize(
+    ("database_url", "message", "host"),
+    [
+        (
+            "postgresql://u:pw@certificate-db.internal:5432/db",
+            'connection failed: connection to server at "certificate-db.internal" (10.0.0.5), port 5432 failed: '
+            "Connection refused",
+            "certificate-db.internal",
+        ),
+        (
+            "postgresql://u:pw@SSL-primary:5432/db",
+            'connection failed: connection to server at "SSL-primary" (10.0.0.6), port 5432 failed: '
+            "Connection refused",
+            "ssl-primary",
+        ),
+        (
+            "postgresql://u:pw@certificate-db.invalid:5432/db",
+            "connection failed: failed to resolve host 'certificate-db.invalid': [Errno -2] "
+            "Name or service not known",
+            "certificate-db.invalid",
+        ),
+    ],
+)
+def test_coordination_failure_labels_unreachable_hosts_named_like_tls_markers(
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    message: str,
+    host: str,
+) -> None:
+    import psycopg
+    from litellm_proxy_extras.migration_lock import _coordination_failure
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    error: Final = psycopg.OperationalError(message)
+
+    result: Final = _coordination_failure(database_url, error, connecting=True)
+
+    assert f"P1001: Can't reach database server at `{host}:5432`" in result
+
+
+def test_coordination_failure_labels_connection_refused_as_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import psycopg
+    from litellm_proxy_extras.migration_lock import _coordination_failure
+
+    database_url: Final = "postgresql://u:pw@127.0.0.1:5432/db"
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    error: Final = psycopg.OperationalError(
+        'connection failed: connection to server at "127.0.0.1", port 5432 failed: Connection refused'
+    )
+
+    result: Final = _coordination_failure(database_url, error, connecting=True)
+
+    assert result.startswith("Lost or could not establish v2 migration coordination with the database: ")
+    assert "P1001: Can't reach database server at `127.0.0.1:5432`" in result
 
 
 def test_custom_prisma_dir(monkeypatch):
@@ -644,14 +765,14 @@ class TestHandBuiltSpendLogsIndexDriftFilter:
         ],
     )
     def test_hand_built_index_creation_is_removed(self, statement):
-        assert filter_hand_built_spend_logs_index_diff(f"-- CreateIndex\n{statement};\n") == ""
+        assert filter_request_log_index_diff(f"-- CreateIndex\n{statement};\n") == ""
 
     def test_other_spend_logs_indexes_and_statements_are_kept_verbatim(self):
         kept = (
             'CREATE INDEX "LiteLLM_SpendLogs_session_id_idx" ON "LiteLLM_SpendLogs"("session_id");\n'
             'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;\n'
         )
-        assert filter_hand_built_spend_logs_index_diff(kept) == kept
+        assert filter_request_log_index_diff(kept) == kept
 
 
 class TestPartitionedSpendLogsPushGuard:
@@ -761,6 +882,9 @@ class TestSpendLogsPartitionDetectionMissingPsycopg:
 
 
 _ATTEMPT_BUDGET = 4
+_P3009_MIGRATION_NAME = "20260415120000_health_check_latest_per_model_index"
+_P3009_STARTED_AT = "2026-10-02 23:20:56.439594 UTC"
+_P3009_DEADLOCK_LOGS = "ERROR: deadlock detected\nDETAIL: Process 72 waits for ShareLock on transaction 991"
 
 _P3005_STDERR = """Error: P3005
 
@@ -782,12 +906,120 @@ ERROR: relation "SomeTable" already exists
 """
 
 
+def _p3009_stderr(migration_name: str, started_at: str) -> str:
+    return (
+        "Error: P3009\n\n"
+        "migrate found failed migrations in the target database, new migrations will not be applied. "
+        "Read more about how to resolve migration issues in a production database: "
+        "https://pris.ly/d/migrate-resolve\n"
+        f"The `{migration_name}` migration started at {started_at} failed\n"
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _LedgerRow:
+    migration_name: str
+    started_at: str
+    finished: bool = False
+    rolled_back: bool = False
+    logs: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _LedgerCursor:
+    row: tuple[object, ...] | None = None
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self.row
+
+    def fetchall(self) -> tuple[tuple[object, ...], ...]:
+        return ()
+
+
+class _LedgerConnection:
+    def __init__(self, ledger: "_FakeLedger") -> None:
+        self.ledger = ledger
+
+    def __enter__(self) -> "_LedgerConnection":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, query: object, params: tuple[object, ...] = ()) -> _LedgerCursor:
+        return self.ledger.execute(query, params)
+
+
+class _FakeLedger:
+    def __init__(self, at_error: tuple[_LedgerRow, ...], after_peer: tuple[_LedgerRow, ...]) -> None:
+        self.rows = at_error
+        self.after_peer = after_peer
+        self._peer_observed = False
+
+    def connect(self, *args: object, **kwargs: object) -> _LedgerConnection:
+        return _LedgerConnection(self)
+
+    def execute(self, query: object, params: tuple[object, ...]) -> _LedgerCursor:
+        text: Final = str(query)
+        if "WHERE migration_name = %s" not in text or not params:
+            return _LedgerCursor()
+        if not self._peer_observed:
+            self.rows = self.after_peer
+            self._peer_observed = True
+        matching: Final = tuple(
+            row
+            for row in self.rows
+            if row.migration_name == params[0] and (len(params) == 1 or row.started_at == params[1])
+        )
+        if "rolled_back_at IS NULL" in text:
+            unresolved: Final = next((row for row in matching if not row.finished and not row.rolled_back), None)
+            return _LedgerCursor((unresolved.logs,) if unresolved else None)
+        if "IS NOT NULL" in text:
+            resolved: Final = next((row for row in matching if row.finished or row.rolled_back), None)
+            return _LedgerCursor((1,) if resolved else None)
+        return _LedgerCursor()
+
+
+@pytest.mark.parametrize(
+    "pooled,direct,expected",
+    (
+        ("postgresql://pool/db?pgbouncer=true", None, "postgresql://pool/db?pgbouncer=true"),
+        ("postgresql://pool/db?pgbouncer=true", "postgresql://writer/db", "postgresql://writer/db?schema=public"),
+        (
+            "postgresql://pool/db?schema=tenant%20one&pgbouncer=true",
+            "postgresql://writer/db?sslmode=require&schema=wrong",
+            "postgresql://writer/db?sslmode=require&schema=tenant+one",
+        ),
+    ),
+)
+def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(
+    pooled: str, direct: str | None, expected: str
+) -> None:
+    from litellm_proxy_extras.migration_lock import migration_environment
+
+    environment: Final = {"DATABASE_URL": pooled, "PRISMA_OFFLINE_MODE": "true"}
+    configured: Final = {**environment, **({"DIRECT_URL": direct} if direct else {})}
+    migrated: Final = migration_environment(configured)
+
+    assert migrated["DATABASE_URL"] == expected
+    assert migrated["PRISMA_OFFLINE_MODE"] == "true"
+    assert configured["DATABASE_URL"] == pooled
+
+
 class _MigrateDeployHarness:
     """Drives _setup_database_v2 with a scripted sequence of
     `prisma migrate deploy` outcomes, with every recovery command faked out so
     nothing touches a database or the packaged migrations directory."""
 
-    def __init__(self, monkeypatch, tmp_path, outcomes, repeat_last=False):
+    def __init__(
+        self,
+        monkeypatch,
+        tmp_path,
+        outcomes,
+        repeat_last=False,
+        confirmed_migrations=(),
+        ledger: "_FakeLedger | None" = None,
+    ):
         import subprocess as subprocess_module
 
         import litellm_proxy_extras.utils as utils_module
@@ -798,16 +1030,9 @@ class _MigrateDeployHarness:
         self._outcomes = list(outcomes)
         self._repeat_last = repeat_last
         self._subprocess_module = subprocess_module
+        self.confirmed_migrations = set(confirmed_migrations)
 
-        monkeypatch.delenv("DATABASE_URL", raising=False)
-        monkeypatch.setattr(
-            ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path))
-        )
-        monkeypatch.setattr(
-            ProxyExtrasDBManager,
-            "_create_baseline_migration",
-            staticmethod(self._fake_baseline),
-        )
+        monkeypatch.setattr(ProxyExtrasDBManager, "_get_prisma_dir", staticmethod(lambda: str(tmp_path)))
         monkeypatch.setattr(
             ProxyExtrasDBManager,
             "_roll_back_migration",
@@ -818,14 +1043,22 @@ class _MigrateDeployHarness:
             "_resolve_specific_migration",
             staticmethod(self.resolved.append),
         )
+        if ledger is None:
+            monkeypatch.delenv("DATABASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+            monkeypatch.setattr("psycopg.connect", ledger.connect)
+        monkeypatch.setenv("LITELLM_MIGRATION_DIR", str(tmp_path))
         monkeypatch.setattr(utils_module.prisma_toolchain, "run_prisma", self._fake_run)
+        monkeypatch.setattr(utils_module, "_get_prisma_env", lambda: {})
         monkeypatch.setattr(utils_module.time, "sleep", lambda seconds: None)
 
         self.baseline_succeeds = True
 
     def _fake_baseline(self, *args, **kwargs):
         self.baselines += 1
-        return self.baseline_succeeds
+        if not self.baseline_succeeds:
+            raise RuntimeError("The existing schema was not verified")
 
     def _next_outcome(self):
         if self._outcomes:
@@ -845,79 +1078,214 @@ class _MigrateDeployHarness:
         raise self._subprocess_module.CalledProcessError(1, cmd, stderr=outcome)
 
     def run(self):
-        return ProxyExtrasDBManager._setup_database_v2(use_migrate=True)
+        while not ProxyExtrasDBManager._run_database_v2(
+            use_migrate=True,
+            recover_completed=self._fake_recovery,
+            baseline_existing=self._fake_baseline,
+        ):
+            continue
+        return True
+
+    def _fake_recovery(self, name: str) -> bool:
+        if name not in self.confirmed_migrations:
+            return False
+        self.confirmed_migrations.remove(name)
+        self.resolved.append(name)
+        return True
+
+
+class TestConcurrentP3009Recovery:
+    @pytest.mark.parametrize(
+        "after_peer",
+        (
+            (_LedgerRow(_P3009_MIGRATION_NAME, _P3009_STARTED_AT, rolled_back=True, logs=_P3009_DEADLOCK_LOGS),),
+            (
+                _LedgerRow(_P3009_MIGRATION_NAME, _P3009_STARTED_AT, rolled_back=True, logs=_P3009_DEADLOCK_LOGS),
+                _LedgerRow(_P3009_MIGRATION_NAME, "2026-10-02 23:21:11.539224 UTC"),
+            ),
+            (_LedgerRow(_P3009_MIGRATION_NAME, _P3009_STARTED_AT, finished=True, logs=_P3009_DEADLOCK_LOGS),),
+        ),
+        ids=("rolled-back", "rolled-back-beside-a-fresh-in-flight-row", "finished"),
+    )
+    def test_a_p3009_row_a_peer_already_recovered_is_retried(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        after_peer: tuple[_LedgerRow, ...],
+    ) -> None:
+        deadlocked_row: Final = _LedgerRow(
+            _P3009_MIGRATION_NAME,
+            _P3009_STARTED_AT,
+            logs=_P3009_DEADLOCK_LOGS,
+        )
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_p3009_stderr(_P3009_MIGRATION_NAME, _P3009_STARTED_AT), "ok"],
+            ledger=_FakeLedger(at_error=(deadlocked_row,), after_peer=after_peer),
+        )
+
+        assert harness.run() is True
+        assert len(harness.deploy_calls) == 2
+
+    @pytest.mark.parametrize(
+        "ledger_rows",
+        (
+            (
+                _LedgerRow(
+                    _P3009_MIGRATION_NAME,
+                    _P3009_STARTED_AT,
+                    logs='ERROR: syntax error at or near "SLECT"',
+                ),
+            ),
+            (
+                _LedgerRow(
+                    _P3009_MIGRATION_NAME,
+                    _P3009_STARTED_AT,
+                    logs='ERROR: syntax error at or near "SLECT"',
+                ),
+                _LedgerRow(
+                    _P3009_MIGRATION_NAME,
+                    "2026-10-02 23:19:40.120000 UTC",
+                    rolled_back=True,
+                    logs=_P3009_DEADLOCK_LOGS,
+                ),
+            ),
+        ),
+        ids=("only-row", "beside-a-recovered-earlier-attempt"),
+    )
+    def test_an_unresolved_p3009_row_without_the_deadlock_marker_stops(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        ledger_rows: tuple[_LedgerRow, ...],
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [_p3009_stderr(_P3009_MIGRATION_NAME, _P3009_STARTED_AT)],
+            ledger=_FakeLedger(at_error=ledger_rows, after_peer=ledger_rows),
+        )
+
+        with pytest.raises(RuntimeError, match="Migration completion could not be verified"):
+            harness.run()
+        assert len(harness.deploy_calls) == 1
 
 
 class TestMigrateDeployAttemptAccounting:
-    """A `prisma db push` database has a full schema and no ledger, so the v2
-    resolver baselines it and then works through every migration whose objects
-    already exist. Those recoveries make progress, so they must not spend the
-    retry budget, which is there to stop a run that is getting nowhere."""
-
-    def test_a_push_created_database_finishes_bootstrapping(
-        self, monkeypatch, tmp_path
-    ):
-        already_there = [
-            "20250329084805_new_cron_job_table",
-            "20250806095134_rename_alias_to_server_name_mcp_table",
-            "20260224203854_add_agent_object_permissions_table",
-            "20260301120000_fourth_table",
-            "20260302120000_fifth_table",
-            "20260303120000_sixth_table",
-        ]
+    def test_a_push_created_database_finishes_bootstrapping(self, monkeypatch, tmp_path):
         harness = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
-            [_P3005_STDERR]
-            + [_p3018_stderr(name) for name in already_there]
-            + ["ok"],
+            [_P3005_STDERR, "ok"],
         )
 
         assert harness.run() is True
         assert harness.baselines == 1
-        assert harness.resolved == already_there
-        assert len(harness.deploy_calls) == len(already_there) + 2
+        assert harness.resolved == []
+        assert len(harness.deploy_calls) == 2
 
-    def test_repeated_recovery_of_one_migration_still_gives_up(
-        self, monkeypatch, tmp_path
-    ):
+    def test_repeated_recovery_of_one_migration_still_gives_up(self, monkeypatch, tmp_path):
         harness = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
             [_p3018_stderr("20250329084805_new_cron_job_table")],
             repeat_last=True,
+            confirmed_migrations=("20250329084805_new_cron_job_table",),
         )
 
         with pytest.raises(RuntimeError):
             harness.run()
-        assert len(harness.deploy_calls) <= _ATTEMPT_BUDGET + 1
+        assert len(harness.deploy_calls) == 2
+        assert harness.resolved == ["20250329084805_new_cron_job_table"]
 
     def test_timeouts_still_spend_the_budget(self, monkeypatch, tmp_path):
-        harness = _MigrateDeployHarness(
-            monkeypatch, tmp_path, ["timeout"], repeat_last=True
-        )
+        harness = _MigrateDeployHarness(monkeypatch, tmp_path, ["timeout"], repeat_last=True)
 
         with pytest.raises(RuntimeError):
             harness.run()
         assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
 
-    def test_a_baseline_that_never_lands_stops_after_the_budget(
-        self, monkeypatch, tmp_path
-    ):
-        harness = _MigrateDeployHarness(
-            monkeypatch, tmp_path, [_P3005_STDERR], repeat_last=True
-        )
+    def test_an_unverified_baseline_stops_without_replaying_migrations(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(monkeypatch, tmp_path, [_P3005_STDERR], repeat_last=True)
         harness.baseline_succeeds = False
 
         with pytest.raises(RuntimeError):
             harness.run()
-        assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
+        assert len(harness.deploy_calls) == 1
+
+    def test_lock_contention_does_not_spend_the_failure_budget(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            ["Error: P1002\nTimed out waiting for the advisory lock"] * 6 + ["ok"],
+        )
+        assert harness.run() is True
+        assert len(harness.deploy_calls) == 7
+
+    def test_duplicate_object_error_without_completion_proof_is_fatal(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(monkeypatch, tmp_path, [_p3018_stderr("20260101000000_x")])
+        with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
+            harness.run()
+        assert harness.resolved == []
+        assert len(harness.deploy_calls) == 1
+
+    @pytest.mark.parametrize("name", ("20260101000000_x", "20260101000000_migration with spaces"))
+    def test_an_interrupted_migration_with_confirmed_sql_can_finish(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [f"Error: P3009\nThe `{name}` migration failed", "ok"],
+            confirmed_migrations=(name,),
+        )
+        assert harness.run() is True
+        assert harness.resolved == [name]
+
+    def test_an_interrupted_migration_without_confirmation_stops(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        name: Final = "20260101000000_x"
+        started: Final = "2026-09-12 20:15:06.694553 UTC"
+        report: Final = f"Error: P3009\nThe `{name}` migration started at {started} failed"
+        harness: Final = _MigrateDeployHarness(
+            monkeypatch,
+            tmp_path,
+            [report],
+        )
+        with pytest.raises(RuntimeError, match="Migration completion could not be verified") as failure:
+            harness.run()
+        message: Final = str(failure.value)
+        assert name in message
+        assert started in message
+        assert "start record but no successful completion record" in message
+        assert "cannot determine whether its SQL committed" in message
+        assert "avoid repeating or skipping database changes" in message
+        assert "_prisma_migrations" in message
+        assert "migration.sql" in message
+        assert "same database" in message
+        assert "Only after verifying every migration change is present" in message
+        assert "prisma migrate resolve --applied <migration_name>" in message
+        assert "Only after verifying no migration changes remain" in message
+        assert "prisma migrate resolve --rolled-back <migration_name>" in message
+        assert "leave migration history unchanged" in message
+        assert "Repeated restarts alone" in message
+        assert report in message
+        assert len(harness.deploy_calls) == 1
+        assert harness.resolved == []
 
     def test_an_unrecoverable_error_is_not_retried(self, monkeypatch, tmp_path):
         harness = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
-            ["Error: P3018\n\nMigration name: 20260101000000_x\n\nERROR: syntax error at or near \"SLECT\"\n"],
+            ['Error: P3018\n\nMigration name: 20260101000000_x\n\nERROR: syntax error at or near "SLECT"\n'],
             repeat_last=True,
         )
 
@@ -925,6 +1293,38 @@ class TestMigrateDeployAttemptAccounting:
             harness.run()
         assert len(harness.deploy_calls) == 1
         assert harness.resolved == []
+
+
+@pytest.mark.parametrize(
+    "steps,logs,script,expected",
+    (
+        (1, "", b"CREATE TABLE item (id int);", True),
+        (0, "", b"CREATE TABLE item (id int);", False),
+        (0, "already exists", b"CREATE TABLE item (id int);", False),
+        (1, "permission denied", b"CREATE TABLE item (id int);", False),
+        (1, "", b"CREATE TABLE item (id text);", False),
+        (2, "", b"CREATE TABLE item (id int);", False),
+    ),
+)
+def test_migration_completion_requires_a_matching_successful_script(
+    steps: int, logs: str, script: bytes, expected: bool
+) -> None:
+    import hashlib
+
+    from litellm_proxy_extras.migration_recovery import MigrationProgress
+
+    progress: Final = MigrationProgress(hashlib.sha256(b"CREATE TABLE item (id int);").hexdigest(), steps, logs)
+    assert progress.confirms_completion(script) is expected
+
+
+def test_prisma_lock_waiting_has_its_own_deadline():
+    from litellm_proxy_extras.utils import _MigrateAttemptBudget
+
+    budget = _MigrateAttemptBudget(attempts_left=4, contention_seconds_left=2)
+    waiting = budget.after_contention(1)
+    assert waiting.attempts_left == 4
+    with pytest.raises(RuntimeError, match="advisory lock"):
+        waiting.after_contention(2)
 
 
 class TestJWTKeyMappingCascade:
@@ -991,3 +1391,329 @@ class TestJWTKeyMappingCascade:
                 f"{path} must declare onDelete: Cascade on the JWT key mapping "
                 "relation (issue #33702)"
             )
+
+
+class TestStripPrismaQueryParams:
+    """The psycopg URL the job connects with is derived from the Prisma-dialect
+    DATABASE_URL, whose TLS params mean something else to libpq."""
+
+    @staticmethod
+    def _query(url: str) -> dict[str, str]:
+        from urllib.parse import parse_qsl, urlparse
+
+        return dict(parse_qsl(urlparse(url).query))
+
+    @pytest.mark.parametrize(
+        "url,expected_user,expected_password,expected_host,expected_port,expected_sslmode",
+        (
+            (
+                "postgresql://u:wr ong'pw9@writer:5433/litellm",
+                "u",
+                "wr ong'pw9",
+                "writer",
+                "5433",
+                None,
+            ),
+            (
+                "postgresql://u:wr ong'pw9@writer:5433/litellm?schema=x&sslmode=require",
+                "u",
+                "wr ong'pw9",
+                "writer",
+                "5433",
+                "require",
+            ),
+            (
+                "postgresql://u:p%40ss%20w@writer:5433/litellm",
+                "u",
+                "p@ss w",
+                "writer",
+                "5433",
+                None,
+            ),
+            (
+                "postgresql://u:p%z@writer:5433/litellm",
+                "u",
+                "p%z",
+                "writer",
+                "5433",
+                None,
+            ),
+            (
+                "postgresql://u:wr ong'pw9@[::1]:5433/litellm",
+                "u",
+                "wr ong'pw9",
+                "::1",
+                "5433",
+                None,
+            ),
+        ),
+    )
+    def test_userinfo_is_encoded_for_libpq(
+        self,
+        url: str,
+        expected_user: str,
+        expected_password: str,
+        expected_host: str,
+        expected_port: str,
+        expected_sslmode: str | None,
+    ) -> None:
+        from psycopg.conninfo import conninfo_to_dict
+
+        result: Final = ProxyExtrasDBManager._strip_prisma_query_params(url)
+        conninfo: Final = conninfo_to_dict(result)
+
+        assert conninfo["user"] == expected_user
+        assert conninfo["password"] == expected_password
+        assert conninfo["host"] == expected_host
+        assert conninfo["port"] == expected_port
+        assert conninfo["dbname"] == "litellm"
+        assert conninfo.get("sslmode") == expected_sslmode
+        assert "schema" not in conninfo
+
+    def test_empty_password_userinfo_keeps_its_separator(self) -> None:
+        url: Final = "postgresql://u:@writer/litellm"
+
+        assert ProxyExtrasDBManager._strip_prisma_query_params(url) == url
+
+    def test_prisma_ca_sslcert_becomes_sslrootcert_with_verify_full(self) -> None:
+        url: Final = (
+            "postgresql://u:p@writer:5432/db?schema=public&sslmode=require&sslcert=/tmp/pinned.pem&sslaccept=strict"
+        )
+
+        cleaned: Final = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "verify-full", "sslrootcert": "/tmp/pinned.pem"}
+        assert cleaned.startswith("postgresql://u:p@writer:5432/db?")
+
+    @pytest.mark.parametrize("sslmode", ["prefer", "require"])
+    @pytest.mark.parametrize("sslaccept", ["strict", "unknown-mode-prisma-treats-as-strict"])
+    def test_strict_verifies_chain_and_hostname_whatever_sslmode_prisma_was_given(
+        self, sslmode: str, sslaccept: str
+    ) -> None:
+        url: Final = f"postgresql://writer/db?sslmode={sslmode}&sslcert=/certs/ca.pem&sslaccept={sslaccept}"
+
+        cleaned: Final = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "verify-full", "sslrootcert": "/certs/ca.pem"}
+
+    def test_strict_with_tls_disabled_stays_off(self) -> None:
+        url: Final = "postgresql://writer/db?sslmode=disable&sslcert=/certs/ca.pem&sslaccept=strict"
+
+        cleaned: Final = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "disable"}
+
+    @pytest.mark.parametrize("sslaccept", ["&sslaccept=accept_invalid_certs", ""])
+    def test_without_strict_the_ca_is_dropped_so_libpq_checks_nothing_like_prisma(self, sslaccept: str) -> None:
+        url: Final = f"postgresql://writer/db?sslmode=require&sslcert=/certs/ca.pem{sslaccept}"
+
+        cleaned: Final = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "require"}
+
+    def test_a_ca_alone_without_strict_or_sslmode_leaves_libpq_its_defaults(self) -> None:
+        cleaned: Final = ProxyExtrasDBManager._strip_prisma_query_params("postgresql://writer/db?sslcert=/certs/ca.pem")
+
+        assert cleaned == "postgresql://writer/db"
+
+    def test_a_libpq_client_certificate_pair_is_left_alone(self) -> None:
+        url: Final = (
+            "postgresql://writer/db?sslmode=verify-full&sslrootcert=/ca.pem&sslcert=/client.crt&sslkey=/client.key"
+        )
+
+        cleaned: Final = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {
+            "sslmode": "verify-full",
+            "sslrootcert": "/ca.pem",
+            "sslcert": "/client.crt",
+            "sslkey": "/client.key",
+        }
+
+    def test_an_explicit_sslrootcert_wins_over_the_prisma_sslcert(self) -> None:
+        url: Final = "postgresql://writer/db?sslmode=require&sslrootcert=/ca.pem&sslcert=/pinned.pem&sslaccept=strict"
+
+        cleaned: Final = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert self._query(cleaned) == {"sslmode": "verify-full", "sslrootcert": "/ca.pem"}
+
+    def test_prisma_only_params_are_dropped_and_plain_urls_pass_through(self) -> None:
+        url: Final = "postgresql://u:p@pooler:6543/db?schema=tenant&pgbouncer=true&connection_limit=5&connect_timeout=3"
+
+        cleaned: Final = ProxyExtrasDBManager._strip_prisma_query_params(url)
+
+        assert cleaned == "postgresql://u:p@pooler:6543/db?connect_timeout=3"
+        assert (
+            ProxyExtrasDBManager._strip_prisma_query_params("postgresql://u:p@writer/db")
+            == "postgresql://u:p@writer/db"
+        )
+
+
+class TestBuildRequestLogIndexes:
+    """The migration job hands the index build the direct database URL and the schema
+    the migrations target, waits for it, and reports its result."""
+
+    @pytest.fixture
+    def builds(self) -> SimpleQueue[tuple[str, str]]:
+        return SimpleQueue()
+
+    @pytest.fixture
+    def build(self, builds: SimpleQueue[tuple[str, str]]) -> Callable[[str, str], bool]:
+        def record(database_url: str, schema: str) -> bool:
+            builds.put((database_url, schema))
+            return True
+
+        return record
+
+    def test_the_build_gets_the_direct_url_without_prisma_params_and_the_prisma_schema(
+        self, monkeypatch: pytest.MonkeyPatch, builds: SimpleQueue[tuple[str, str]], build: Callable[[str, str], bool]
+    ) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@pooler:6543/db?schema=tenant&pgbouncer=true")
+        monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@primary:5432/db?connection_limit=1")
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds.get_nowait() == ("postgresql://u:p@primary:5432/db", "tenant")
+        assert builds.empty()
+
+    def test_the_build_defaults_to_the_database_url_and_the_public_schema(
+        self, monkeypatch: pytest.MonkeyPatch, builds: SimpleQueue[tuple[str, str]], build: Callable[[str, str], bool]
+    ) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+        monkeypatch.delenv("DIRECT_URL", raising=False)
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds.get_nowait() == ("postgresql://u:p@primary:5432/db", "public")
+        assert builds.empty()
+
+    def test_a_build_that_leaves_indexes_missing_is_reported_so_the_job_reruns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@primary:5432/db")
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=lambda url, schema: False) is False
+
+    def test_without_a_database_url_nothing_is_built(
+        self, monkeypatch: pytest.MonkeyPatch, builds: SimpleQueue[tuple[str, str]], build: Callable[[str, str], bool]
+    ) -> None:
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+
+        assert ProxyExtrasDBManager.build_request_log_indexes(build=build) is True
+
+        assert builds.empty()
+
+
+class TestStartRequestLogIndexBuild:
+    """A serving proxy that ran the migrations starts the index build on a daemon thread
+    and goes on to serve while it runs."""
+
+    def test_the_build_runs_on_a_daemon_thread_that_does_not_hold_up_the_caller(self) -> None:
+        release: Final = threading.Event()
+        builds: Final[SimpleQueue[str]] = SimpleQueue()
+
+        def build() -> bool:
+            assert release.wait(5), "the caller never came back from start_request_log_index_build"
+            builds.put(threading.current_thread().name)
+            return True
+
+        thread: Final = ProxyExtrasDBManager.start_request_log_index_build(build=build)
+
+        assert builds.empty(), "the build ran before start_request_log_index_build returned"
+        assert thread.daemon is True
+        release.set()
+        thread.join(5)
+        assert builds.get_nowait() == "litellm-request-log-indexes"
+        assert builds.empty()
+
+
+class TestRunMigrationJob:
+    """`run_migration_job` is `setup_database` followed by the index build, each step's
+    result deciding whether the job reports success."""
+
+    @pytest.fixture
+    def calls(self) -> SimpleQueue[tuple[str, bool, bool] | tuple[str]]:
+        return SimpleQueue()
+
+    @pytest.fixture
+    def setup(
+        self, calls: SimpleQueue[tuple[str, bool, bool] | tuple[str]]
+    ) -> Callable[[bool], Callable[[bool, bool], bool]]:
+        def record(result: bool) -> Callable[[bool, bool], bool]:
+            def setup_database(use_migrate: bool, use_v2_resolver: bool) -> bool:
+                calls.put(("setup", use_migrate, use_v2_resolver))
+                return result
+
+            return setup_database
+
+        return record
+
+    @pytest.fixture
+    def build(self, calls: SimpleQueue[tuple[str, bool, bool] | tuple[str]]) -> Callable[[bool], Callable[[], bool]]:
+        def record(result: bool) -> Callable[[], bool]:
+            def build_request_log_indexes() -> bool:
+                calls.put(("build",))
+                return result
+
+            return build_request_log_indexes
+
+        return record
+
+    def test_the_job_builds_the_indexes_after_the_migrations_succeed(
+        self,
+        calls: SimpleQueue[tuple[str, bool, bool] | tuple[str]],
+        setup: Callable[[bool], Callable[[bool, bool], bool]],
+        build: Callable[[bool], Callable[[], bool]],
+    ) -> None:
+        assert ProxyExtrasDBManager.run_migration_job(True, False, setup=setup(True), build=build(True)) is True
+
+        assert (calls.get_nowait(), calls.get_nowait()) == (("setup", True, False), ("build",))
+        assert calls.empty()
+
+    def test_the_job_fails_without_building_when_the_migrations_fail(
+        self,
+        calls: SimpleQueue[tuple[str, bool, bool] | tuple[str]],
+        setup: Callable[[bool], Callable[[bool, bool], bool]],
+        build: Callable[[bool], Callable[[], bool]],
+    ) -> None:
+        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(False), build=build(True)) is False
+
+        assert calls.get_nowait() == ("setup", True, True)
+        assert calls.empty()
+
+    def test_the_job_fails_when_an_index_could_not_be_built(
+        self,
+        calls: SimpleQueue[tuple[str, bool, bool] | tuple[str]],
+        setup: Callable[[bool], Callable[[bool, bool], bool]],
+        build: Callable[[bool], Callable[[], bool]],
+    ) -> None:
+        assert ProxyExtrasDBManager.run_migration_job(True, True, setup=setup(True), build=build(False)) is False
+
+        assert (calls.get_nowait(), calls.get_nowait()) == (("setup", True, True), ("build",))
+        assert calls.empty()
+
+
+class TestMigrationJobOwnedDrift:
+    JOB_INDEXES: Final = (
+        "-- CreateIndex\n"
+        'CREATE INDEX "LiteLLM_SpendLogs_litellm_call_id_idx" ON "LiteLLM_SpendLogs"("litellm_call_id");\n'
+        "\n-- CreateIndex\n"
+        'CREATE INDEX "LiteLLM_SpendLogs_api_key_startTime_idx" ON "LiteLLM_SpendLogs"("api_key", "startTime");\n'
+    )
+
+    def test_a_plain_spend_logs_table_only_loses_the_migration_job_indexes(self) -> None:
+        filtered: Final = ProxyExtrasDBManager._filter_migration_job_owned_drift(
+            _PARTITIONED_DRIFT_SQL + self.JOB_INDEXES, partitioned=False
+        )
+        assert "LiteLLM_SpendLogs_litellm_call_id_idx" not in filtered
+        assert "LiteLLM_SpendLogs_api_key_startTime_idx" not in filtered
+        assert 'PRIMARY KEY ("request_id")' in filtered
+
+    def test_a_partitioned_spend_logs_table_also_loses_its_partitioning_artifacts(self) -> None:
+        filtered: Final = ProxyExtrasDBManager._filter_migration_job_owned_drift(
+            _PARTITIONED_DRIFT_SQL + self.JOB_INDEXES, partitioned=True
+        )
+        assert "LiteLLM_SpendLogs_litellm_call_id_idx" not in filtered
+        assert 'PRIMARY KEY ("request_id")' not in filtered
+        assert "LiteLLM_SpendLogs_legacy" not in filtered
+        assert 'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN     "updated_by" TEXT;' in filtered
