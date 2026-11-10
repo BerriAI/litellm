@@ -17830,7 +17830,7 @@
     },
     "c4ai-aya-vision-32b": {
         "litellm_provider": "cohere_chat",
-        "max_input_tokens": 16000,
+        "max_input_tokens": 16384,
         "max_output_tokens": 4000,
         "mode": "chat",
         "source": "https://docs.cohere.com/docs/aya-vision",
@@ -17838,7 +17838,7 @@
     },
     "command-a-reasoning-08-2025": {
         "litellm_provider": "cohere_chat",
-        "max_input_tokens": 256000,
+        "max_input_tokens": 288768,
         "max_output_tokens": 32000,
         "mode": "chat",
         "source": "https://docs.cohere.com/docs/command-a-reasoning",
@@ -17849,7 +17849,7 @@
     },
     "command-a-translate-08-2025": {
         "litellm_provider": "cohere_chat",
-        "max_input_tokens": 8000,
+        "max_input_tokens": 8992,
         "max_output_tokens": 8000,
         "mode": "chat",
         "source": "https://docs.cohere.com/docs/command-a-translate",
@@ -17879,7 +17879,7 @@
     "north-mini-code-1.0": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "cohere_chat",
-        "max_input_tokens": 256000,
+        "max_input_tokens": 436000,
         "max_output_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 0.0,
@@ -17891,7 +17891,7 @@
     "north-small-translate-1.0": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "cohere_chat",
-        "max_input_tokens": 16000,
+        "max_input_tokens": 32768,
         "max_output_tokens": 16000,
         "mode": "chat",
         "output_cost_per_token": 0.0,
@@ -17899,7 +17899,7 @@
     },
     "tiny-aya-earth": {
         "litellm_provider": "cohere_chat",
-        "max_input_tokens": 8000,
+        "max_input_tokens": 8192,
         "max_output_tokens": 8000,
         "mode": "chat",
         "source": "https://docs.cohere.com/docs/tiny-aya",
@@ -17908,7 +17908,7 @@
     },
     "tiny-aya-fire": {
         "litellm_provider": "cohere_chat",
-        "max_input_tokens": 8000,
+        "max_input_tokens": 8192,
         "max_output_tokens": 8000,
         "mode": "chat",
         "source": "https://docs.cohere.com/docs/tiny-aya",
@@ -17917,7 +17917,7 @@
     },
     "tiny-aya-global": {
         "litellm_provider": "cohere_chat",
-        "max_input_tokens": 8000,
+        "max_input_tokens": 8192,
         "max_output_tokens": 8000,
         "mode": "chat",
         "source": "https://docs.cohere.com/docs/tiny-aya",
@@ -17926,7 +17926,7 @@
     },
     "tiny-aya-water": {
         "litellm_provider": "cohere_chat",
-        "max_input_tokens": 8000,
+        "max_input_tokens": 8192,
         "max_output_tokens": 8000,
         "mode": "chat",
         "source": "https://docs.cohere.com/docs/tiny-aya",

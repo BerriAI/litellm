@@ -1,3 +1,4 @@
+import reprlib
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from types import MappingProxyType
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.rust_bridge.host.model_cost import VersionCached
 from litellm.types.llms.cohere import CohereV2ChatResponse
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -59,6 +61,23 @@ _COHERE_THINKING_BUDGET: Final = MappingProxyType(
 _NOTHING: Final[Mapping[str, object]] = MappingProxyType({})
 _RESPONSE_FORMAT_EXCLUSIVE_PARAMS: Final = ("tools", "documents")
 _MODELS_REJECTING_RESPONSE_FORMAT_BESIDE_TOOLS: Final = frozenset({"command-r-08-2024", "command-r-plus-08-2024"})
+_SCHEMA_KEYWORDS_COHERE_REJECTS: Final = frozenset(
+    {
+        "allOf",
+        "oneOf",
+        "not",
+        "minimum",
+        "maximum",
+        "multipleOf",
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "minProperties",
+        "maxProperties",
+    }
+)
+_PATTERN_SYNTAX_COHERE_REJECTS: Final = ("(?=", "(?!", "(?<=", "(?<!")
 
 
 def _cohere_model_id(model: str) -> str:
@@ -70,6 +89,7 @@ def _cohere_model_ids(model: str, base_model: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(name for name in names if isinstance(name, str)))
 
 
+@VersionCached
 def _any_model_supports(capability: Callable[..., bool], model_ids: tuple[str, ...]) -> bool:
     return any(capability(model=model_id, custom_llm_provider="cohere_chat") for model_id in model_ids)
 
@@ -170,26 +190,58 @@ def _beside_tools_on_rejecting_model(optional_params: Mapping[str, object], mode
     )
 
 
+def _subschemas(schema: Mapping[str, object]) -> Iterator[object]:
+    yield from (as_str_mapping(schema.get("properties")) or _NOTHING).values()
+    yield from as_object_list(schema.get("anyOf")) or ()
+    yield from as_object_list(schema.get("prefixItems")) or ()
+    yield schema.get("items")
+    yield schema.get("additionalProperties")
+
+
+def _pattern_cohere_rejects(pattern: object) -> bool:
+    if not isinstance(pattern, str):
+        return False
+    anchored: Final = pattern.startswith("^") or (pattern.endswith("$") and not pattern.endswith("\\$"))
+    return anchored or any(syntax in pattern for syntax in _PATTERN_SYNTAX_COHERE_REJECTS)
+
+
+def _schema_feature_cohere_rejects(schema: object) -> str | None:
+    fields: Final = as_str_mapping(schema)
+    if fields is None:
+        return None
+    keyword: Final = next((key for key in fields if key in _SCHEMA_KEYWORDS_COHERE_REJECTS), None)
+    if keyword is not None:
+        return f"'{keyword}'"
+    if _pattern_cohere_rejects(fields.get("pattern")):
+        return "a pattern with ^, $, or a lookaround"
+    nested: Final = (_schema_feature_cohere_rejects(subschema) for subschema in _subschemas(fields))
+    return next((feature for feature in nested if feature is not None), None)
+
+
 def _rejection(
     param: str, value: object, optional_params: Mapping[str, object], model_ids: tuple[str, ...]
 ) -> str | None:
     model: Final = model_ids[0]
     match param:
+        case "tool_choice" if not (optional_params.get("tools") or optional_params.get("functions")):
+            return None
         case "tool_choice" if not (isinstance(value, str) and value in _COHERE_TOOL_CHOICE_VALUES):
             return (
                 "Cohere's tool_choice takes only 'auto', 'none', 'required', "
-                f"or a function when it is the only tool, got {value!r}."
+                f"or a function when it is the only tool, got {reprlib.repr(value)}."
             )
         case "tool_choice" if not _any_model_supports(litellm.utils.supports_tool_choice, model_ids):
             return f"Cohere model {model} does not support tool_choice."
         case "reasoning_effort":
-            return f"Cohere does not support reasoning_effort={value!r}."
+            return f"Cohere does not support reasoning_effort={reprlib.repr(value)}."
         case "response_format" if (as_str_mapping(value) or _NOTHING).get("type") != "json_object":
             return "Cohere's response_format takes only 'text', 'json_object', or 'json_schema'."
-        case "response_format" if not _any_model_supports(litellm.supports_response_schema, model_ids):
-            return f"Cohere model {model} does not support response_format."
         case "response_format" if _beside_tools_on_rejecting_model(optional_params, model_ids):
             return f"Cohere model {model} does not take response_format beside tools or documents."
+        case "response_format" if (
+            feature := _schema_feature_cohere_rejects((as_str_mapping(value) or _NOTHING).get("json_schema"))
+        ) is not None:
+            return f"Cohere's response_format schema does not support {feature}."
         case _:
             return None
 
