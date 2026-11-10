@@ -130,7 +130,8 @@
     "chunks",
     "start",
     "end",
-    "first_chunk"
+    "first_chunk",
+    "stream_teardown"
   ],
   "stream_failure": [
     "logger",

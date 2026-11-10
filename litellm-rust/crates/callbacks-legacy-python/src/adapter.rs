@@ -329,7 +329,12 @@ impl LegacyLogging {
         logger.sync_success_for_async_call(py, &self.response, &self.start, &self.end)
     }
 
-    fn stream_success(&self, py: Python<'_>, stream: &DeliveredStream) -> PyResult<()> {
+    fn stream_success(
+        &self,
+        py: Python<'_>,
+        stream: &DeliveredStream,
+        teardown: bool,
+    ) -> PyResult<()> {
         let logger = self.logger()?;
         let billing = self.stream_billing().ok_or(HostError::MissingState)?;
         let billed = Streaming::Success.call(
@@ -346,6 +351,7 @@ impl LegacyLogging {
                 &self.start,
                 &self.end,
                 &stream.first_chunk,
+                teardown,
             ),
         );
         match billed {
@@ -667,7 +673,7 @@ impl LegacyLogging {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response.clone_ref(py));
         match &self.stream {
-            Some(stream) => self.stream_success(py, stream)?,
+            Some(stream) => self.stream_success(py, stream, false)?,
             None => self.dispatch_success(py)?,
         }
         Ok(HookStep::Ready(()))
@@ -737,8 +743,28 @@ impl LegacyLogging {
     }
 }
 
+impl LegacyLogging {
+    // A caller that goes away mid-stream cancels the call before it ends: Python's Messages
+    // stream iterator still bills the chunks it read, straight away rather than deferred.
+    fn bill_abandoned_stream(&mut self, py: Python<'_>) -> PyResult<()> {
+        if !self.asynchronous || self.end.is_some() {
+            return Ok(());
+        }
+        let Some(stream) = self.stream.take() else {
+            return Ok(());
+        };
+        self.end = Some(datetime(py, epoch_seconds())?);
+        self.stream_success(py, &stream, true)
+    }
+}
+
 impl PythonOwned for LegacyLogging {
     fn close(&mut self, py: Python<'_>) {
+        if self.logger.is_some()
+            && let Err(error) = self.bill_abandoned_stream(py)
+        {
+            error.write_unraisable(py, None);
+        }
         if let Some(logger) = self.logger.take()
             && let Err(error) = logger.restore_context(py)
         {
@@ -2183,6 +2209,45 @@ assert chunks[0] is first
 assert chunks[1] is last
 ",
             );
+        });
+    }
+
+    #[rstest]
+    #[case::cancelled_mid_stream(None, &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::after_success(Some(true), &["stamp_stream_head", "stream_opened", "stream_success", "restore"])]
+    #[case::after_failure(Some(false), &["stamp_stream_head", "stream_opened", "stream_failure", "restore"])]
+    fn closing_an_unfinished_stream_bills_its_delivered_chunks_once(
+        #[case] ended: Option<bool>,
+        #[case] expected: &[&str],
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(
+                py,
+                c"first = b'first'\nresponse = None\nfailure = ValueError('provider')\nhead = {}",
+            );
+            let mut logging = LegacyLogging {
+                operation: crate::LoggingOperation::Messages,
+                ..logged(py, &locals, true)
+            };
+            logging
+                .on_stream_open(py, &local(&locals, "head").unbind())
+                .unwrap();
+            logging
+                .on_stream_chunk(py, &local(&locals, "first").unbind())
+                .unwrap();
+            match ended {
+                Some(true) => drop(succeed(py, &locals, &mut logging)),
+                Some(false) => drop(fail(py, &locals, &mut logging)),
+                None => {}
+            }
+            litellm_host_python::PythonOwned::close(&mut logging, py);
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names, expected);
         });
     }
 

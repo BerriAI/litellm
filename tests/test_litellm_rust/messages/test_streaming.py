@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Final
@@ -71,6 +72,25 @@ async def test_stream_closed_early_logs_success_once(server: RecordingServer) ->
     assert len(await recorder.wait_for_async("async_log_success_event")) == 1
     with pytest.raises(StopAsyncIteration):
         await anext(stream)
+
+
+@pytest.mark.asyncio
+async def test_stream_cancelled_while_waiting_on_the_provider_logs_success_for_what_it_read(
+    server: RecordingServer,
+) -> None:
+    server.enqueue(ResponseSpec(body=None, events=MESSAGES_EVENTS, chunk_delay=1))
+    recorder: Final = RecordingLogger()
+
+    stream: Final = await call(server, stream=True, callbacks=[recorder])
+    assert isinstance(stream, AsyncIterator)
+    await anext(stream)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(anext(stream), timeout=0.2)
+
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert len(success) == 1
+    assert success[0].response.usage.prompt_tokens == MESSAGES_RESPONSE["usage"]["input_tokens"]
+    assert "log_failure_event" not in recorder.names
 
 
 async def _streamed_pre_call_input(server: RecordingServer) -> object:

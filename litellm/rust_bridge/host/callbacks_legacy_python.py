@@ -11,6 +11,7 @@ import contextvars
 import datetime
 import inspect
 import json
+import sys
 import traceback
 import uuid
 import weakref
@@ -457,6 +458,14 @@ def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     )
 
 
+def _cancelling(task: asyncio.Task[object]) -> bool:
+    return task.cancelling() > 0 if sys.version_info >= (3, 11) else True
+
+
+def _proxy_request(logger: LoggingSurface) -> object:
+    return logger.litellm_params.get("proxy_server_request")
+
+
 def stream_success(
     logger: Logging,
     url_route: str,
@@ -466,6 +475,7 @@ def stream_success(
     start: datetime.datetime,
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
+    stream_teardown: bool,
 ) -> None:
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
@@ -490,7 +500,7 @@ def stream_success(
         raw_bytes=chunks,
         end_time=end,
     )
-    if getattr(logger, "_on_deferred_stream_complete", None) is not None:
+    if not stream_teardown and getattr(logger, "_on_deferred_stream_complete", None) is not None:
         logger._deferred_stream_complete_args = (coroutine,)  # pyright: ignore[reportAttributeAccessIssue]  # the proxy's deferred stream release reads this slot
         return
     try:
@@ -499,6 +509,11 @@ def stream_success(
         from litellm.litellm_core_utils.litellm_logging import executor
 
         executor.submit(contextvars.copy_context().run, asyncio.run, coroutine)
+        return
+    cancelled: Final = asyncio.current_task()
+    if stream_teardown and cancelled is not None and _cancelling(cancelled) and _proxy_request(logger):
+        # the proxy's disconnect cleanup runs later in this task and stamps the 499 error_information this row carries
+        cancelled.add_done_callback(lambda _: enqueue_logging(coroutine))
         return
     enqueue_logging(coroutine)
 
