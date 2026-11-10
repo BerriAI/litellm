@@ -1,11 +1,10 @@
-use super::{HandleError, python};
+use super::{CACHE_HOST_MODULE, HandleError, python};
 use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope, ScopedCache};
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::Protocol,
 };
 use pyo3::{prelude::*, types::PyDict};
-const CACHE_HOST_MODULE: &str = "litellm.rust_bridge.host.cache";
 
 pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
 

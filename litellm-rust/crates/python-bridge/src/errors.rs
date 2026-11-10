@@ -29,6 +29,8 @@ const MESSAGES_UNSUPPORTED_PARAM: &str = "messages_unsupported_param";
 /// The phase label (`Connection` or `Read`) of a timed-out call, for Python's timeout text, or
 /// `Body` for a streamed body read that timed out after the head arrived.
 const MESSAGES_TIMEOUT: &str = "messages_timeout";
+// `(received, expected, reset)` of a streamed body the connection ended early.
+const MESSAGES_BODY_CUT: &str = "messages_body_cut";
 /// No credential reached the provider, which Python raises as `AuthenticationError`.
 const MESSAGES_MISSING_CREDENTIAL: &str = "messages_missing_credential";
 /// Python refuses the request only once its logger knows the resolved model and provider (the
@@ -133,6 +135,9 @@ pub(crate) fn route_failure(
                     (false, false) => "Read",
                 };
                 value.setattr(MESSAGES_TIMEOUT, phase)?;
+            }
+            if let Some(cut) = error.body_cut() {
+                value.setattr(MESSAGES_BODY_CUT, (cut.received, cut.expected, cut.reset))?;
             }
             if error.is_missing_credential() {
                 value.setattr(MESSAGES_MISSING_CREDENTIAL, true)?;

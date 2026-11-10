@@ -2,7 +2,7 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from functools import lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
@@ -1552,6 +1552,48 @@ def enforce_batch_limits_are_admin_only(
         detail={
             "error": f"Only proxy admins can set {changed} on a {entity}. "
             "It limits what the holder can do with batches, so the holder cannot raise it."
+        },
+    )
+
+
+VECTOR_STORE_INDEX_GRANTS_METADATA_KEY: Final = "allowed_vector_store_indexes"
+
+
+def _stored_vector_store_index_grants(existing_metadata: Mapping[str, object] | None) -> object:
+    if existing_metadata is None:
+        return None
+    return existing_metadata.get(VECTOR_STORE_INDEX_GRANTS_METADATA_KEY) or None
+
+
+def _requested_vector_store_index_grants(
+    data: BatchLimitRequest,
+    top_level_grants: Sequence[AllowedVectorStoreIndexItem] | None,
+    stored_grants: object,
+) -> object:
+    if top_level_grants is not None:
+        return [grant.model_dump() for grant in top_level_grants] or None
+    if "metadata" in data.model_fields_set:
+        return (data.metadata or EMPTY_MAPPING).get(VECTOR_STORE_INDEX_GRANTS_METADATA_KEY) or None
+    return stored_grants
+
+
+def enforce_vector_store_index_grants_are_admin_only(
+    data: BatchLimitRequest,
+    top_level_grants: Sequence[AllowedVectorStoreIndexItem] | None,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    entity: Literal["key", "team"],
+) -> None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored_grants: Final = _stored_vector_store_index_grants(existing_metadata)
+    if _requested_vector_store_index_grants(data, top_level_grants, stored_grants) == stored_grants:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": f"Only proxy admins can set {VECTOR_STORE_INDEX_GRANTS_METADATA_KEY} on a {entity}. "
+            "It grants read and write access to vector store indexes, so the holder cannot widen it."
         },
     )
 

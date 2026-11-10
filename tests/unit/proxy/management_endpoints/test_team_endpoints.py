@@ -9967,6 +9967,37 @@ async def test_delete_validated_team_rows_deletes_only_the_keys_its_rostered_mem
 
 
 @pytest.mark.asyncio
+async def test_delete_validated_team_rows_drops_the_committed_spend_of_the_teams_it_deleted(
+    monkeypatch,
+    disable_audit_logging_for_mocked_team,
+):
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(
+        redis=None, memory={"spend:committed:team:team-doomed": 7.0, "spend:committed:team:team-kept": 3.0}
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
+    team = LiteLLM_TeamTable(team_id="team-doomed", members_with_roles=[], metadata={}, model_max_budget={}, model_spend={})
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_teammembership.delete_many = AsyncMock()
+    mock_access_group_tx_cm = MagicMock()
+    mock_access_group_tx_cm.__aenter__ = AsyncMock(return_value=AsyncMock())
+    mock_access_group_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_access_group_tx_cm)
+    _wire_team_delete_tx(mock_prisma_client, locked_teams=(team,), team_keys=())
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")
+
+    await delete_validated_team_rows(
+        teams=(team,),
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="hashed-admin"),
+        litellm_changed_by=None,
+    )
+
+    assert spend.memory == {"spend:committed:team:team-kept": 3.0}
+
+
+@pytest.mark.asyncio
 async def test_delete_validated_teams_writes_the_deleted_audit_row_only_for_a_team_still_there_under_the_lock(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -13124,7 +13155,7 @@ def test_set_budget_reset_at_clears_when_budget_duration_null():
     data = UpdateTeamRequest(team_id="test-team", budget_duration=None)
     updated_kv = {"team_id": "test-team", "budget_duration": None}
 
-    _set_budget_reset_at(data, updated_kv)
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" in updated_kv
     assert updated_kv["budget_reset_at"] is None
@@ -13141,7 +13172,7 @@ def test_set_budget_reset_at_noop_when_budget_duration_not_sent():
     data = UpdateTeamRequest(team_id="test-team")
     updated_kv = {"team_id": "test-team"}
 
-    _set_budget_reset_at(data, updated_kv)
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" not in updated_kv
 
@@ -13157,10 +13188,39 @@ def test_set_budget_reset_at_sets_value_when_budget_duration_provided():
     data = UpdateTeamRequest(team_id="test-team", budget_duration="30d")
     updated_kv = {"team_id": "test-team", "budget_duration": "30d"}
 
-    _set_budget_reset_at(data, updated_kv)
+    _set_budget_reset_at(data, updated_kv, LiteLLM_TeamTable(team_id="test-team"))
 
     assert "budget_reset_at" in updated_kv
     assert updated_kv["budget_reset_at"] is not None
+
+
+@pytest.mark.parametrize(
+    ("stored_duration", "stored_reset_at", "moves_reset"),
+    [
+        ("30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ("30d", datetime(2020, 1, 1), False),
+        ("30d", datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ("7d", datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ("30d", None, True),
+    ],
+)
+def test_set_budget_reset_at_keeps_a_due_reset_when_the_duration_is_resent(
+    stored_duration: str, stored_reset_at: datetime | None, moves_reset: bool
+) -> None:
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    updated_kv: Final[dict[str, object]] = {"team_id": "test-team", "budget_duration": "30d"}
+
+    _set_budget_reset_at(
+        UpdateTeamRequest(team_id="test-team", budget_duration="30d"),
+        updated_kv,
+        LiteLLM_TeamTable(team_id="test-team", budget_duration=stored_duration, budget_reset_at=stored_reset_at),
+    )
+
+    reset_at: Final = updated_kv.get("budget_reset_at")
+    assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
+    assert ("budget_reset_at" in updated_kv) is moves_reset
 
 
 @pytest.mark.asyncio

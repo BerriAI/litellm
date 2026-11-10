@@ -19,6 +19,8 @@ model LiteLLM_BudgetTable {
   rpm_limit     BigInt?
   tpd_limit     BigInt?
   model_max_budget Json?
+  model_tpm_limit Json?
+  model_rpm_limit Json?
   budget_duration String?
   budget_reset_at DateTime?
   allowed_models String[] @default([]) // per-member model scope; empty = inherit team models
@@ -2051,6 +2053,11 @@ model LiteLLM_BackgroundInteractionSettlement {
 
   @@index([claimed_at], map: "idx_background_interaction_settlement_claimed_at")
   @@index([settled_at], map: "idx_background_interaction_settlement_settled_at")
+}
+
+model LiteLLM_BackgroundResponseSettlement {
+  response_id String   @id
+  settled_at  DateTime @default(now())
 }
 
 model LiteLLM_Lens {

@@ -464,7 +464,7 @@ def test_concurrent_burst_ends_each_stream_by_whether_its_provider_finished_it(g
         )
 
 
-_SPEND_LOG_INSERT: Final = b'INSERT INTO "public"."LiteLLM_SpendLogs"'
+_SPEND_LOG_INSERT: Final = b'"LiteLLM_SpendLogs" ('
 
 
 def _spend_statuses(database_url: str | None) -> Counter[tuple[str, str]]:
