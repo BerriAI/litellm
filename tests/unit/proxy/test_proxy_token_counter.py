@@ -2505,6 +2505,15 @@ async def test_utils_token_counter_counts_the_system_text_beside_a_system_part_i
             },
             id="anthropic_tool",
         ),
+        pytest.param(
+            {
+                "function": {
+                    "name": "get_weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
+            },
+            id="openai_tool_without_type",
+        ),
     ],
 )
 async def test_utils_token_counter_keeps_its_own_system_and_tools_next_to_google_contents(
