@@ -137,9 +137,12 @@ const cacheTokens = (row: ClientLog) => {
 };
 const billedGuardrailCost = (entry: z.infer<typeof guardrailEntrySchema>) =>
   entry.guardrail_cost_in_spend === false ? 0 : Math.max(entry.guardrail_cost ?? 0, 0);
+type GuardrailInformation = NonNullable<NonNullable<ClientLog["metadata"]>["guardrail_information"]>;
+const guardrailEntries = (information: GuardrailInformation) =>
+  Array.isArray(information) ? information : [information];
 const guardrailSpend = (row: ClientLog) => {
   const information = row.metadata?.guardrail_information;
-  const entries = information == null ? [] : Array.isArray(information) ? information : [information];
+  const entries = information == null ? [] : guardrailEntries(information);
   return Math.min(
     entries.reduce((total, entry) => total + billedGuardrailCost(entry), 0),
     Math.max(row.spend, 0),
