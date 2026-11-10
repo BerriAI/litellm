@@ -2555,3 +2555,31 @@ async def test_run_async_fallback_serves_a_target_the_rate_limit_check_admits() 
     )
     response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
     assert response.choices[0].message.content == "served"
+
+
+@pytest.mark.asyncio
+async def test_run_async_fallback_reserves_a_repeated_target_once() -> None:
+    checked: Final = []  # mutable-ok: records the targets the check saw
+
+    async def admit(*, model: str, request_kwargs: Mapping[str, object], ctx: object) -> bool:
+        checked.append(model)
+        return True
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": "http://127.0.0.1:9"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback", "fallback"]}],
+        num_retries=0,
+        fallback_rate_limit_check=admit,
+    )
+    with pytest.raises(Exception):  # noqa: B017  # the provider failure of the last attempt, any shape
+        await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+    assert checked == ["fallback"]

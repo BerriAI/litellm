@@ -5419,7 +5419,9 @@ class _Driver:
             if not await ctx.fallback_budget_allowed(model=target, request_kwargs=request):
                 self._walk.targets().record_skip(target, FallbackSkipReason.OVER_BUDGET)
                 return False
-            if not await ctx.fallback_rate_limit_allowed(model=target, request_kwargs=request):
+            if target not in self._walk.targets() and not await ctx.fallback_rate_limit_allowed(
+                model=target, request_kwargs=request
+            ):
                 self._walk.targets().record_skip(target, FallbackSkipReason.RATE_LIMITED)
                 return False
         except Exception as error:  # noqa: BLE001  # handed to the Rust call loop, which ends the chain

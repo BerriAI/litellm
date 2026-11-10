@@ -904,16 +904,16 @@ async def run_async_fallback(
                 original_model_group,
             )
             continue
+        attempt_key = fallback_attempt_key(mg)
+        if attempt_key is not None and attempt_key in attempted:
+            verbose_router_logger.info(
+                "Skipping fallback to model_group = %s, already attempted for this request",
+                mask_sensitive_structure(mg),
+            )
+            continue
         if not await _is_fallback_target_admitted(ctx, mg, original_model_group, kwargs, attempted=attempted):
             continue
-        attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:
-            if attempt_key in attempted:
-                verbose_router_logger.info(
-                    "Skipping fallback to model_group = %s, already attempted for this request",
-                    mask_sensitive_structure(mg),
-                )
-                continue
             attempted.record(attempt_key)
         try:
             # LOGGING
