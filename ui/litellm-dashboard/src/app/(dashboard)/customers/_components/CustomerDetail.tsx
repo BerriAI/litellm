@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
 import { Ban, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -43,16 +44,21 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
   );
   const usageQuery = useCustomerUsage(accessToken);
   const [editOpen, setEditOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const refresh = () => {
+    info.refetch();
+    queryClient.invalidateQueries({ queryKey: ["get", "/customer/list"] });
+  };
   const block = $api.useMutation("post", "/customer/block", {
     onSuccess: () => {
       toast.success(t("customerPortal.toasts.blocked"));
-      info.refetch();
+      refresh();
     },
   });
   const unblock = $api.useMutation("post", "/customer/update", {
     onSuccess: () => {
       toast.success(t("customerPortal.toasts.unblocked"));
-      info.refetch();
+      refresh();
     },
   });
 
@@ -131,9 +137,7 @@ export default function CustomerDetail({ customerId, onBack }: { customerId: str
       <Button variant="link" size="sm" className="h-auto p-0 text-xs text-muted-foreground" onClick={onBack}>
         {t("customerPortal.detail.back")}
       </Button>
-      {c && (
-        <EditCustomerDialog open={editOpen} onOpenChange={setEditOpen} customer={c} onSaved={() => info.refetch()} />
-      )}
+      {c && <EditCustomerDialog open={editOpen} onOpenChange={setEditOpen} customer={c} onSaved={refresh} />}
     </div>
   );
 }
