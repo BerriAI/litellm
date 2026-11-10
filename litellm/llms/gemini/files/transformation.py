@@ -25,6 +25,7 @@ from litellm.llms.base_llm.files.transformation import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
+    FileContentRequest,
     HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
@@ -51,6 +52,21 @@ class _GeminiFileMetadata(TypedDict, total=False):
 
 class _GeminiCreateFileResponse(TypedDict):
     file: ReadOnly[_GeminiFileMetadata]
+
+
+def gemini_file_name(file_id: str) -> str:
+    """
+    Normalize a file identifier into Gemini's `files/{id}` resource name.
+
+    Supports:
+    - `abc123`
+    - `files/abc123`
+    - `https://generativelanguage.googleapis.com/v1beta/files/abc123`
+    """
+    path: Final = urlparse(file_id).path.lstrip("/") if file_id.startswith(("http://", "https://")) else file_id
+    files_index: Final = path.find("files/")
+    bare_id: Final = (path[files_index:] if files_index != -1 else path).strip("/").removeprefix("files/")
+    return f"files/{encode_url_path_segment(bare_id, field_name='file_id')}"
 
 
 class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
@@ -246,32 +262,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         return url, {}
 
     def _normalize_gemini_file_id(self, file_id: str) -> str:
-        """
-        Normalize file identifier into `files/{id}` form.
-
-        Supports:
-        - `abc123`
-        - `files/abc123`
-        - `https://generativelanguage.googleapis.com/v1beta/files/abc123`
-        """
-        if file_id.startswith(("http://", "https://")):
-            parsed: Final = urlparse(file_id)
-            path: Final = parsed.path.lstrip("/")
-            files_index: Final = path.find("files/")
-            if files_index != -1:
-                normalized_file_id = path[files_index:]
-            else:
-                normalized_file_id = path
-        else:
-            normalized_file_id = file_id
-
-        normalized_file_id = normalized_file_id.strip("/")
-        if normalized_file_id.startswith("files/"):
-            normalized_file_id = normalized_file_id.removeprefix("files/")
-
-        encoded_file_id: Final = encode_url_path_segment(normalized_file_id, field_name="file_id")
-
-        return f"files/{encoded_file_id}"
+        return gemini_file_name(file_id)
 
     def transform_retrieve_file_response(
         self,
@@ -403,11 +394,16 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
     def transform_file_content_request(
         self,
-        file_content_request,
+        file_content_request: FileContentRequest,
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")
+        file_id: Final = file_content_request.get("file_id")
+        if file_id is None:
+            raise ValueError("file_id is required to download file content")
+        api_base: Final = self.get_api_base(litellm_params.get("api_base"))
+        url: Final = join_api_base(api_base, f"download/v1beta/{gemini_file_name(file_id)}:download")
+        return url, {"alt": "media"}
 
     def transform_file_content_response(
         self,
@@ -415,4 +411,4 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
-        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")
+        return HttpxBinaryResponseContent(response=raw_response)
