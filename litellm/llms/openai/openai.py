@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.custom_httpx.http_handler import outbound_proxy_of
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -456,7 +457,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 if isinstance(cached_client, OpenAI) or isinstance(cached_client, AsyncOpenAI):
                     return cached_client
             if is_async:
-                async_http_client: Final = OpenAIChatCompletion._get_async_http_client(shared_session=shared_session)
+                async_http_client: Final = OpenAIChatCompletion._get_async_http_client(
+                    shared_session=shared_session, outbound_proxy=outbound_proxy_of(litellm_params)
+                )
                 http_client: httpx.Client | httpx.AsyncClient | None = async_http_client
                 _new_client: OpenAI | AsyncOpenAI = (
                     AsyncOpenAI(
@@ -478,7 +481,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     )
                 )
             else:
-                sync_http_client: Final = OpenAIChatCompletion._get_sync_http_client()
+                sync_http_client: Final = OpenAIChatCompletion._get_sync_http_client(
+                    outbound_proxy=outbound_proxy_of(litellm_params)
+                )
                 http_client = sync_http_client
                 _new_client = (
                     OpenAI(

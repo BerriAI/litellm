@@ -649,6 +649,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=None,
         description="Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.",
     )
+    outbound_proxy: str | None = Field(
+        default=None,
+        description="Proxy this deployment's provider traffic egresses through: an http://, https://, socks5:// or socks5h:// URL, or 'direct' to bypass the HTTP_PROXY / HTTPS_PROXY / ALL_PROXY environment for this deployment only. Unset inherits the environment proxies.",
+    )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
     thought_signature_in_tool_call_id: Annotated[

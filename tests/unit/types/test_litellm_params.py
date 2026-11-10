@@ -73,6 +73,7 @@ CONNECTION_NAMES: Final = (
     "client",
     "shared_session",
     "ssl_verify",
+    "outbound_proxy",
     "request_timeout",
     "force_timeout",
     "stream_timeout",

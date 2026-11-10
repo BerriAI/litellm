@@ -21,7 +21,7 @@ from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.single_flight import SingleFlight, single_flight_lru_cache
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError, outbound_proxy_of
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIAsyncHTTPClient, OpenAIHTTPClient
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -943,9 +943,9 @@ class BaseAzureLLM(BaseOpenAILLM):
         }
         # init http client + SSL Verification settings
         if is_async is True:
-            azure_client_params["http_client"] = self._get_async_http_client()
+            azure_client_params["http_client"] = self._get_async_http_client(outbound_proxy=outbound_proxy_of(_lp))
         else:
-            azure_client_params["http_client"] = self._get_sync_http_client()
+            azure_client_params["http_client"] = self._get_sync_http_client(outbound_proxy=outbound_proxy_of(_lp))
 
         azure_client_params["max_retries"] = max_retries
         if timeout is not None:

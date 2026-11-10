@@ -36835,6 +36835,11 @@ export interface components {
             organization?: string | null;
             /** Otpm */
             otpm?: number | null;
+            /**
+             * Outbound Proxy
+             * @description Proxy this deployment's provider traffic egresses through: an http://, https://, socks5:// or socks5h:// URL, or 'direct' to bypass the HTTP_PROXY / HTTPS_PROXY / ALL_PROXY environment for this deployment only. Unset inherits the environment proxies.
+             */
+            outbound_proxy?: string | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */
@@ -53033,6 +53038,11 @@ export interface components {
             organization?: string | null;
             /** Otpm */
             otpm?: number | null;
+            /**
+             * Outbound Proxy
+             * @description Proxy this deployment's provider traffic egresses through: an http://, https://, socks5:// or socks5h:// URL, or 'direct' to bypass the HTTP_PROXY / HTTPS_PROXY / ALL_PROXY environment for this deployment only. Unset inherits the environment proxies.
+             */
+            outbound_proxy?: string | null;
             /** Output Cost Per Audio Per Second */
             output_cost_per_audio_per_second?: number | null;
             /** Output Cost Per Audio Token */

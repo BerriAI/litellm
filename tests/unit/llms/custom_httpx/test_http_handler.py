@@ -1,4 +1,5 @@
 import asyncio, importlib, json, time
+import importlib.util
 import gc
 import io
 import logging
@@ -33,7 +34,9 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     MaskedHTTPStatusError,
+    get_async_httpx_client,
     get_httpx_client,
+    resolve_outbound_proxy,
     get_shared_realtime_ssl_context,
     get_ssl_configuration,
     realtime_ssl_for_url,
@@ -1832,6 +1835,164 @@ async def test_force_ipv4_httpx_transport_honours_no_proxy(keepalive_server, mon
         await handler.close()
 
     assert response.text == "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_aiohttp_transport", [True, False])
+async def test_async_handler_outbound_proxy_routes_through_the_deployment_proxy(
+    forward_proxy_server, monkeypatch: pytest.MonkeyPatch, disable_aiohttp_transport: bool
+):
+    """A deployment's own proxy carries its traffic even when the process has no proxy env at all."""
+    proxy_url, seen_uris = forward_proxy_server
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", disable_aiohttp_transport)
+
+    handler = AsyncHTTPHandler(outbound_proxy=proxy_url)
+    try:
+        response = await handler.get(_PROXY_ONLY_UPSTREAM_URL)
+    finally:
+        await handler.close()
+
+    assert response.text == "via-proxy"
+    assert seen_uris == [_PROXY_ONLY_UPSTREAM_URL]
+
+
+@pytest.mark.asyncio
+async def test_async_handler_outbound_proxy_wins_over_proxy_env(
+    forward_proxy_server, monkeypatch: pytest.MonkeyPatch
+):
+    """HTTP_PROXY points at a dead host; only the deployment proxy can make this request succeed."""
+    proxy_url, seen_uris = forward_proxy_server
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+
+    handler = AsyncHTTPHandler(outbound_proxy=proxy_url)
+    try:
+        response = await handler.get(_PROXY_ONLY_UPSTREAM_URL)
+    finally:
+        await handler.close()
+
+    assert response.text == "via-proxy"
+    assert seen_uris == [_PROXY_ONLY_UPSTREAM_URL]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_aiohttp_transport", [True, False])
+async def test_async_handler_outbound_proxy_direct_bypasses_proxy_env(
+    keepalive_server, monkeypatch: pytest.MonkeyPatch, disable_aiohttp_transport: bool
+):
+    """'direct' lets one deployment skip a process-wide proxy that would otherwise swallow its traffic."""
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", disable_aiohttp_transport)
+
+    handler = AsyncHTTPHandler(outbound_proxy="direct")
+    try:
+        response = await handler.get(keepalive_server)
+    finally:
+        await handler.close()
+
+    assert response.text == "ok"
+
+
+def test_sync_handler_outbound_proxy_routes_through_the_deployment_proxy(
+    forward_proxy_server, monkeypatch: pytest.MonkeyPatch
+):
+    proxy_url, seen_uris = forward_proxy_server
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+
+    handler = HTTPHandler(outbound_proxy=proxy_url)
+    try:
+        response = handler.get(_PROXY_ONLY_UPSTREAM_URL)
+    finally:
+        handler.close()
+
+    assert response.text == "via-proxy"
+    assert seen_uris == [_PROXY_ONLY_UPSTREAM_URL]
+
+
+def test_sync_handler_outbound_proxy_direct_bypasses_proxy_env(keepalive_server, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+
+    handler = HTTPHandler(outbound_proxy="direct")
+    try:
+        response = handler.get(keepalive_server)
+    finally:
+        handler.close()
+
+    assert response.text == "ok"
+
+
+@pytest.mark.parametrize(
+    "outbound_proxy",
+    ["ftp://proxy.example:21", "proxy.example:3128", "", "   ", "socks4://proxy.example:1080"],
+)
+def test_outbound_proxy_rejects_unsupported_values(outbound_proxy: str):
+    with pytest.raises(ValueError, match="outbound_proxy"):
+        resolve_outbound_proxy(outbound_proxy)
+
+
+def test_outbound_proxy_passes_through_supported_values():
+    assert resolve_outbound_proxy(None) is None
+    assert resolve_outbound_proxy(" DIRECT ") == "direct"
+    assert resolve_outbound_proxy("http://proxy.example:3128") == "http://proxy.example:3128"
+    assert resolve_outbound_proxy("https://user:pw@proxy.example:443") == "https://user:pw@proxy.example:443"
+
+
+def test_outbound_proxy_socks_needs_socksio(monkeypatch: pytest.MonkeyPatch):
+    """A SOCKS URL without the optional httpx[socks] extra fails at construction, not at the first request."""
+    import importlib.util
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name, *args: None if name == "socksio" else real_find_spec(name, *args)
+    )
+
+    with pytest.raises(ValueError, match="socksio"):
+        AsyncHTTPHandler(outbound_proxy="socks5://proxy.example:1080")
+    with pytest.raises(ValueError, match="socksio"):
+        HTTPHandler(outbound_proxy="socks5h://proxy.example:1080")
+
+
+@pytest.mark.skipif(importlib.util.find_spec("socksio") is None, reason="httpx[socks] extra not installed")
+def test_outbound_proxy_socks_accepted_when_socksio_present():
+    assert resolve_outbound_proxy("socks5://proxy.example:1080") == "socks5://proxy.example:1080"
+    assert resolve_outbound_proxy("socks5h://proxy.example:1080") == "socks5h://proxy.example:1080"
+
+
+@pytest.mark.asyncio
+async def test_cached_async_clients_are_not_shared_across_outbound_proxies(monkeypatch: pytest.MonkeyPatch):
+    """Two deployments with different egress must never pick up each other's cached client."""
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    provider = httpxSpecialProvider.LoggingCallback
+
+    proxy_a = {"ssl_verify": None, "outbound_proxy": "http://proxy.a:3128"}
+    proxy_b = {"ssl_verify": None, "outbound_proxy": "http://proxy.b:3128"}
+
+    proxied = get_async_httpx_client(provider, params=proxy_a)
+    same_proxied = get_async_httpx_client(provider, params=dict(proxy_a))
+    other_proxied = get_async_httpx_client(provider, params=proxy_b)
+    inherited = get_async_httpx_client(provider, params={"ssl_verify": None, "outbound_proxy": None})
+    try:
+        assert proxied is same_proxied
+        assert proxied is not other_proxied
+        assert proxied is not inherited
+        assert proxied.outbound_proxy == "http://proxy.a:3128"
+        assert other_proxied.outbound_proxy == "http://proxy.b:3128"
+        assert inherited.outbound_proxy is None
+    finally:
+        for handler in (proxied, other_proxied, inherited):
+            await handler.close()
 
 
 @pytest.fixture
