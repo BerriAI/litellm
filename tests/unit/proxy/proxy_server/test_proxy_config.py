@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import ssl
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
@@ -34,6 +35,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import turn_on_json
+from litellm.constants import DEFAULT_SSL_CIPHERS
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
@@ -1947,6 +1949,10 @@ async def test_ProxyConfig_get_config_reads_secrets_without_rsa_key_exchange_in_
     tmp_path, monkeypatch, fips_mode: str, rsa_offered: bool
 ):
     """Secret reads during get_config run before enforce_fips_mode, so fips_mode already excludes RSA key exchange."""
+    default_cipher_list: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    default_cipher_list.set_ciphers(DEFAULT_SSL_CIPHERS)
+    if not any(cipher["kea"] == "kx-rsa" for cipher in default_cipher_list.get_ciphers()):
+        pytest.skip("this OpenSSL offers no RSA key exchange suite from DEFAULT_SSL_CIPHERS")
     config_file_path = _write_vault_backed_config(
         tmp_path, monkeypatch, TLS_RECORDING_CONFIG.format(fips_mode=fips_mode)
     )
