@@ -220,6 +220,70 @@ def test_muse_chat_completions_bridge_uses_the_native_responses_endpoint(respx_m
     assert response.usage.total_tokens == 9
 
 
+@pytest.mark.parametrize("surface", ["responses", "chat"])
+@pytest.mark.parametrize("model", MODELS)
+@pytest.mark.parametrize("choice", ["auto", "none", "required", {"type": "function", "name": "report_number"}])
+def test_muse_drop_params_preserves_disabled_tools_and_downgrades_forced_choices(
+    model: str, surface: str, choice: str | dict[str, str], respx_mock: respx.MockRouter
+) -> None:
+    tool: Final = {
+        "type": "function",
+        "name": "report_number",
+        "description": "Report the fixture number.",
+        "parameters": {"type": "object", "properties": {"number": {"type": "integer"}}, "required": ["number"]},
+    }
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response(model)))
+    if surface == "responses":
+        litellm.responses(
+            model=f"vertex_ai/meta/{model}",
+            input="Report number 7.",
+            tools=[tool],
+            tool_choice=choice,
+            vertex_project="unit-project",
+            drop_params=True,
+            num_retries=0,
+        )
+    else:
+        chat_tool: Final = {
+            "type": "function",
+            "function": {key: value for key, value in tool.items() if key != "type"},
+        }
+        chat_choice: Final = (
+            {"type": "function", "function": {"name": choice["name"]}} if isinstance(choice, dict) else choice
+        )
+        litellm.completion(
+            model=f"vertex_ai/meta/{model}",
+            messages=[{"role": "user", "content": "Report number 7."}],
+            tools=[chat_tool],
+            tool_choice=chat_choice,
+            vertex_project="unit-project",
+            drop_params=True,
+            num_retries=0,
+        )
+    body: Final = FIELDS.validate_json(route.calls.last.request.content)
+    wire_tool: Final = tool if surface == "responses" else {**tool, "strict": None}
+    assert body.get("tool_choice") == "auto"
+    assert body.get("tools", []) == ([] if choice == "none" else [wire_tool])
+
+
+@pytest.mark.parametrize("choice", ["none", "required", {"type": "function", "name": "report_number"}])
+@pytest.mark.parametrize("model", MODELS)
+def test_muse_rejects_unsupported_tool_choices_before_contacting_vertex(
+    model: str, choice: str | dict[str, str], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(ENDPOINT).mock(return_value=httpx.Response(200, json=_response(model)))
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"tool_choice.*auto"):
+        litellm.responses(
+            model=f"vertex_ai/meta/{model}",
+            input="Report number 7.",
+            tool_choice=choice,
+            vertex_project="unit-project",
+            drop_params=False,
+            num_retries=0,
+        )
+    assert not route.called
+
+
 def test_muse_accepts_nested_workload_identity_credentials(
     respx_mock: respx.MockRouter, mocker: MockerFixture, google_credentials: Mock
 ) -> None:

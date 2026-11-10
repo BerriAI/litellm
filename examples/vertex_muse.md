@@ -31,6 +31,15 @@ Requests are stateless. LiteLLM defaults to `store=False` and rejects
 `store=True`. Send the conversation context in `input` on each request instead
 of using `previous_response_id` or a stored conversation.
 
+Vertex Muse currently accepts only automatic tool selection. With `drop_params=True`,
+LiteLLM downgrades `required` and named tool choices to `auto`. This allows the model
+to return text instead of a tool call, so applications must still validate their
+expected output and handle a missing tool call. For `tool_choice="none"`, LiteLLM
+also removes the offered tools before sending `auto`, preserving the instruction
+that no tool may be called. This applies to Responses requests and the Chat
+Completions bridge. Without `drop_params`, unsupported choices raise an
+`UnsupportedParamsError` before contacting Vertex.
+
 The catalog includes Google's documented input limits and capabilities. Google
 does not list an output limit for Wonder or Spark on the linked model cards, so
 those limits remain unspecified. Ember's documented output limit is included.
