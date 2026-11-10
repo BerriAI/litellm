@@ -20,6 +20,7 @@ from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
 from litellm.constants import (
     BATCH_LINE_ITEMS_MAX_PART_BYTES,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
@@ -765,7 +766,7 @@ class CheckBatchCost:
         credentials: Final = self.llm_router.registry().credentials(model_id, form="with_provider") or {}
         _file_content = await afile_content(
             file_id=cast(str, raw_output_file_id),
-            **cast(FileContentCallOptions, credentials),
+            **cast(FileContentCallOptions, {**credentials, **stored_s3_bucket_kwargs(cast(str, raw_output_file_id))}),
         )
 
         content_bytes: Final = await _file_content_bytes(_file_content)

@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     UpdateKeyRequest,
     UpdateTeamRequest,
 )
+from litellm.proxy.auth.auth_utils import TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_MANAGED_TEAM_METADATA_KEY,
     SCIM_TEAM_DATA_METADATA_KEY,
@@ -97,6 +98,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "priority",
         "zguard_policy_id",
         "allowed_tools",
+        TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
         "allow_client_mock_response",
         "allow_client_message_redaction_opt_out",
         "allow_client_pricing_override",
