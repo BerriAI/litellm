@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -29,11 +29,13 @@ LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS: Final = 5 * 60
 LATEST_RELEASE_CACHE_KEY: Final = "latest_release_info"
 
 _RELEASE_BULLET_PATTERN: Final = re.compile(r"^\*\s+(?:([A-Za-z]+)(?:\([^)]*\))?!?:\s)?\S")
+_AREA_BULLET_PATTERN: Final = re.compile(r"^-\s+\*\*[^*]+\*\*\s+([A-Za-z]+)")
 _NEW_CONTRIBUTOR_PATTERN: Final = re.compile(r"^\*\s+@\S+ made their first contribution\b")
 _CHANGELOG_PAGE_PATTERN: Final = re.compile(rf"{re.escape(CHANGELOG_URL)}v(\d+)\.(\d+)\.(\d+)/")
 
 _Bucket: TypeAlias = Literal["new_features", "bug_fixes", "other_updates"]
 _PREFIX_BUCKETS: Final[Mapping[str, _Bucket]] = MappingProxyType({"feat": "new_features", "fix": "bug_fixes"})
+_VERB_BUCKETS: Final[Mapping[str, _Bucket]] = MappingProxyType({"added": "new_features", "fixed": "bug_fixes"})
 
 
 class LatestReleaseInfo(LiteLLMBaseModel):
@@ -97,6 +99,9 @@ def _default_release_check_enabled() -> bool:
 def _bucket_for(line: str) -> _Bucket | None:
     if _NEW_CONTRIBUTOR_PATTERN.match(line) is not None:
         return None
+    area_match: Final = _AREA_BULLET_PATTERN.match(line)
+    if area_match is not None:
+        return _VERB_BUCKETS.get(area_match.group(1).lower(), "other_updates")
     match: Final = _RELEASE_BULLET_PATTERN.match(line)
     if match is None:
         return None
@@ -105,7 +110,8 @@ def _bucket_for(line: str) -> _Bucket | None:
 
 
 def count_release_bullets(body: str) -> Mapping[_Bucket, int]:
-    """Bucket release-note bullets by conventional-commit type or ``other_updates``."""
+    """Bucket release-note bullets by conventional-commit type (``* fix(x): ...``) or by the verb after the area label
+    (``- **Area:** Fixed ...``), falling back to ``other_updates``."""
     return MappingProxyType(Counter(bucket for line in body.splitlines() if (bucket := _bucket_for(line)) is not None))
 
 
@@ -220,6 +226,12 @@ async def get_latest_release_info(
         return result
 
 
+async def refresh_latest_release_info(client: _AsyncGetClient, cache: InMemoryCache, fetch_lock: asyncio.Lock) -> None:
+    result: Final = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
+    if isinstance(result, LatestReleaseUnavailable):
+        verbose_proxy_logger.warning("LiteLLM: latest release info unavailable: %s", result.reason)
+
+
 @router.get(
     "/get/latest_release_info",
     tags=["UI Settings"],
@@ -227,6 +239,7 @@ async def get_latest_release_info(
     response_model=LatestReleaseInfo | None,
 )
 async def latest_release_info(
+    background_tasks: BackgroundTasks,
     client: Annotated[_AsyncGetClient, Depends(_default_client)],
     cache: Annotated[InMemoryCache, Depends(_default_cache)],
     fetch_lock: Annotated[asyncio.Lock, Depends(_default_fetch_lock)],
@@ -235,13 +248,16 @@ async def latest_release_info(
     """
     Newest stable release on the LiteLLM changelog, linked to its changelog page, with the PR count of its whole
     minor line (e.g. v1.105.0 + v1.105.1) from GitHub split into new features, bug fixes and other updates.
-    Returns null when the changelog or GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+    Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, returns
+    null and fetches after the response is sent, so a later call returns the release. It also returns null while the
+    changelog or GitHub can't be reached, so the dashboard upgrade notice simply doesn't render.
     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
     """
     if not release_check_enabled:
         return None
-    result: Final = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
-    if isinstance(result, LatestReleaseUnavailable):
-        verbose_proxy_logger.warning("LiteLLM: latest release info unavailable: %s", result.reason)
-        return None
-    return result
+    cached: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
+    if isinstance(cached, LatestReleaseInfo):
+        return cached
+    if not isinstance(cached, LatestReleaseUnavailable) and not fetch_lock.locked():
+        background_tasks.add_task(refresh_latest_release_info, client, cache, fetch_lock)
+    return None
