@@ -1,14 +1,16 @@
-from dataclasses import replace
 import json
+from collections.abc import Mapping
+from dataclasses import replace
 from typing import Final
 from unittest.mock import ANY
 
 import pytest
 from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
-from integration.translation.case import TranslationTestCase
-from integration.translation.responses.bases.anthropic import CLAUDE_SONNET_5_5_TEST_CASE
-from integration.translation.runner import assert_translation
+from integration.translation.case import RejectionTestCase, TranslationTestCase
+from integration.translation.responses.bases.anthropic import CLAUDE_HAIKU_5_5_TEST_CASE, CLAUDE_SONNET_5_5_TEST_CASE
+from integration.translation.runner import assert_rejection, assert_translation
+from pydantic import JsonValue
 
 CLAUDE_SONNET_5_5_CACHE_HIT_THINKING_SIGNATURE_0: Final = (
     "CAQSowkKEAgSGAI4AUIIdGhpbmtpbmcSDOwQCAqgczGjZGBQDhoMT4bVPdH6VMFI48MwIjC029tj1Uerfhj93na2igkejc43fgJVSxspenJp"
@@ -206,3 +208,103 @@ def test_responses_prompt_cache_hit_anthropic(
     case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
     assert_translation(case, gateway, provider)
+
+
+def unsupported_params_error(fields: str, *, bridge: bool) -> Mapping[str, JsonValue]:
+    bridge_sentence: Final = "The Responses API to chat completions bridge cannot translate them. " if bridge else ""
+    return {
+        "error": {
+            "message": f"litellm.UnsupportedParamsError: anthropic does not support parameters: {fields}, for "
+            f"model=claude-haiku-5-5. {bridge_sentence}To drop these, set `litellm.drop_params=True` or for proxy:\n\n"
+            "`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send "
+            f"allowed_openai_params={fields} in your request.\n\nLiteLLM: model group 'anthropic/claude-haiku-5-5' "
+            "failed with the error above. No fallback was attempted.",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "400",
+        }
+    }
+
+
+PROMPT_CACHE_OPTIONS: Final[Mapping[str, JsonValue]] = {
+    "mode": "explicit",
+    "ttl": "30m",
+    "comparison_response_id": "resp_synthetic_prior_01",
+    "prewarm": True,
+}
+
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_KEY_UNSUPPORTED_TEST_CASE: Final = RejectionTestCase(
+    scenario="prompt_cache_key_unsupported",
+    litellm_endpoint=CLAUDE_HAIKU_5_5_TEST_CASE.litellm_endpoint,
+    litellm_request={**CLAUDE_HAIKU_5_5_TEST_CASE.litellm_request, "prompt_cache_key": "synthetic-cache-key"},
+    expected_litellm_status_code=400,
+    expected_litellm_response=unsupported_params_error("['prompt_cache_key']", bridge=False),
+)
+
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_KEY_DROPPED_TEST_CASE: Final = replace(
+    CLAUDE_HAIKU_5_5_TEST_CASE,
+    scenario="prompt_cache_key_dropped",
+    litellm_request={
+        **CLAUDE_HAIKU_5_5_TEST_CASE.litellm_request,
+        "prompt_cache_key": "synthetic-cache-key",
+        "drop_params": True,
+    },
+)
+
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_RETENTION_UNSUPPORTED_TEST_CASE: Final = RejectionTestCase(
+    scenario="prompt_cache_retention_unsupported",
+    litellm_endpoint=CLAUDE_HAIKU_5_5_TEST_CASE.litellm_endpoint,
+    litellm_request={**CLAUDE_HAIKU_5_5_TEST_CASE.litellm_request, "prompt_cache_retention": "24h"},
+    expected_litellm_status_code=400,
+    expected_litellm_response=unsupported_params_error("['prompt_cache_retention']", bridge=False),
+)
+
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_RETENTION_DROPPED_TEST_CASE: Final = replace(
+    CLAUDE_HAIKU_5_5_TEST_CASE,
+    scenario="prompt_cache_retention_dropped",
+    litellm_request={
+        **CLAUDE_HAIKU_5_5_TEST_CASE.litellm_request,
+        "prompt_cache_retention": "24h",
+        "drop_params": True,
+    },
+)
+
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_OPTIONS_UNSUPPORTED_TEST_CASE: Final = RejectionTestCase(
+    scenario="prompt_cache_options_unsupported",
+    litellm_endpoint=CLAUDE_HAIKU_5_5_TEST_CASE.litellm_endpoint,
+    litellm_request={**CLAUDE_HAIKU_5_5_TEST_CASE.litellm_request, "prompt_cache_options": PROMPT_CACHE_OPTIONS},
+    expected_litellm_status_code=400,
+    expected_litellm_response=unsupported_params_error("['prompt_cache_options']", bridge=True),
+)
+
+CLAUDE_HAIKU_5_5_PROMPT_CACHE_OPTIONS_DROPPED_TEST_CASE: Final = replace(
+    CLAUDE_HAIKU_5_5_TEST_CASE,
+    scenario="prompt_cache_options_dropped",
+    litellm_request={
+        **CLAUDE_HAIKU_5_5_TEST_CASE.litellm_request,
+        "prompt_cache_options": PROMPT_CACHE_OPTIONS,
+        "drop_params": True,
+    },
+)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        CLAUDE_HAIKU_5_5_PROMPT_CACHE_KEY_UNSUPPORTED_TEST_CASE,
+        CLAUDE_HAIKU_5_5_PROMPT_CACHE_KEY_DROPPED_TEST_CASE,
+        CLAUDE_HAIKU_5_5_PROMPT_CACHE_RETENTION_UNSUPPORTED_TEST_CASE,
+        CLAUDE_HAIKU_5_5_PROMPT_CACHE_RETENTION_DROPPED_TEST_CASE,
+        CLAUDE_HAIKU_5_5_PROMPT_CACHE_OPTIONS_UNSUPPORTED_TEST_CASE,
+        CLAUDE_HAIKU_5_5_PROMPT_CACHE_OPTIONS_DROPPED_TEST_CASE,
+    ],
+    ids=lambda case: case.id,
+)
+def test_responses_prompt_cache_params_anthropic(
+    case: TranslationTestCase | RejectionTestCase, gateway: Gateway, provider: SharedProvider
+) -> None:
+    match case:
+        case RejectionTestCase():
+            assert_rejection(case, gateway, provider)
+        case TranslationTestCase():
+            assert_translation(case, gateway, provider)
