@@ -112,6 +112,7 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
                 instructions=responses_api_request.get("instructions"),
                 request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                request_input=request_input,
             )
 
         acompletion_args: Final = {}

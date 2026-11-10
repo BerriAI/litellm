@@ -787,3 +787,35 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     tool_message: Final = result["messages"][2]
     assert json.loads(assistant_message["tool_calls"][0]["function"]["arguments"]) == function_arguments
     assert json.loads(tool_message["content"]) == function_output
+
+
+@pytest.mark.parametrize(
+    ("route_fills", "expected"),
+    (
+        (True, [("user", "What is 2+2?"), ("assistant", "Four."), ("user", ""), ("assistant", "Eight.")]),
+        (False, [("user", "What is 2+2?"), ("assistant", "Four."), ("assistant", "Eight.")]),
+    ),
+    ids=("route_fills_empty_user_turns", "route_drops_them"),
+)
+@pytest.mark.asyncio
+async def test_a_stored_follow_up_whose_lone_user_item_had_no_content_replays_its_empty_user_turn(
+    route_fills: bool, expected: list[tuple[object, object]]
+) -> None:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-empty-turn", "What is 2+2?", "Four.")
+    follow_up: Final = {
+        **_spend_log("chatcmpl-follow-up", "session-empty-turn", "", "Eight."),
+        "proxy_server_request": {"input": [{"role": "user", "content": None}], "model": "claude-bridge"},
+    }
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+        return_value=[first_turn, follow_up],
+    ):
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-follow-up",
+            route_fills_empty_user_turns=lambda: route_fills,
+        )
+
+    assert [(message.get("role"), message.get("content")) for message in result["messages"]] == expected

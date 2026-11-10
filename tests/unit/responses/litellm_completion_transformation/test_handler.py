@@ -14,6 +14,7 @@ kwargs lack the flag and these tests fail.
 
 import json
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -223,3 +224,46 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     )
     assert isinstance(response, ResponsesAPIResponse)
     assert [item.type for item in response.output] == ["message"]
+
+
+class _StoredSession:
+    def __init__(self, rows: tuple[Mapping[str, object], ...]) -> None:
+        self.rows: Final = rows
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
+        return [dict(row) for row in self.rows]
+
+
+_STORED_FIRST_TURN: Final = {
+    "request_id": "chatcmpl-turn-one",
+    "call_type": "aresponses",
+    "session_id": "turn-one-session",
+    "proxy_server_request": {"input": "My favorite number is 7.", "model": "claude-opus-5-5"},
+    "response": {
+        "id": "chatcmpl-turn-one",
+        "object": "chat.completion",
+        "created": 1748575031,
+        "model": "claude-opus-5-5",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "Noted."}, "finish_reason": "stop"}],
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_bridged_follow_up_with_a_lone_user_item_without_content_ends_on_a_user_turn():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredSession((_STORED_FIRST_TURN,)))):
+        await litellm.aresponses(
+            model="azure_ai/claude-opus-5-5",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input=[{"role": "user", "content": None}],
+            previous_response_id="chatcmpl-turn-one",
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert [message["role"] for message in provider.request_body["messages"]] == ["user", "assistant", "user"]

@@ -5877,6 +5877,7 @@ def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history
             litellm_completion_request=chat_request,
             instructions=instructions,
             session_lookup=session_lookup,
+            request_input=cast(ResponseInputParam, [empty_user_item]),
         )
     )
 
@@ -5885,6 +5886,29 @@ def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history
         ("assistant", "Four."),
         ("user", ""),
     ]
+
+
+def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is_still_refused() -> None:
+    async def no_stored_turns(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(messages=[], litellm_session_id=None)
+
+    chat_request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="bedrock/us.anthropic.claude-opus-5-5",
+        input=cast(ResponseInputParam, [_NULL_USER_ITEM]),
+        responses_api_request={"previous_response_id": "resp_unknown"},
+        custom_llm_provider="bedrock",
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="Unable to create messages"):
+        asyncio.run(
+            LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                previous_response_id="resp_unknown",
+                litellm_completion_request=chat_request,
+                instructions=None,
+                session_lookup=no_stored_turns,
+                request_input=cast(ResponseInputParam, [_NULL_USER_ITEM]),
+            )
+        )
 
 
 def test_a_user_input_item_without_content_between_function_calls_keeps_them_in_one_turn() -> None:

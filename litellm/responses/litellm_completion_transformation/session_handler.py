@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
@@ -52,6 +52,7 @@ class ResponsesSessionHandler:
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
         item_cache_control: bool = False,
+        route_fills_empty_user_turns: Callable[[], bool] | None = None,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -88,6 +89,7 @@ class ResponsesSessionHandler:
                     proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
                     item_cache_control=item_cache_control,
+                    route_fills_empty_user_turns=route_fills_empty_user_turns,
                 )
             )
 
@@ -120,12 +122,14 @@ class ResponsesSessionHandler:
             | Message
         ],
         item_cache_control: bool = False,
+        route_fills_empty_user_turns: Callable[[], bool] | None = None,
     ):
         """
         Extend the chat completion message history with the spend log payload
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
             LiteLLMCompletionResponsesConfig,
+            restored_empty_user_turn,
         )
 
         response_input_param: str | ResponseInputParam | None = None
@@ -154,6 +158,15 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                 )
             )
+            if route_fills_empty_user_turns is not None:
+                chat_completion_message_history.extend(
+                    restored_empty_user_turn(
+                        response_input_param,
+                        chat_completion_message_history,
+                        item_cache_control,
+                        route_fills_empty_user_turns,
+                    )
+                )
 
         ############################################################
         # Add Output messages for this Spend Log

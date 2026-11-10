@@ -338,20 +338,24 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     )
 
 
-def _dropped_final_user_turn(
-    input_items: str | ResponseInputParam, messages: Sequence[object], continues_session: bool
-) -> bool:
-    if isinstance(input_items, str) or not input_items or message_field(input_items[-1], "role") != "user":
-        return False
-    last_role: Final = message_field(messages[-1], "role") if messages else None
-    return last_role == "assistant" or (continues_session and last_role in (None, "system", "developer"))
-
-
 def _empty_user_turn(last_input_item: object) -> GenericChatCompletionMessage:
     cache_control: Final = _input_item_cache_control(as_str_mapping(last_input_item) or {})
     if cache_control is None:
         return GenericChatCompletionMessage(role="user", content="")
     return GenericChatCompletionMessage(role="user", content="", cache_control=cache_control)
+
+
+def restored_empty_user_turn(
+    input_items: str | ResponseInputParam,
+    messages: Sequence[object],
+    keeps_cache_mark: bool,
+    route_fills_empty_user_turns: Callable[[], bool],
+) -> tuple[GenericChatCompletionMessage, ...]:
+    if isinstance(input_items, str) or not input_items or message_field(input_items[-1], "role") != "user":
+        return ()
+    if not messages or message_field(messages[-1], "role") != "assistant" or not route_fills_empty_user_turns():
+        return ()
+    return (_empty_user_turn(input_items[-1] if keeps_cache_mark else None),)
 
 
 def _target_fills_empty_user_turns(model: str, custom_llm_provider: str | None, base_model: object) -> bool:
@@ -1003,15 +1007,8 @@ class LiteLLMCompletionResponsesConfig:
                 replay_reasoning=replay_reasoning,
             )
         )
-        request_params: Final = cast(Mapping[str, object], responses_api_request)  # cast-ok: only read through .get
-        if (
-            route_fills_empty_user_turns is not None
-            and _dropped_final_user_turn(
-                input, messages, continues_session=bool(request_params.get("previous_response_id"))
-            )
-            and route_fills_empty_user_turns()
-        ):
-            messages.append(_empty_user_turn(input[-1]))
+        if route_fills_empty_user_turns is not None:
+            messages.extend(restored_empty_user_turn(input, messages, item_cache_control, route_fills_empty_user_turns))
 
         return messages
 
@@ -1035,6 +1032,7 @@ class LiteLLMCompletionResponsesConfig:
         instructions: str | None,
         session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
         request_kwargs: Mapping[str, object] = MappingProxyType({}),
+        request_input: str | ResponseInputParam | None = None,
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -1046,9 +1044,13 @@ class LiteLLMCompletionResponsesConfig:
         keeps_item_marks: Final = _target_keeps_item_marks(
             model, provider, drops_unsupported_params(request_kwargs.get("drop_params"))
         )
+        route_fills_empty_user_turns: Final = partial(
+            _target_fills_empty_user_turns, model, provider, request_kwargs.get("base_model")
+        )
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
+            route_fills_empty_user_turns=None if request_input is None else route_fills_empty_user_turns,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -1096,9 +1098,19 @@ class LiteLLMCompletionResponsesConfig:
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools: Final = litellm_completion_request.get("tools") or []
-        combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+        paired_messages: Final = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
             messages=combined_messages, tools=tools
         )
+        combined_messages = [
+            *paired_messages,
+            *(
+                ()
+                if request_input is None
+                else restored_empty_user_turn(
+                    request_input, paired_messages, keeps_item_marks, route_fills_empty_user_turns
+                )
+            ),
+        ]
 
         # Safety check: Ensure we don't end up with empty messages
         # This can happen when using previous_response_id without a database (e.g., in tests)
