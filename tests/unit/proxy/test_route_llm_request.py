@@ -3225,6 +3225,10 @@ async def test_route_request_sends_a_bedrock_model_id_missing_from_the_config_to
             id="guardrail-named-model",
         ),
         pytest.param({"endpoint": f"model/{_BEDROCK_MODEL_ID}/converse/extra"}, id="segment-after-the-action"),
+        pytest.param(
+            {"model": "application-inference-profile/abc123", "endpoint": "model/application-inference-profile/abc123/converse"},
+            id="slash-in-an-id-that-is-not-an-arn",
+        ),
     ],
 )
 @pytest.mark.asyncio

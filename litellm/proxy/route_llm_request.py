@@ -141,6 +141,7 @@ def _may_call_bedrock_without_a_deployment(route_type: str, data: Mapping[str, o
         and data.get("custom_llm_provider") == "bedrock"
         and isinstance(endpoint, str)
         and isinstance(model, str)
+        and ("/" not in model or model.startswith("arn:"))
         and endpoint in frozenset(f"model/{model}/{action}" for action in _BEDROCK_MODEL_ACTIONS)
         and _PLAIN_BEDROCK_ENDPOINT.fullmatch(endpoint) is not None
         and not {".", ".."}.intersection(endpoint.split("/"))
