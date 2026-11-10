@@ -259,3 +259,44 @@ async def test_claude_count_request_counts_the_empty_user_turn_a_follow_up_sends
         ("assistant", "Four."),
         ("user", ""),
     ]
+
+
+_APPLICATION_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc"
+_ANSWERED_THEN_EMPTY: Final[list[JsonValue]] = [
+    {"role": "user", "content": "What is 2+2?"},
+    {"role": "assistant", "content": "Four."},
+    {"role": "user", "content": None},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "responses_request",
+    (
+        {"model": _APPLICATION_PROFILE_ARN, "input": _ANSWERED_THEN_EMPTY},
+        {"model": _APPLICATION_PROFILE_ARN, "previous_response_id": "resp_stored", "input": [_ANSWERED_THEN_EMPTY[-1]]},
+    ),
+    ids=("in_request", "follow_up"),
+)
+@pytest.mark.parametrize(
+    ("base_model", "fills"), (("anthropic.claude-opus-5-5", True), (None, False)), ids=("base_model", "no_base_model")
+)
+async def test_converse_count_request_reads_an_arn_deployment_model_from_base_model_like_inference(
+    responses_request: dict[str, JsonValue], base_model: str | None, fills: bool
+) -> None:
+    request: Final = await chat_count_request(
+        model=_APPLICATION_PROFILE_ARN,
+        custom_llm_provider="bedrock",
+        api_base=None,
+        responses_request=responses_request,
+        policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+        session_lookup=_a_stored_question_and_answer,
+        base_model=base_model,
+    )
+
+    assert isinstance(request, ChatCountRequest)
+    assert [(message.get("role"), message.get("content")) for message in request.messages] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        *((("user", ""),) if fills else ()),
+    ]

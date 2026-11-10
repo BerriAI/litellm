@@ -181,6 +181,7 @@ from .tool_search import (
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
+    chat_config_builds_anthropic_request,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
@@ -273,6 +274,8 @@ if TYPE_CHECKING:
     from openai.types.responses.response_apply_patch_tool_call import (
         ResponseApplyPatchToolCall,
     )
+
+    from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE: Final = InMemoryCache()
@@ -810,14 +813,22 @@ def restored_empty_user_turn(
     return (_empty_user_turn(input_items[-1] if keeps_cache_mark else None, text),)
 
 
-def _target_fills_empty_user_turns(model: str, custom_llm_provider: str | None, base_model: object) -> bool:
+def _resolved_chat_config(model: str, custom_llm_provider: str | None) -> "BaseConfig | None":
+    try:
+        return provider_chat_config(model, custom_llm_provider)
+    except litellm.BadRequestError:
+        return None
+
+
+def target_fills_empty_user_turns(model: str, custom_llm_provider: str | None, base_model: object) -> bool:
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
     from litellm.llms.bedrock.common_utils import bedrock_converse_rejects_assistant_prefill
     from litellm.utils import is_explicitly_disabled_factory
 
-    if isinstance(provider_chat_config(model, custom_llm_provider), AmazonConverseConfig):
+    chat_config: Final = _resolved_chat_config(model, custom_llm_provider)
+    if isinstance(chat_config, AmazonConverseConfig):
         return bedrock_converse_rejects_assistant_prefill(model, base_model if isinstance(base_model, str) else None)
-    return provider_builds_anthropic_request(model, custom_llm_provider) and is_explicitly_disabled_factory(
+    return chat_config_builds_anthropic_request(chat_config) and is_explicitly_disabled_factory(
         model, custom_llm_provider, "supports_assistant_prefill"
     )
 
@@ -1317,7 +1328,7 @@ class LiteLLMCompletionResponsesConfig:
             only_since_compaction=not native_compaction,
             caller_input=numbered_input,
             route_fills_empty_user_turns=partial(
-                _target_fills_empty_user_turns, model, custom_llm_provider, request_kwargs.get("base_model")
+                target_fills_empty_user_turns, model, custom_llm_provider, request_kwargs.get("base_model")
             ),
         )
         malformed_field_error: Final = (
@@ -1537,7 +1548,7 @@ class LiteLLMCompletionResponsesConfig:
             routed_model_info(request_kwargs.get("model_info")),
         )
         route_fills_empty_user_turns: Final = partial(
-            _target_fills_empty_user_turns, model, provider, request_kwargs.get("base_model")
+            target_fills_empty_user_turns, model, provider, request_kwargs.get("base_model")
         )
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
@@ -1545,7 +1556,7 @@ class LiteLLMCompletionResponsesConfig:
             client_response_ids=previous_response_client_ids,
             tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
             stored_turns=stored_turns,
-            route_fills_empty_user_turns=None if request_input is None else route_fills_empty_user_turns,
+            replays_empty_user_turns=request_input is not None,
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)
@@ -1565,20 +1576,6 @@ class LiteLLMCompletionResponsesConfig:
             if any(holds_tool_search_use(message) for message in stored_messages)
             else stored_messages
         )
-        session_messages: Final = (
-            _replayed_messages_for_cache_points(
-                replayed_messages,
-                _OBJECT_LIST_ADAPTER.validate_python(_messages),
-                _item_mark_rules(
-                    model,
-                    provider,
-                    _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or []),
-                    request_kwargs,
-                ),
-            )
-            if keeps_item_marks
-            else replayed_messages
-        )
         instructions_end: Final = 1 if instructions else 0
         carried_instructions: Final = None if instructions else chat_completion_session.get("instructions")
         leading_system_messages: Final = (
@@ -1597,24 +1594,42 @@ class LiteLLMCompletionResponsesConfig:
             if input_replaces_history
             else _messages[instructions_end:]
         )
-        combined_messages = [*leading_system_messages, *session_messages, *new_messages]
+        mark_rules: Final = _item_mark_rules(
+            model, provider, _OBJECT_LIST_ADAPTER.validate_python(request_fields.get("tools") or []), request_kwargs
+        )
+        messages_before_restore: Final = _OBJECT_LIST_ADAPTER.validate_python(
+            (*leading_system_messages, *replayed_messages, *new_messages)
+        )
+        restored_turn: Final = (
+            ()
+            if request_input is None
+            else tuple(
+                map(
+                    mark_rules.checked,
+                    restored_empty_user_turn(
+                        request_input,
+                        messages_before_restore,
+                        keeps_item_marks,
+                        route_fills_empty_user_turns,
+                    ),
+                )
+            )
+        )
+        session_messages: Final = (
+            _replayed_messages_for_cache_points(
+                replayed_messages, (*_OBJECT_LIST_ADAPTER.validate_python(_messages), *restored_turn), mark_rules
+            )
+            if keeps_item_marks
+            else replayed_messages
+        )
+        combined_messages = [*leading_system_messages, *session_messages, *new_messages, *restored_turn]
 
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools: Final = _OBJECT_LIST_ADAPTER.validate_python(litellm_completion_request.get("tools") or [])
-        paired_messages: Final = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+        combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
             messages=combined_messages, tools=tools
         )
-        combined_messages = [
-            *paired_messages,
-            *(
-                ()
-                if request_input is None
-                else restored_empty_user_turn(
-                    request_input, paired_messages, keeps_item_marks, route_fills_empty_user_turns
-                )
-            ),
-        ]
 
         # Safety check: Ensure we don't end up with empty messages
         # This can happen when using previous_response_id without a database (e.g., in tests)

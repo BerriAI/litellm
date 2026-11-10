@@ -6014,7 +6014,9 @@ _QUESTION_ITEM: Final = {"role": "user", "content": "What is 2+2?"}
 _ANSWER_ITEM: Final = {"role": "assistant", "content": "Four."}
 
 
-def _bridged_turns(model: str, provider: str, items: Sequence[Mapping[str, object]]) -> list[tuple[object, object]]:
+def _bridged_turns(
+    model: str, provider: str | None, items: Sequence[Mapping[str, object]]
+) -> list[tuple[object, object]]:
     result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model=model,
         input=cast(ResponseInputParam, list(items)),
@@ -6086,6 +6088,13 @@ def test_a_final_user_input_item_without_content_stays_dropped_on_routes_that_ne
     model: str, provider: str
 ) -> None:
     assert _bridged_turns(model, provider, (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM)) == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+    ]
+
+
+def test_a_final_user_input_item_without_content_stays_dropped_when_no_provider_resolves_the_model() -> None:
+    assert _bridged_turns("my-batch-alias", None, (_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM)) == [
         ("user", "What is 2+2?"),
         ("assistant", "Four."),
     ]
@@ -6490,10 +6499,11 @@ _EPHEMERAL: Final = {"type": "ephemeral"}
 
 def _replayed_messages_from(
     turns: Sequence[Mapping[str, object]],
-    current: Mapping[str, object],
+    current: Mapping[str, object] | None,
     *,
     model: str = _CLAUDE_ON_BEDROCK,
     tools: Sequence[Mapping[str, object]] = (),
+    request_input: ResponseInputParam | None = None,
     **request_kwargs: object,
 ) -> Sequence[Mapping[str, object]]:
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
@@ -6506,12 +6516,13 @@ def _replayed_messages_from(
             litellm_completion_request={
                 "model": model,
                 "custom_llm_provider": "bedrock",
-                "messages": [current],
+                "messages": [current] if current else [],
                 **({"tools": list(tools)} if tools else {}),
             },
             instructions=None,
             session_lookup=session_lookup,
             request_kwargs=request_kwargs,
+            request_input=request_input,
         )
     )
     return TypeAdapter(list[dict[str, object]]).validate_python(request["messages"])
@@ -6671,6 +6682,25 @@ def test_replayed_marks_stay_untouched_for_a_target_without_cache_points():
     )
 
     assert messages[:5] == replayed_turns
+
+
+def test_the_marked_empty_user_turn_a_follow_up_restores_takes_a_slot_from_the_replayed_marks():
+    stored_turns: Final[tuple[Mapping[str, object], ...]] = (
+        *_marked_turns(MAX_CACHE_CONTROL_BLOCKS - 1),
+        {"role": "user", "content": "last stored turn", "cache_control": _EPHEMERAL},
+        {"role": "assistant", "content": "Four."},
+    )
+    marked_empty_item: Final[dict[str, object]] = {**_NULL_USER_ITEM, "cache_control": _EPHEMERAL}
+
+    messages: Final = _replayed_messages_from(
+        stored_turns,
+        None,
+        model="us.anthropic.claude-opus-5-5",
+        request_input=cast(ResponseInputParam, [marked_empty_item]),
+    )
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == MAX_CACHE_CONTROL_BLOCKS
+    assert messages[-1] == {"role": "user", "content": "", "cache_control": _EPHEMERAL}
 
 
 def _bridged_request(
