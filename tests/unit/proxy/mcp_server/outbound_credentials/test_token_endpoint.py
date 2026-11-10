@@ -246,19 +246,14 @@ async def test_fetch_signs_the_same_hmac_client_assertion_in_fips_mode(fips_mode
 async def test_fetch_computes_the_hmac_client_assertion_with_hmac_digest_in_fips_mode(
     fips_mode: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    keys: Final[list[bytes]] = []
-
-    def recording_digest(key: bytes, msg: bytes, digest: str) -> bytes:
-        keys.append(key)
-        return hmac.digest(key, msg, digest)
-
-    monkeypatch.setattr("litellm.proxy.common_utils.fips_jwt.hmac", MagicMock(digest=recording_digest))
+    digest: Final = MagicMock(wraps=hmac.digest)
+    monkeypatch.setattr("litellm.proxy.common_utils.fips_jwt.hmac", MagicMock(digest=digest))
     client: Final = _client(_resp())
     with patch(_PATCH_TARGET, return_value=client):
         result: Final = await TokenEndpointClient().fetch(_ENDPOINT, _CLIENT_ID, {"grant_type": "g"}, _HMAC_AUTH)
 
     assert isinstance(result, Ok)
-    assert keys == [_HMAC_AUTH.private_key.get_secret_value().encode()]
+    assert [call.args[0] for call in digest.call_args_list] == [_HMAC_AUTH.private_key.get_secret_value().encode()]
 
 
 @pytest.mark.asyncio
