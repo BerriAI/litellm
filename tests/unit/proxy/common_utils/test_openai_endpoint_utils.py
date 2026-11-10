@@ -118,6 +118,27 @@ def test_remove_sensitive_info_from_deployment_with_excluded_keys():
     assert "api_key" not in sanitized_config["litellm_params"]
 
 
+@pytest.mark.parametrize(
+    "outbound_proxy, expected",
+    [
+        ("http://user:s3cret@corp-proxy:3128", "http://corp-proxy:3128"),
+        ("socks5h://user:p%40ss@socks.internal:1080/", "socks5h://socks.internal:1080/"),
+        ("https://token@proxy.example", "https://proxy.example"),
+        ("http://corp-proxy:3128", "http://corp-proxy:3128"),
+        ("direct", "direct"),
+    ],
+)
+def test_remove_sensitive_info_from_deployment_strips_outbound_proxy_credentials(outbound_proxy: str, expected: str):
+    deployment = {
+        "model_name": "mistral",
+        "litellm_params": {"model": "mistral/mistral-large", "outbound_proxy": outbound_proxy},
+    }
+
+    sanitized = remove_sensitive_info_from_deployment(deployment)
+
+    assert sanitized["litellm_params"]["outbound_proxy"] == expected
+
+
 def test_remove_sensitive_info_from_deployment_keeps_nested_nulls():
     router_config = {
         "models": {"capable": "strong", "efficient": "fast", "judge": None},
