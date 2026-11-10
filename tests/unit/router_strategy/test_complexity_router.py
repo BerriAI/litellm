@@ -8299,7 +8299,9 @@ class TestUserTurnClassifierFailureHoldsTheDefaultModel:
     TOOL_RESULT: Final[dict[str, object]] = {"role": "tool", "tool_call_id": "t1", "content": "File contents returned."}
 
     @staticmethod
-    def _router(*classifier_replies: object) -> tuple[ComplexityRouter, MagicMock]:
+    def _router(
+        *classifier_replies: object, default_model: str = "gpt-4o", plan_mode_min_tier: str | None = None
+    ) -> tuple[ComplexityRouter, MagicMock]:
         router_instance: Final = MagicMock()
         router_instance.health.return_value.store = DualCache()
         router_instance.acompletion = AsyncMock(side_effect=list(classifier_replies))
@@ -8320,8 +8322,9 @@ class TestUserTurnClassifierFailureHoldsTheDefaultModel:
                     "circuit_breaker_enabled": False,
                 },
                 "classifier_fallback": "default_model",
-                "default_model": "gpt-4o",
+                "default_model": default_model,
                 "classification_mode": "user_turn",
+                **({"plan_mode_min_tier": plan_mode_min_tier} if plan_mode_min_tier is not None else {}),
             },
         )
         return router, router_instance
@@ -8381,6 +8384,28 @@ class TestUserTurnClassifierFailureHoldsTheDefaultModel:
         continued: Final = await self._route(router, None, input=tool_output, previous_response_id="resp_2")
 
         assert continued == ("gpt-4o", "user_turn_continuation")
+
+    @pytest.mark.asyncio
+    async def test_a_plan_mode_continuation_still_gets_the_plan_floor_over_a_held_fallback(self):
+        router, _ = self._router(
+            _llm_response('{"tier": "SIMPLE"}'),
+            TimeoutError("classifier timed out"),
+            _llm_response('{"tier": "SIMPLE"}'),
+            default_model="untiered-default",
+            plan_mode_min_tier="COMPLEX",
+        )
+        fix_ask: Final = [self.HELLO, self.HELLO_REPLY, self.FIX]
+        plan_mode_body: Final = TestPlanModeTierFloor.PLAN_BODY
+
+        assert await self._route(router, [self.HELLO]) == ("gpt-4o-mini", "llm_classifier")
+        assert await self._route(router, fix_ask) == ("untiered-default", "default_model_fallback")
+        continued: Final = await self._route(
+            router,
+            [*fix_ask, self.TOOL_CALL, self.TOOL_RESULT],
+            proxy_server_request={"body": plan_mode_body},
+        )
+
+        assert continued == ("claude-sonnet-4-20250514", "plan_mode")
 
 
 class TestRoutingPlugins:
