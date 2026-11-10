@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import time
 from collections.abc import Iterator, Mapping
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
 
@@ -10,7 +11,7 @@ import httpx
 import pytest
 import respx
 from openai.types.completion_usage import CompletionUsage
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import TranscriptionResponse, model_cost
@@ -4578,6 +4579,77 @@ def test_batch_cost_calculator_bills_cached_tokens_at_the_standard_cache_price_w
     )
 
     assert prompt_cost == pytest.approx(1000 * expected_rate)
+
+
+def _cached_image_batch_usage() -> Usage:
+    return Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=1000, image_tokens=1000, cached_tokens_details=CachedTokensDetails(image_tokens=1000)
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("image_batch_cache_price", "text_batch_cache_price", "expected_rate"),
+    [
+        pytest.param(1e-6, 6.25e-7, 1e-6, id="the-batch-cached-image-price-wins"),
+        pytest.param(None, 6.25e-7, 6.25e-7, id="without-it-cached-images-bill-the-batch-cache-price"),
+        pytest.param(None, None, 2e-6, id="without-any-batch-cache-price-cached-images-bill-the-standard-image-cache-price"),
+    ],
+)
+def test_batch_cost_calculator_bills_cached_image_tokens_at_the_batch_cached_image_price(
+    image_batch_cache_price: float | None, text_batch_cache_price: float | None, expected_rate: float
+) -> None:
+    model_info: Final = cast(
+        ModelInfo,
+        {
+            "input_cost_per_token": 5e-6,
+            "input_cost_per_image_token": 8e-6,
+            "cache_read_input_token_cost": 1.25e-6,
+            "cache_read_input_image_token_cost": 2e-6,
+            "input_cost_per_token_batches": 2.5e-6,
+            "input_cost_per_image_token_batches": 4e-6,
+            "cache_read_input_token_cost_batches": text_batch_cache_price,
+            "cache_read_input_image_token_cost_batches": image_batch_cache_price,
+        },
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_cached_image_batch_usage(), model="gpt-image-2", custom_llm_provider="openai", model_info=model_info
+    )
+
+    assert prompt_cost == pytest.approx(1000 * expected_rate)
+
+
+_COST_MAP_ROWS: Final = TypeAdapter(dict[str, dict[str, object]])
+
+
+def _rows_with_a_batch_cached_image_price() -> tuple[tuple[str, str, float, ModelInfo], ...]:
+    rows: Final = _COST_MAP_ROWS.validate_json(
+        Path(litellm.__file__).with_name("model_prices_and_context_window_backup.json").read_bytes()
+    )
+    return tuple(
+        (name, str(entry["litellm_provider"]), rate, cast(ModelInfo, entry))
+        for name, entry in rows.items()
+        if isinstance(rate := entry.get("cache_read_input_image_token_cost_batches"), float)
+    )
+
+
+def test_batch_cached_image_tokens_bill_the_rows_batch_cached_image_price_on_every_row_that_has_one() -> None:
+    rows: Final = _rows_with_a_batch_cached_image_price()
+    assert rows, "no cost map row prices Batch cached image input"
+
+    mispriced: Final = tuple(
+        (name, cost, 1000 * rate)
+        for name, provider, rate, entry in rows
+        for cost in (batch_cost_calculator(_cached_image_batch_usage(), name, provider, model_info=entry)[0],)
+        if cost != pytest.approx(1000 * rate)
+    )
+
+    assert mispriced == ()
 
 
 def test_batch_cost_calculator_bills_long_context_cached_tokens_at_the_standard_long_context_cache_price() -> None:
