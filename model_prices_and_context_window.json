@@ -25274,6 +25274,10 @@
             "notes": "Firecrawl search pricing: $83 for 100,000 credits, 2 credits per 10 results. Cost = ceiling(limit/10) * 2 * $0.00083"
         }
     },
+    "webiq/search": {
+        "litellm_provider": "webiq",
+        "mode": "search"
+    },
     "perplexity/search": {
         "input_cost_per_query": 0.005,
         "litellm_provider": "perplexity",
