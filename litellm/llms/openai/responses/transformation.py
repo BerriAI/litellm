@@ -12,18 +12,21 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
+    deployment_model_info,
     deployment_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params, process_response_headers
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, normalize_drop_params, process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    cache_control_as_prompt_cache_breakpoint,
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     drop_non_python_regex_patterns,
     flatten_combinators_and_drop_non_python_regex_patterns,
+)
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    cache_control_as_prompt_cache_breakpoint,
     prompt_cache_breakpoint_for_wire,
     whole_prompt_cache_breakpoint_or_none,
     with_prompt_cache_breakpoint,
@@ -45,6 +48,7 @@ from litellm.responses.litellm_completion_transformation.tool_search import (
     tools_with_anthropic_tool_search_mapped,
     tools_without_anthropic_tool_search,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import *
@@ -73,7 +77,9 @@ _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
 _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
-_PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS
+_PROVIDERS_REPLAYING_ONLY_THEIR_OWN_REASONING: Final = frozenset(
+    {LlmProviders.AZURE, LlmProviders.BEDROCK, LlmProviders.BEDROCK_MANTLE, LlmProviders.OPENAI}
+)
 _ROLES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"system", "developer", "user"})
 _PART_TYPES_READING_PROMPT_CACHE_BREAKPOINTS: Final = frozenset({"input_text", "input_image", "input_file"})
 _INPUT_PART_LIST_KEYS: Final = frozenset({"content", "output"})
@@ -619,10 +625,44 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 "model": model,
                 "input": replay_safe_input,
                 **response_api_optional_request_params,
+                **self._prompt_cache_options_with_original_comparison_id(request_params),
             },
         )
 
         return final_request_params
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return {**extra_body, **self._prompt_cache_options_with_original_comparison_id(extra_body)}
+
+    def _prompt_cache_options_with_original_comparison_id(self, params: Mapping[str, object]) -> Mapping[str, object]:
+        options: Final = as_str_mapping(params.get("prompt_cache_options"))
+        comparison_response_id: Final = None if options is None else options.get("comparison_response_id")
+        if (
+            self.custom_llm_provider != LlmProviders.OPENAI
+            or options is None
+            or not isinstance(comparison_response_id, str)
+            or not comparison_response_id.startswith("resp_")
+        ):
+            return {}
+        decoded_id: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(comparison_response_id)
+        decoded_provider: Final = decoded_id.get("custom_llm_provider")
+        original_response_id: Final = decoded_id.get("response_id", comparison_response_id)
+        rebuilt_envelope: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            {"id": original_response_id}, decoded_provider, {"model_info": {"id": decoded_id.get("model_id")}}
+        )
+        if (
+            decoded_provider != LlmProviders.OPENAI
+            or original_response_id == comparison_response_id
+            or rebuilt_envelope.get("id") != comparison_response_id
+        ):
+            return {}
+        return {"prompt_cache_options": {**options, "comparison_response_id": original_response_id}}
 
     def _prepared_input_and_tools(
         self,
@@ -633,7 +673,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         prompt_cache_options: object = None,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
         validated_input: Final = self._validate_input_param(
-            self._drop_bridge_minted_reasoning_items(input), drops_set_created_by=drops_params(litellm_params)
+            self._drop_bridge_minted_reasoning_items(input), drop_params=drops_params(litellm_params)
         )
         reads_breakpoints: Final = self._reads_prompt_cache_breakpoints(
             model=model, litellm_params=litellm_params, prompt_cache_options=prompt_cache_options
@@ -732,6 +772,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             custom_llm_provider=_provider_name(self.custom_llm_provider),
             api_base=host.api_base or host.base_url,
             prompt_cache_options=prompt_cache_options,
+            model_info=deployment_model_info(litellm_params),
         )
 
     @staticmethod
@@ -914,7 +955,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return tools if all(new is old for new, old in zip(sanitized, tools, strict=True)) else sanitized
 
     def _validate_input_param(
-        self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
+        self, input: str | ResponseInputParam, *, drop_params: bool = False
     ) -> str | ResponseInputParam:
         """
         Ensure all input fields if pydantic are converted to dict
@@ -928,9 +969,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 # if it's pydantic, convert to dict
                 if isinstance(item, BaseModel):
                     validated_input.append(
-                        replayable_responses_item(
-                            item.model_dump(exclude_none=True), drops_set_created_by=drops_set_created_by
-                        )
+                        replayable_responses_item(item.model_dump(exclude_none=True), drops_set_created_by=drop_params)
                     )
                 elif isinstance(item, dict):
                     validated_input.append(
@@ -938,7 +977,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                             self._handle_reasoning_item(cast(dict[str, object], item))
                             if item.get("type") == "reasoning"
                             else item,
-                            drops_set_created_by=drops_set_created_by,
+                            drops_set_created_by=drop_params,
                         )
                     )
                 else:
@@ -1097,7 +1136,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return None
 
     @staticmethod
-    def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+    def parse_terminal_response_from_stream_chunks(all_chunks: Sequence[str]) -> ResponsesAPIResponse | None:
         terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks)
         return None if terminal_event is None else terminal_event.response
 

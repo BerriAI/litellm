@@ -105,6 +105,10 @@ from litellm.utils import get_utc_datetime
 from litellm.llms.base_llm.managed_resources.utils import encode_unified_id, generate_unified_id_string
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from tests._master_key import MASTER_KEY
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
+from tests.unit.redis.stores.auth_cache_double import shared_cache
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
 def _rendered_log_message(call):
@@ -2398,6 +2402,37 @@ async def test_deny_by_default_ignores_tools_that_name_no_vector_store(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deny_by_default", [False, True], ids=["legacy", "deny-by-default"])
+@pytest.mark.parametrize(
+    ("key_vector_stores", "denied_by"),
+    [(["KBSTOREA"], _KEY_DENIED), (["KBSTOREB"], None)],
+    ids=["ungranted", "granted"],
+)
+async def test_file_search_inside_additional_tools_input_item_needs_a_vector_store_grant(
+    deny_by_default: bool, key_vector_stores: list[str], denied_by: ProxyErrorTypes | None
+):
+    await _assert_rag_query_outcome(
+        _common_checks_for_rag_query(
+            {"vector_store_deny_by_default": deny_by_default},
+            _virtual_key(object_permission_id="key-permission"),
+            SimpleNamespace(vector_stores=key_vector_stores),
+            request_body={
+                "model": "gpt-4o-mini",
+                "input": [
+                    {
+                        "type": "additional_tools",
+                        "role": "developer",
+                        "tools": [{"type": "file_search", "vector_store_ids": ["KBSTOREB"]}],
+                    },
+                    {"type": "message", "role": "user", "content": "what is in this KB?"},
+                ],
+            },
+        ),
+        denied_by,
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_body",
     [
@@ -4023,11 +4058,11 @@ async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_t
 
     async def fake_find_many(**kwargs):
         if "where" not in kwargs:
-            return [_tag_registry_row("usecase:spent")]
+            return [_tag_registry_row("app:spent")]
         return [_tag_db_row(name, max_budget=1.0) for name in kwargs["where"]["tag_name"]["in"]]
 
     async def spent_tag_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
-        return 1.5 if counter_key == "spend:tag:usecase:spent" else fallback_spend
+        return 1.5 if counter_key == "spend:tag:app:spent" else fallback_spend
 
     async def receive():
         return {
@@ -4047,7 +4082,7 @@ async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_t
             "scheme": "http",
             "server": ("localhost", 4000),
             "query_string": b"",
-            "headers": [(b"content-type", b"application/json"), (b"baggage", b"entrypoint=spent")],
+            "headers": [(b"content-type", b"application/json"), (b"baggage", b"service=spent")],
         },
         receive,
     )
@@ -4055,7 +4090,7 @@ async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_t
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
         request,
         request_body,
-        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:"}]},
         None,
         MagicMock(),
     )
@@ -4077,7 +4112,7 @@ async def test_common_checks_rejects_a_spent_mapped_tag_whatever_non_list_tags_t
             valid_token=UserAPIKeyAuth(token="test-token", metadata=key_metadata),
             request=request,
         )
-    assert exc_info.value.entity_id == "usecase:spent"
+    assert exc_info.value.entity_id == "app:spent"
 
 
 @pytest.mark.asyncio
@@ -6045,6 +6080,71 @@ class TestGuardrailModificationCheck:
         self._call({"metadata": '"just a string"'})
 
 
+def _member_without_row_prisma(max_budget: float) -> MagicMock:
+    budget_row: Final = MagicMock()
+    budget_row.max_budget = max_budget
+    budget_row.dict = MagicMock(return_value={"budget_id": "budget-default", "max_budget": max_budget})
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
+    prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    return prisma_client
+
+
+async def _check_member_without_membership_row(prisma_client: MagicMock) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.utils import ProxyLogging
+
+    await _check_team_member_budget(
+        team_object=LiteLLM_TeamTable(team_id="team-1", metadata={"team_member_budget_id": "budget-default"}),
+        user_object=LiteLLM_UserTable(user_id="user-1"),
+        valid_token=UserAPIKeyAuth(token="tok-1", user_id="user-1", team_id="team-1"),
+        prisma_client=prisma_client,
+        user_api_key_cache=DualCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_rejects_member_without_membership_row_with_a_403_naming_member_add(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    import litellm.proxy.proxy_server as ps
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis={})
+    prisma_client: Final = _member_without_row_prisma(100.0)
+    monkeypatch.setattr(ps, "general_settings", {"fail_closed_budget_enforcement": True})
+    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+    monkeypatch.setattr(ps, "prisma_client", prisma_client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_member_without_membership_row(prisma_client)
+
+    assert exc_info.value.status_code == 403
+    message: Final = str(exc_info.value.detail)
+    assert "user-1" in message and "team-1" in message and "/team/member_add" in message
+    prisma_client.db.litellm_teammembership.find_unique.assert_awaited_once()
+    assert spend.commands == []
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_off_still_admits_member_without_membership_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as ps
+    from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+    spend: Final = FakeSpendCounters(redis={})
+    prisma_client: Final = _member_without_row_prisma(100.0)
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(ps, "spend_counter_store", spend.store())
+    monkeypatch.setattr(ps, "prisma_client", prisma_client)
+
+    await _check_member_without_membership_row(prisma_client)
+
+    assert spend.commands, "the member budget check must still read the spend counter with the flag off"
+
+
 @pytest.mark.asyncio
 async def test_team_member_budget_check_falls_back_to_team_default_budget_id():
     """When a member's TeamMembership has no linked budget row, the check
@@ -6973,7 +7073,7 @@ async def test_team_update_not_shadowed_by_internal_usage_cache_lit_4391():
 
     team_id = "team-lit-4391"
     shared_redis = _SharedFakeRedis()
-    user_api_key_cache = UserApiKeyCache(redis_cache=shared_redis)
+    user_api_key_cache, auth_store = shared_cache(connection=shared_redis)
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.internal_usage_cache.dual_cache = DualCache(
         redis_cache=shared_redis,
@@ -7014,12 +7114,13 @@ async def test_team_update_not_shadowed_by_internal_usage_cache_lit_4391():
         f"refreshed it. Got models={refreshed.models if refreshed else None}"
     )
 
-    redis_copy = await shared_redis.async_get_cache(f"team_id:{team_id}")
-    assert redis_copy is not None and redis_copy["models"] == ["model-a", "model-b"], (
+    redis_copy = auth_store.redis.get(f"team_id:{team_id}")
+    assert isinstance(redis_copy, dict) and redis_copy["models"] == ["model-a", "model-b"], (
         "The shared Redis lost the refreshed team object — the internal-cache "
         "invalidation must run BEFORE the fresh write, not after. "
         f"Got: {redis_copy}"
     )
+    assert f"team_id:{team_id}" not in shared_redis._store, "redis-py never touches the auth cache keyspace"
 
 
 class _CountingFakeRedis(_SharedFakeRedis):
@@ -8193,7 +8294,6 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
     must be dumped to ISO strings before the write, and the read side must give back a model.
     """
     from litellm.proxy.auth.auth_checks import get_team_member_default_budget
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     budget_row = MagicMock()
     budget_row.dict = lambda: {
@@ -8206,20 +8306,7 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=budget_row)
 
-    class _JsonOnlyRedis:
-        """Stands in for RedisCache, which serializes with a bare json.dumps()."""
-
-        def __init__(self):
-            self.writes = []
-
-        async def async_set_cache(self, key, value, **kwargs):
-            self.writes.append((key, json.dumps(value)))
-
-        async def async_get_cache(self, key, **kwargs):
-            return None
-
-    redis_cache = _JsonOnlyRedis()
-    cache = UserApiKeyCache(redis_cache=redis_cache)
+    cache, auth_store = shared_cache()
 
     budget = await get_team_member_default_budget(
         budget_id="tm-budget-1",
@@ -8229,9 +8316,10 @@ async def test_get_team_member_default_budget_caches_json_safe_payload():
 
     assert isinstance(budget, LiteLLM_BudgetTable)
     assert budget.max_budget == 25.0
-    assert len(redis_cache.writes) == 1
-    written_key, written_payload = redis_cache.writes[0]
-    assert written_key == "team_member_default_budget:tm-budget-1"
+    assert [command[:2] for command in auth_store.commands if command[0] == "SET"] == [
+        ("SET", "team_member_default_budget:tm-budget-1")
+    ]
+    written_payload = json.dumps(auth_store.redis["team_member_default_budget:tm-budget-1"])
     assert json.loads(written_payload)["max_budget"] == 25.0
 
     cached = await get_team_member_default_budget(
@@ -9749,18 +9837,17 @@ def _project_with_budget(spend: float, max_budget: float | None):
 async def test_project_max_budget_check_blocks_when_live_spend_reaches_the_budget(
     counter_spend, db_spend, max_budget, blocks
 ):
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.auth.auth_checks import _project_max_budget_check
 
-    real_spend_counter_cache = DualCache()
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     if counter_spend is not None:
-        real_spend_counter_cache.in_memory_cache.set_cache(key="spend:project:p-budget", value=counter_spend)
+        real_spend_counter_store.set_local("spend:project:p-budget", counter_spend)
     valid_token = UserAPIKeyAuth(api_key="hashed-key", project_id="p-budget", team_id="t-1", user_id="u-1")
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.budget_alerts = AsyncMock()
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_store", real_spend_counter_store
     ):
         if not blocks:
             await _project_max_budget_check(
@@ -10596,13 +10683,19 @@ async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_cle
     await real_cache.async_set_cache(key="team_membership:user-1:team-1", value="stale-membership")
 
     real_spend_counter_cache = DualCache()
-    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:user-1:team-1", value=999.0)
     real_spend_counter_cache.in_memory_cache.set_cache(
         key="spend_db_floor:spend:team_member:user-1:team-1", value=999.0
     )
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
+    real_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with (
+        patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+        ),
+        patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_store", real_spend_counter_store
+        ),
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
@@ -10613,7 +10706,7 @@ async def test_invalidate_team_member_spend_state_sets_the_spend_counter_and_cle
 
     assert await real_cache.async_get_cache(key="team-1_user-1") is None
     assert await real_cache.async_get_cache(key="team_membership:user-1:team-1") is None
-    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 0.0
+    assert real_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0
     assert (
         real_spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:team_member:user-1:team-1") == 0.0
     ), "the DB-floor marker kept the pre-reset value; a stale-floor read can raise the counter right back up"
@@ -10626,17 +10719,16 @@ async def test_invalidate_team_member_spend_state_leaves_the_live_spend_counter_
     case would force the next read to reseed from the DB's own spend column, which lags the live
     counter via periodic batch writes, briefly UNDER-enforcing the raised cap against a spend
     value lower than what was actually tracked (regression: PR #37971 Bugbot finding)."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
     await real_cache.async_set_cache(key="team-1_user-1", value="stale-membership")
 
-    real_spend_counter_cache = DualCache()
-    real_spend_counter_cache.in_memory_cache.set_cache(key="spend:team_member:user-1:team-1", value=999.0)
+    real_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
+    real_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_store", real_spend_counter_store
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
@@ -10645,7 +10737,7 @@ async def test_invalidate_team_member_spend_state_leaves_the_live_spend_counter_
         )
 
     assert await real_cache.async_get_cache(key="team-1_user-1") is None
-    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 999.0
+    assert real_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 999.0
 
 
 @pytest.mark.asyncio
@@ -10653,17 +10745,13 @@ async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_dele
     """/key/{key}/reset_spend SETs its counter to the reset value rather than deleting it, so a
     worker's next read reflects it directly instead of falling back through a DB reseed. A reset
     caller passing new_spend must match that precedent, not merely delete the counter."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
-    real_spend_counter_cache = DualCache()
-    fake_redis_cache = MagicMock()
-    fake_redis_cache.async_set_cache = AsyncMock()
-    real_spend_counter_cache.redis_cache = fake_redis_cache
+    spend = FakeSpendCounters()
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with patch(  # test-quality-ok: injects a store over a fake handle for the module global
+        "litellm.proxy.proxy_server.spend_counter_store", spend.store()
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
@@ -10672,8 +10760,8 @@ async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_dele
             new_spend=2.5,
         )
 
-    assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 2.5
-    fake_redis_cache.async_set_cache.assert_awaited_once_with(key="spend:team_member:user-1:team-1", value=2.5, ttl=60)
+    assert spend.memory == {"spend:team_member:user-1:team-1": 2.5}
+    assert spend.commands == ["SET spend:team_member:user-1:team-1 2.5 60"]
 
 
 @pytest.mark.asyncio
@@ -10682,18 +10770,13 @@ async def test_invalidate_team_member_spend_state_deletes_redis_counter_when_set
     first), so a failed Redis SET would otherwise leave the OLD pre-reset value authoritative
     for every worker even though the reset reported success. On a failed SET, the stale Redis
     entry must be deleted instead, so the next read clean-misses and reseeds from the DB."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
-    real_spend_counter_cache = DualCache()
-    fake_redis_cache = MagicMock()
-    fake_redis_cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
-    fake_redis_cache.async_delete_cache = AsyncMock()
-    real_spend_counter_cache.redis_cache = fake_redis_cache
+    spend = FakeSpendCounters(redis={"spend:team_member:user-1:team-1": 9.0}, failing=frozenset({"set"}))
 
-    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    with patch(  # test-quality-ok: injects a store over a fake handle for the module global
+        "litellm.proxy.proxy_server.spend_counter_store", spend.store()
     ):
         await invalidate_team_member_spend_state(
             user_id="user-1",
@@ -10702,7 +10785,9 @@ async def test_invalidate_team_member_spend_state_deletes_redis_counter_when_set
             new_spend=2.5,
         )
 
-    fake_redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:team_member:user-1:team-1")
+    assert spend.commands == ["DEL spend:team_member:user-1:team-1"]
+    assert spend.redis == {}
+    assert spend.memory == {"spend:team_member:user-1:team-1": 2.5}
 
 
 @pytest.mark.asyncio
@@ -10712,19 +10797,14 @@ async def test_invalidate_team_member_spend_state_raises_503_when_both_redis_wri
     member, so the reset must surface a 503 instead (regression: PR #37971 Greptile finding)."""
     from fastapi import HTTPException
 
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     real_cache = UserApiKeyCache()
-    real_spend_counter_cache = DualCache()
-    fake_redis_cache = MagicMock()
-    fake_redis_cache.async_set_cache = AsyncMock(side_effect=ConnectionError("redis down"))
-    fake_redis_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis still down"))
-    real_spend_counter_cache.redis_cache = fake_redis_cache
+    spend = FakeSpendCounters(failing=frozenset({"set", "delete"}))
 
     with (
-        patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
-            "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+        patch(  # test-quality-ok: injects a store over a fake handle for the module global
+            "litellm.proxy.proxy_server.spend_counter_store", spend.store()
         ),
         pytest.raises(HTTPException) as exc_info,
     ):
@@ -10776,12 +10856,16 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
 
     remote_user_api_key_cache = UserApiKeyCache()
     remote_spend_counter_in_memory_cache = InMemoryCache()
-    remote_spend_counter_in_memory_cache.set_cache("spend:team_member:user-1:team-1", 999.0)
     remote_spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:team_member:user-1:team-1", 999.0)
+    remote_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
+    remote_spend_counter_store.set_local("spend:team_member:user-1:team-1", 999.0)
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
             "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
+        ),
+        patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_store", SpendCounterStore(connect(None).spend_counters())
         ),
         patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -10804,13 +10888,14 @@ async def test_invalidate_team_member_spend_state_broadcasts_the_spend_counter_t
         redis_cache=_FakeRedisCache(),
         user_api_key_cache=remote_user_api_key_cache,
         additional_in_memory_caches=(remote_spend_counter_in_memory_cache,),
+        spend_counters=remote_spend_counter_store,
     )
     for cache_key in ("spend:team_member:user-1:team-1", "spend_db_floor:spend:team_member:user-1:team-1"):
         remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
             {"type": "message", "data": _published_message_for(cache_key)}
         )
 
-    assert remote_spend_counter_in_memory_cache.get_cache("spend:team_member:user-1:team-1") == 0.0
+    assert remote_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0
     assert remote_spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:team_member:user-1:team-1") == 0.0, (
         "the DB-floor marker was not broadcast; a remote worker can re-raise the counter off its stale floor"
     )
@@ -10847,11 +10932,15 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
             return _RecordingRedisClient()
 
     local_spend_counter_cache = DualCache()
+    local_spend_counter_store = SpendCounterStore(connect(None).spend_counters())
     local_user_api_key_cache = UserApiKeyCache()
 
     with (
         patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
             "litellm.proxy.proxy_server.spend_counter_cache", local_spend_counter_cache
+        ),
+        patch(  # test-quality-ok: injects a real store for the module global, not a behavior mock
+            "litellm.proxy.proxy_server.spend_counter_store", local_spend_counter_store
         ),
         patch(  # test-quality-ok: injects a fake pub/sub-capable redis cache; no live redis in this unit test
             "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
@@ -10869,13 +10958,14 @@ async def test_invalidate_team_member_spend_state_self_delivered_broadcast_does_
         redis_cache=_FakeRedisCache(),
         user_api_key_cache=local_user_api_key_cache,
         additional_in_memory_caches=(local_spend_counter_cache.in_memory_cache,),
+        spend_counters=local_spend_counter_store,
     )
     for _, message in published:
         own_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
             {"type": "message", "data": message}
         )
 
-    assert local_spend_counter_cache.in_memory_cache.get_cache("spend:team_member:user-1:team-1") == 0.0, (
+    assert local_spend_counter_store.get_local("spend:team_member:user-1:team-1") == 0.0, (
         "the handler's self-delivered broadcast erased the post-reset spend counter"
     )
     assert (
@@ -11789,8 +11879,8 @@ def _client_tag_request(client_tags, baggage):
         {
             "type": "http",
             "headers": [
-                *([(b"baggage", b"entrypoint=a")] if baggage else []),
-                *([(b"x-litellm-tags", b"usecase:a")] if client_tags == "header" else []),
+                *([(b"baggage", b"service=a")] if baggage else []),
+                *([(b"x-litellm-tags", b"app:a")] if client_tags == "header" else []),
             ],
         }
     )
@@ -11814,7 +11904,7 @@ def _client_tag_rejection(route, data, request):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/messages", "/v1/responses"])
-@pytest.mark.parametrize("client_tags", [None, [], ["usecase:a"], '{"tags":["usecase:a"]}', "header"])
+@pytest.mark.parametrize("client_tags", [None, [], ["app:a"], '{"tags":["app:a"]}', "header"])
 @pytest.mark.parametrize("client_slot", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("baggage", [True, False])
 async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_it(
@@ -11825,7 +11915,9 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
     unmapped_request = _client_tag_request(client_tags, baggage=False)
     unmapped = _client_tag_body(client_tags, client_slot)
     LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(unmapped, route)
-    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key"))
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+        unmapped_request, unmapped, UserAPIKeyAuth(api_key="qa-key")
+    )
 
     mapped_request = _client_tag_request(client_tags, baggage=baggage)
     mapped = _client_tag_body(client_tags, client_slot)
@@ -11833,7 +11925,7 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
         mapped_request,
         mapped,
-        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:"}]},
         None,
         MagicMock(),
     )
@@ -11843,19 +11935,19 @@ async def test_baggage_mapping_rejects_exactly_the_client_tags_rejected_without_
         route, unmapped, unmapped_request
     )
     if client_tags is None and baggage:
-        assert "usecase:a" in mapped["metadata" if "chat/completions" in route else "litellm_metadata"]["tags"]
+        assert "app:a" in mapped["metadata" if "chat/completions" in route else "litellm_metadata"]["tags"]
 
 
 @pytest.mark.asyncio
 async def test_baggage_mapping_still_rejects_client_metadata_tags():
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
-    request = _client_tag_request(["usecase:b"], baggage=True)
-    data = {"metadata": {"tags": ["usecase:b"]}}
+    request = _client_tag_request(["app:b"], baggage=True)
+    data = {"metadata": {"tags": ["app:b"]}}
     await LiteLLMProxyRequestSetup.apply_baggage_tag_mappings_pre_auth(
         request,
         data,
-        {"request_tag_mappings": [{"key": "entrypoint", "tag_prefix": "usecase:"}]},
+        {"request_tag_mappings": [{"key": "service", "tag_prefix": "app:"}]},
         None,
         MagicMock(),
     )

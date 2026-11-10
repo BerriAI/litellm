@@ -353,6 +353,10 @@ class ModelInfo(MirroredPricingParams):
 
     max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
 
+    # deployments that set the same value share one provider encryption boundary, so encrypted reasoning
+    # minted on one can be replayed to another (e.g. regional endpoints of one OpenAI organization)
+    encrypted_content_boundary: Annotated[str, Field(min_length=1)] | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
@@ -427,6 +431,7 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     ## OBJECT STORAGE (files / batches) ##
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
+    allow_legacy_cloud_file_ids: bool | None = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None
@@ -658,6 +663,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     tag_regex: list[str] | None = None
 
     # auto-router params
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -1040,6 +1046,21 @@ def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     return MappingProxyType(get_type_hints(model_class))
 
 
+class PriceTier(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    range: tuple[float, float]
+    costs: Mapping[str, float]
+
+
+class DeploymentPricing(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    costs: Mapping[str, float]
+    tiered_pricing: tuple[PriceTier, ...] = ()
+
+
 class ModelGroupInfo(LiteLLMBaseModel):
     model_group: str
     providers: list[str]
@@ -1070,6 +1091,7 @@ class ModelGroupInfo(LiteLLMBaseModel):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     description: str | None = None
     supported_endpoints: tuple[str, ...] | None = None
+    deployment_pricing: tuple[DeploymentPricing, ...] = ()
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():
@@ -1154,9 +1176,9 @@ class CustomRoutingStrategyBase:
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ) -> None:
         """
         Asynchronously retrieves the available deployment based on the given parameters.
@@ -1177,9 +1199,9 @@ class CustomRoutingStrategyBase:
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ) -> None:
         """
         Synchronously retrieves the available deployment based on the given parameters.
@@ -1444,6 +1466,7 @@ class PreRoutingStrategy(Protocol):
         messages: list[dict[str, Any]] | None = None,
         input: "str | list[Any] | None" = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> "PreRoutingHookResponse | None": ...
 
 

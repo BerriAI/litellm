@@ -8,14 +8,20 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, Generic, Literal, Protocol, TypeVar
+from typing import (
+    Final,
+    Generic,
+    Literal,
+    Protocol,
+    TypeVar,
+    cast,  # noqa: TID251  # get_data returns validated rows selected by table_name
+)
 
 from typing_extensions import assert_never
 
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
     GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
@@ -42,17 +48,30 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     end_user_cache_key,
     model_access_group_cache_key,
-    model_access_group_spend_counter_key,
     project_cache_key,
-    project_spend_counter_key,
     tag_cache_key,
 )
 from litellm.proxy.db.budget_window_spend_writer import roll_window_spend_row
 from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET, PodLockManager
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
-from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_keys
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.spend_counters import (
+    SPEND_COUNTERS_TARGET,
+    SpendCounterStore,
+    end_user_counter,
+    key_counter,
+    key_window_counter,
+    model_access_group_counter,
+    org_counter,
+    project_counter,
+    tag_counter,
+    team_counter,
+    team_member_counter,
+    team_window_counter,
+    user_counter,
+)
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
 from litellm.repositories.project_repository import ProjectRepository
@@ -82,6 +101,7 @@ _RowT = TypeVar("_RowT")
 class _RowReset(Generic[_RowT]):
     row: _RowT
     spend_decrement: float
+    expected_reset_at: datetime | None
 
 
 _LINKED_KEYS_WHERE: Final[Mapping[str, object]] = MappingProxyType({"budget_duration": None, "spend": {"gt": 0}})
@@ -157,7 +177,7 @@ def _row_carried_spend(row: _BudgetLinkedRow, caps: Mapping[str, float]) -> floa
 
 
 def _team_membership_counter_key(row: _TeamMembershipRow) -> str:
-    return f"spend:team_member:{row.user_id}:{row.team_id}"
+    return team_member_counter(row.user_id, row.team_id)
 
 
 def _team_membership_cache_keys(row: _TeamMembershipRow) -> tuple[str, ...]:
@@ -165,7 +185,7 @@ def _team_membership_cache_keys(row: _TeamMembershipRow) -> tuple[str, ...]:
 
 
 def _key_counter_key(row: _KeyRow) -> str:
-    return f"spend:key:{row.token}"
+    return key_counter(row.token)
 
 
 def _key_cache_keys(row: _KeyRow) -> tuple[str, ...]:
@@ -173,7 +193,7 @@ def _key_cache_keys(row: _KeyRow) -> tuple[str, ...]:
 
 
 def _org_counter_key(row: _OrgRow) -> str:
-    return f"spend:org:{row.organization_id}"
+    return org_counter(row.organization_id)
 
 
 def _org_cache_keys(row: _OrgRow) -> tuple[str, ...]:
@@ -184,7 +204,7 @@ def _org_cache_keys(row: _OrgRow) -> tuple[str, ...]:
 
 
 def _tag_counter_key(row: _TagRow) -> str:
-    return f"spend:tag:{row.tag_name}"
+    return tag_counter(row.tag_name)
 
 
 def _tag_cache_keys(row: _TagRow) -> tuple[str, ...]:
@@ -192,7 +212,7 @@ def _tag_cache_keys(row: _TagRow) -> tuple[str, ...]:
 
 
 def _model_access_group_counter_key(row: _ModelAccessGroupRow) -> str:
-    return model_access_group_spend_counter_key(row.access_group_name)
+    return model_access_group_counter(row.access_group_name)
 
 
 def _model_access_group_cache_keys(row: _ModelAccessGroupRow) -> tuple[str, ...]:
@@ -200,7 +220,7 @@ def _model_access_group_cache_keys(row: _ModelAccessGroupRow) -> tuple[str, ...]
 
 
 def _project_counter_key(row: _ProjectRow) -> str:
-    return project_spend_counter_key(row.project_id)
+    return project_counter(row.project_id)
 
 
 def _project_cache_keys(row: _ProjectRow) -> tuple[str, ...]:
@@ -208,7 +228,7 @@ def _project_cache_keys(row: _ProjectRow) -> tuple[str, ...]:
 
 
 def _enduser_counter_key(row: _EndUserRow) -> str:
-    return f"spend:end_user:{row.user_id}"
+    return end_user_counter(row.user_id)
 
 
 def _enduser_cache_keys(row: _EndUserRow) -> tuple[str, ...]:
@@ -427,7 +447,7 @@ class _WindowSource:
     table: str
     id_column: str
     entity_type: Litellm_EntityType
-    counter_prefix: str
+    window_counter: Callable[[str, str], str]
     log_subject: str
     retry_subject: str
     write: Callable[[PrismaClient, str, str], Awaitable[None]]
@@ -452,7 +472,7 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
         table="LiteLLM_VerificationToken",
         id_column="token",
         entity_type=Litellm_EntityType.KEY,
-        counter_prefix="spend:key",
+        window_counter=key_window_counter,
         log_subject="keys",
         retry_subject="key",
         write=_write_key_windows,
@@ -461,7 +481,7 @@ _WINDOW_SOURCES: Final[tuple[_WindowSource, ...]] = (
         table="LiteLLM_TeamTable",
         id_column="team_id",
         entity_type=Litellm_EntityType.TEAM,
-        counter_prefix="spend:team",
+        window_counter=team_window_counter,
         log_subject="teams",
         retry_subject="team",
         write=_write_team_windows,
@@ -607,22 +627,16 @@ class ResetBudgetJob:
         commit opens a window where get_current_spend reads 0 from Redis
         while the DB still holds the pre-reset value, allowing bypass.
         """
-        try:
-            from litellm.proxy.proxy_server import spend_counter_cache
+        from litellm.proxy.proxy_server import spend_counter_store
 
-            spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
-            if spend_counter_cache.redis_cache is not None:
-                try:
-                    await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
-                except Exception as redis_err:
-                    verbose_proxy_logger.warning(
-                        "Failed to reset spend counter %s in Redis: %s. "
-                        "Budget may be over-enforced until counter expires.",
-                        counter_key,
-                        redis_err,
-                    )
+        try:
+            await spend_counter_store.delete((counter_key, *committed_spend_keys((counter_key,))))
         except Exception as e:
-            verbose_proxy_logger.warning("Failed to reset spend counter %s: %s", counter_key, e)
+            verbose_proxy_logger.warning(
+                "Failed to reset spend counter %s in Redis: %s. Budget may be over-enforced until counter expires.",
+                counter_key,
+                e,
+            )
 
     @staticmethod
     async def _invalidate_global_proxy_spend_cache() -> None:
@@ -671,11 +685,11 @@ class ResetBudgetJob:
         if not keys:
             return
         try:
-            from litellm.proxy.proxy_server import spend_counter_cache, user_api_key_cache
+            from litellm.proxy.proxy_server import spend_counter_store, user_api_key_cache
 
             match cache:
                 case "spend counter":
-                    await spend_counter_cache.async_delete_cache_keys(keys)
+                    await spend_counter_store.delete((*keys, *committed_spend_keys(keys)))
                 case "user_api_key_cache":
                     await user_api_key_cache.async_delete_cache_keys(keys)
                 case _:
@@ -909,13 +923,14 @@ class ResetBudgetJob:
             db_span("reset_budget_cascade", "LiteLLM_BudgetTable"),
             budget_cascade_unit_of_work(self._new_batch) as uow,
         ):
+            uow.row_locks.queue_row_locks(cascade.budget_ids)
+            _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
             uow.team_memberships.queue_total_spend_repair(cascade.budget_ids)
             _queue_budget_linked_resets(uow.team_memberships, cascade)
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
-            _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
+            _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.tags, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_budget_linked_resets(uow.model_access_groups, cascade, extra=_SPENT_ROWS_WHERE)
-            _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
             for budget_id, budget_reset_at in cascade.budget_resets:
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
@@ -1043,6 +1058,8 @@ class ResetBudgetJob:
                     token=k.row.token,
                     budget_reset_at=k.row.budget_reset_at,
                     spend_decrement=k.spend_decrement,
+                    expected_reset_at=k.expected_reset_at,
+                    spend_after_reset=float(k.row.spend or 0.0),
                 )
 
     async def _write_user_reset_updates(self, updated_users: Sequence[_RowReset[LiteLLM_UserTable]]) -> None:
@@ -1068,6 +1085,8 @@ class ResetBudgetJob:
                     user_id=u.row.user_id,
                     budget_reset_at=u.row.budget_reset_at,
                     spend_decrement=u.spend_decrement,
+                    expected_reset_at=u.expected_reset_at,
+                    spend_after_reset=float(u.row.spend or 0.0),
                 )
 
     async def _write_team_reset_updates(self, updated_teams: Sequence[_RowReset[LiteLLM_TeamTable]]) -> None:
@@ -1093,6 +1112,8 @@ class ResetBudgetJob:
                     team_id=t.row.team_id,
                     budget_reset_at=t.row.budget_reset_at,
                     spend_decrement=t.spend_decrement,
+                    expected_reset_at=t.expected_reset_at,
+                    spend_after_reset=float(t.row.spend or 0.0),
                 )
 
     def _emit_phase_failure(
@@ -1149,7 +1170,12 @@ class ResetBudgetJob:
             if keys_to_reset is not None and len(keys_to_reset) > 0:
                 for key in keys_to_reset:
                     try:
-                        pre_reset_spend = float(key.spend or 0.0)
+                        pre_reset_spend, expected_reset_at = (
+                            float(key.spend or 0.0),
+                            cast(  # cast-ok: get_data's key branch returns validated key rows
+                                LiteLLM_VerificationToken, key
+                            ).budget_reset_at,
+                        )
                         updated_key = await ResetBudgetJob._reset_budget_for_key(
                             key=key,
                             current_time=now,
@@ -1160,6 +1186,7 @@ class ResetBudgetJob:
                                 _RowReset(
                                     row=updated_key,
                                     spend_decrement=pre_reset_spend - float(updated_key.spend or 0.0),
+                                    expected_reset_at=expected_reset_at,
                                 )
                             )
                         else:
@@ -1175,7 +1202,7 @@ class ResetBudgetJob:
                     for k in updated_keys:
                         token = getattr(k.row, "token", None)
                         if token:
-                            await self._invalidate_spend_counter(f"spend:key:{token}")
+                            await self._invalidate_spend_counter(key_counter(str(token)))
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
@@ -1256,7 +1283,12 @@ class ResetBudgetJob:
             if users_to_reset is not None and len(users_to_reset) > 0:
                 for user in users_to_reset:
                     try:
-                        pre_reset_spend = float(user.spend or 0.0)
+                        pre_reset_spend, expected_reset_at = (
+                            float(user.spend or 0.0),
+                            cast(  # cast-ok: get_data's user branch returns validated user rows
+                                LiteLLM_UserTable, user
+                            ).budget_reset_at,
+                        )
                         updated_user = await ResetBudgetJob._reset_budget_for_user(
                             user=user,
                             current_time=now,
@@ -1267,6 +1299,7 @@ class ResetBudgetJob:
                                 _RowReset(
                                     row=updated_user,
                                     spend_decrement=pre_reset_spend - float(updated_user.spend or 0.0),
+                                    expected_reset_at=expected_reset_at,
                                 )
                             )
                         else:
@@ -1286,7 +1319,7 @@ class ResetBudgetJob:
                     for u in updated_users:
                         user_id = getattr(u.row, "user_id", None)
                         if user_id:
-                            await self._invalidate_spend_counter(f"spend:user:{user_id}")
+                            await self._invalidate_spend_counter(user_counter(str(user_id)))
                         if user_id == LITELLM_PROXY_BUDGET_NAME:
                             await self._invalidate_global_proxy_spend_cache()
 
@@ -1371,7 +1404,12 @@ class ResetBudgetJob:
             if teams_to_reset is not None and len(teams_to_reset) > 0:
                 for team in teams_to_reset:
                     try:
-                        pre_reset_spend = float(team.spend or 0.0)
+                        pre_reset_spend, expected_reset_at = (
+                            float(team.spend or 0.0),
+                            cast(  # cast-ok: get_data's team branch returns validated team rows
+                                LiteLLM_TeamTable, team
+                            ).budget_reset_at,
+                        )
                         updated_team = await ResetBudgetJob._reset_budget_for_team(
                             team=team,
                             current_time=now,
@@ -1382,6 +1420,7 @@ class ResetBudgetJob:
                                 _RowReset(
                                     row=updated_team,
                                     spend_decrement=pre_reset_spend - float(updated_team.spend or 0.0),
+                                    expected_reset_at=expected_reset_at,
                                 )
                             )
                         else:
@@ -1401,7 +1440,7 @@ class ResetBudgetJob:
                     for t in updated_teams:
                         team_id = getattr(t.row, "team_id", None)
                         if team_id:
-                            await self._invalidate_spend_counter(f"spend:team:{team_id}")
+                            await self._invalidate_spend_counter(team_counter(str(team_id)))
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
@@ -1464,7 +1503,7 @@ class ResetBudgetJob:
     async def _reset_expired_window(
         window: dict,
         counter_key: str,
-        spend_counter_cache: DualCache,
+        spend_counter_store: SpendCounterStore,
         now: datetime,
         reset_settings: BudgetResetSettings,
         prisma_client: PrismaClient,
@@ -1478,13 +1517,11 @@ class ResetBudgetJob:
         reset_at: Final = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
         if reset_at > now:
             return False
-        new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_cache)
-        spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_value)
-        if spend_counter_cache.redis_cache is not None:
-            try:
-                await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_value)
-            except Exception as redis_err:
-                verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
+        new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_store)
+        try:
+            await spend_counter_store.set(counter_key, new_value)
+        except Exception as redis_err:
+            verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
         budget_duration: Final = window["budget_duration"]
         next_reset_at: Final = compute_budget_reset_at(budget_duration=budget_duration, settings=reset_settings)
         window["reset_at"] = next_reset_at.isoformat()
@@ -1538,7 +1575,7 @@ class ResetBudgetJob:
     @staticmethod
     @with_service_target(SPEND_COUNTERS_TARGET)
     async def _window_carried_spend(
-        window: Mapping[str, object], counter_key: str, spend_counter_cache: DualCache
+        window: Mapping[str, object], counter_key: str, spend_counter_store: SpendCounterStore
     ) -> float:
         """Per-window spend lives only in the counter, so the carried overage is
         read from it before the reset overwrites it."""
@@ -1549,11 +1586,11 @@ class ResetBudgetJob:
         if cap is None:
             return 0.0
         try:
-            current: Final = await spend_counter_cache.async_get_cache(key=counter_key)
+            current, _ = await spend_counter_store.read(counter_key)
         except Exception as e:  # noqa: BLE001  # an unreadable counter falls back to a plain zero reset
             verbose_proxy_logger.warning("Failed to read spend counter %s for rollover: %s", counter_key, e)
             return 0.0
-        if not isinstance(current, (int, float)):
+        if current is None:
             return 0.0
         return _carried_spend(float(current), cap)
 
@@ -1563,12 +1600,12 @@ class ResetBudgetJob:
         reset_at <= now. Only the expired windows are reset; other windows are untouched.
         """
 
-        from litellm.proxy.proxy_server import spend_counter_cache
+        from litellm.proxy.proxy_server import spend_counter_store
 
         now: Final = datetime.utcnow()
         for source in _WINDOW_SOURCES:
             try:
-                await self._reset_windows_for(source=source, now=now, spend_counter_cache=spend_counter_cache)
+                await self._reset_windows_for(source=source, now=now, spend_counter_store=spend_counter_store)
             except Exception as e:
                 verbose_proxy_logger.exception("Failed to reset budget windows for %s: %s", source.log_subject, e)
 
@@ -1576,7 +1613,7 @@ class ResetBudgetJob:
         self,
         source: _WindowSource,
         now: datetime,
-        spend_counter_cache: DualCache,
+        spend_counter_store: SpendCounterStore,
     ) -> None:
         """Walk one table's windowed rows a page at a time, to the end.
 
@@ -1598,7 +1635,7 @@ class ResetBudgetJob:
                 source=source,
                 cursor=cursor,
                 now=now,
-                spend_counter_cache=spend_counter_cache,
+                spend_counter_store=spend_counter_store,
             )
             if next_cursor is None:
                 return
@@ -1609,7 +1646,7 @@ class ResetBudgetJob:
         source: _WindowSource,
         cursor: str,
         now: datetime,
-        spend_counter_cache: DualCache,
+        spend_counter_store: SpendCounterStore,
     ) -> str | None:
         """Reset one page of windows; return the next cursor, or None when drained."""
         rows: Final = await self._with_db_retry(
@@ -1628,11 +1665,11 @@ class ResetBudgetJob:
             windows: list[dict[str, object]] = raw if isinstance(raw, list) else json.loads(raw)
             changed = False
             for window in windows:
-                counter_key = f"{source.counter_prefix}:{row_id}:window:{window['budget_duration']}"
+                counter_key = source.window_counter(row_id, str(window["budget_duration"]))
                 if await ResetBudgetJob._reset_expired_window(
                     window,
                     counter_key,
-                    spend_counter_cache,
+                    spend_counter_store,
                     now,
                     self.reset_settings,
                     prisma_client=self.prisma_client,

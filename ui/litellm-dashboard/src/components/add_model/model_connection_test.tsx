@@ -1,4 +1,6 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/i18n/i18n";
 import { AlertTriangle, CircleCheck, Copy, ExternalLink, Info, LoaderCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -21,10 +23,11 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
   formValues,
   accessToken,
   testMode: _testMode,
-  modelName = "this model",
+  modelName = i18n.t("addModel.modelConnectionTest.thisModel"),
   onClose: _onClose,
   onTestComplete,
 }) => {
+  const { t } = useTranslation();
   const [error, setError] = React.useState<Error | string | null>(null);
   const [rawResponse, setRawResponse] = React.useState<any>(null);
   const [isLoading, setIsLoading] = React.useState(true);
@@ -46,8 +49,8 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
       if (!result?.length) {
         setError(
           result
-            ? "Required fields are not filled in. Fill them in and test the connection again."
-            : "Failed to prepare model data. Please check your form inputs.",
+            ? t("addModel.modelConnectionTest.requiredFieldsMissing")
+            : t("addModel.modelConnectionTest.prepareFailed"),
         );
         setIsSuccess(false);
         setIsLoading(false);
@@ -58,11 +61,12 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
       const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, modelInfoObj?.mode);
 
       if (response.status === "success") {
-        toast.success("Connection test successful!");
+        toast.success(t("addModel.modelConnectionTest.success"));
         setError(null);
         setIsSuccess(true);
       } else {
-        const errorMessage = response.result?.error || response.message || "Unknown error";
+        const errorMessage =
+          response.result?.error || response.message || t("addModel.modelConnectionTest.unknownError");
         setError(errorMessage);
         setRawResponse(response.result?.raw_request_typed_dict);
         setIsSuccess(false);
@@ -87,7 +91,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
   }, []);
 
   const getCleanErrorMessage = (errorMsg: string) => {
-    if (!errorMsg) return "Unknown error";
+    if (!errorMsg) return t("addModel.modelConnectionTest.unknownError");
     return errorMsg
       .split("stack trace:")[0]
       .trim()
@@ -99,7 +103,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
       ? getCleanErrorMessage(error)
       : error?.message
         ? getCleanErrorMessage(error.message)
-        : "Unknown error";
+        : t("addModel.modelConnectionTest.unknownError");
 
   const formatCurlCommand = (
     apiBase: string,
@@ -141,13 +145,13 @@ ${formattedBody}
       {isLoading ? (
         <div aria-busy="true" className="flex flex-col items-center justify-center gap-4 px-5 py-8 text-center">
           <LoaderCircle className="size-8 animate-spin text-primary" />
-          <p className="text-base">Testing connection to {modelName}...</p>
+          <p className="text-base">{t("addModel.modelConnectionTest.testing", { modelName })}</p>
         </div>
       ) : isSuccess ? (
         <div className="flex items-center justify-center gap-2.5 px-5 py-8">
           <CircleCheck className="size-6 text-primary" />
           <p data-testid="connection-success-msg" className="text-lg font-medium">
-            Connection to {modelName} successful!
+            {t("addModel.modelConnectionTest.succeeded", { modelName })}
           </p>
         </div>
       ) : (
@@ -155,12 +159,12 @@ ${formattedBody}
           <div className="mb-5 flex items-center gap-3">
             <AlertTriangle className="size-6 text-destructive" />
             <p data-testid="connection-failure-msg" className="text-lg font-medium text-destructive">
-              Connection to {modelName} failed
+              {t("addModel.modelConnectionTest.failed", { modelName })}
             </p>
           </div>
 
           <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/10 p-4 shadow-xs">
-            <p className="mb-2 font-medium">Error:</p>
+            <p className="mb-2 font-medium">{t("addModel.modelConnectionTest.errorLabel")}</p>
             <p className="text-sm leading-relaxed text-destructive">{errorMessage}</p>
 
             {error && (
@@ -170,14 +174,16 @@ ${formattedBody}
                 className="mt-3 h-auto px-0"
                 onClick={() => setShowDetails((visible) => !visible)}
               >
-                {showDetails ? "Hide Details" : "Show Details"}
+                {showDetails
+                  ? t("addModel.modelConnectionTest.hideDetails")
+                  : t("addModel.modelConnectionTest.showDetails")}
               </Button>
             )}
           </div>
 
           {showDetails && (
             <div className="mb-5">
-              <p className="mb-2 text-sm font-medium">Troubleshooting Details</p>
+              <p className="mb-2 text-sm font-medium">{t("addModel.modelConnectionTest.troubleshootingDetails")}</p>
               <pre className="max-h-52 overflow-auto rounded-lg border bg-muted/50 p-4 text-xs leading-relaxed">
                 {typeof error === "string" ? error : JSON.stringify(error, null, 2)}
               </pre>
@@ -185,9 +191,9 @@ ${formattedBody}
           )}
 
           <div>
-            <p className="mb-2 text-sm font-medium">API Request</p>
+            <p className="mb-2 text-sm font-medium">{t("addModel.modelConnectionTest.apiRequest")}</p>
             <pre className="max-h-64 overflow-auto rounded-lg border bg-muted/50 p-4 text-xs leading-relaxed">
-              {curlCommand || "No request data available"}
+              {curlCommand || t("addModel.modelConnectionTest.noRequestData")}
             </pre>
             <Button
               type="button"
@@ -195,11 +201,11 @@ ${formattedBody}
               className="mt-2"
               onClick={() => {
                 navigator.clipboard.writeText(curlCommand || "");
-                toast.success("Copied to clipboard");
+                toast.success(t("addModel.modelConnectionTest.copied"));
               }}
             >
               <Copy data-icon="inline-start" />
-              Copy to Clipboard
+              {t("addModel.modelConnectionTest.copyToClipboard")}
             </Button>
           </div>
         </div>
@@ -213,7 +219,7 @@ ${formattedBody}
         render={<a href="https://docs.litellm.ai/docs/providers" target="_blank" rel="noopener noreferrer" />}
       >
         <Info data-icon="inline-start" />
-        View Documentation
+        {t("addModel.modelConnectionTest.viewDocumentation")}
         <ExternalLink data-icon="inline-end" />
       </Button>
     </div>

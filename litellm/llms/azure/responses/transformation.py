@@ -3,19 +3,21 @@ from collections.abc import Callable, Mapping
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import urlsplit
 
 import httpx
-from openai.types.responses import ResponseReasoningItem
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
-from litellm.litellm_core_utils.prompt_templates.common_utils import prompt_cache_breakpoint_within
+from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
+    prompt_cache_breakpoint_within,
+)
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.base_llm.responses.transformation import SUMMARY_ONLY_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import *
@@ -72,6 +74,21 @@ def _with_responses_api_version(api_base: str | None, litellm_params: Mapping[st
     return MappingProxyType({**litellm_params, "api_version": _resolve_responses_api_version(api_base, litellm_params)})
 
 
+_AZURE_REJECTED_INPUT_FIELDS: Final = MappingProxyType(
+    {"message": frozenset({"status"}), "reasoning": frozenset({"status"})}
+)
+_AZURE_REJECTED_INPUT_FIELDS_UNDER_DROP_PARAMS: Final = MappingProxyType(
+    {**_AZURE_REJECTED_INPUT_FIELDS, "reasoning": frozenset({"status", "content"})}
+)
+
+
+def _without_fields_azure_rejects(item: object, rejected_fields: Mapping[str, frozenset[str]]) -> object:
+    if not is_str_keyed_mapping(item):
+        return item
+    rejected: Final = rejected_fields.get(str(item.get("type")), frozenset())
+    return {key: value for key, value in item.items() if key not in rejected} if rejected else item
+
+
 class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     # Parameters not supported by Azure Responses API
     AZURE_UNSUPPORTED_PARAMS = ["context_management"]
@@ -122,68 +139,17 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_stripped_model_name(self, model: str) -> str:
         return model.replace("responses/", "").replace("o_series/", "").replace("azure_ai/", "")
 
-    def _handle_reasoning_item(self, item: dict[str, Any]) -> Mapping[str, object]:
-        """
-        Handle reasoning items to filter out the status field.
-        Issue: https://github.com/BerriAI/litellm/issues/13484
-
-        Azure OpenAI API does not accept 'status' field in reasoning input items.
-        """
-        if item.get("type") == "reasoning":
-            try:
-                # Ensure required fields are present for ResponseReasoningItem
-                item_data: Final = dict(item)
-                if "summary" not in item_data:
-                    item_data["summary"] = (
-                        item_data.get("reasoning_content", "")[:100] + "..."
-                        if len(item_data.get("reasoning_content", "")) > 100
-                        else item_data.get("reasoning_content", "")
-                    )
-
-                # Create ResponseReasoningItem object from the item data
-                reasoning_item: Final = ResponseReasoningItem.model_validate(item_data)
-
-                # Convert back to dict with exclude_none=True to exclude None fields
-                dict_reasoning_item: Final = reasoning_item.model_dump(exclude_none=True)
-                dict_reasoning_item.pop("status", None)
-
-                return dict_reasoning_item
-            except Exception as e:
-                verbose_logger.debug("Failed to create ResponseReasoningItem, falling back to manual filtering: %s", e)
-                # Fallback: manually filter out known None fields
-                filtered_item: Final = {
-                    k: v
-                    for k, v in item.items()
-                    if v is not None or k not in {"status", "content", "encrypted_content"}
-                }
-                return filtered_item
-        return item
-
     def _validate_input_param(
-        self, input: str | ResponseInputParam, *, drops_set_created_by: bool = False
+        self, input: str | ResponseInputParam, *, drop_params: bool = False
     ) -> str | ResponseInputParam:
-        """
-        Override parent method to also filter out 'status' field from message items.
-        Azure OpenAI API does not accept 'status' field in input messages.
-        """
-        from typing import cast
-
-        # First call parent's validation
-        validated_input: Final = super()._validate_input_param(input, drops_set_created_by=drops_set_created_by)
-
-        # Then filter out status from message items
-        if isinstance(validated_input, list):
-            filtered_input: Final[list[object]] = []
-            for item in validated_input:
-                if isinstance(item, dict) and item.get("type") == "message":
-                    # Filter out status field from message items
-                    filtered_item = {k: v for k, v in item.items() if k != "status"}
-                    filtered_input.append(filtered_item)
-                else:
-                    filtered_input.append(item)
-            return cast(ResponseInputParam, filtered_input)
-
-        return validated_input
+        validated_input: Final = super()._validate_input_param(input, drop_params=drop_params)
+        if not isinstance(validated_input, list):
+            return validated_input
+        rejected_fields: Final = (
+            _AZURE_REJECTED_INPUT_FIELDS_UNDER_DROP_PARAMS if drop_params else _AZURE_REJECTED_INPUT_FIELDS
+        )
+        sanitized_items: Final = [_without_fields_azure_rejects(item, rejected_fields) for item in validated_input]
+        return cast("ResponseInputParam", sanitized_items)  # cast-ok: items keep their shape minus rejected fields
 
     def transform_responses_api_request(
         self,
@@ -285,9 +251,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def compact_url(self, api_base: str) -> str:
         params: Final = httpx.URL(api_base).params
-        v1_params: Final = (
-            params if BaseAzureLLM.is_azure_v1_api_version(params.get("api-version")) else params.remove("api-version")
-        )
+        api_version: Final = next(iter(params.get_list("api-version")), None)
+        v1_params: Final = params if BaseAzureLLM.is_azure_v1_api_version(api_version) else params.remove("api-version")
         return super().compact_url(str(_v1_responses_url(api_base).copy_with(params=v1_params)))
 
     #########################################################

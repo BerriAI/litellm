@@ -1085,7 +1085,7 @@ class TestClearCache:
         Test that clear_cache successfully clears router model caches and reloads models.
         """
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = ["openai/gpt-4o", "openai/gpt-4o-mini"]
 
@@ -1125,7 +1125,7 @@ class TestClearCache:
         # entries are auto_router/* deployments (so their router-map entries should be
         # cleared for reload); the config-defined router is preserved.
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1209,7 +1209,7 @@ class TestClearCache:
         )
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1270,7 +1270,7 @@ class TestClearCachePreservesConfigRouters:
         )
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1315,7 +1315,7 @@ class TestClearCachePreservesConfigRouters:
         from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1346,15 +1346,15 @@ class TestClearCachePreservesConfigRouters:
         assert "shared-name" in plugins["complexity"]
 
     @pytest.mark.asyncio
-    async def test_db_quality_and_adaptive_routers_are_evicted(self):
-        """The auto_router/ prefix also covers quality_router/ and adaptive_router/. Their
+    async def test_db_quality_adaptive_and_switchyard_routers_are_evicted(self):
+        """The auto_router/ prefix also covers quality_router/, adaptive_router/ and switchyard. Their
         registry entries must be popped too, or reload's init raises 'already exists'
         (quality) or leaves a stale entry (adaptive).
         """
         from litellm.proxy.management_endpoints.model_management_endpoints import clear_cache
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.registry.return_value.all.return_value = [
             {
@@ -1367,11 +1367,17 @@ class TestClearCachePreservesConfigRouters:
                 "model_info": {"id": "db-a", "db_model": True},
                 "litellm_params": {"model": "auto_router/adaptive_router/a1"},
             },
+            {
+                "model_name": "s1",
+                "model_info": {"id": "db-s", "db_model": True},
+                "litellm_params": {"model": "auto_router/switchyard"},
+            },
         ]
         plugins["auto"] = {}
         plugins["complexity"] = {}
         plugins["quality"] = {"q1": MagicMock()}
         plugins["adaptive"] = {"a1": MagicMock()}
+        plugins["switchyard"] = {"s1": MagicMock()}
 
         mock_config = MagicMock()
         mock_config.add_deployment_locked = AsyncMock(
@@ -1389,6 +1395,7 @@ class TestClearCachePreservesConfigRouters:
 
         assert "q1" not in plugins["quality"]
         assert "a1" not in plugins["adaptive"]
+        assert "s1" not in plugins["switchyard"]
 
 
 class TestDeleteModelClearsRouterRegistry:
@@ -1503,7 +1510,7 @@ class TestDeleteModelClearsRouterRegistry:
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
 
         mock_router = MagicMock()
-        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}}
+        plugins: dict[str, dict] = {"auto": {}, "complexity": {}, "adaptive": {}, "quality": {}, "switchyard": {}}
         mock_router.registry.return_value.plugins.side_effect = plugins.__getitem__
         mock_router.apply.return_value = ApplyResult(
             version=1,
@@ -1564,7 +1571,7 @@ def deleted_auto_router_catalog(monkeypatch):
     config = proxy_server.ProxyConfig()
     config.auto_router_db_catalog = build_auto_router_catalog(rows)
     monkeypatch.setattr(proxy_server, "proxy_config", config)
-    monkeypatch.setattr(proxy_server, "MODEL_RECONCILE_LOCK", asyncio.Lock())
+    monkeypatch.setattr(proxy_server, "DB_RECONCILE_LOCK", asyncio.Lock())
     monkeypatch.setattr(proxy_server, "llm_router", Router(model_list=[]))
     monkeypatch.setattr(proxy_server, "_license_check", SimpleNamespace(auto_router_capability_limit=lambda: 1))
     monkeypatch.setattr(proxy_server, "heuristic_v1_tuning_baselines", {})
@@ -2288,8 +2295,8 @@ class TestTeamModelSiblingRouting:
     async def test_router_finds_all_sibling_team_deployments(self):
         """
         When two team deployments share team_public_model_name="gpt-4.1-mini",
-        the router's _common_checks_available_deployment must return BOTH as
-        healthy_deployments (not collapse to one).
+        routing that public name for the team must reach BOTH deployments
+        (not collapse to one).
         """
         import litellm
 
@@ -2338,14 +2345,16 @@ class TestTeamModelSiblingRouting:
         result = router.map_team_model(public_name, team_id)
         assert result == public_name
 
-        # _common_checks_available_deployment should return both deployments
-        model, healthy = router._common_checks_available_deployment(
-            model=public_name,
-            request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
-        )
-        assert isinstance(healthy, list)
-        assert len(healthy) == 2
-        api_bases = {d["litellm_params"]["api_base"] for d in healthy}
+        # routing the public name for the team must reach both siblings
+        api_bases = set()
+        for _ in range(30):
+            response = await router.acompletion(
+                model=public_name,
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response="ok",
+                metadata={"user_api_key_team_id": team_id},
+            )
+            api_bases.add(response._hidden_params["api_base"])
         assert api_bases == {
             "https://eastus.openai.azure.com",
             "https://westus.openai.azure.com",
@@ -4860,6 +4869,146 @@ class TestModelInfoCostMapEchoFilter:
             "cost-map metadata must not be persisted from an unchanged /model/info echo"
         )
 
+    def test_echo_of_an_expanded_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-echo-wildcard"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        echo: Final = {**entry, "id": "dep-echo-wildcard", "db_model": True, "access_groups": ["prod"]}
+        db_model: Final = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_name="my-openai/gpt-5.6", model_info=ModelInfo(**echo)),
+            llm_router=router,
+        )
+
+        info: Final = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto the whole wildcard"
+
+    def test_echo_saved_on_a_worker_that_has_not_loaded_the_wildcard_is_not_persisted(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router_without_the_wildcard: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "openai-mini",
+                    "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "x"},
+                    "model_info": {"id": "dep-other"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        db_model: Final = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        result: Final = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_name="my-openai/gpt-5.6",
+                model_info=ModelInfo(**{**entry, "id": "dep-echo-wildcard", "access_groups": ["prod"]}),
+            ),
+            llm_router=router_without_the_wildcard,
+        )
+
+        info: Final = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto the whole wildcard"
+
+    def test_legacy_update_echo_of_an_expanded_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _ListedRow,
+            legacy_update_model_info_changes,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "my-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-echo-wildcard"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        db_model: Final = Deployment(
+            model_name="my-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-echo-wildcard"),
+        )
+
+        changes: Final = legacy_update_model_info_changes(
+            db_model,
+            ModelInfo(**{**entry, "id": "dep-echo-wildcard", "access_groups": ["prod"]}),
+            loaded_catalog=lambda: {},
+            listed_row=_ListedRow("my-openai/gpt-5.6", router),
+        )
+
+        assert dict(changes) == {"access_groups": ["prod"]}
+
+    @pytest.mark.asyncio
+    async def test_echo_of_a_team_wildcard_row_is_not_persisted_on_the_wildcard(self):
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import _update_team_model_in_db
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "team-openai/*",
+                    "litellm_params": {"model": "openai/*", "api_key": "x"},
+                    "model_info": {"id": "dep-team-wildcard", "team_id": "team-a"},
+                }
+            ]
+        )
+        entry: Final = litellm.get_model_info("openai/gpt-5.6")
+        echo: Final = {**entry, "id": "dep-team-wildcard", "team_id": "team-a", "access_groups": ["prod"]}
+        db_model: Final = Deployment(
+            model_name="team-openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-team-wildcard", team_id="team-a"),
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"),
+            patch("litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"),
+        ):
+            result: Final = await _update_team_model_in_db(
+                db_model=db_model,
+                patch_data=updateDeployment(model_name="team-openai/gpt-5.6", model_info=ModelInfo(**echo)),
+                user_api_key_dict=UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN),
+                prisma_client=MockPrismaClient(team_exists=True),
+                write_row=_passthrough_row,
+                llm_router=router,
+            )
+
+        info: Final = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert set(info).isdisjoint(entry), "one listed model's metadata must not be saved onto a team's wildcard"
+
     def test_an_edited_value_survives_the_echo_filter(self):
         import litellm
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
@@ -5950,7 +6099,7 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
 
     @pytest.mark.asyncio
     async def test_reconciles_serialize_so_no_stale_snapshot_can_evict(self, monkeypatch):
-        """MODEL_RECONCILE_LOCK admits one reconcile at a time.
+        """DB_RECONCILE_LOCK admits one reconcile at a time.
 
         The fake body awaits, which is the whole point: without the lock the gather below
         parks all five inside the critical section at that await and observed depth goes
@@ -6079,7 +6228,7 @@ class TestConcurrentModelWritesDoNotEvictEachOther:
 
 class TestDeleteEvictionsHoldTheReconcileLock:
     """A delete evicts from ``llm_router`` directly instead of reconciling, so it must
-    take MODEL_RECONCILE_LOCK to do it.
+    take DB_RECONCILE_LOCK to do it.
 
     The db row is gone by then, but a reconcile that snapshotted the db BEFORE the row
     was deleted still lists that id as desired, and its ``_add_deployment`` upserts the
@@ -6093,7 +6242,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
     async def _assert_evicts_under_lock(monkeypatch, call_endpoint, model_id: str, config) -> None:
         """Run ``call_endpoint`` with the lock already held and assert it blocks.
 
-        Holding MODEL_RECONCILE_LOCK stands in for a reconcile that is mid-flight. If
+        Holding DB_RECONCILE_LOCK stands in for a reconcile that is mid-flight. If
         the eviction takes the lock it cannot run until we release; if it does not, it
         runs straight through and the deployment is evicted while the "reconcile" is
         still in its critical section -- exactly the interleaving that resurrects it.
@@ -6106,7 +6255,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
         own, exactly as here.
         """
         lock = asyncio.Lock()
-        monkeypatch.setattr("litellm.proxy.proxy_server.MODEL_RECONCILE_LOCK", lock)
+        monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", lock)
         stale_catalog = config.auto_router_db_catalog
 
         async with lock:
@@ -6115,7 +6264,7 @@ class TestDeleteEvictionsHoldTheReconcileLock:
             for _ in range(50):
                 await asyncio.sleep(0)
             assert not task.done(), (
-                f"deleting {model_id} did not wait for MODEL_RECONCILE_LOCK -- an "
+                f"deleting {model_id} did not wait for DB_RECONCILE_LOCK -- an "
                 f"in-flight reconcile can resurrect the deployment it just evicted"
             )
             config.auto_router_db_catalog = stale_catalog
@@ -8567,12 +8716,19 @@ class TestAccessGroupModelSync:
                 return [{"deployment_count": deployment_count}]
             if sql.startswith('UPDATE "LiteLLM_AccessGroupTable"'):
                 return [{"access_group_id": "ag-1"}]
+            if sql.startswith(("SELECT 1 AS locked FROM", 'SELECT team_id FROM "LiteLLM_TeamTable"')):
+                return []
             assert sql.startswith("WITH ")
             return TestAccessGroupModelSync._ALLOWLIST_ROWS
+
+        @contextlib.asynccontextmanager
+        async def transaction():
+            yield mock_prisma.db
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+        mock_prisma.db.tx = MagicMock(side_effect=transaction)
         mock_prisma.db.litellm_proxymodeltable = AsyncMock()
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=row)
         mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=row)
@@ -11420,3 +11576,138 @@ async def test_add_new_model_reports_a_database_outage_during_the_insert_as_503(
         )
 
     assert (exc_info.value.code, exc_info.value.type) == ("503", "no_db_connection")
+
+
+@pytest.mark.parametrize("invalid", [
+    {"algorithm": "random"},
+    {"classifier": {}},
+    {"options": {"capable_system_prompt": "ignored"}},
+])
+def test_switchyard_write_rejects_unloadable_configuration(invalid: dict[str, object]) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import _strategy_router_write_violation
+    from litellm.types.router import updateLiteLLMParams
+
+    violation: Final = _strategy_router_write_violation(
+        incoming_params=updateLiteLLMParams(
+            model="auto_router/switchyard",
+            switchyard_router_config={"models": {"capable": "strong", "efficient": "fast"}, **invalid},
+        ),
+        existing_params=None,
+    )
+    assert violation is not None
+    assert "Invalid switchyard_router_config" in violation
+
+
+SWITCHYARD_PARAMS: Final = {
+    "model": "auto_router/switchyard",
+    "switchyard_router_config": {"models": {"capable": "strong", "efficient": "fast"}},
+}
+
+
+@pytest.mark.parametrize(
+    ("model_name", "incoming", "existing"),
+    [
+        ("strong", SWITCHYARD_PARAMS, None),
+        ("fast", {"model": "auto_router/switchyard"}, SWITCHYARD_PARAMS),
+        ("fast", None, SWITCHYARD_PARAMS),
+        (
+            "smart",
+            {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {"tiers": {"SIMPLE": "smart", "COMPLEX": "strong"}},
+            },
+            None,
+        ),
+    ],
+)
+def test_strategy_router_that_lists_itself_is_rejected_before_saving(
+    model_name: str, incoming: dict[str, object] | None, existing: dict[str, object] | None
+) -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        _raise_on_strategy_router_write_violation,
+    )
+    from litellm.types.router import updateLiteLLMParams
+
+    with pytest.raises(ProxyException) as exc_info:
+        _raise_on_strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(**incoming) if incoming is not None else None,
+            existing_params=updateLiteLLMParams(**existing) if existing is not None else None,
+            model_name=model_name,
+        )
+    assert exc_info.value.code == "400"
+    assert model_name in exc_info.value.message
+
+
+def test_strategy_router_with_other_targets_saves() -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import _self_routing_violation
+    from litellm.types.router import updateLiteLLMParams
+
+    assert _self_routing_violation("route", updateLiteLLMParams(**SWITCHYARD_PARAMS), None) is None
+
+
+def test_self_routing_is_caught_when_the_stored_model_is_encrypted(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        _raise_on_strategy_router_write_violation,
+    )
+    from litellm.types.router import updateLiteLLMParams
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-encryption")
+    stored: Final = updateLiteLLMParams(
+        **{**SWITCHYARD_PARAMS, "model": encrypt_value_helper("auto_router/switchyard")}
+    )
+    assert stored.model != "auto_router/switchyard"
+    with pytest.raises(ProxyException) as exc_info:
+        _raise_on_strategy_router_write_violation(
+            incoming_params=updateLiteLLMParams(
+                switchyard_router_config={"models": {"capable": "route", "efficient": "fast"}}
+            ),
+            existing_params=stored,
+            model_name="route",
+        )
+    assert exc_info.value.code == "400"
+
+
+@pytest.mark.asyncio
+async def test_rename_rewrites_only_in_a_transaction_holding_every_locked_teams_advisory_lock():
+    """A team that starts listing the old name between the advisory snapshot and the row lock must not be
+    rewritten without its advisory lock, or a roster change on that team can still deadlock with the rename."""
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
+
+    snapshots = iter(([{"team_id": "team-1"}], [{"team_id": "team-1"}, {"team_id": "team-2"}]))
+    transactions: list[list[tuple[str, tuple[str, ...]]]] = []
+
+    async def query_raw(sql: str, *params: str) -> list[dict[str, object]]:
+        if transactions:
+            transactions[-1].append((sql, params))
+        if sql.startswith("SELECT COUNT(*)"):
+            return [{"deployment_count": 0}]
+        if sql.startswith('SELECT team_id FROM "LiteLLM_TeamTable"') and not sql.endswith("FOR UPDATE"):
+            return next(snapshots)
+        if sql.startswith('SELECT team_id FROM "LiteLLM_TeamTable"'):
+            return [{"team_id": "team-1"}, {"team_id": "team-2"}]
+        return []
+
+    @contextlib.asynccontextmanager
+    async def transaction():
+        transactions.append([])
+        yield db
+
+    db = SimpleNamespace(query_raw=query_raw, tx=transaction)
+    with patch("litellm.proxy.management_helpers.model_allowlist_rename_sync.evict_and_broadcast", AsyncMock()):
+        await sync_model_allowlists_for_renamed_model(
+            SimpleNamespace(db=db),
+            model_id="deployment",
+            old_name="old-model",
+            new_name="new-model",
+            llm_router=None,
+            user_api_key_cache=UserApiKeyCache(),
+        )
+
+    rewrites = [calls for calls in transactions if any(sql.startswith("WITH ") for sql, _ in calls)]
+    assert len(rewrites) == 1
+    advisory = [params[0] for sql, params in rewrites[0] if "pg_advisory_xact_lock" in sql]
+    assert advisory == ["team-1", "team-2"]

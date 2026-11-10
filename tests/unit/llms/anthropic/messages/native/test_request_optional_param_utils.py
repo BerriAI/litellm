@@ -143,3 +143,37 @@ def test_the_thread_field_survives_optional_param_filtering():
         {"max_tokens": 64, "thread": thread}
     )
     assert result == {"max_tokens": 64, "thread": thread}
+
+
+@pytest.mark.parametrize(
+    ("model", "param", "value"),
+    [
+        ("claude-opus-4-8", "temperature", 0.3),
+        ("claude-opus-4-8", "top_p", 0.9),
+        ("claude-opus-4-8", "top_k", 5),
+        ("claude-sonnet-4-6", "speed", "fast"),
+    ],
+)
+def test_deployment_listed_param_is_dropped_before_the_unsupported_param_gate(monkeypatch, model, param, value):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    result: Final = AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+        params={param: value, "stream": True},
+        model=model,
+        drop_params=False,
+        additional_drop_params=(param,),
+    )
+
+    assert result == {"stream": True}
+
+
+def test_param_missing_from_the_drop_list_still_raises_the_unsupported_param_400(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="does not support top_p") as raised:
+        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            params={"top_k": 5, "top_p": 0.9},
+            model="claude-opus-4-8",
+            drop_params=False,
+            additional_drop_params=("top_k", "top_p.nested"),
+        )
+
+    assert raised.value.status_code == 400

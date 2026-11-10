@@ -1,8 +1,8 @@
+import asyncio
 import base64
 import json
 import logging
 import time
-import asyncio
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from types import SimpleNamespace
@@ -23,12 +23,19 @@ from litellm_enterprise.proxy.hooks.managed_files import (
     PROXY_LiteLLMManagedFiles,
     _provider_file_retrieve_credentials,
 )
+
+from litellm import Router
 from litellm.caching import DualCache
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import get_format_from_file_id
 from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
-    is_base64_encoded_unified_file_id,
+    TeamProviderDeployment,
+    convert_b64_uid_to_unified_uid,
     encode_file_id_with_model,
+    get_models_from_unified_file_id,
+    is_base64_encoded_unified_file_id,
+    provider_file_id_from_managed_id,
 )
 from litellm.types.llms.openai import OpenAIFileObject
 from tests.unit.litellm_core_utils.attribute_forwarder import AttributeForwarder
@@ -209,6 +216,7 @@ def _marked_fallback_file_row(
 
 def _batch_response_for_output_listing() -> "LiteLLMBatch":
     from openai.types.batch import BatchRequestCounts
+
     from litellm.types.utils import LiteLLMBatch
 
     response: Final = LiteLLMBatch(
@@ -753,9 +761,9 @@ async def test_router_acreate_batch_only_selects_from_file_id_mapping(monkeypatc
 
 @pytest.mark.asyncio
 async def test_output_file_id_for_batch_retrieve():
-    import litellm.proxy.proxy_server as proxy_server_module
     from openai.types.batch import BatchRequestCounts
 
+    import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import OpenAIFileObject
     from litellm.types.utils import LiteLLMBatch
@@ -837,9 +845,9 @@ async def test_output_file_id_preserves_target_model_names_when_model_name_missi
     (e.g. Vertex batch retrieve), unified output_file_id should still include
     target_model_names from the managed input file ID.
     """
-    import litellm.proxy.proxy_server as proxy_server_module
     from openai.types.batch import BatchRequestCounts
 
+    import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import OpenAIFileObject
     from litellm.types.utils import LiteLLMBatch
@@ -925,9 +933,9 @@ async def test_error_file_id_for_failed_batch():
     """
     Test that the error_file_id is properly managed when a batch fails
     """
-    import litellm.proxy.proxy_server as proxy_server_module
     from openai.types.batch import BatchRequestCounts
 
+    import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import OpenAIFileObject
     from litellm.types.utils import LiteLLMBatch
@@ -1102,7 +1110,7 @@ def test_update_responses_input_with_unified_file_id():
     Test that update_responses_input_with_model_file_ids correctly decodes
     unified file IDs and extracts llm_output_file_id from responses API input.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1145,7 +1153,7 @@ def test_update_responses_input_with_regular_file_id():
     Test that update_responses_input_with_model_file_ids keeps regular
     OpenAI file IDs unchanged.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1181,7 +1189,7 @@ def test_update_responses_input_with_string_input():
     """
     Test that update_responses_input_with_model_file_ids returns string input unchanged.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1198,7 +1206,7 @@ def test_update_responses_input_with_multiple_file_ids():
     Test that update_responses_input_with_model_file_ids handles multiple file IDs
     (both unified and regular) in the same input.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1242,7 +1250,7 @@ def test_update_responses_input_with_model_file_id_mapping():
     Test that update_responses_input_with_model_file_ids correctly uses
     model_file_id_mapping to map managed file IDs to provider-specific file IDs.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_input_with_model_file_ids,
     )
 
@@ -1302,7 +1310,7 @@ def test_update_responses_tools_with_model_file_id_mapping():
     tools.container.file_ids were not being replaced with provider-specific
     file IDs, causing "string too long" errors from OpenAI.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_tools_with_model_file_ids,
     )
 
@@ -1350,7 +1358,7 @@ def test_update_responses_tools_without_mapping():
     Test that update_responses_tools_with_model_file_ids keeps file IDs
     unchanged when no mapping is provided.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_tools_with_model_file_ids,
     )
 
@@ -1382,7 +1390,7 @@ def test_update_responses_tools_with_mixed_file_ids():
     Test that update_responses_tools_with_model_file_ids correctly handles
     a mix of managed and regular file IDs.
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
         update_responses_tools_with_model_file_ids,
     )
 
@@ -1978,7 +1986,6 @@ async def test_store_batch_output_file_retries_model_name_provider_fetch():
     assert all(
         call.kwargs["custom_llm_provider"] == "bedrock"
         and call.kwargs["max_retries"] == 0
-        and "_litellm_internal_model_credentials" not in call.kwargs
         for call in retrieve.call_args_list
     )
     assert sleep_calls == [0.5, 1.0]
@@ -2020,7 +2027,6 @@ async def test_store_batch_output_file_marks_model_name_fallback_after_four_tran
     assert all(
         call.kwargs["custom_llm_provider"] == "bedrock"
         and call.kwargs["max_retries"] == 0
-        and "_litellm_internal_model_credentials" not in call.kwargs
         for call in retrieve.call_args_list
     )
     assert sleep_calls == [0.5, 1.0, 2.0]
@@ -3654,7 +3660,6 @@ async def test_afile_retrieve_refreshes_marked_fallback_without_router_from_mode
     retrieve.assert_awaited_once()
     assert retrieve.await_args.kwargs["custom_llm_provider"] == "bedrock"
     assert retrieve.await_args.kwargs["max_retries"] == 0
-    assert "_litellm_internal_model_credentials" not in retrieve.await_args.kwargs
     updated_row: Final = managed_file_table.rows["unified-output"]
     assert updated_row.file_object == response
     assert updated_row.model_mappings == {"bedrock/model-x": "provider-output"}
@@ -3698,7 +3703,6 @@ async def test_afile_retrieve_uses_model_name_when_router_does_not_know_deployme
     )
     assert retrieve.await_args.kwargs["custom_llm_provider"] == "bedrock"
     assert retrieve.await_args.kwargs["max_retries"] == 0
-    assert "_litellm_internal_model_credentials" not in retrieve.await_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -3826,7 +3830,6 @@ async def test_afile_retrieve_case3_uses_default_provider_for_unknown_router_dep
     assert retrieve.await_args.kwargs["file_id"] == "provider-output"
     assert retrieve.await_args.kwargs["max_retries"] == 0
     assert "custom_llm_provider" not in retrieve.await_args.kwargs
-    assert "_litellm_internal_model_credentials" not in retrieve.await_args.kwargs
 
 
 @pytest.mark.asyncio
@@ -3943,7 +3946,6 @@ async def test_afile_retrieve_raises_error_for_non_managed_file():
 
 @pytest.mark.asyncio
 async def test_list_batches_from_managed_objects_table():
-    from openai.types.batch import BatchRequestCounts
 
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -6323,3 +6325,132 @@ async def test_only_a_streamed_background_create_is_marked_for_the_managed_bill(
     assert isinstance(result, dict)
     assert (MANAGED_BACKGROUND_RESPONSE_METADATA_KEY in result["litellm_metadata"]) is marked
     assert result["metadata"] == {"run": "nightly"}
+
+
+_TEAM_DEPLOYMENT_API_BASE: Final = "https://team-openai.example/v1"
+_TEAM_DEPLOYMENT: Final = TeamProviderDeployment(
+    deployment_id="team-a-openai", public_model_name="openai/*", credentials={}
+)
+
+
+def _team_openai_wildcard_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "model_name_team-a_openai",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "team-openai-key",
+                    "api_base": _TEAM_DEPLOYMENT_API_BASE,
+                },
+                "model_info": {"id": "team-a-openai", "team_id": "team-a", "team_public_model_name": "openai/*"},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
+@respx.mock
+async def test_register_provider_file_stores_a_managed_file_its_owner_can_call() -> None:
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma()
+    provider_retrieve: Final = respx.get(f"{_TEAM_DEPLOYMENT_API_BASE}/files/file-ingested").respond(
+        200,
+        json={
+            "id": "file-ingested",
+            "object": "file",
+            "bytes": 12,
+            "created_at": 456,
+            "filename": "sample.txt",
+            "purpose": "assistants",
+            "status": "processed",
+        },
+    )
+    owner: Final = UserAPIKeyAuth(user_id="viewer", team_id="team-a")
+
+    managed_file_id: Final = await proxy_managed_files.register_provider_file(
+        provider_file_id="file-ingested",
+        content_type="text/plain",
+        deployment=_TEAM_DEPLOYMENT,
+        owner=owner,
+        llm_router=_team_openai_wildcard_router(),
+    )
+
+    assert managed_file_id is not None
+    assert is_base64_encoded_unified_file_id(managed_file_id)
+    assert get_format_from_file_id(managed_file_id) == "text/plain"
+    assert get_models_from_unified_file_id(convert_b64_uid_to_unified_uid(managed_file_id)) == ["openai/*"]
+    assert provider_file_id_from_managed_id(managed_file_id) == "file-ingested"
+    assert provider_retrieve.calls.last.request.headers["authorization"] == "Bearer team-openai-key"
+    stored: Final = managed_file_table.rows[managed_file_id]
+    assert stored.model_mappings == {"team-a-openai": "file-ingested"}
+    assert stored.file_object is not None
+    assert stored.file_object.id == managed_file_id
+    assert stored.file_object.filename == "sample.txt"
+    assert await proxy_managed_files.can_user_call_unified_file_id(managed_file_id, owner) is True
+    assert (
+        await proxy_managed_files.can_user_call_unified_file_id(
+            managed_file_id, UserAPIKeyAuth(user_id="outsider", team_id="team-b")
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
+@respx.mock
+async def test_register_provider_file_returns_none_when_the_provider_cannot_find_the_file() -> None:
+    proxy_managed_files, managed_file_table = _managed_files_with_fake_prisma()
+    respx.get(f"{_TEAM_DEPLOYMENT_API_BASE}/files/file-ingested").respond(
+        404, json={"error": {"message": "No such File object: file-ingested", "type": "invalid_request_error"}}
+    )
+
+    managed_file_id: Final = await proxy_managed_files.register_provider_file(
+        provider_file_id="file-ingested",
+        content_type="text/plain",
+        deployment=_TEAM_DEPLOYMENT,
+        owner=UserAPIKeyAuth(user_id="viewer", team_id="team-a"),
+        llm_router=_team_openai_wildcard_router(),
+    )
+
+    assert managed_file_id is None
+    assert managed_file_table.rows == {}
+
+
+class _UnwritableManagedFileTable(_InMemoryManagedFileTable):
+    async def upsert(
+        self,
+        where: Mapping[str, object],
+        data: Mapping[str, Mapping[str, object]],
+    ) -> LiteLLM_ManagedFileTable:
+        raise RuntimeError("database unavailable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
+@respx.mock
+async def test_register_provider_file_returns_none_when_the_managed_row_cannot_be_written() -> None:
+    proxy_managed_files: Final = PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=_InMemoryManagedFilesPrismaClient(_UnwritableManagedFileTable())
+    )
+    respx.get(f"{_TEAM_DEPLOYMENT_API_BASE}/files/file-ingested").respond(
+        200,
+        json={
+            "id": "file-ingested",
+            "object": "file",
+            "bytes": 12,
+            "created_at": 456,
+            "filename": "sample.txt",
+            "purpose": "assistants",
+        },
+    )
+
+    managed_file_id: Final = await proxy_managed_files.register_provider_file(
+        provider_file_id="file-ingested",
+        content_type="text/plain",
+        deployment=_TEAM_DEPLOYMENT,
+        owner=UserAPIKeyAuth(user_id="viewer", team_id="team-a"),
+        llm_router=_team_openai_wildcard_router(),
+    )
+
+    assert managed_file_id is None

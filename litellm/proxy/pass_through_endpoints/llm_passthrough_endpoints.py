@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
 import openai
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Security, WebSocket
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
@@ -31,7 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -58,6 +58,7 @@ from litellm.llms.anthropic.common_utils import (
     anthropic_pass_through_api_base,
     merge_anthropic_beta_headers,
 )
+from litellm.llms.azure.common_utils import entra_rejection_in
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
     is_azure_body_model_inference_endpoint,
@@ -96,6 +97,8 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    api_key_header,
+    custom_litellm_key_header,
     get_bearer_token,
     is_no_auth_dev_mode,
     user_api_key_auth,
@@ -132,7 +135,6 @@ from litellm.proxy.common_utils.token_count_log import (
     logged_provider_token_count,
     rejected_token_count,
 )
-from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
 from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
     stream_usage_relay,
     without_injected_usage_frames,
@@ -157,11 +159,15 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.utils import ProxyLogging as ProxyLoggingType
 from litellm.proxy.utils import is_known_model, normalize_route_for_root_path
+from litellm.proxy.vector_store_endpoints.endpoints import build_request_data_from_managed_vector_store
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
+    assert_vector_store_index_access,
     get_litellm_managed_vector_store,
+    has_vector_store_index_access,
     is_allowed_to_call_vector_store_endpoint,
+    normalize_litellm_params,
 )
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
 from litellm.types.passthrough_endpoints.eu_jev import EuJevDecisionRequest, EuJevDecisionResponse
@@ -180,8 +186,8 @@ from litellm.types.passthrough_endpoints.tinyfish import (
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import LiteLLMParamsTypedDict
 from litellm.types.utils import CallTypes, LlmProviders
-from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
-from litellm.utils import ProviderConfigManager
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore, LiteLLM_ManagedVectorStoreIndex
+from litellm.utils import ProviderConfigManager, with_named_credential
 
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
@@ -300,7 +306,11 @@ def get_passthrough_router_request_metadata(
     )
     if request is not None:
         LiteLLMProxyRequestSetup.apply_authenticated_baggage_tags(request, request_data)
-    return _METADATA_ADAPTER.validate_python(request_data["litellm_metadata"])
+    metadata: Final = _METADATA_ADAPTER.validate_python(request_data["litellm_metadata"])
+    return {
+        **metadata,
+        **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict),
+    }
 
 
 async def llm_passthrough_factory_proxy_route(
@@ -1050,6 +1060,131 @@ async def milvus_proxy_route(
     return received_value
 
 
+def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStoreIndex:
+    registry: Final = litellm.vector_store_index_registry
+    index_object: Final = registry.get_vector_store_index_by_name(index_name) if registry is not None else None
+    if index_object is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Index {index_name} is not a litellm managed vector store index. "
+            "Only litellm managed vector store indexes are supported.",
+        )
+    return index_object
+
+
+async def _opensearch_store_params(
+    index_object: LiteLLM_ManagedVectorStoreIndex, user_api_key_dict: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    registry: Final = litellm.vector_store_registry
+    store_name: Final = index_object.litellm_params.vector_store_name
+    named_stores: Final = tuple(
+        store
+        for store in (registry.vector_stores if registry is not None else ())
+        if store.get("vector_store_name") == store_name
+    )
+    if len(named_stores) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{len(named_stores)} vector stores are named {store_name}, so LiteLLM cannot tell which one "
+            f"index {index_object.index_name} is on. Give each vector store a unique name.",
+        )
+    if not named_stores:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Vector store {store_name} of index {index_object.index_name} is not registered.",
+        )
+    vector_store: Final = named_stores[0]
+    params: Final = with_named_credential(
+        build_request_data_from_managed_vector_store(normalize_litellm_params(vector_store))
+    )
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(provider, str) or provider.split("/", 1)[0] != LlmProviders.OPENSEARCH.value:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Index {index_object.index_name} is on vector store {store_name}, "
+            "which is not an OpenSearch vector store.",
+        )
+    await assert_user_can_access_vector_store(vector_store=vector_store, user_api_key_dict=user_api_key_dict)
+    return params
+
+
+@router.api_route(
+    "/opensearch/{endpoint:path}",
+    methods=["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["OpenSearch Pass-through", "pass-through"],
+    openapi_extra={
+        "requestBody": {
+            "required": False,
+            "content": {
+                "application/json": {"schema": {"type": "object", "additionalProperties": True}},
+                "application/x-ndjson": {"schema": {"type": "string"}},
+            },
+        }
+    },
+    responses={
+        200: {
+            "description": "OpenSearch's response, unmodified",
+            "content": {"application/json": {"schema": {"type": "object", "additionalProperties": True}}},
+        }
+    },
+)
+async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through_route's untyped handler result
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Call an OpenSearch index through the proxy, e.g. `POST /opensearch/<index>/_search`.
+
+    `<index>` is a LiteLLM vector store index on an OpenSearch vector store. The key or its team needs `read` or
+    `write` on it in `allowed_vector_store_indexes`, and LiteLLM signs the call with the vector store's AWS identity.
+    """
+    from litellm.llms.opensearch.vector_stores.index_passthrough import (
+        IndexRefusal,
+        index_operation,
+        parse_index_path,
+        prepare_index_request,
+    )
+    from litellm.llms.opensearch.vector_stores.transformation import OpenSearchIndexAWS, OpenSearchVectorStoreConfig
+
+    path: Final = parse_index_path(endpoint)
+    if isinstance(path, IndexRefusal):
+        raise HTTPException(status_code=path.status_code, detail=path.message)
+    operation: Final = index_operation(request.method, path.api)
+    assert_vector_store_index_access(
+        user_api_key_dict, path.index_name, operation.permission if operation is not None else None
+    )
+    index_object: Final = _registered_vector_store_index(path.index_name)
+    store_params: Final = await _opensearch_store_params(index_object, user_api_key_dict)
+    prepared: Final = await prepare_index_request(
+        config=OpenSearchVectorStoreConfig(aws=OpenSearchIndexAWS()),
+        method=request.method,
+        path=path,
+        operation=operation,
+        provider_index=index_object.litellm_params.vector_store_index,
+        content_type=request.headers.get("content-type"),
+        query=tuple(request.query_params.multi_items()),
+        body=await request.body(),
+        store_params=store_params,
+        can_read=has_vector_store_index_access(user_api_key_dict, path.index_name, "read"),
+    )
+    if isinstance(prepared, IndexRefusal):
+        raise HTTPException(status_code=prepared.status_code, detail=prepared.message)
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=prepared.url,
+        custom_headers=prepared.headers,
+        custom_llm_provider=LlmProviders.OPENSEARCH.value,
+        keep_target_query=True,
+        upstream_headers_filter=lambda _forwarded: prepared.headers,
+    )
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, prepared.body)
+    setattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, {})
+    safe_set_request_parsed_body(request, {})
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
 async def is_streaming_request_fn(request: Request) -> bool:
     if request.method == "POST":
         content_type: Final = request.headers.get("content-type", None)
@@ -1417,13 +1552,12 @@ async def handle_bedrock_count_tokens(
         if deployment is not None:
             model_litellm_params: Final = deployment.get("litellm_params", {})
 
-            # Get the resolved model ID from the configuration
             if "model" in model_litellm_params:
                 resolved_model = model_litellm_params["model"]
 
             # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
             for key, value in model_litellm_params.items():
-                if key != "user_api_key_dict":  # Don't overwrite user_api_key_dict
+                if key != "user_api_key_dict":
                     litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
@@ -1615,7 +1749,7 @@ async def bedrock_proxy_route(
         )
 
     from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
-    from litellm.llms.bedrock.chat import BedrockConverseLLM
+    from litellm.llms.bedrock.passthrough.transformation import BedrockAgentRuntimeAWS
 
     aws_region_name: Final = await run_aws_signing(get_secret_str, secret_name="AWS_REGION_NAME")
     base_target_url: Final = f"https://bedrock-agent-runtime.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
@@ -1632,7 +1766,7 @@ async def bedrock_proxy_route(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
-    bedrock_llm: Final = BedrockConverseLLM()
+    agent_runtime_aws: Final = BedrockAgentRuntimeAWS()
     # Assuming the body contains JSON data, parse it
     try:
         data: Final = await _json_request_body(request)
@@ -1640,7 +1774,7 @@ async def bedrock_proxy_route(
         raise HTTPException(status_code=400, detail={"error": e})
     prepped: Final = await run_aws_signing(
         sign_aws_json_post,
-        get_credentials=bedrock_llm.get_credentials,
+        get_credentials=agent_runtime_aws.get_credentials,
         service_name="bedrock",
         aws_region_name=aws_region_name,
         url=str(updated_url),
@@ -1711,6 +1845,7 @@ async def comprehend_medical_proxy_route(
     """
     from .llm_provider_handlers.comprehend_medical_passthrough_logging_handler import (
         COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS,
+        ComprehendMedicalAWS,
     )
 
     if operation not in COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS:
@@ -1739,12 +1874,12 @@ async def comprehend_medical_proxy_route(
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
 
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
+    from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
 
     target_url: Final = f"https://comprehendmedical.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
     prepped: Final = await run_aws_signing(
         sign_aws_json_post,
-        get_credentials=partial(BaseAWSLLM().get_credentials, aws_region_name=aws_region_name),
+        get_credentials=partial(ComprehendMedicalAWS().get_credentials, aws_region_name=aws_region_name),
         service_name="comprehendmedical",
         aws_region_name=aws_region_name,
         url=target_url,
@@ -1968,6 +2103,7 @@ async def transcribe_proxy_route(
         TRANSCRIBE_OWNED_JOB_OPERATIONS,
         TRANSCRIBE_PRICED_OPERATION,
         TRANSCRIBE_TARGET_PREFIX,
+        TranscribeAWS,
         TranscribeRefusal,
         transcribe_admin_only_refusal,
         transcribe_cost_per_second,
@@ -2033,12 +2169,12 @@ async def transcribe_proxy_route(
     if access_refusal is not None:
         raise HTTPException(status_code=access_refusal.status_code, detail=access_refusal.detail)
 
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing, sign_aws_json_post
+    from litellm.llms.bedrock.base_aws_llm import run_aws_signing, sign_aws_json_post
 
     target_url: Final = f"https://transcribe.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
     prepped: Final = await run_aws_signing(
         sign_aws_json_post,
-        get_credentials=partial(BaseAWSLLM().get_credentials, aws_region_name=aws_region_name),
+        get_credentials=partial(TranscribeAWS().get_credentials, aws_region_name=aws_region_name),
         service_name="transcribe",
         aws_region_name=aws_region_name,
         url=target_url,
@@ -2382,6 +2518,16 @@ async def _relay_router_model(
         )
     except httpx.HTTPStatusError as upstream_error:
         return await _relay_upstream_response(upstream_error.response)
+    except Exception as error:
+        rejection: Final = entra_rejection_in(error)
+        if rejection is None:
+            raise
+        raise ProxyException(
+            message=redact_internal_details_from_client_message(rejection.message),
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=rejection.status_code,
+        ) from error
 
     if not is_streaming_request:
         return await _relay_upstream_response(cast(httpx.Response, result))
@@ -3083,7 +3229,7 @@ async def _base_vertex_proxy_route(
     fastapi_response: Response,
     get_vertex_pass_through_handler: BaseVertexAIPassThroughHandler,
     general_settings: Mapping[str, object],
-    user_api_key_dict: UserAPIKeyAuth | None = None,
+    user_api_key_dict: UserAPIKeyAuth,
     router_credentials: LiteLLM_ManagedVectorStore | None = None,
 ):
     """
@@ -3099,7 +3245,7 @@ async def _base_vertex_proxy_route(
         fastapi_response: FastAPI response object
         get_vertex_pass_through_handler: Handler for the specific Vertex AI service
         general_settings: Proxy general settings, read per request for the anthropic-beta values to drop
-        user_api_key_dict: User API key authentication dict
+        user_api_key_dict: The caller the route authenticated
         router_credentials: Optional vector store credentials from registry (LiteLLM_ManagedVectorStore)
     """
     from litellm.llms.vertex_ai.common_utils import (
@@ -3113,18 +3259,6 @@ async def _base_vertex_proxy_route(
     encoded_endpoint = httpx.URL(endpoint).path
     verbose_proxy_logger.debug("requested endpoint %s", endpoint)
     headers: Mapping[str, str] = {}
-    api_key_to_use = get_litellm_virtual_key(request=request)
-    user_api_key_dict = await user_api_key_auth(
-        request=request,
-        api_key=api_key_to_use,
-    )
-
-    if user_api_key_dict is None:
-        api_key_to_use = get_litellm_virtual_key(request=request)
-        user_api_key_dict = await user_api_key_auth(
-            request=request,
-            api_key=api_key_to_use,
-        )
     if router_credentials is not None:
         await assert_user_can_access_vector_store(
             vector_store=router_credentials,
@@ -3236,6 +3370,18 @@ async def _base_vertex_proxy_route(
     return received_value
 
 
+async def _authenticate_vertex_caller(
+    request: Request,
+    authorization: Annotated[str | None, Security(api_key_header)],
+    litellm_api_key: Annotated[str | None, Security(custom_litellm_key_header)],
+) -> UserAPIKeyAuth:
+    return await user_api_key_auth(
+        request=request,
+        api_key=authorization,  # pyright: ignore[reportArgumentType]  # its own Security default is None when unset
+        custom_litellm_key_header=litellm_api_key,
+    )
+
+
 @router.api_route(
     "/vertex_ai/discovery/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -3245,6 +3391,7 @@ async def vertex_discovery_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_authenticate_vertex_caller)],
 ):
     """
     Call any vertex discovery endpoint using the proxy.
@@ -3283,6 +3430,7 @@ async def vertex_discovery_proxy_route(
         fastapi_response=fastapi_response,
         get_vertex_pass_through_handler=discovery_handler,
         general_settings=_proxy_general_settings(),
+        user_api_key_dict=user_api_key_dict,
         router_credentials=vector_store_credentials,
     )
 
@@ -3302,7 +3450,7 @@ async def vertex_proxy_route(
     endpoint: str,
     request: Request,
     fastapi_response: Response,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_authenticate_vertex_caller)],
 ):
     """
     Call LiteLLM proxy via Vertex AI SDK.

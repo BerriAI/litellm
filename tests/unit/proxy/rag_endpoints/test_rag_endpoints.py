@@ -2,9 +2,12 @@
 Tests for RAG proxy endpoints.
 """
 
+import base64
 import io
 import json
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,7 +20,12 @@ import litellm
 from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    TeamProviderDeployment,
+    detect_content_type_from_filename,
+)
 from litellm.proxy.proxy_server import app
+from litellm.types.utils import SpecialEnums
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
@@ -637,6 +645,474 @@ def test_rag_ingest_blank_caller_credential_name_uses_team_provider_credentials(
     assert forwarded["api_base"] == _TEAM_OPENAI_BASE
 
 
+@dataclass(frozen=True, slots=True)
+class _ProviderFileRegistration:
+    provider_file_id: str
+    content_type: str
+    deployment: TeamProviderDeployment
+    owner: UserAPIKeyAuth
+
+
+class _ManagedFilesHookStub:
+    def __init__(
+        self,
+        *,
+        managed_file_id: str | None,
+        can_access: bool = True,
+        model_mappings: Mapping[str, Mapping[str, str]] = MappingProxyType({}),
+        unified_file_ids: Mapping[str, str] = MappingProxyType({}),
+    ) -> None:
+        self.managed_file_id: Final = managed_file_id
+        self.can_access: Final = can_access
+        self.model_mappings: Final = model_mappings
+        self.unified_file_ids: Final = unified_file_ids
+        self.registrations: tuple[_ProviderFileRegistration, ...] = ()
+
+    async def register_provider_file(
+        self,
+        *,
+        provider_file_id: str,
+        content_type: str,
+        deployment: TeamProviderDeployment,
+        owner: UserAPIKeyAuth,
+        llm_router: Router | None,
+    ) -> str | None:
+        self.registrations = (
+            *self.registrations,
+            _ProviderFileRegistration(provider_file_id, content_type, deployment, owner),
+        )
+        return self.managed_file_id
+
+    async def can_user_call_unified_file_id(self, unified_file_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+        return self.can_access
+
+    async def can_user_call_unified_object_id(self, unified_object_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
+        return self.can_access
+
+    async def get_model_file_id_mapping(
+        self, file_ids: Sequence[str], litellm_parent_otel_span: object
+    ) -> Mapping[str, Mapping[str, str]]:
+        return {file_id: self.model_mappings[file_id] for file_id in file_ids if file_id in self.model_mappings}
+
+    async def get_unified_file_ids_for_provider_file_ids(
+        self, provider_file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Mapping[str, str]:
+        return {file_id: self.unified_file_ids[file_id] for file_id in provider_file_ids if file_id in self.unified_file_ids}
+
+
+def _managed_file_id(provider_file_id: str) -> str:
+    unified_file_id: Final = SpecialEnums.LITELLM_MANAGED_FILE_COMPLETE_STR.value.format(
+        "text/plain", "unified-1", "openai/team-provider", provider_file_id, "team-deployment"
+    )
+    return base64.urlsafe_b64encode(unified_file_id.encode()).decode().rstrip("=")
+
+
+def _installed_managed_files_hook(hook: _ManagedFilesHookStub | None):
+    from litellm.proxy import proxy_server
+
+    proxy_hook_mapping: Final = proxy_server.proxy_logging_obj.proxy_hook_mapping
+    hooks_without_managed_files: Final = {
+        name: installed for name, installed in proxy_hook_mapping.items() if name != "managed_files"
+    }
+    return patch.dict(  # test-quality-ok: the proxy reads its hooks from this process-wide mapping, no injection seam
+        proxy_hook_mapping,
+        {**hooks_without_managed_files, **({} if hook is None else {"managed_files": hook})},
+        clear=True,
+    )
+
+
+def _prisma_client_saving_a_new_store() -> tuple[MagicMock, MagicMock]:
+    prisma_client: Final = MagicMock()
+    managed_vector_store_table: Final = prisma_client.db.litellm_managedvectorstorestable
+    managed_vector_store_table.find_unique = AsyncMock(return_value=None)
+    created_row: Final = MagicMock()
+    created_row.model_dump.return_value = {
+        "vector_store_id": "vs_new",
+        "custom_llm_provider": "openai",
+        "litellm_params": "{}",
+        "vector_store_metadata": "{}",
+    }
+    managed_vector_store_table.create = AsyncMock(return_value=created_row)
+    return prisma_client, managed_vector_store_table
+
+
+def _router_without_team_deployment() -> Router:
+    return Router(model_list=[_completion_deployment()])
+
+
+@pytest.mark.parametrize("ingest_request", [_ingest_form, _ingest_json])
+def test_rag_ingest_returns_a_managed_file_id_for_an_upload_through_the_team_deployment(client_team_a, ingest_request):
+    router: Final = _team_provider_router()
+    team_deployment_id: Final = router.registry().all()[0]["model_info"]["id"]
+    managed_file_id: Final = _managed_file_id("file_123")
+    hook: Final = _ManagedFilesHookStub(managed_file_id=managed_file_id)
+    prisma_client, managed_vector_store_table = _prisma_client_saving_a_new_store()
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        _patched_prisma_client(prisma_client),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **ingest_request({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    (registration,) = hook.registrations
+    assert registration.provider_file_id == "file_123"
+    assert registration.content_type == "text/plain"
+    assert registration.deployment.deployment_id == team_deployment_id
+    assert registration.deployment.public_model_name == "openai/team-provider"
+    assert registration.deployment.credentials["api_key"] == _TEAM_PROVIDER_KEY
+    assert registration.owner.team_id == _TEAM_ID
+    saved_data: Final = managed_vector_store_table.create.await_args.kwargs["data"]
+    saved_metadata: Final = json.loads(saved_data["vector_store_metadata"])
+    assert [entry["file_id"] for entry in saved_metadata["ingested_files"]] == [managed_file_id]
+
+
+def test_rag_ingest_registers_a_url_upload_with_the_type_its_path_names(client_team_a):
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            **_ingest_json(
+                {"custom_llm_provider": "openai"}, file_url="https://example.com/files/handbook.pdf?sig=abc#page=2"
+            ),
+        )
+
+    assert response.status_code == 200, response.json()
+    (registration,) = hook.registrations
+    assert registration.content_type == detect_content_type_from_filename("handbook.pdf")
+
+
+@pytest.mark.parametrize(
+    ("vector_store", "registry_store", "headers", "general_settings"),
+    [
+        pytest.param(
+            {"custom_llm_provider": "openai", "litellm_credential_name": "caller-openai"},
+            None,
+            {},
+            {},
+            id="caller-credential-name",
+        ),
+        pytest.param(
+            {"vector_store_id": "registry-store-with-key"},
+            _managed_openai_store("registry-store-with-key", {"api_key": _REGISTRY_PROVIDER_KEY}),
+            {},
+            {},
+            id="registered-store-key",
+        ),
+        pytest.param(
+            {"custom_llm_provider": "openai"},
+            None,
+            {"Authorization": "Bearer sk-litellm-virtual-key", "x-api-key": "sk-forwarded-provider-key"},
+            {"forward_llm_provider_auth_headers": True},
+            id="forwarded-provider-key",
+        ),
+        pytest.param({"custom_llm_provider": "bedrock"}, None, {}, {}, id="non-openai-provider"),
+    ],
+)
+def test_rag_ingest_keeps_the_provider_file_id_when_the_upload_used_other_credentials(
+    client_team_a, vector_store, registry_store, headers, general_settings
+):
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        registry_store,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        patch(
+            "litellm.proxy.vector_store_endpoints.utils.can_user_access_vector_store",
+            new=AsyncMock(return_value=True),
+        ),
+        patch.dict("litellm.proxy.proxy_server.general_settings", general_settings),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", headers=headers, **_ingest_form(vector_store))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+    assert hook.registrations == ()
+
+
+def _team_wildcard_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": _TEAM_PROVIDER_KEY, "api_base": _TEAM_OPENAI_BASE},
+                "model_info": {"team_id": _TEAM_ID},
+            }
+        ]
+    )
+
+
+_ONE_MODEL_TEAM_KEY: Final = UserAPIKeyAuth(user_id="test_team_user", team_id=_TEAM_ID, models=["openai/gpt-5.4-mini"])
+
+
+def test_rag_ingest_keeps_the_provider_file_id_for_a_key_the_team_deployment_checks_reject(client_team_a):
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch as aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_wildcard_router()),
+        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: _ONE_MODEL_TEAM_KEY}),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+    assert hook.registrations == ()
+    assert aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
+
+
+@pytest.mark.parametrize(
+    ("router_factory", "hook"),
+    [
+        pytest.param(
+            _router_without_team_deployment,
+            _ManagedFilesHookStub(managed_file_id=_managed_file_id("file_123")),
+            id="no-team-deployment",
+        ),
+        pytest.param(_team_provider_router, None, id="no-managed-files-hook"),
+    ],
+)
+def test_rag_ingest_keeps_the_provider_file_id_without_a_team_deployment_or_managed_files_hook(
+    client_team_a, router_factory, hook
+):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router_factory()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+    assert hook is None or hook.registrations == ()
+
+
+def test_rag_ingest_keeps_the_provider_file_id_when_managed_file_registration_fails(client_team_a):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file_123"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(_ManagedFilesHookStub(managed_file_id=None)),
+    ):
+        response: Final = client_team_a.post("/v1/rag/ingest", **_ingest_form({"custom_llm_provider": "openai"}))
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file_123"
+
+
+def test_rag_ingest_with_a_managed_file_id_attaches_the_provider_file_and_returns_the_managed_id(client_team_a):
+    managed_file_id: Final = _managed_file_id("file-raw")
+    hook: Final = _ManagedFilesHookStub(managed_file_id=None)
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={"file_id": managed_file_id, "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    assert mock_aingest.await_args.kwargs["file_id"] == "file-raw"
+    assert hook.registrations == ()
+
+
+def test_rag_ingest_with_a_managed_file_id_attaches_the_team_deployment_copy(client_team_a):
+    router: Final = _team_provider_router()
+    team_deployment_id: Final = router.registry().all()[0]["model_info"]["id"]
+    managed_file_id: Final = _managed_file_id("file-other-copy")
+    hook: Final = _ManagedFilesHookStub(
+        managed_file_id=None,
+        model_mappings={managed_file_id: {"team-deployment": "file-other-copy", team_deployment_id: "file-team-copy"}},
+    )
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-team-copy"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={"file_id": managed_file_id, "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    assert mock_aingest.await_args.kwargs["file_id"] == "file-team-copy"
+
+
+def test_rag_ingest_with_a_managed_file_id_attaches_the_copy_matching_the_credentials_for_a_key_limited_to_one_model(
+    client_team_a,
+):
+    router: Final = _team_wildcard_router()
+    team_deployment_id: Final = router.registry().all()[0]["model_info"]["id"]
+    managed_file_id: Final = _managed_file_id("file-other-copy")
+    hook: Final = _ManagedFilesHookStub(
+        managed_file_id=None,
+        model_mappings={managed_file_id: {"team-deployment": "file-other-copy", team_deployment_id: "file-team-copy"}},
+    )
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-team-copy"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch.dict(app.dependency_overrides, {user_api_key_auth: lambda: _ONE_MODEL_TEAM_KEY}),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={"file_id": managed_file_id, "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}}},
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == managed_file_id
+    assert mock_aingest.await_args.kwargs["file_id"] == "file-team-copy"
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]["api_key"] == _TEAM_PROVIDER_KEY
+
+
+def test_rag_ingest_rejects_a_managed_file_id_the_caller_cannot_access(client_team_a):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(_ManagedFilesHookStub(managed_file_id=None, can_access=False)),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": _managed_file_id("file-raw"),
+                "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}},
+            },
+        )
+
+    assert response.status_code == 403, response.json()
+    assert mock_aingest.await_count == 0
+
+
+def test_rag_ingest_with_an_empty_file_url_never_claims_a_raw_file_id(client_team_a):
+    hook: Final = _ManagedFilesHookStub(managed_file_id=_managed_file_id("file-raw"))
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(hook),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": "file-raw",
+                "file_url": "",
+                "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}},
+            },
+        )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["file_id"] == "file-raw"
+    assert hook.registrations == ()
+
+
+def test_rag_ingest_answers_400_for_a_managed_file_id_without_the_managed_files_hook(client_team_a):
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None,
+        {"status": "completed", "vector_store_id": "vs_new", "file_id": "file-raw"},
+    )
+
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        patch("litellm.proxy.proxy_server.llm_router", _team_provider_router()),
+        _patched_prisma_client(None),
+        _installed_managed_files_hook(None),
+    ):
+        response: Final = client_team_a.post(
+            "/v1/rag/ingest",
+            json={
+                "file_id": _managed_file_id("file-raw"),
+                "ingest_options": {"vector_store": {"custom_llm_provider": "openai"}},
+            },
+        )
+
+    assert response.status_code == 400, response.json()
+    assert mock_aingest.await_count == 0
+
+
 def test_rag_ingest_failed_upstream_status_is_returned_without_persisting_store(client_internal_user):
     prisma_client: Final = MagicMock()
     managed_vector_store_table: Final = prisma_client.db.litellm_managedvectorstorestable
@@ -695,6 +1171,41 @@ def test_rag_query_forwards_team_provider_credentials_to_unmanaged_search(
     assert response.status_code == 200, response.json()
     assert search.call_count == 1
     assert search.calls.last.request.headers["authorization"] == f"Bearer {_TEAM_PROVIDER_KEY}"
+
+
+@pytest.mark.usefixtures("httpx_transport")
+def test_rag_query_search_results_carry_the_managed_file_id_ingest_returned(
+    client_team_a: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    managed_file_id: Final = _managed_file_id("file-ingested")
+    respx_mock.post(f"{_TEAM_OPENAI_BASE}/vector_stores/provider-native-store/search").respond(
+        json={
+            **_OPENAI_SEARCH_PAGE,
+            "data": [
+                {
+                    "file_id": "file-ingested",
+                    "filename": "handbook.txt",
+                    "score": 0.9,
+                    "attributes": {},
+                    "content": [{"type": "text", "text": "hello"}],
+                }
+            ],
+        }
+    )
+
+    with _installed_managed_files_hook(
+        _ManagedFilesHookStub(managed_file_id=None, unified_file_ids={"file-ingested": managed_file_id})
+    ):
+        response: Final = _post_rag_query(
+            client_team_a,
+            retrieval_config={"vector_store_id": "provider-native-store", "custom_llm_provider": "openai"},
+            managed_stores=(),
+            router=_team_provider_router(),
+        )
+
+    assert response.status_code == 200, response.json()
+    search_results: Final = response.json()["choices"][0]["message"]["provider_specific_fields"]["search_results"]
+    assert [hit["file_id"] for hit in search_results["data"]] == [managed_file_id]
 
 
 @pytest.mark.usefixtures("httpx_transport")
