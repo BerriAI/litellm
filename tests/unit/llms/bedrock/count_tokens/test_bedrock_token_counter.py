@@ -437,6 +437,89 @@ async def test_claude_count_sends_the_tool_search_tool_the_deployments_inference
     assert counted_tools == _JSON_BODY.validate_json(inference.requests[0].content)["tools"]
 
 
+_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "6"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 27, "outputTokens": 1, "totalTokens": 28},
+}
+
+
+def _texts(content: JsonValue) -> tuple[str, ...]:
+    if isinstance(content, str):
+        return (content,)
+    blocks: Final = content if isinstance(content, list) else []
+    return tuple(text for block in blocks if isinstance(block, dict) and isinstance(text := block.get("text"), str))
+
+
+def _role_texts(message: JsonValue) -> tuple[tuple[JsonValue, str], ...]:
+    if not isinstance(message, dict):
+        return ()
+    role: Final = message.get("role")
+    return tuple((role, text) for text in _texts(message.get("content")))
+
+
+def _counted_body(request: httpx.Request) -> Mapping[str, JsonValue]:
+    counted_input: Final = _JSON_BODY.validate_json(request.content)["input"]
+    assert isinstance(counted_input, dict)
+    converse: Final = counted_input.get("converse")
+    return converse if isinstance(converse, dict) else _invoke_body(request)
+
+
+def _sent_texts(body: Mapping[str, JsonValue]) -> tuple[tuple[JsonValue, str], ...]:
+    messages: Final = body["messages"]
+    return tuple(pair for message in (messages if isinstance(messages, list) else []) for pair in _role_texts(message))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "assistant_turn",
+    (
+        {"role": "assistant", "content": ""},
+        {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+        {
+            "role": "assistant",
+            "content": "",
+            "thinking_blocks": [{"type": "thinking", "thinking": "Adding.", "signature": "c2lnbmF0dXJl"}],
+        },
+    ),
+    ids=("empty_string", "empty_text_block", "thinking_and_empty_string"),
+)
+async def test_claude_converse_count_sends_the_texts_converse_inference_sends(
+    assistant_turn: dict[str, JsonValue],
+) -> None:
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    deployment_model: Final = "bedrock/us.anthropic.claude-haiku-5-5"
+    messages: Final = [
+        {"role": "user", "content": "What is 2+2?"},
+        assistant_turn,
+        {"role": "user", "content": "And 3+3?"},
+    ]
+    inference: Final = _Bedrock(runtime=(200, _CONVERSE_REPLY), mantle=(200, _CONVERSE_REPLY))
+    await litellm.acompletion(
+        model=deployment_model,
+        messages=messages,
+        max_tokens=8,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 27}), mantle=(200, {"input_tokens": 27}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-5-5",
+        messages=messages,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}},
+        request_model="claude-haiku-5-5",
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert result.error is False
+    converse_sent: Final = _sent_texts(_JSON_BODY.validate_json(inference.requests[0].content))
+    assert _sent_texts(_counted_body(bedrock.requests[0])) == converse_sent
+    assert converse_sent == (("user", "What is 2+2?"), ("user", "And 3+3?"))
+
+
 @pytest.mark.asyncio
 async def test_claude_chat_tool_use_counted_on_mantle_metadata_route_is_translated_too() -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))

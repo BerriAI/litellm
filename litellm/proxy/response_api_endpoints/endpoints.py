@@ -89,6 +89,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     _UNTRUSTED_METADATA_CONTROL_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
     add_guardrails_from_policy_engine,
+    client_pricing_fields_stripped_for,
     is_chat_completions_body,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
@@ -1824,11 +1825,12 @@ async def responses_input_tokens(
         )
 
     request_fields: Final = _PROXY_SERVER_REQUEST_ADAPTER.validate_python(data)
+    left_out_fields: Final = counted_fields.keys() | client_pricing_fields_stripped_for(user_api_key_dict)
     try:
         responses_request: Final = await _with_managed_file_id_mapping(
             _with_authorized_previous_response(
                 {
-                    **{name: value for name, value in request_fields.items() if name not in counted_fields},
+                    **{name: value for name, value in request_fields.items() if name not in left_out_fields},
                     **token_fields,
                 },
                 response_id_security,

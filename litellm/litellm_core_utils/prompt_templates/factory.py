@@ -2443,6 +2443,25 @@ def carries_empty_text(message: object) -> bool:
     return isinstance(content, list) and any(map(_is_empty_text_block, blocks))
 
 
+_CONVERSE_ASSISTANT_NON_TEXT_FIELDS: Final = ("tool_calls", "thinking_blocks")
+
+
+def _assistant_turn_as_converse_sends_it(message: Mapping[str, object]) -> Mapping[str, object] | None:
+    if message.get("role") != "assistant" or not carries_empty_text(message):
+        return message
+    kept: Final = tuple(block for block in parts_of(message.get("content")) if not _is_empty_text_block(block))
+    if kept or any(message.get(field) for field in _CONVERSE_ASSISTANT_NON_TEXT_FIELDS):
+        return {**message, "content": list(kept) or None}
+    return None
+
+
+def assistant_turns_as_converse_sends_them(
+    messages: Sequence[Mapping[str, object]],
+) -> tuple[Mapping[str, object], ...]:
+    turns: Final = map(_assistant_turn_as_converse_sends_it, messages)
+    return tuple(turn for turn in turns if turn is not None)
+
+
 def _with_placeholder_text(block: object) -> object:
     fields: Final = _dict_block(block)
     if fields is None or not _is_empty_text_block(fields):

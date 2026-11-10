@@ -5409,6 +5409,7 @@ class TestResponsesInputTokens:
         response_id_security: object | None = None,
         managed_files: object | None = None,
         headers: Mapping[str, str] = EMPTY_MAPPING,
+        key_metadata: Mapping[str, object] = EMPTY_MAPPING,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -5432,7 +5433,9 @@ class TestResponsesInputTokens:
                 )
             )
         )
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", request_route=path)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="sk-test", request_route=path, metadata=dict(key_metadata)
+        )
         app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
         app.dependency_overrides[_proxy_llm_router] = lambda: llm_router
         if response_id_security is not None:
@@ -5602,6 +5605,23 @@ class TestResponsesInputTokens:
         assert response.status_code == 200, response.text
         sent = counter.await_args.kwargs["responses_request"]
         assert {name: sent[name] for name in ("tools", "tool_choice", "parallel_tool_calls") if name in sent} == expected
+
+    @pytest.mark.parametrize(
+        "key_metadata, kept",
+        [({}, False), ({"allow_client_pricing_override": True}, True)],
+        ids=["plain_key", "pricing_override_key"],
+    )
+    def test_client_pricing_fields_reach_the_counter_only_when_inference_keeps_them(
+        self, key_metadata: dict[str, object], kept: bool
+    ) -> None:
+        response, counter = self._post_input_tokens(
+            {"model": "gpt-4o", "input": "hi", "base_model": "anthropic.claude-haiku-5-5", "input_cost_per_token": 1.0},
+            key_metadata=key_metadata,
+        )
+
+        assert response.status_code == 200, response.text
+        sent: Final = counter.await_args.kwargs["responses_request"]
+        assert ("base_model" in sent, "input_cost_per_token" in sent, sent["input"]) == (kept, kept, "hi")
 
     def test_previous_response_id_reaches_the_counter_authorized_next_to_the_id_the_client_held(self) -> None:
         from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
