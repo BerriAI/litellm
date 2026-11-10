@@ -164,9 +164,7 @@ class _LabelScope:
         if server is None:
             return False
         toolset_names: Final = self.toolset_tools.get(server.server_id)
-        return server.server_id in self.server_ids or (
-            toolset_names is not None and match_known_tool_name(tool_name, server, toolset_names) is not None
-        )
+        return server.server_id in self.server_ids or (toolset_names is not None and tool_name in toolset_names)
 
     def _allows(self, server: MCPServer | None, tool_name: str, listed_name: str) -> bool:
         if self.allowed_tools is None or listed_name in self.allowed_tools:

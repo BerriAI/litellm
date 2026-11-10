@@ -1590,6 +1590,14 @@ TOOLSET_ROWS: Final = (
     ),
     MCPToolset(toolset_id="ts-shouty", toolset_name="CALC", tools=[{"server_id": "srv-2", "tool_name": "lookup"}]),
     MCPToolset(toolset_id="ts-group", toolset_name="reference", tools=[{"server_id": "srv-1", "tool_name": "add"}]),
+    MCPToolset(
+        toolset_id="ts-prefixed",
+        toolset_name="prefixed-toolset",
+        tools=[{"server_id": "srv-1", "tool_name": "add"}, {"server_id": "srv-1", "tool_name": "calc-subtract"}],
+    ),
+    MCPToolset(
+        toolset_id="ts-subtract", toolset_name="subtract-toolset", tools=[{"server_id": "srv-1", "tool_name": "subtract"}]
+    ),
 )
 
 
@@ -1666,9 +1674,9 @@ async def _listing_through_the_gateway(
             manager._drop_listed_tools(server.server_id)
 
 
-def _team_grants(toolset_id: str) -> GrantedToolsetIds:
+def _team_grants(*toolset_ids: str) -> GrantedToolsetIds:
     async def team_permission(context: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable:
-        return LiteLLM_ObjectPermissionTable(object_permission_id="op-team", mcp_toolsets=[toolset_id])
+        return LiteLLM_ObjectPermissionTable(object_permission_id="op-team", mcp_toolsets=list(toolset_ids))
 
     async def granted_through_team(context: UserAPIKeyAuth) -> frozenset[str]:
         return await granted_toolset_ids(context, team_object_permission=team_permission, require_key_access=False)
@@ -1701,14 +1709,15 @@ async def _calls_the_entries_run(
     called: tuple[str, ...],
     unresolvable_tools: Mapping[str, str] = MappingProxyType({}),
     servers: Sequence[MCPServer] = GATEWAY_SERVERS,
+    granted_toolsets: tuple[str, ...] = ("ts-granted",),
 ) -> tuple[str, ...]:
     tools, server_names = await _listing_through_the_gateway(
-        monkeypatch, user, mcp_tools, _team_grants("ts-granted"), servers=servers
+        monkeypatch, user, mcp_tools, _team_grants(*granted_toolsets), servers=servers
     )
     _deduplicated, tool_server_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(tools, server_names)
     tool_choice: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": allowed_label}]}
     gateway: Final = await LiteLLM_Proxy_MCP_Handler.gateway_tools(
-        tool_choice, {**tool_server_map, **unresolvable_tools}, mcp_tools, user, _team_grants("ts-granted")
+        tool_choice, {**tool_server_map, **unresolvable_tools}, mcp_tools, user, _team_grants(*granted_toolsets)
     )
     return tuple(
         name
@@ -1808,6 +1817,25 @@ async def test_a_toolset_entry_allows_only_the_toolset_tools_its_own_allowed_too
     )
 
     assert ran == runs
+
+
+@pytest.mark.asyncio
+async def test_a_toolset_label_allows_no_tool_whose_prefixed_name_only_matches_a_tool_the_toolset_grants(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ran: Final = await _calls_the_entries_run(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-team", team_id="team-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        (
+            {"type": "mcp", "server_label": "team", "server_url": "litellm_proxy/mcp/prefixed-toolset"},
+            {"type": "mcp", "server_label": "writer", "server_url": "litellm_proxy/mcp/subtract-toolset"},
+        ),
+        "team",
+        ("calc-add", "calc-subtract"),
+        granted_toolsets=("ts-prefixed", "ts-subtract"),
+    )
+
+    assert ran == ("calc-add",)
 
 
 @pytest.mark.asyncio
