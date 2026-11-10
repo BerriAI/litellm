@@ -72,7 +72,7 @@ if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
 _HEADERS_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
 _SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
