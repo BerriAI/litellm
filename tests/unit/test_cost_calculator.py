@@ -4773,6 +4773,65 @@ def test_batch_cost_calculator_preserves_cache_write_prices_and_defaults_only_wh
     assert completion_cost_value == pytest.approx(200 * 15e-6 / 2)
 
 
+def test_batch_cost_calculator_bills_cache_reads_at_the_input_rate_when_no_cache_read_price_is_set() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 0.0,
+    }
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=600,
+            cache_creation_tokens=100,
+            text_tokens=300,
+        ),
+        cache_read_input_tokens=600,
+        cache_creation_input_tokens=100,
+    )
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage,
+        model="batch-pricing-fixture",
+        custom_llm_provider="anthropic",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((300 + 600 + 100) * 2e-6 / 2)
+    assert completion_cost_value == 0.0
+
+
+def test_batch_cost_calculator_preserves_explicit_zero_cache_read_price() -> None:
+    model_info: Final[ModelInfo] = {
+        "input_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=600,
+            cache_creation_tokens=100,
+            text_tokens=300,
+        ),
+        cache_read_input_tokens=600,
+        cache_creation_input_tokens=100,
+    )
+
+    prompt_cost, completion_cost_value = batch_cost_calculator(
+        usage=usage,
+        model="batch-pricing-fixture",
+        custom_llm_provider="anthropic",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((300 * 2e-6 + 600 * 0.0 + 100 * 2e-6) / 2)
+    assert completion_cost_value == 0.0
+
+
 def test_completion_cost_bills_interactions_api_response():
     from litellm.types.interactions import InteractionsAPIResponse
 

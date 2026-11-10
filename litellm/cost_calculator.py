@@ -3291,8 +3291,16 @@ def batch_cost_calculator(
         )  # batch cost is usually half of the regular token cost
 
         # Add cache read cost if applicable
-        cache_read_cost_key: Final = get_service_tier_cost_key("cache_read_input_token_cost", None)
-        total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
+        cache_read_cost_key: Final = get_service_tier_cost_key(
+            "cache_read_input_token_cost", None
+        )
+        configured_cache_read_cost: Final = model_info.get(cache_read_cost_key)
+        cache_read_cost: Final = (
+            input_cost_per_token
+            if configured_cache_read_cost is None
+            else configured_cache_read_cost
+        )
+        total_prompt_cost += cache_read_tokens * cache_read_cost / 2
 
         configured_cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost")
         cache_creation_cost: Final = (
