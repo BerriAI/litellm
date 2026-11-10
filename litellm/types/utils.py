@@ -43,7 +43,6 @@ from pydantic import (
     OnErrorOmit,
     PrivateAttr,
     SkipValidation,
-    StrictBool,
     field_serializer,
     field_validator,
 )
@@ -4874,4 +4873,8 @@ class BaseUrlRoutingHint(TypedDict, total=False):
 
 class CacheControlsHint(TypedDict, total=False):
     cache: ReadOnly[OnErrorOmit[Mapping[str, object] | None]]
-    caching: ReadOnly[OnErrorOmit[StrictBool | None]]
+    caching: ReadOnly[OnErrorOmit[JsonValue]]
+
+
+class DeploymentHeadersHint(TypedDict, total=False):
+    extra_headers: ReadOnly[OnErrorOmit[Mapping[str, str] | None]]

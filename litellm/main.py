@@ -149,6 +149,7 @@ from litellm.types.utils import (
     BaseUrlRoutingHint,
     CacheControlsHint,
     CustomPricingLiteLLMParams,
+    DeploymentHeadersHint,
     ModelResponseStream,
     ProviderRoutingHints,
     RawRequestTypedDict,
@@ -4139,6 +4140,7 @@ _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 _CACHE_CONTROLS_HINT: Final = TypeAdapter(CacheControlsHint)
+_DEPLOYMENT_HEADERS_HINT: Final = TypeAdapter(DeploymentHeadersHint)
 
 
 _AWS_BEDROCK_CLIENT_CREDENTIAL_KEYS: Final = (
@@ -8748,6 +8750,7 @@ def speech(
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
+                extra_headers=_DEPLOYMENT_HEADERS_HINT.validate_python(kwargs).get("extra_headers"),
                 timeout=timeout,
                 cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
             )
@@ -8802,6 +8805,7 @@ def speech(
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            extra_headers=_DEPLOYMENT_HEADERS_HINT.validate_python(kwargs).get("extra_headers"),
             timeout=timeout,
             cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
         )

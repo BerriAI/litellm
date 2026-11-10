@@ -1140,10 +1140,12 @@ async def test_aspeech_vertex_ai_gemini_tts_routes_to_configured_api_base(
         vertex_credentials=_AUTHORIZED_USER,
         vertex_location="global",
         api_base="https://vertex.gateway.internal",
+        extra_headers={"x-gateway-key": "gateway-secret"},
     )
 
     assert gateway_route.call_count == 1
     assert gateway_route.calls.last.request.headers["authorization"] == "Bearer minted-google-token"
+    assert gateway_route.calls.last.request.headers["x-gateway-key"] == "gateway-secret"
     assert _PCM_AUDIO in response.content
 
 
