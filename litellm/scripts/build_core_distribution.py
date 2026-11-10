@@ -12,8 +12,6 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SOURCES: Final = (
     "litellm",
     "litellm/rust",
-    ".cargo",
-    "rust-toolchain.toml",
     "model_prices_and_context_window.json",
     "README.md",
     "LICENSE",

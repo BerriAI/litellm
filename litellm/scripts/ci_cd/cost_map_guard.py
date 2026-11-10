@@ -26,6 +26,7 @@ from types import MappingProxyType
 from typing import Final
 
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
+COST_MAP_PATHS: Final = ("litellm/data/model_prices_and_context_window.json", COST_MAP_PATH)
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
 PINS_PATH: Final = "litellm/scripts/ci_cd/cost_map_pins.json"
 PINS_PATHS: Final = (
@@ -33,7 +34,7 @@ PINS_PATHS: Final = (
     "scripts/ci_cd/cost_map_pins.json",
     "ci_cd/cost_map_pins.json",
 )
-GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
+GUARDED_PATHS: Final = (*COST_MAP_PATHS, BACKUP_PATH)
 CHECKED_PATHS: Final = (*GUARDED_PATHS, *PINS_PATHS)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
 PRICE_SYNC_BRANCH_PREFIX: Final = "litellm-providers/price-sync"
@@ -258,7 +259,8 @@ def _git(*args: str) -> str | None:
 
 def snapshot(revision: str) -> Snapshot:
     return Snapshot(
-        *(_git("show", f"{revision}:{path}") or "" for path in GUARDED_PATHS),
+        next((text for path in COST_MAP_PATHS if (text := _git("show", f"{revision}:{path}")) is not None), ""),
+        _git("show", f"{revision}:{BACKUP_PATH}") or "",
         next((text for path in PINS_PATHS if (text := _git("show", f"{revision}:{path}")) is not None), ""),
     )
 

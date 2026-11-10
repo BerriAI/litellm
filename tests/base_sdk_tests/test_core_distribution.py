@@ -78,6 +78,10 @@ def test_staging_stamps_release_version_without_modifying_sources(
         elif name == "litellm/rust":
             path.mkdir()
             (path / "Cargo.toml").write_text("shared rust")
+            for configuration in ("rust-toolchain.toml", ".cargo/config.toml"):
+                target: Final = path / configuration
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / "litellm" / "rust" / configuration).read_bytes())
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"shared {name}")
@@ -96,7 +100,10 @@ def test_staging_stamps_release_version_without_modifying_sources(
         assert not (stage / "litellm" / "__init__.py").exists()
         assert all(
             (stage / name).exists()
-            for name in ("litellm/rust", ".cargo", "rust-toolchain.toml", "model_prices_and_context_window.json")
+            for name in (
+                "litellm/rust", "litellm/rust/.cargo/config.toml", "litellm/rust/rust-toolchain.toml",
+                "model_prices_and_context_window.json",
+            )
         )
     assert manifest.read_bytes() == original
     assert (source / "pyproject.toml").read_text() == '[project]\nname = "litellm"\nversion = "9.8.7rc1"\n'
@@ -198,7 +205,8 @@ def test_core_artifacts_exclude_local_configuration(distributions: tuple[Path, P
 
 
 @pytest.mark.parametrize(
-    "relative_path", ["rust-toolchain.toml", ".cargo/config.toml", "model_prices_and_context_window.json"]
+    "relative_path",
+    ["litellm/rust/rust-toolchain.toml", "litellm/rust/.cargo/config.toml", "model_prices_and_context_window.json"],
 )
 def test_core_sdist_preserves_native_build_configuration(distribution_directory: Path, relative_path: str) -> None:
     sdists: Final = tuple(distribution_directory.glob("litellm_core-*.tar.gz"))
