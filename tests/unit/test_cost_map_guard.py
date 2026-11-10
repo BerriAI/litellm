@@ -355,6 +355,25 @@ def test_checked_in_pins_hold_in_the_checked_in_cost_map() -> None:
     assert guard.pin_failures(pins, cost_map) == ()
 
 
+@pytest.mark.parametrize("pins_path", guard.PINS_PATHS)
+@pytest.mark.parametrize("pins", (PINS, "", "not JSON"))
+def test_relocated_pins_keep_the_same_validation(tmp_path: Path, pins_path: str, pins: str) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    base: Final = _commit(tmp_path, BASE_MAP, "base", pins=PINS)
+    destination: Final = tmp_path / pins_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / guard.PINS_PATH).rename(destination)
+    destination.write_text(pins)
+    head: Final = _git_commit(tmp_path, "relocate pins")
+    result: Final = _run_guard(tmp_path, base, head, "litellm_fix_pricing")
+    assert result.returncode == (0 if pins == PINS else 1), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("pins_path", guard.PINS_PATHS)
+def test_relocated_pins_cannot_be_changed_by_bots(pins_path: str) -> None:
+    assert guard.pin_author_failures("litellm_fix_pricing", "Bot", (pins_path,)) == (BOT_AUTHOR_PIN_FAILURE,)
+
+
 def _commit(repo: Path, cost_map: dict[str, object], message: str, pins: str | None = None) -> str:
     text = _serialize(cost_map)
     pins_file = repo / guard.PINS_PATH

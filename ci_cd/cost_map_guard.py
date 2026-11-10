@@ -28,8 +28,13 @@ from typing import Final
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
 PINS_PATH: Final = "ci_cd/cost_map_pins.json"
+PINS_PATHS: Final = (
+    "litellm/scripts/ci_cd/cost_map_pins.json",
+    "scripts/ci_cd/cost_map_pins.json",
+    "ci_cd/cost_map_pins.json",
+)
 GUARDED_PATHS: Final = (COST_MAP_PATH, BACKUP_PATH)
-CHECKED_PATHS: Final = (*GUARDED_PATHS, PINS_PATH)
+CHECKED_PATHS: Final = (*GUARDED_PATHS, *PINS_PATHS)
 BOT_BRANCH_PREFIX: Final = "litellm_cost_map_sync_"
 PRICE_SYNC_BRANCH_PREFIX: Final = "litellm-providers/price-sync"
 TARGET_ENV: Final = "COST_MAP_GUARD_TARGET"
@@ -193,7 +198,7 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
 
 
 def pin_author_failures(head_ref: str, author_type: str, changed_files: Sequence[str]) -> tuple[str, ...]:
-    if PINS_PATH not in changed_files:
+    if not any(path in changed_files for path in PINS_PATHS):
         return ()
     if head_ref.startswith(PRICE_SYNC_BRANCH_PREFIX):
         return (f"price sync PRs may not change {PINS_PATH}; a pin moves only in a human PR with new evidence",)
@@ -252,7 +257,10 @@ def _git(*args: str) -> str | None:
 
 
 def snapshot(revision: str) -> Snapshot:
-    return Snapshot(*(_git("show", f"{revision}:{path}") or "" for path in CHECKED_PATHS))
+    return Snapshot(
+        *(_git("show", f"{revision}:{path}") or "" for path in GUARDED_PATHS),
+        next((text for path in PINS_PATHS if (text := _git("show", f"{revision}:{path}")) is not None), ""),
+    )
 
 
 def merged_tree(merge_base: str, target: str, head: str) -> str | MergeFailed | None:
