@@ -5574,7 +5574,7 @@ def get_optional_params(
     prompt_cache_key: str | None = None,
     base_model: str | None = None,
     model_info: Mapping[str, object] | None = None,
-    reasoning_drop_logger: WarningLogger = verbose_logger,
+    _litellm_reasoning_drop_logger: WarningLogger = verbose_logger,
     **kwargs: object,
 ):
     drop_params = normalize_drop_params(drop_params)  # rebind-ok: config and DB deployments pass "true" as a string
@@ -5586,7 +5586,7 @@ def get_optional_params(
     # OpenAI param.
     passed_params.pop("base_model", None)
     passed_params.pop("model_info", None)
-    passed_params.pop("reasoning_drop_logger", None)
+    passed_params.pop("_litellm_reasoning_drop_logger", None)
     provider_config: BaseConfig | None = None
     if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
         provider_config = ProviderConfigManager.get_provider_chat_config(
@@ -6081,7 +6081,7 @@ def get_optional_params(
                 model=model,
                 drop_params=bool(drop_params),
                 declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
-                reasoning_drop_logger=reasoning_drop_logger,
+                reasoning_drop_logger=_litellm_reasoning_drop_logger,
             )
             if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
             else litellm.OpenAIConfig().map_openai_params(
@@ -6114,7 +6114,7 @@ def get_optional_params(
                 model=_azure_detection_model,
                 drop_params=bool(drop_params),
                 declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
-                reasoning_drop_logger=reasoning_drop_logger,
+                reasoning_drop_logger=_litellm_reasoning_drop_logger,
             )
         else:
             verbose_logger.debug(
@@ -6144,7 +6144,7 @@ def get_optional_params(
             model=model,
             drop_params=bool(drop_params),
             model_info=model_info,
-            reasoning_drop_logger=reasoning_drop_logger,
+            reasoning_drop_logger=_litellm_reasoning_drop_logger,
         )
     else:  # assume passing in params for openai-like api
         optional_params = litellm.OpenAILikeChatConfig().map_openai_params(

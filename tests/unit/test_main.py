@@ -2421,6 +2421,13 @@ def test_reasoning_effort_drop_warning_fires_only_when_the_provider_gets_no_effo
     assert len(drop_warnings) == (1 if sent_effort is None else 0)
 
 
+@pytest.fixture
+def github_copilot_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    (tmp_path / "api-key.json").write_text(
+        json.dumps({"token": "token", "expires_at": 4102444800, "endpoints": {"api": "https://api.githubcopilot.com"}})
+    )
+
 
 @pytest.mark.parametrize(
     ("model", "api_base", "refused_effort", "model_info"),
@@ -2440,6 +2447,13 @@ def test_reasoning_effort_drop_warning_fires_only_when_the_provider_gets_no_effo
             {"reasoning_effort_levels": ["minimal", "low", "medium", "high"]},
             id="chatgpt-declared-level",
         ),
+        pytest.param(
+            "github_copilot/gpt-5.5",
+            "https://api.githubcopilot.com",
+            "minimal",
+            {"reasoning_effort_levels": ["minimal", "low", "medium", "high"]},
+            id="github-copilot-declared-level",
+        ),
     ],
 )
 def test_reasoning_effort_drop_warning_stays_quiet_when_the_summary_alias_restores_the_effort(
@@ -2448,6 +2462,7 @@ def test_reasoning_effort_drop_warning_stays_quiet_when_the_summary_alias_restor
     refused_effort: str,
     model_info: dict[str, object] | None,
     azure_upstream_routes: AzureUpstreamRoutes,
+    github_copilot_api_key: None,
     caplog: pytest.LogCaptureFixture,
 ):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -2464,6 +2479,24 @@ def test_reasoning_effort_drop_warning_stays_quiet_when_the_summary_alias_restor
 
     assert azure_upstream_routes.sent_reasoning_effort() == refused_effort
     assert not [r for r in caplog.records if "Dropping reasoning_effort" in r.getMessage()]
+
+
+def test_a_request_param_named_like_the_drop_holder_still_reaches_the_provider(
+    azure_upstream_routes: AzureUpstreamRoutes,
+):
+    litellm.completion(
+        model=_UNLISTED_AZURE_GPT_5_MODEL,
+        messages=[{"role": "user", "content": "hello"}],
+        api_base=_AZURE_TEST_API_BASE,
+        api_key="fake-key",
+        api_version="2025-04-01-preview",
+        drop_params=True,
+        reasoning_drop_logger="sent by the caller",
+    )
+
+    sent_body: Final = json.loads(azure_upstream_routes.chat.calls[0].request.content)
+    assert sent_body["reasoning_drop_logger"] == "sent by the caller"
+
 
 def test_mock_response_keeps_the_reasoning_effort_drop_warning(
     local_model_cost_map: None, caplog: pytest.LogCaptureFixture

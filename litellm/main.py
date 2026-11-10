@@ -6187,7 +6187,7 @@ def completion(
             return get_optional_params(
                 **mapping_args,
                 model_info=deployment_info,
-                reasoning_drop_logger=reasoning_drop_logger,
+                _litellm_reasoning_drop_logger=reasoning_drop_logger,
                 **mapping_special_params,
             )
 
