@@ -1045,3 +1045,16 @@ def test_bedrock_gpt_oss_rows_declare_vision_support_like_their_safeguard_siblin
 def test_bedrock_gpt_oss_vision_is_explicitly_disabled_for_the_router_gate() -> None:
     assert litellm.utils.is_vision_explicitly_disabled("bedrock/openai.gpt-oss-120b-1:0") is True
     assert litellm.utils.is_vision_explicitly_disabled("bedrock_mantle/openai.gpt-oss-20b") is True
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_azure_ai_claude_rows_priced_for_web_search_say_they_support_it(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    priced_rows: Final = {
+        key: row
+        for key, row in prices.items()
+        if key.startswith("azure_ai/claude") and isinstance(row, dict) and row.get("search_context_cost_per_query")
+    }
+    assert priced_rows
+    unflagged: Final = tuple(key for key, row in priced_rows.items() if row.get("supports_web_search") is not True)
+    assert unflagged == (), unflagged
