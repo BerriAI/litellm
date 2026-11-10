@@ -640,7 +640,7 @@ async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
     assert "anthropic_beta" not in json.loads(request.content)
 
 
-def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
+def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header(local_beta_headers_config: None) -> None:
     """
     Test that remove_unsupported_beta correctly filters out prompt-caching-scope-2026-01-05
     from the anthropic-beta headers.
