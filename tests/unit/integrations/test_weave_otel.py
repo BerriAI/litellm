@@ -12,9 +12,10 @@ from litellm.integrations.weave.weave_otel import (
     WeaveLLMObsOTELAttributes,
     _set_weave_specific_attributes,
     get_weave_otel_config,
+    set_weave_otel_attributes,
 )
 from litellm.types.integrations.weave_otel import WeaveOtelConfig, WeaveSpanAttributes
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import Message, ModelResponse
 
 
 def test_get_weave_otel_config():
@@ -205,3 +206,32 @@ def test_weave_output_value_is_the_dumped_model_response() -> None:
     output: Final = json.loads(str(span.attributes[OpenInferenceSpanAttributes.OUTPUT_VALUE]))
     assert output["id"] == "chatcmpl-1"
     assert output["choices"][0]["message"]["content"] == "Sunny."
+
+
+def test_weave_span_keeps_input_and_token_usage_when_messages_are_litellm_messages() -> None:
+    span: Final = _TRACER.start_span("litellm_request")
+    messages: Final = (Message(role="user", content="weather in SF?"), Message(role="assistant", content="Sunny."))
+    response: Final = ModelResponse(
+        model="gpt-4o",
+        choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Still sunny."}}],
+        usage={"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+    )
+
+    set_weave_otel_attributes(span, {"messages": messages, "standard_logging_object": {}}, response)
+
+    attributes: Final = span.attributes or {}
+    assert json.loads(str(attributes[OpenInferenceSpanAttributes.INPUT_VALUE])) == {
+        "messages": [message.model_dump() for message in messages]
+    }
+    assert {
+        key: attributes.get(key)
+        for key in (
+            OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+            OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+            OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+        )
+    } == {
+        OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_PROMPT: 7,
+        OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_COMPLETION: 3,
+        OpenInferenceSpanAttributes.LLM_TOKEN_COUNT_TOTAL: 10,
+    }

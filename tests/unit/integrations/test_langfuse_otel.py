@@ -20,6 +20,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import Span
 
 import litellm
+from litellm.integrations._types.open_inference import SpanAttributes
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL, REDACTED_BY_LITELLM
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.langfuse.langfuse_otel_attributes import LangfuseLLMObsOTELAttributes
@@ -28,7 +29,16 @@ from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.plumbing.context import set_request_destinations
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import Choices, ModelResponse, StandardCallbackDynamicParams
+from litellm.types.utils import Choices, Message, ModelResponse, StandardCallbackDynamicParams
+
+CHAT_MESSAGE_DICTS: Final = ({"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi back"})
+CHAT_MESSAGE_OBJECTS: Final = tuple(Message(role=message["role"], content=message["content"]) for message in CHAT_MESSAGE_DICTS)
+GENERATION_USAGE_AND_PARAM_KEYS: Final = (
+    SpanAttributes.LLM_TOKEN_COUNT_PROMPT,
+    SpanAttributes.LLM_TOKEN_COUNT_COMPLETION,
+    SpanAttributes.LLM_TOKEN_COUNT_TOTAL,
+    SpanAttributes.LLM_INVOCATION_PARAMETERS,
+)
 
 
 class TestLangfuseOtelIntegration:
@@ -140,45 +150,38 @@ class TestLangfuseOtelIntegration:
                 "langfuse.observation.type", "generation"
             )
 
-    def test_set_messages_serializes_pydantic_message_objects(self):
-        """list[litellm.Message] in messages must not raise and must keep role and content."""
-        from litellm.integrations.langfuse.langfuse_otel_attributes import (
-            LangfuseLLMObsOTELAttributes,
+    @pytest.mark.parametrize(
+        ("messages", "expected_input"),
+        [
+            (CHAT_MESSAGE_DICTS, list(CHAT_MESSAGE_DICTS)),
+            (CHAT_MESSAGE_OBJECTS, [message.model_dump() for message in CHAT_MESSAGE_OBJECTS]),
+        ],
+        ids=["dict_messages", "litellm_message_objects"],
+    )
+    def test_generation_keeps_input_model_params_and_token_usage(
+        self, messages: Sequence[object], expected_input: Sequence[object]
+    ) -> None:
+        span: Final = TracerProvider().get_tracer("langfuse-otel-tests").start_span("litellm_request")
+        response: Final = ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+            usage={"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
         )
-        from litellm.types.utils import Message
 
-        mock_span: Final = MagicMock()
-        kwargs: Final = {
-            "messages": [
-                Message(role="user", content="hello"),
-                Message(role="assistant", content="hi back"),
-            ]
+        LangfuseOtelLogger.set_langfuse_otel_attributes(
+            span,
+            {"messages": messages, "standard_logging_object": {"model_parameters": {"temperature": 0.2}}},
+            response,
+        )
+
+        attributes: Final = dict(span.attributes or {})
+        assert json.loads(str(attributes.pop("langfuse.observation.input"))) == expected_input
+        assert {key: attributes.get(key) for key in GENERATION_USAGE_AND_PARAM_KEYS} == {
+            SpanAttributes.LLM_TOKEN_COUNT_PROMPT: 7,
+            SpanAttributes.LLM_TOKEN_COUNT_COMPLETION: 3,
+            SpanAttributes.LLM_TOKEN_COUNT_TOTAL: 10,
+            SpanAttributes.LLM_INVOCATION_PARAMETERS: json.dumps({"temperature": 0.2}),
         }
-
-        LangfuseLLMObsOTELAttributes.set_messages(mock_span, kwargs)
-
-        key, value = mock_span.set_attribute.call_args.args
-        assert key == "langfuse.observation.input"
-        payload = json.loads(value)
-        assert payload["messages"][0]["role"] == "user"
-        assert payload["messages"][0]["content"] == "hello"
-        assert payload["messages"][1]["role"] == "assistant"
-        assert payload["messages"][1]["content"] == "hi back"
-
-    def test_set_messages_passes_through_plain_dicts(self):
-        """Plain-dict messages serialize unchanged."""
-        from litellm.integrations.langfuse.langfuse_otel_attributes import (
-            LangfuseLLMObsOTELAttributes,
-        )
-
-        mock_span: Final = MagicMock()
-        kwargs: Final = {"messages": [{"role": "user", "content": "hello"}]}
-
-        LangfuseLLMObsOTELAttributes.set_messages(mock_span, kwargs)
-
-        key, value = mock_span.set_attribute.call_args.args
-        assert key == "langfuse.observation.input"
-        assert json.loads(value) == {"messages": [{"role": "user", "content": "hello"}]}
 
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""
