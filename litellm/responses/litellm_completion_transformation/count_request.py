@@ -154,6 +154,7 @@ async def _with_previous_turns(
         request_kwargs={"drop_params": policy.drop_params},
         previous_response_client_ids=previous_response_client_ids(previous_response_id, responses_request),
         input_replaces_history=holds_compaction_summary(responses_request.get("input")),
+        request_input=_caller_input(responses_request),
     )
 
 

@@ -234,6 +234,7 @@ class LiteLLMCompletionTransformationHandler:
                 previous_response_client_ids=previous_response_client_ids,
                 stored_turns=stored_turns,
                 input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
+                request_input=request_input,
             )
 
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = await litellm.acompletion(

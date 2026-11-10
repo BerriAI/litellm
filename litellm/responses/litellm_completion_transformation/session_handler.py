@@ -1,7 +1,8 @@
 import asyncio
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import reduce
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
@@ -300,6 +301,7 @@ class ResponsesSessionHandler:
         client_response_ids: tuple[str, ...] = (),
         tool_call_provider_fields: bool = False,
         stored_turns: StoredTurns | None = None,
+        route_fills_empty_user_turns: Callable[[], bool] | None = None,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -341,12 +343,14 @@ class ResponsesSessionHandler:
             ],
             item_cache_control,
             tool_call_provider_fields,
+            route_fills_empty_user_turns,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
             proxy_server_requests[: start.index],
             item_cache_control,
             tool_call_provider_fields,
+            route_fills_empty_user_turns,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -407,18 +411,19 @@ class ResponsesSessionHandler:
         proxy_server_requests: Sequence[Mapping[str, object] | None],
         item_cache_control: bool,
         tool_call_provider_fields: bool,
+        route_fills_empty_user_turns: Callable[[], bool] | None = None,
     ) -> list["SessionMessage"]:
-        return list(
-            chain.from_iterable(
-                ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
-                    spend_log=spend_log,
-                    proxy_server_request_dict=proxy_server_request,
-                    chat_completion_message_history=[],
-                    item_cache_control=item_cache_control,
-                    tool_call_provider_fields=tool_call_provider_fields,
-                )
-                for spend_log, proxy_server_request in zip(spend_logs, proxy_server_requests, strict=True)
-            )
+        return reduce(
+            lambda history, turn: ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+                spend_log=turn[0],
+                proxy_server_request_dict=turn[1],
+                chat_completion_message_history=history,
+                item_cache_control=item_cache_control,
+                tool_call_provider_fields=tool_call_provider_fields,
+                route_fills_empty_user_turns=route_fills_empty_user_turns,
+            ),
+            zip(spend_logs, proxy_server_requests, strict=True),
+            [],
         )
 
     @staticmethod
@@ -434,12 +439,14 @@ class ResponsesSessionHandler:
         ],
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
+        route_fills_empty_user_turns: Callable[[], bool] | None = None,
     ):
         """
         Extend the chat completion message history with the spend log payload
         """
         from litellm.responses.litellm_completion_transformation.transformation import (
             LiteLLMCompletionResponsesConfig,
+            restored_empty_user_turn,
         )
 
         response_input_param: str | ResponseInputParam | None = None
@@ -470,6 +477,15 @@ class ResponsesSessionHandler:
                     only_since_compaction=True,
                 )
             )
+            if route_fills_empty_user_turns is not None:
+                chat_completion_message_history.extend(
+                    restored_empty_user_turn(
+                        response_input_param,
+                        chat_completion_message_history,
+                        item_cache_control,
+                        route_fills_empty_user_turns,
+                    )
+                )
 
         ############################################################
         # Add Output messages for this Spend Log

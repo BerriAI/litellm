@@ -359,3 +359,27 @@ async def test_bridged_follow_up_after_a_client_tool_search_with_a_client_field_
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert isinstance(response, ResponsesAPIResponse)
+
+
+@pytest.mark.asyncio
+async def test_bridged_follow_up_with_a_lone_user_item_without_content_ends_on_a_user_turn():
+    previous_response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+    )
+    stored_turns: Final = _StoredTurns((_stored_mcp_turn(previous_response_id),))
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)):
+        await litellm.aresponses(
+            model="azure_ai/claude-opus-5-5",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input=[{"role": "user", "content": None}],
+            previous_response_id=previous_response_id,
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert [message["role"] for message in provider.request_body["messages"]] == ["user", "assistant", "user"]

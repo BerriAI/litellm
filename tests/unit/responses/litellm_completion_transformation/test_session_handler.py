@@ -19,6 +19,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
+    StoredTurns,
     _normalize_redacted_tool_call_arguments,
 )
 from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
@@ -1435,3 +1436,33 @@ async def test_previous_response_replays_a_thought_signature_kept_out_of_the_id_
     model_parts: Final = list(chain.from_iterable(turn["parts"] for turn in model_turns))
     assert len(model_parts) == 1
     assert (model_parts[0]["thoughtSignature"] == LONG_SIGNATURE) is short_ids
+
+
+@pytest.mark.parametrize(
+    ("route_fills", "expected"),
+    (
+        (True, [("user", "What is 2+2?"), ("assistant", "Four."), ("user", ""), ("assistant", "Eight.")]),
+        (False, [("user", "What is 2+2?"), ("assistant", "Four."), ("assistant", "Eight.")]),
+    ),
+    ids=("route_fills_empty_user_turns", "route_drops_them"),
+)
+@pytest.mark.asyncio
+async def test_a_stored_follow_up_whose_lone_user_item_had_no_content_replays_its_empty_user_turn(
+    route_fills: bool, expected: list[tuple[object, object]]
+) -> None:
+    first_turn: Final = _spend_log("chatcmpl-first", "session-empty-turn", "What is 2+2?", "Four.")
+    follow_up: Final = {
+        **_spend_log("chatcmpl-follow-up", "session-empty-turn", "", "Eight."),
+        "proxy_server_request": {"input": [{"role": "user", "content": None}], "model": "claude-bridge"},
+    }
+
+    result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+        "chatcmpl-follow-up",
+        stored_turns=StoredTurns(
+            spend_logs=(first_turn, follow_up),
+            proxy_server_requests=(first_turn["proxy_server_request"], follow_up["proxy_server_request"]),
+        ),
+        route_fills_empty_user_turns=lambda: route_fills,
+    )
+
+    assert [(message.get("role"), message.get("content")) for message in result["messages"]] == expected

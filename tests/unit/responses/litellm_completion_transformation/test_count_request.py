@@ -229,3 +229,33 @@ async def test_claude_count_request_leaves_out_the_stored_turns_a_compaction_ite
     assert _SUMMARY in counted and "And Osaka?" in counted
     assert "Weather in SF?" not in counted
     assert "call_0" not in counted
+
+
+async def _a_stored_question_and_answer(previous_response_id: str) -> ChatCompletionSession:
+    return ChatCompletionSession(
+        messages=[{"role": "user", "content": "What is 2+2?"}, {"role": "assistant", "content": "Four."}],
+        litellm_session_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_claude_count_request_counts_the_empty_user_turn_a_follow_up_sends() -> None:
+    request: Final = await chat_count_request(
+        model="claude-opus-5-5",
+        custom_llm_provider="anthropic",
+        api_base=None,
+        responses_request={
+            "model": "claude-opus-5-5",
+            "previous_response_id": "resp_stored",
+            "input": [{"role": "user", "content": None}],
+        },
+        policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+        session_lookup=_a_stored_question_and_answer,
+    )
+
+    assert isinstance(request, ChatCountRequest)
+    assert [(message.get("role"), message.get("content")) for message in request.messages] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", ""),
+    ]
