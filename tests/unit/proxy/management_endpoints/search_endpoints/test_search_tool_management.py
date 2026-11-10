@@ -3,6 +3,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,6 +26,16 @@ from litellm.types.search import SearchToolInfoResponse
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 client = TestClient(app)
+
+
+def test_dashboard_discovers_webiq_with_its_display_name() -> None:
+    with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)):
+        response: Final = client.get("/search_tools/ui/available_providers")
+
+    assert response.status_code == 200, response.text
+    assert [provider for provider in response.json()["providers"] if provider["provider_name"] == "webiq"] == [
+        {"provider_name": "webiq", "ui_friendly_name": "Microsoft Web IQ"}
+    ]
 
 
 @pytest.mark.asyncio
