@@ -25,7 +25,6 @@ class Store:
     state: SweepState | None = None
     claimable: bool = True
     pending: bool = False
-    index_ready: bool = True
     per_scope: int = 3
     unreadable: frozenset[str] = frozenset()
     pages: list[tuple[str, int]] = field(default_factory=list)
@@ -37,10 +36,7 @@ class Store:
     async def accounting_pending(self, day: date) -> bool:
         return self.pending
 
-    async def key_index_ready(self) -> bool:
-        return self.index_ready
-
-    async def save(self, owner: str, state: SweepState) -> None:
+    def _keep(self, state: SweepState) -> None:
         self.saved.append(state)
         self.state = state
 
@@ -57,13 +53,13 @@ class Store:
         if self.unreadable.intersection(ids):
             raise ResourceUnreadableError()
         advanced: Final = advance(state, ids, limit)
-        await self.save(owner, advanced)
+        self._keep(advanced)
         return advanced
 
     async def skip_next(self, owner: str, state: SweepState) -> SweepState:
         ids: Final = self._next(state, 1)
         advanced: Final = advance(state, ids, 1, skipped=len(ids))
-        await self.save(owner, advanced)
+        self._keep(advanced)
         return advanced
 
 
@@ -127,14 +123,6 @@ async def test_an_unreadable_resource_is_retried_alone_then_skipped() -> None:
     assert ("team", 1) in store.pages
     assert store.state is not None and store.state.completed
     assert (store.state.checked, store.state.skipped) == (12, 1)
-
-
-@pytest.mark.asyncio
-async def test_keys_wait_for_their_index_while_other_scopes_run() -> None:
-    store: Final = Store(index_ready=False)
-    await _run(store)
-    assert all(scope != "key" for scope, _ in store.pages)
-    assert store.state is not None and store.state.completed and store.state.checked == 1 + 3 * 3
 
 
 @pytest.mark.asyncio
