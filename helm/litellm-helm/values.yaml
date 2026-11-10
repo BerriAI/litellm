@@ -660,17 +660,3 @@ serviceMonitor:
   namespaceSelector:
     matchNames: []
     # - test-namespace
-
-lens:
-  enabled: false
-  url: ""
-  publicUrl: ""
-  service:
-    name: ""
-    port: 4318
-  gatewaySecret:
-    name: ""
-    key: gateway-secret
-  serviceTokenSecret:
-    name: ""
-    key: service-token

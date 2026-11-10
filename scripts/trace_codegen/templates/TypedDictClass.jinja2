@@ -1,8 +1,0 @@
-{% from 'types.jinja2' import hint %}
-class {{ class_name }}(typing_extensions.TypedDict):
-{%- for field in fields %}
-    {{ field.name }}: ReadOnly[{% if not field.required or field.extras.get("x_python_optional", false) %}NotRequired[{% endif %}{% if field.constraints and ("minimum" in field.constraints or "maximum" in field.constraints) %}Annotated[{{ hint(field.data_type) }}, Field({% if "minimum" in field.constraints %}ge={{ field.constraints["minimum"].value }}{% endif %}{% if "minimum" in field.constraints and "maximum" in field.constraints %}, {% endif %}{% if "maximum" in field.constraints %}le={{ field.constraints["maximum"].value }}{% endif %})]{% else %}{{ hint(field.data_type) }}{% endif %}{% if not field.required or field.extras.get("x_python_optional", false) %}]{% endif %}]
-{%- endfor %}
-{% if not fields %}
-    pass
-{% endif %}

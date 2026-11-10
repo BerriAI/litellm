@@ -255,9 +255,9 @@ it would need to update the `config.yaml` file which is a exposed ConfigMap, and
 therefore, read-only. This is a limitation of this helm chart, not the Admin UI
 itself.
 
-## Connect Lens
+## Removed Lens configuration
 
-This chart does not deploy Lens. Deploy Lens from [its own chart](https://github.com/BerriAI/lens/tree/main/helm/lens), then set `lens.enabled: true`, `lens.url`, `lens.publicUrl`, `lens.gatewaySecret.name` and `lens.serviceTokenSecret.name`. The secret keys default to `gateway-secret` and `service-token`. Set `lens.service.name` when that Lens runs in this release's namespace and the chart ingress should route `/lens-ingest` to it. The old `lensWorker` values are no longer read, and enabling them fails the render
+The external Lens integration has been removed. Existing `lens` and `lensWorker` values are ignored with a warning in the release notes. Remove these obsolete values when updating your configuration.
 
 ## Shutdown accounting
 

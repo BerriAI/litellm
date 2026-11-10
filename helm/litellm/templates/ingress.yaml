@@ -166,15 +166,6 @@ spec:
     - host: {{ $componentHosts.gateway | quote }}
       http:
         paths:
-          {{- if and .Values.lens.enabled .Values.lens.service.name }}
-          - path: /lens-ingest
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ .Values.lens.service.name }}
-                port:
-                  number: {{ .Values.lens.service.port }}
-          {{- end }}
           - path: /
             pathType: Prefix
             backend:
@@ -248,16 +239,6 @@ spec:
                 name: {{ $gatewayName }}
                 port:
                   number: {{ $gatewayPort }}
-          {{- end }}
-          {{- if and .Values.lens.enabled .Values.lens.service.name }}
-          {{- $builtinPathKeys = append $builtinPathKeys "/lens-ingest|Prefix" }}
-          - path: /lens-ingest
-            pathType: Prefix
-            backend:
-              service:
-                name: {{ .Values.lens.service.name }}
-                port:
-                  number: {{ .Values.lens.service.port }}
           {{- end }}
           {{- /*
             --- Operator-supplied extra paths (ingress.extraPaths) ---

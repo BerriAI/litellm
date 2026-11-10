@@ -28,7 +28,7 @@ WEBSOCKET_ROUTES: Final = (
     "/deepgram/listen",
     "/vertex_ai/live",
 )
-HTTP_ONLY_ROUTES: Final = ("/v1/traces", "/v1/logs", "/v1/chat/completions", "/nope")
+HTTP_ONLY_ROUTES: Final = ("/v1/models", "/v1/chat/completions", "/nope")
 HANDSHAKE_SHAPES: Final = (
     "no_header",
     "empty_bearer",
@@ -47,7 +47,6 @@ CRASH_MARKERS: Final = (
     "AttributeError: 'WebSocket' object has no attribute 'method'",
     "ERROR: user_api_key_auth.py",
 )
-OTLP_LENS_MESSAGE: Final = "Send traces and logs directly to the Lens endpoint shown in Lens setup."
 REALTIME_TRANSCRIPTION_MODEL: Final = "gpt-realtime-whisper"
 
 Headers = tuple[tuple[str, str], ...]
@@ -197,33 +196,16 @@ def _http_window(owned: OwnedProxy, offset: int, access_line: str) -> str:
     return eventually(lambda: _log_after(owned, offset), lambda text: access_line in text, seconds=30)
 
 
-@pytest.mark.parametrize("content_type", ("application/json", "application/x-protobuf"))
-@pytest.mark.parametrize("path", ("/v1/traces", "/v1/logs"))
-def test_an_otlp_ingest_post_still_answers_410_in_the_caller_s_encoding(
-    owned: OwnedProxy, path: str, content_type: str
-) -> None:
-    tag: Final = _tag("otlp")
-    offset: Final = owned.log.stat().st_size
-    response: Final = owned.gateway.client.post(
-        f"{path}?tag={tag}", content=b"", headers={"content-type": content_type}
-    )
-    assert response.status_code == 410, response.text
-    assert response.headers["content-type"].split(";", 1)[0] == content_type, response.headers
-    assert OTLP_LENS_MESSAGE.encode() in response.content, response.content
-    window: Final = _http_window(owned, offset, f'"POST {path}?tag={tag} HTTP/1.1" 410')
-    assert _crash_lines(window) == (), window
-
-
-def test_a_get_on_the_otlp_path_is_not_otlp_ingest_and_answers_a_plain_401(owned: OwnedProxy) -> None:
+def test_an_unauthorized_get_answers_json_even_with_a_protobuf_content_type(owned: OwnedProxy) -> None:
     tag: Final = _tag("otlpget")
     offset: Final = owned.log.stat().st_size
     response: Final = owned.gateway.client.get(
-        f"/v1/traces?tag={tag}", headers={"content-type": "application/x-protobuf"}
+        f"/v1/models?tag={tag}", headers={"content-type": "application/x-protobuf"}
     )
     assert response.status_code == 401, response.text
     assert response.headers["content-type"].split(";", 1)[0] == "application/json", response.headers
     assert response.json()["error"]["code"] == "401", response.text
-    window: Final = _http_window(owned, offset, f'"GET /v1/traces?tag={tag} HTTP/1.1" 401')
+    window: Final = _http_window(owned, offset, f'"GET /v1/models?tag={tag} HTTP/1.1" 401')
     assert _crash_lines(window) == (), window
 
 

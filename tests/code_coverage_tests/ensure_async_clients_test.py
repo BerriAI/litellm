@@ -2,9 +2,6 @@ import ast
 import os
 
 ALLOWED_FILES = [
-    # Lens data traffic owns one pool per app lifespan, isolated from model traffic and closed on shutdown.
-    "../../litellm/tracing/remote.py",
-    "./litellm/tracing/remote.py",
     # Only a guardrail check retry opens a client, on purpose to get a new connection, and closes it right after.
     "../../litellm/proxy/guardrails/guardrail_hooks/generic_guardrail_api/generic_guardrail_api.py",
     "./litellm/proxy/guardrails/guardrail_hooks/generic_guardrail_api/generic_guardrail_api.py",

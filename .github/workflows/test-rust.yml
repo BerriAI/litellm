@@ -6,10 +6,6 @@ on:
       - "litellm-rust/**"
       - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
-      - "scripts/generate_trace_types.py"
-      - "scripts/trace_codegen/**"
-      - "scripts/lens_assets/**"
-      - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -41,10 +37,6 @@ on:
       - "litellm-rust/**"
       - "model_prices_and_context_window.json"
       - "litellm/rust_bridge/**"
-      - "scripts/generate_trace_types.py"
-      - "scripts/trace_codegen/**"
-      - "scripts/lens_assets/**"
-      - "litellm/tracing/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -157,10 +149,6 @@ jobs:
         uses: mozilla-actions/sccache-action@d651010b8da762cde178750d8eda7b5febfe147a
         with:
           version: "v0.18.0"
-
-      - name: Check generated trace contracts
-        working-directory: .
-        run: uv run scripts/generate_trace_types.py --check
 
       - run: cargo nextest run --workspace --locked
 

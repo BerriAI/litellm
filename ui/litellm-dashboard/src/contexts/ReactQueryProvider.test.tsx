@@ -17,7 +17,9 @@ describe("root query retry policy", () => {
   });
 
   it("does not retry a malformed success response, which a retry cannot fix", async () => {
-    expect(await attempts(new ApiError("Expected JSON from /lens but the server returned text/html", 200, ""))).toBe(1);
+    expect(
+      await attempts(new ApiError("Expected JSON from /model_group/info but the server returned text/html", 200, "")),
+    ).toBe(1);
   });
 
   it("retries server and network errors", async () => {

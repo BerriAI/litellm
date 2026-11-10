@@ -20,7 +20,6 @@ on:
       - backend/Dockerfile
       - backend/main.py
       - litellm-rust/**
-      - litellm/proxy/lens/**
       - docker/component_entrypoint.sh
       - docker/entrypoint.sh
       - litellm/proxy/prisma_migration.py
@@ -131,7 +130,7 @@ jobs:
           persist-credentials: false
 
       - name: Build runtime image
-        run: docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -f "${{ matrix.dockerfile }}" -t litellm-runtime-scan:${{ github.sha }} .
+        run: docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-ci -f "${{ matrix.dockerfile }}" -t litellm-runtime-scan:${{ github.sha }} .
 
       - name: Tag the cached builder for Admin MCP schema setup
         run: docker build --target builder -f "${{ matrix.dockerfile }}" -t litellm-admin-mcp-schema:${{ github.sha }} .

@@ -15,8 +15,6 @@ from typing import TYPE_CHECKING, Final, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-from scripts.seed_tracing_fixtures import JSON_OBJECT, spend_fixtures
-
 if TYPE_CHECKING:
     from prisma.types import LiteLLM_SpendLogsCreateWithoutRelationsInput
 
@@ -363,7 +361,7 @@ class SeedOptions(BaseModel):
 def seed_arguments(argv: Sequence[str] | None = None) -> SeedOptions:
     parser: Final = argparse.ArgumentParser(description="Insert synthetic request logs of controlled sizes into a local proxy DB")
     parser.add_argument("--profile", choices=PROFILES, default="default")
-    parser.add_argument("--timeout-seconds", type=float, default=os.environ.get("LENS_DEV_SEED_TIMEOUT_SECONDS", "120"))
+    parser.add_argument("--timeout-seconds", type=float, default=os.environ.get("REQUEST_LOG_SEED_TIMEOUT_SECONDS", "120"))
     arguments: Final = SeedOptions.model_validate(vars(parser.parse_args(argv)))
     if not math.isfinite(arguments.timeout_seconds) or arguments.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be finite and positive")
@@ -371,9 +369,12 @@ def seed_arguments(argv: Sequence[str] | None = None) -> SeedOptions:
 
 
 def metadata_template() -> dict[str, JsonValue]:
-    """A real captured row's metadata, so the drawer sees the keys the gateway writes."""
-    _, rows = spend_fixtures()[0]
-    return JSON_OBJECT.validate_json(rows[0]["metadata"])
+    return {
+        "user_api_key": "seed-logs-key",
+        "user_api_key_alias": "seed-logs",
+        "user_api_key_user_id": "seed-logs-user",
+        "user_api_key_team_id": "seed-logs-team",
+    }
 
 
 async def verify(client: httpx.AsyncClient, logs: tuple[SeededLog, ...], ui_base: str) -> None:
@@ -402,7 +403,7 @@ async def seed(profile: Profile = "default", timeout_seconds: float = 120) -> in
     template: Final = metadata_template()
     now: Final = datetime.now(timezone.utc)
     proxy_url: Final = os.environ.get("PROXY_BASE_URL", "http://127.0.0.1:4000")
-    ui_base: Final = os.environ.get("LENS_DEV_UI_URL", proxy_url)
+    ui_base: Final = os.environ.get("REQUEST_LOG_UI_URL", proxy_url)
     async with (
         httpx.AsyncClient(
             base_url=proxy_url,

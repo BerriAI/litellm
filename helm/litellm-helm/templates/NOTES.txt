@@ -21,3 +21,7 @@
   kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:$CONTAINER_PORT
 {{- end }}
 PDB: {{ if .Values.pdb.enabled }}enabled{{ else }}disabled{{ end }}. Configure via .Values.pdb.*
+
+{{- if or (hasKey .Values "lens") (hasKey .Values "lensWorker") }}
+WARNING: The Lens integration has been removed. lens and lensWorker values are ignored. Remove these obsolete values.
+{{- end }}

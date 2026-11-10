@@ -5,7 +5,7 @@ Pins covered:
 - ``_close_dangling_otel_server_span``
 - ``otel_request_validation_exception_handler``
 - ``otel_unhandled_exception_handler``
-- ``otlp_http_exception_handler``
+- ``proxy_http_exception_handler``
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from litellm.proxy.proxy_server import (
     openai_exception_handler,
     otel_request_validation_exception_handler,
     otel_unhandled_exception_handler,
-    otlp_http_exception_handler,
+    proxy_http_exception_handler,
 )
 
 from .conftest import normalize
@@ -677,41 +677,6 @@ async def test_otel_unhandled_exception_handler_reraises_http_exception_invalid(
         await otel_unhandled_exception_handler(request=request, exc=HTTPException(status_code=418, detail="teapot"))
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("media_type", ["application/json", "application/x-protobuf"])
-@pytest.mark.parametrize("root_path", ["", "/tenant-a"])
-@pytest.mark.parametrize("error", [
-    ProxyException("database credentials: secret", "auth_error", None, 401),
-    HTTPException(403, "database credentials: secret"),
-])
-async def test_otlp_auth_errors_hide_internal_details(
-    media_type: str, root_path: str, error: ProxyException | HTTPException,
-) -> None:
-    from google.rpc.status_pb2 import Status
-
-    from litellm.proxy.proxy_server import otlp_http_exception_handler
-
-    request: Final = Request({
-        "type": "http", "method": "POST", "path": root_path + "/v1/traces", "root_path": root_path,
-        "headers": [(b"content-type", media_type.encode())],
-    })
-    response: Final = (
-        await openai_exception_handler(request, error)
-        if isinstance(error, ProxyException)
-        else await otlp_http_exception_handler(request, error)
-    )
-    assert response is not None
-    assert response.status_code == (401 if isinstance(error, ProxyException) else 403)
-    assert response.headers["content-type"].startswith(media_type)
-    message: Final = (
-        json.loads(response.body)["message"]
-        if media_type == "application/json"
-        else Status.FromString(response.body).message
-    )
-    expected: Final = "Unauthorized" if isinstance(error, ProxyException) else "Forbidden"
-    assert message == expected
-
-
 def _websocket(sent: list[Message]) -> WebSocket:
     async def receive() -> Message:
         return {"type": "websocket.connect"}
@@ -726,7 +691,7 @@ def _websocket(sent: list[Message]) -> WebSocket:
 async def test_http_exception_on_a_plain_http_request_keeps_the_default_json_body() -> None:
     request: Final = _make_request(path="/v1/models")
 
-    response: Final = await otlp_http_exception_handler(request, HTTPException(404, "not found"))
+    response: Final = await proxy_http_exception_handler(request, HTTPException(404, "not found"))
 
     assert response is not None
     assert response.status_code == 404
@@ -737,7 +702,7 @@ async def test_http_exception_on_a_plain_http_request_keeps_the_default_json_bod
 async def test_a_disabled_claude_code_gateway_answers_the_anthropic_not_found_error() -> None:
     request: Final = _make_request(path="/claude_code_gateway/v1/messages")
 
-    response: Final = await otlp_http_exception_handler(
+    response: Final = await proxy_http_exception_handler(
         request, HTTPException(404, "Claude Code gateway is not enabled")
     )
 
@@ -766,7 +731,7 @@ async def test_http_exception_on_a_websocket_closed_before_accept_sends_nothing_
     websocket: Final = _websocket(sent)
     await websocket.close(code=1008)
 
-    response: Final = await otlp_http_exception_handler(websocket, HTTPException(403, "No API key provided"))
+    response: Final = await proxy_http_exception_handler(websocket, HTTPException(403, "No API key provided"))
 
     assert response is None
     assert sent == [{"type": "websocket.close", "code": 1008, "reason": ""}]
@@ -776,7 +741,7 @@ async def test_http_exception_on_a_websocket_closed_before_accept_sends_nothing_
 async def test_http_exception_on_a_connecting_websocket_denies_the_upgrade_with_its_status() -> None:
     websocket: Final = _websocket([])
 
-    response: Final = await otlp_http_exception_handler(websocket, HTTPException(403, "No API key provided"))
+    response: Final = await proxy_http_exception_handler(websocket, HTTPException(403, "No API key provided"))
 
     assert response is not None
     assert response.status_code == 403
@@ -792,7 +757,7 @@ async def test_http_exception_on_an_accepted_websocket_closes_it_with_a_matching
     websocket: Final = _websocket(sent)
     await websocket.accept()
 
-    response: Final = await otlp_http_exception_handler(websocket, HTTPException(status_code, "late failure"))
+    response: Final = await proxy_http_exception_handler(websocket, HTTPException(status_code, "late failure"))
 
     assert response is None
     assert sent[-1] == {"type": "websocket.close", "code": close_code, "reason": ""}
@@ -807,7 +772,7 @@ def test_websocket_auth_rejection_reaches_the_client_as_a_denial_instead_of_a_se
         await websocket.accept()
 
     app: Final = FastAPI()
-    app.exception_handler(HTTPException)(otlp_http_exception_handler)
+    app.exception_handler(HTTPException)(proxy_http_exception_handler)
     app.add_api_websocket_route("/v1/responses", responses)
 
     with pytest.raises(WebSocketDisconnect) as disconnect, TestClient(app).websocket_connect("/v1/responses"):
@@ -824,7 +789,7 @@ def test_websocket_rejected_before_any_close_reaches_the_client_as_an_http_denia
         await websocket.accept()
 
     app: Final = FastAPI()
-    app.exception_handler(HTTPException)(otlp_http_exception_handler)
+    app.exception_handler(HTTPException)(proxy_http_exception_handler)
     app.add_api_websocket_route("/v1/responses", responses)
 
     with pytest.raises(WebSocketDenialResponse) as denial, TestClient(app).websocket_connect("/v1/responses"):
