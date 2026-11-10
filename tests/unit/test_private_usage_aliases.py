@@ -4145,14 +4145,6 @@ PROXY_ALIAS_CASES: Final = (
 
 LLMS_FORWARDER_CASES: Final = (
     (
-        "litellm.llms.bedrock.chat.invoke_handler",
-        "AWSEventStreamDecoder",
-        "_chunk_parser",
-        "chunk_parser",
-        "instance",
-        False,
-    ),
-    (
         "litellm.llms.aiml.chat.transformation",
         "AIMLChatConfig",
         "_get_openai_compatible_provider_info",

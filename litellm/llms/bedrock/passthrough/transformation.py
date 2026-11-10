@@ -150,7 +150,7 @@ def _without_invoke_guardrail_headers(headers: Mapping[str, str]) -> Mapping[str
 
 
 def _reports_guardrail_usage(headers: Mapping[str, str]) -> bool:
-    traces: Final = tuple(value.upper() for name, value in headers.items() if name.lower() == _BEDROCK_TRACE_HEADER)
+    traces: Final = tuple(value for name, value in headers.items() if name.lower() == _BEDROCK_TRACE_HEADER)
     return bool(traces) and all(trace in _BEDROCK_GUARDRAIL_USAGE_TRACES for trace in traces)
 
 
@@ -308,7 +308,7 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
     translated_chunk: Final = decoder.chunk_parser(chunk_data=json.loads(message))
     if isinstance(translated_chunk, ModelResponseStream):
         return translated_chunk
-    if generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
+    if generic_chunk_has_all_required_fields(translated_chunk):
         return convert_generic_chunk_to_model_response_stream(cast(GenericStreamingChunk, translated_chunk))
     return None
 

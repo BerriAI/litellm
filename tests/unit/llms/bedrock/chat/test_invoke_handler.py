@@ -2073,8 +2073,8 @@ def test_invoke_stream_decoder_carries_the_guardrail_trace_of_the_message_stop_c
     ``amazon-bedrock-trace``. The chunk keeps it so the stream builder and the spend log can price it."""
     decoder = AmazonAnthropicClaudeStreamDecoder(model="anthropic.claude-sonnet-5-v1:0", sync_stream=True)
     trace = {"guardrail": {"input": {"gid": {"invocationMetrics": {"usage": {"topicPolicyUnits": 1}}}}}}
-    plain = decoder._chunk_parser({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3}})
-    traced = decoder._chunk_parser(
+    plain = decoder.chunk_parser({"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3}})
+    traced = decoder.chunk_parser(
         {
             "type": "message_stop",
             "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3},

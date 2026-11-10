@@ -40,7 +40,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_param,
     stored_attribute,
 )
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_items
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_items
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
@@ -361,6 +361,12 @@ _DECODED_JSON: Final = TypeAdapter(object)
 def _provider_response_model(chunk: object) -> str | None:
     model: Final[object] = chunk.get("model") if isinstance(chunk, Mapping) else getattr(chunk, "model", None)
     return model if isinstance(model, str) and model else None
+
+
+def _chunk_provider_specific_fields(chunk: object) -> object:
+    if isinstance(chunk, ModelResponseStream):
+        return chunk.provider_specific_fields
+    return chunk.get("provider_specific_fields") if is_str_keyed_dict(chunk) else None
 
 
 def _parsed_provider_hidden_params(hidden: object) -> _ParsedChunkHiddenParams | None:
@@ -1516,10 +1522,9 @@ class CustomStreamWrapper:
                 chunk.choices[0].finish_reason = None
             return _ProviderChunkEarlyReturn(chunk)
 
-        if (
-            isinstance(chunk, dict)
-            and generic_chunk_has_all_required_fields(chunk=chunk)  # check if chunk is a generic streaming chunk
-        ) or (self.custom_llm_provider and self.custom_llm_provider in litellm._custom_providers):
+        if generic_chunk_has_all_required_fields(chunk=chunk) or (  # check if chunk is a generic streaming chunk
+            self.custom_llm_provider and self.custom_llm_provider in litellm._custom_providers
+        ):
             if self.received_finish_reason is not None:
                 _chunk_has_content: Final = isinstance(chunk, dict) and (
                     bool(chunk.get("text", ""))
@@ -1796,8 +1801,9 @@ class CustomStreamWrapper:
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
-        if isinstance(chunk, ModelResponseStream) and chunk.provider_specific_fields:
-            self.logging_obj.record_native_bedrock_guardrail(chunk.provider_specific_fields)
+        chunk_provider_specific_fields: Final = _chunk_provider_specific_fields(chunk)
+        if chunk_provider_specific_fields:
+            self.logging_obj.record_native_bedrock_guardrail(chunk_provider_specific_fields)
         if self.custom_llm_provider != "cached_response" and isinstance(
             chunk, (ChatCompletionChunk, ModelResponseStream)
         ):
@@ -3093,14 +3099,14 @@ def calculate_total_usage(chunks: Sequence[ModelResponse | ModelResponseStream])
     return returned_usage_chunk
 
 
-def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
+def generic_chunk_has_all_required_fields(chunk: object) -> bool:
     """
     Checks if the provided chunk dictionary contains all required fields for GenericStreamingChunk.
 
     :param chunk: The dictionary to check.
     :return: True if all required fields are present, False otherwise.
     """
-    return all(key in _GCHUNK_FIELDS for key in chunk)
+    return is_str_keyed_dict(chunk) and all(key in _GCHUNK_FIELDS for key in chunk)
 
 
 def convert_generic_chunk_to_model_response_stream(
@@ -3121,6 +3127,7 @@ def convert_generic_chunk_to_model_response_stream(
             )
         ],
         finish_reason=chunk["finish_reason"] if chunk["is_finished"] else None,
+        provider_specific_fields=chunk.get("provider_specific_fields"),
     )
 
     if "usage" in chunk and chunk["usage"] is not None:

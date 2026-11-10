@@ -191,7 +191,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             prompt_parts.append(f"{role}: {content}")
         return "\n".join(part for part in prompt_parts if part).strip()
 
-    def transform_response(
+    def _transform_invoke_response(
         self,
         model: str,
         raw_response: httpx.Response,
