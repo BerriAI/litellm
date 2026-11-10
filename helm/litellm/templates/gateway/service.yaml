@@ -8,6 +8,9 @@ metadata:
     app.kubernetes.io/component: gateway
 spec:
   type: {{ .Values.gateway.service.type }}
+  {{- with .Values.gateway.service.trafficDistribution }}
+  trafficDistribution: {{ . }}
+  {{- end }}
   ports:
     - port: {{ .Values.gateway.service.port }}
       targetPort: http

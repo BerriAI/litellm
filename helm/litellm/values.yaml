@@ -374,6 +374,12 @@ gateway:
   service:
     type: ClusterIP
     port: 4000
+    # Optional Service.spec.trafficDistribution. Leave empty to inherit the
+    # Kubernetes default, which spreads in-cluster traffic over every ready
+    # gateway pod. Set PreferSameZone (PreferClose before Kubernetes 1.33) so
+    # a client is served by a gateway pod in its own zone when one is ready,
+    # which keeps cross-zone traffic down. Needs Kubernetes 1.31 or newer.
+    trafficDistribution: ""
   resources:
     requests:
       cpu: "1"
@@ -520,6 +526,8 @@ backend:
   service:
     type: ClusterIP
     port: 4001
+    # Same shape as gateway.service.trafficDistribution.
+    trafficDistribution: ""
   resources:
     requests:
       cpu: "1"
@@ -588,6 +596,8 @@ ui:
   service:
     type: ClusterIP
     port: 3000
+    # Same shape as gateway.service.trafficDistribution.
+    trafficDistribution: ""
   # The backend's public origin, passed to the UI only when ingress.componentHosts is configured.
   backendUrl: ""
   # Public origin of the UI, used for backend and gateway CORS.

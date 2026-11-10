@@ -1,0 +1,46 @@
+suite: test Service trafficDistribution passthrough
+templates:
+  - gateway/service.yaml
+  - backend/service.yaml
+  - ui/service.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: services omit spec.trafficDistribution by default, so Kubernetes' default routing applies
+    asserts:
+      - isKind:
+          of: Service
+      - isNull:
+          path: spec.trafficDistribution
+      - equal:
+          path: spec.type
+          value: ClusterIP
+
+  - it: gateway Service renders spec.trafficDistribution verbatim when configured
+    template: gateway/service.yaml
+    set:
+      gateway.service.trafficDistribution: PreferSameZone
+    asserts:
+      - equal:
+          path: spec.trafficDistribution
+          value: PreferSameZone
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+
+  - it: trafficDistribution passthrough works on every component (backend and ui parity)
+    set:
+      backend.service.trafficDistribution: PreferClose
+      ui.service.trafficDistribution: PreferSameNode
+    asserts:
+      - equal:
+          path: spec.trafficDistribution
+          value: PreferClose
+        template: backend/service.yaml
+      - equal:
+          path: spec.trafficDistribution
+          value: PreferSameNode
+        template: ui/service.yaml
+      - isNull:
+          path: spec.trafficDistribution
+        template: gateway/service.yaml
