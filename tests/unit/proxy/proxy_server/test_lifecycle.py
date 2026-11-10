@@ -794,6 +794,7 @@ def test_cost_tracking_registers_budget_reconciler_when_prisma_missing(monkeypat
     assert litellm.callbacks == []
     assert len(litellm._async_success_callback) == 1
     assert isinstance(litellm._async_success_callback[0], BudgetReservationReconcileLogger)
+    assert "_PROXY_" in type(litellm._async_success_callback[0]).__name__
 
 
 # ---------------------------------------------------------------------------

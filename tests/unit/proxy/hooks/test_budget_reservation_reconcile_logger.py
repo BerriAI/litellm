@@ -1,4 +1,4 @@
-"""Unit tests for BudgetReservationReconcileLogger (#45895)."""
+"""Unit tests for _PROXY_BudgetReservationReconcileLogger (#45895)."""
 
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -346,3 +346,31 @@ async def test_missing_or_invalid_metadata_leaves_existing_spend_unchanged(
     await logger.async_log_success_event(kwargs, object(), now, now)
 
     assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(0.00255)
+
+
+def test_no_log_opt_out_does_not_skip_budget_reconciler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Settlement is mandatory accounting: no-log must not suppress this callback."""
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", False)
+    logging_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="budget-reconcile-no-log",
+        start_time=datetime.now(UTC),
+        function_id="1234",
+    )
+    logger = BudgetReservationReconcileLogger()
+
+    assert "_PROXY_" in type(logger).__name__
+    assert (
+        logging_obj.should_run_callback(
+            callback=logger,
+            litellm_params={"no-log": True},
+            event_hook="async_success_handler",
+        )
+        is True
+    )
