@@ -36,6 +36,7 @@ from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routed_model_name, routing_decision_attributes
 from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -222,6 +223,14 @@ VALID_METRIC_ATTRIBUTE_NAMES: Final[frozenset[str]] = frozenset(
 )
 
 
+def is_deep_metadata_attribute(name: str) -> bool:
+    """``metadata.<field>.<path>`` names one value inside a metadata field, resolved by
+    dot path the way ``custom_prometheus_metadata_labels`` resolves its labels."""
+    root, _, rest = name.partition(".")
+    field_name, _, path = rest.partition(".")
+    return root == "metadata" and field_name in METRIC_METADATA_KEYS and bool(path)
+
+
 @dataclass(frozen=True)
 class OTELMetricAttributeFilter:
     include_list: list[str] | None = None
@@ -259,10 +268,19 @@ def resolve_metric_attribute_filter(
         raise ValueError(
             f"otel.attributes: {TOKEN_TYPE_ATTRIBUTE} is a structural token-usage discriminator and cannot be filtered"
         )
-    unknown: Final = sorted(name for name in requested if name not in VALID_METRIC_ATTRIBUTE_NAMES)
+    deep_excludes: Final = sorted(name for name in exclude or [] if is_deep_metadata_attribute(name))
+    if deep_excludes:
+        raise ValueError(
+            f"otel.attributes: {deep_excludes} name values inside a metadata field, which only "
+            "include_list supports. Exclude the whole metadata field instead."
+        )
+    unknown: Final = sorted(
+        name for name in requested if name not in VALID_METRIC_ATTRIBUTE_NAMES and not is_deep_metadata_attribute(name)
+    )
     if unknown:
         raise ValueError(
-            f"otel.attributes: unknown attribute name(s) {unknown}. Valid names: {sorted(VALID_METRIC_ATTRIBUTE_NAMES)}"
+            f"otel.attributes: unknown attribute name(s) {unknown}. Valid names: {sorted(VALID_METRIC_ATTRIBUTE_NAMES)}, "
+            "plus metadata.<field>.<path> in include_list for a value inside one of those metadata fields"
         )
     return (
         frozenset(include) if include else None,
@@ -471,6 +489,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         # a bad config still fails at startup.
         self._metric_attr_include: frozenset[str] | None = None
         self._metric_attr_exclude: frozenset[str] | None = None
+        self._metric_attr_deep_paths: tuple[str, ...] = ()
         self._metric_attr_filter_resolved = False
         if config.attributes is not None:
             self._ensure_metric_attribute_filter()
@@ -1704,6 +1723,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self._metric_attr_include,
             self._metric_attr_exclude,
         ) = resolve_metric_attribute_filter(attributes)
+        self._metric_attr_deep_paths = tuple(
+            sorted(name for name in self._metric_attr_include or () if is_deep_metadata_attribute(name))
+        )
         self._metric_attr_filter_resolved = True
 
     def _filter_metric_attributes(self, attrs: Mapping[str, str | None]) -> dict[str, str]:
@@ -1742,6 +1764,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 common_attrs[f"metadata.{key}"] = safe_dumps(value)
             else:
                 common_attrs[f"metadata.{key}"] = str(value)
+
+        self._ensure_metric_attribute_filter()
+        for name in self._metric_attr_deep_paths:
+            nested: object = get_nested_value(cast(Mapping[str, object], md), name)
+            if nested is not None and not isinstance(nested, (dict, list)):
+                common_attrs[name] = str(nested)
 
         # get hidden params
         hidden_params: Final = getattr(std_log, "hidden_params", None) or (std_log or {}).get("hidden_params", {})
