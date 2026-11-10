@@ -13,6 +13,7 @@ const SAMPLING_RESTRICTED_NAMES: [&str; 9] = [
     "fable", "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7", "opus-4-8", "opus_4_8", "opus-4.8",
     "opus_4.8",
 ];
+const SAMPLING_TOLERANT_PROVIDERS: [&str; 1] = ["openrouter"];
 const BACKSTOP_PREFIXES: [&str; 4] = [
     "bedrock/converse/",
     "bedrock/invoke/",
@@ -72,20 +73,20 @@ pub fn anthropic_model_capabilities(
         thinking_on_by_default: thinking_always_on || probe.supports("thinking_on_by_default"),
         supports_legacy_thinking: probe.supports("supports_legacy_thinking"),
         supports_output_config: probe.supports("supports_output_config"),
-        supports_sampling_params: declared("supports_sampling_params")
-            .or_else(|| {
-                backstop(
+        supports_sampling_params: declared("supports_sampling_params").unwrap_or_else(|| {
+            SAMPLING_TOLERANT_PROVIDERS.contains(&provider)
+                || backstop(
                     catalog,
                     &backstop_candidates(name),
                     "supports_sampling_params",
                 )
-            })
-            .unwrap_or_else(|| {
-                let lowered = name.to_lowercase();
-                !SAMPLING_RESTRICTED_NAMES
-                    .iter()
-                    .any(|restricted| lowered.contains(restricted))
-            }),
+                .unwrap_or_else(|| {
+                    let lowered = name.to_lowercase();
+                    !SAMPLING_RESTRICTED_NAMES
+                        .iter()
+                        .any(|restricted| lowered.contains(restricted))
+                })
+        }),
         supports_speed: provider == "anthropic"
             && flag(exact(catalog, name), "supports_speed") == Some(true),
         supports_mid_conversation_system: probe.supports("supports_mid_conversation_system"),
@@ -256,6 +257,8 @@ mod tests {
             "supports_adaptive_thinking": false
         },
         "claude-embed-5": {"litellm_provider": "anthropic", "mode": "embedding"},
+        "claude-nosample-5": {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": false},
+        "anthropic/claude-nosample-5": {"litellm_provider": "anthropic", "mode": "chat", "supports_sampling_params": false},
         "claude-default-think-5": {"litellm_provider": "anthropic", "mode": "chat", "thinking_on_by_default": true},
         "claude-always-think-5": {"litellm_provider": "anthropic", "mode": "chat", "thinking_always_on": true},
         "anthropic/claude-split-5": {"litellm_provider": "anthropic", "mode": "chat"},
@@ -398,6 +401,36 @@ mod tests {
                 capabilities.supports_speed,
                 capabilities.supports_sampling_params,
             ),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic_row("anthropic/claude-nosample-5", &[], false)]
+    #[case::anthropic_name("anthropic/claude-fable-test", &[], false)]
+    #[case::openrouter_row("openrouter/anthropic/claude-nosample-5", &[], true)]
+    #[case::openrouter_name("openrouter/anthropic/claude-fable-test", &[], true)]
+    #[case::openrouter_declared_off(
+        "openrouter/anthropic/claude-fable-test",
+        &[("supports_sampling_params", false)],
+        false
+    )]
+    fn sampling_params_are_gated_only_where_the_provider_rejects_them(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] declared: &[(&str, bool)],
+        #[case] expected: bool,
+    ) {
+        let lookup = |capability: &str| {
+            declared
+                .iter()
+                .find(|(name, _)| *name == capability)
+                .map(|(_, supported)| *supported)
+        };
+
+        assert_eq!(
+            anthropic_model_capabilities(&catalog, model, None, None, &lookup)
+                .supports_sampling_params,
             expected
         );
     }
