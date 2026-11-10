@@ -27,14 +27,30 @@ def is_tool_call_request(body: bytes) -> bool:
 
 
 class OAuthScopeResponse:
-    def __init__(self, send: Send, base_url: str, request_path: str | None) -> None:
+    def __init__(
+        self,
+        send: Send,
+        base_url: str,
+        request_path: str | None,
+        is_scoped_endpoint: bool | None = None,
+    ) -> None:
         self._send = send
         self._base_url = base_url
         self._request_path = request_path
+        self._is_scoped_endpoint = is_scoped_endpoint
         self._ready = asyncio.Event()
         self._lock = asyncio.Lock()
         self._challenge: MCPUpstreamAuthError | None = None
         self._closed = False
+
+    @property
+    def is_scoped_endpoint(self) -> bool:
+        if self._is_scoped_endpoint is not None:
+            return self._is_scoped_endpoint
+        if not self._request_path:
+            return False
+        normalized = self._request_path.strip("/")
+        return bool(normalized and normalized != "mcp")
 
     @property
     def pending(self) -> bool:
@@ -44,7 +60,10 @@ class OAuthScopeResponse:
         self._ready.set()
 
     def deny(self, error: MCPUpstreamAuthError) -> None:
-        if self.pending and error.status_code == 403 and error.required_scope is not None:
+        if self.pending and (
+            error.status_code == 401
+            or (error.status_code == 403 and error.required_scope is not None)
+        ):
             self._challenge = error
             self._ready.set()
 
