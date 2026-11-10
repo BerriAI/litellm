@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from itertools import chain
 from typing import Final, LiteralString
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
@@ -97,27 +96,6 @@ class Database:
             "AND classid = %s AND objid = %s ORDER BY pid",
             (key >> 32, key & 0xFFFFFFFF),
         )
-
-    @step("List replica identities waiting on any of the advisory locks")
-    def waiting_identities(self, keys: tuple[int, ...]) -> frozenset[str]:
-        if not keys:
-            return frozenset()
-        key_pairs: Final = tuple((key >> 32, key & 0xFFFFFFFF) for key in keys)
-        key_predicates: Final = sql.SQL(" OR ").join(
-            sql.SQL("(waiting_lock.classid = %s AND waiting_lock.objid = %s)") for _ in key_pairs
-        )
-        parameters: Final = tuple(chain.from_iterable(key_pairs))
-        statement: Final = sql.SQL(
-            "SELECT DISTINCT activity.application_name "
-            "FROM pg_stat_activity AS activity "
-            "JOIN pg_locks AS waiting_lock ON waiting_lock.pid = activity.pid "
-            "WHERE activity.datname = current_database() "
-            "AND waiting_lock.locktype = 'advisory' AND NOT waiting_lock.granted "
-            "AND waiting_lock.database = (SELECT oid FROM pg_database WHERE datname = current_database()) "
-            "AND ({})"
-        ).format(key_predicates)
-        identities: Final = self.query(statement, parameters)
-        return frozenset(row[0] for row in identities if isinstance(row[0], str))
 
     @step("Hold an advisory lock on the test database")
     @contextmanager

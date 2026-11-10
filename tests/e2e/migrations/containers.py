@@ -41,7 +41,6 @@ def until(description: str, condition: Callable[[], bool], seconds: float = 150)
 @dataclass(frozen=True, slots=True)
 class Replica:
     name: str
-    identity: str
     transport: HttpTransport
     output: Path
 
@@ -212,7 +211,6 @@ class Containers:
             port: Final = int(docker("port", name, "4000/tcp").rsplit(":", 1)[1])
             replica: Final = Replica(
                 name=name,
-                identity=name,
                 transport=HttpTransport(f"http://127.0.0.1:{port}", MASTER_KEY, 15),
                 output=directory,
             )
