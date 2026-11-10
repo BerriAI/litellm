@@ -66,7 +66,6 @@ _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter
 _RESERVED_HEADERS: Final[frozenset[str]] = frozenset({"authorization", "content-type"})
 _REMOTE_URL_PREFIXES: Final = ("http://", "https://")
 _DATA_URL_PREFIX: Final = "data:"
-_NO_PROVIDER_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def decisions_text(value: DecisionsJSON) -> str:
@@ -646,12 +645,6 @@ class BaseDecisionsConfig(ABC):
         self, decision_input: DecisionsIRState | DecisionsIRMessages, headers: Mapping[str, str]
     ) -> bool:
         return self.supports_images
-
-    def supports_image_input(self, model: str, custom_llm_provider: str) -> bool:
-        return True
-
-    def provider_request_fields(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-        return _NO_PROVIDER_FIELDS
 
     def supports_assets(self, headers: Mapping[str, str]) -> bool:
         return False

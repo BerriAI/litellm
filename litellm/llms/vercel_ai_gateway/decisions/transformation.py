@@ -1,7 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import replace
 from itertools import chain
-from types import MappingProxyType
 from typing import Final, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -9,10 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from litellm.llms.base_llm.decisions.transformation import usage_reported_cost
 from litellm.llms.openai.decisions.transformation import OpenAIDecisionsConfig
 from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse, DecisionsIRUsage, OpenAIDecisionUsage
-from litellm.utils import is_vision_explicitly_disabled
 
 _Model: Final = TypeVar("_Model", bound=BaseModel)
-_PROVIDER_OPTIONS: Final = "providerOptions"
 
 
 class _ProviderAttempt(BaseModel):
@@ -99,14 +96,6 @@ class VercelAIGatewayDecisionsConfig(OpenAIDecisionsConfig):
         self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
     ) -> str | None:
         return api_key
-
-    def supports_image_input(self, model: str, custom_llm_provider: str) -> bool:
-        return not is_vision_explicitly_disabled(model, custom_llm_provider)
-
-    def provider_request_fields(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-        if _PROVIDER_OPTIONS not in litellm_params:
-            return MappingProxyType({})
-        return MappingProxyType({_PROVIDER_OPTIONS: litellm_params[_PROVIDER_OPTIONS]})
 
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         response: Final = super().parse_response(payload, request)

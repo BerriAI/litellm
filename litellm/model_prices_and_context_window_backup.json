@@ -52548,13 +52548,17 @@
         "litellm_provider": "vercel_ai_gateway",
         "max_input_tokens": 32000,
         "metadata": {
-            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000. A direct /v1/decisions probe with an input_image answered 400 invalid request body on 2026-11-09."
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000. A direct /v1/decisions probe with a 768x768 input_image answered 200 on 2026-11-10, while a 96x96 one answered 400 invalid request body."
         },
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
         "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
         "supports_box_questions": true,
-        "supports_vision": false
+        "supports_vision": true
     },
     "vercel_ai_gateway/typesafe-ai/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,

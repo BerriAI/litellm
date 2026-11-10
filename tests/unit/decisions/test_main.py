@@ -5071,49 +5071,18 @@ async def test_vercel_ai_gateway_decisions_apply_the_operator_discount_and_margi
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("vercel_gateway_key")
-@pytest.mark.parametrize(
-    ("model", "drop_params", "sent_content"),
-    (
-        (
-            "typesafe-ai/jev-1.14.0",
-            False,
-            [
-                {"type": "input_text", "text": _SCREEN_TEXT},
-                {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "high"},
-            ],
-        ),
-        ("typesafe-ai/jev", True, [{"type": "input_text", "text": _SCREEN_TEXT}]),
-    ),
-    ids=("model_reads_images", "text_only_model_drops_them"),
-)
-async def test_vercel_ai_gateway_decisions_send_images_only_to_models_that_read_them(
-    model: str, drop_params: bool, sent_content: list[Mapping[str, object]], respx_mock: respx.MockRouter
-) -> None:
+@pytest.mark.parametrize("model", ("typesafe-ai/jev", "typesafe-ai/jev-1.13.0", "typesafe-ai/jev-1.14.0"))
+async def test_vercel_ai_gateway_jev_decisions_send_images(model: str, respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(json=_vercel_response(model, {}))
 
     await litellm.adecisions(
-        model=f"vercel_ai_gateway/{model}",
-        input=_screen_messages(_PNG_DATA_URL),
-        questions=_PREDICATE_QUESTIONS,
-        drop_params=drop_params,
+        model=f"vercel_ai_gateway/{model}", input=_screen_messages(_PNG_DATA_URL), questions=_PREDICATE_QUESTIONS
     )
 
-    assert json.loads(route.calls.last.request.content)["input"][0]["content"] == sent_content
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("vercel_gateway_key")
-async def test_vercel_ai_gateway_text_only_decisions_model_refuses_images_before_http(
-    respx_mock: respx.MockRouter,
-) -> None:
-    with pytest.raises(litellm.UnsupportedParamsError, match="input_image"):
-        await litellm.adecisions(
-            model="vercel_ai_gateway/typesafe-ai/jev",
-            input=_screen_messages(_PNG_DATA_URL),
-            questions=_PREDICATE_QUESTIONS,
-        )
-
-    assert len(respx_mock.calls) == 0
+    assert json.loads(route.calls.last.request.content)["input"][0]["content"] == [
+        {"type": "input_text", "text": _SCREEN_TEXT},
+        {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "high"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -5138,8 +5107,7 @@ async def test_vercel_ai_gateway_decisions_inline_remote_images(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("vercel_gateway_key")
-async def test_vercel_ai_gateway_decisions_forward_provider_options(respx_mock: respx.MockRouter) -> None:
-    provider_options: Final = {"gateway": {"order": ["openai"], "byok": {"openai": [{"apiKey": "caller-openai-key"}]}}}
+async def test_vercel_ai_gateway_decisions_never_send_caller_provider_options(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(
         json=_vercel_response("openai/gpt-6-luna-decisions", {})
     )
@@ -5148,10 +5116,10 @@ async def test_vercel_ai_gateway_decisions_forward_provider_options(respx_mock: 
         model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
         input="The package arrived broken.",
         questions=_PREDICATE_QUESTIONS,
-        providerOptions=provider_options,
+        providerOptions={"gateway": {"models": ["openai/gpt-6"], "byok": {"openai": [{"apiKey": "caller-openai-key"}]}}},
     )
 
-    assert json.loads(route.calls.last.request.content)["providerOptions"] == provider_options
+    assert "providerOptions" not in json.loads(route.calls.last.request.content)
 
 
 @pytest.mark.asyncio
