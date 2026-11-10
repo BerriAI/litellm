@@ -417,9 +417,6 @@ class CredentialLiteLLMParams(LiteLLMBaseModel):
     azure_scope: str | None = None
     azure_username: str | None = None
     azure_password: str | None = None
-    ## DATABRICKS OAUTH ##
-    databricks_client_id: str | None = None
-    databricks_client_secret: str | None = None
     ## VERTEX AI ##
     vertex_project: str | None = None
     vertex_location: str | None = None
@@ -503,28 +500,6 @@ def _api_key_secret_reference(fields: Mapping[str, object]) -> tuple[str, ...]:
 
 def holds_api_key_secret_reference(fields: Mapping[str, object]) -> bool:
     return bool(_api_key_secret_reference(fields))
-
-
-OAUTH_CREDENTIAL_SECRET_FIELDS: Final[tuple[str, ...]] = (
-    "client_id",
-    "client_secret",
-    "databricks_client_id",
-    "databricks_client_secret",
-)
-
-
-def oauth_secret_reference_field(fields: Mapping[str, object]) -> str | None:
-    for cred_field in OAUTH_CREDENTIAL_SECRET_FIELDS:
-        val = fields.get(cred_field)
-        if isinstance(val, str):
-            stripped = val.strip()
-            if stripped.startswith("os.environ/") or stripped.startswith(_OIDC_SECRET_REFERENCE_PREFIX):
-                return cred_field
-    return None
-
-
-def holds_oauth_secret_reference(fields: Mapping[str, object]) -> bool:
-    return oauth_secret_reference_field(fields) is not None
 
 
 def server_owned_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
@@ -1571,12 +1546,6 @@ def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
     reject_server_owned_wif_fields(body)
     if holds_api_key_secret_reference(body):
         raise ValueError(_API_KEY_SECRET_REFERENCE_REJECTION)
-    oauth_field = oauth_secret_reference_field(body)
-    if oauth_field is not None:
-        raise ValueError(
-            f"Rejected Request: {oauth_field} holds an os.environ/ or oidc/ secret reference, which only a deployment "
-            "or credential a proxy admin configures can carry."
-        )
 
 
 def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:

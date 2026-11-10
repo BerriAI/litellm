@@ -68,7 +68,7 @@ from ...anthropic.chat.transformation import (
     tools_without_unsupported_tool_search,
 )
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
-from ..common_utils import DATABRICKS_HOSTED_MODEL_PREFIXES, DatabricksBase, DatabricksException
+from ..common_utils import DATABRICKS_HOSTED_MODEL_PREFIXES, DatabricksBase, DatabricksException, DeploymentOAuthParams
 
 _RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
     Final[TypeAdapter[dict[str, object] | None]]
@@ -444,43 +444,16 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             or os.getenv("DATABRICKS_USER_AGENT")
         )
 
-        for secret_param in ("client_id", "client_secret", "databricks_client_id", "databricks_client_secret"):
-            val = optional_params.get(secret_param)
-            if isinstance(val, str) and (val.startswith("os.environ/") or val.startswith("oidc/")):
-                raise DatabricksException(
-                    status_code=400,
-                    message=f"Request-supplied {secret_param} cannot be an os.environ/ or oidc/ secret reference",
-                )
-
-        # Unconditionally remove all credential fields from optional_params so they never leak into model payloads
-        opt_client_id: Final = optional_params.pop("client_id", None)
-        opt_db_client_id: Final = optional_params.pop("databricks_client_id", None)
-        opt_client_secret: Final = optional_params.pop("client_secret", None)
-        opt_db_client_secret: Final = optional_params.pop("databricks_client_secret", None)
-        opt_api_key: Final = optional_params.pop("api_key", None)
-
-        client_id: Final = (
-            litellm_params.get("client_id")
-            or litellm_params.get("databricks_client_id")
-            or opt_client_id
-            or opt_db_client_id
-        )
-        client_secret: Final = (
-            litellm_params.get("client_secret")
-            or litellm_params.get("databricks_client_secret")
-            or opt_client_secret
-            or opt_db_client_secret
-        )
+        oauth_params: Final = DeploymentOAuthParams.model_validate(litellm_params)
         api_base, headers = self.databricks_validate_environment(
             api_base=api_base,
-            api_key=api_key or opt_api_key,
+            api_key=api_key,
             endpoint_type="chat_completions",
             custom_endpoint=False,
             headers=headers,
             custom_user_agent=custom_user_agent,
-            client_id=client_id,
-            client_secret=client_secret,
-            litellm_params=litellm_params,
+            client_id=oauth_params.client_id,
+            client_secret=oauth_params.client_secret,
         )
         # Ensure Content-Type header is set
         headers["Content-Type"] = "application/json"

@@ -21,6 +21,7 @@ from litellm.llms.databricks.agent.transformation import (
     resolve_endpoint_url,
     workspace_url_from_api_base,
 )
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.llms.databricks.common_utils import DatabricksException
 from litellm.types.utils import ModelResponse
 
@@ -334,6 +335,7 @@ def test_validate_environment_never_posts_the_env_secret_to_an_app_host(env_oaut
     with pytest.raises(DatabricksException, match="set DATABRICKS_HOST") as info:
         _validate_environment(api_key=None, api_base=APP_URL)
     assert info.value.status_code == 400
+    assert redact_string(info.value.message) == info.value.message
     assert not responses.calls
 
 
@@ -732,6 +734,7 @@ def test_validate_environment_with_deployment_oauth_credentials(
     monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
     monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.setenv("DATABRICKS_HOST", "https://adb-2.azuredatabricks.net")
     token = responses.post(TOKEN_URL, json={"access_token": "deploy-token", "expires_in": 3600})
     headers = DatabricksAgentConfig().validate_environment(
         headers={},
@@ -766,33 +769,11 @@ def test_validate_environment_deployment_oauth_overrides_global_env(
     assert basic_creds.startswith("override-id:")
 
 
-@responses.activate
-def test_validate_environment_deployment_oauth_os_environ_resolution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("AGENT_DEPLOY_ID", "resolved-agent-id")
-    monkeypatch.setenv("AGENT_DEPLOY_SECRET", "resolved-agent-secret")
-    token = responses.post(TOKEN_URL, json={"access_token": "resolved-agent-token", "expires_in": 3600})
-    headers = DatabricksAgentConfig().validate_environment(
-        headers={},
-        model="my-agent",
-        messages=[],
-        optional_params={},
-        litellm_params={
-            "client_id": "os.environ/AGENT_DEPLOY_ID",
-            "client_secret": "os.environ/AGENT_DEPLOY_SECRET",
-        },
-        api_base=WORKSPACE,
-    )
-    assert headers["Authorization"] == "Bearer resolved-agent-token"
-    assert token.call_count == 1
-
-
 def test_validate_environment_deployment_oauth_incomplete_credentials_raises_400(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-secret")
-    with pytest.raises(DatabricksException, match="Incomplete Databricks deployment OAuth credentials") as exc_info:
+    with pytest.raises(DatabricksException, match="Incomplete Databricks OAuth credentials") as exc_info:
         DatabricksAgentConfig().validate_environment(
             headers={},
             model="my-agent",
@@ -802,6 +783,7 @@ def test_validate_environment_deployment_oauth_incomplete_credentials_raises_400
             api_base=WORKSPACE,
         )
     assert exc_info.value.status_code == 400
+    assert redact_string(exc_info.value.message) == exc_info.value.message
 
 
 @responses.activate
@@ -822,26 +804,6 @@ def test_validate_environment_static_api_key_takes_precedence_over_deployment_oa
 
 
 @responses.activate
-def test_validate_environment_static_api_key_in_litellm_params_takes_precedence_over_oauth(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    headers = DatabricksAgentConfig().validate_environment(
-        headers={},
-        model="my-agent",
-        messages=[],
-        optional_params={},
-        litellm_params={
-            "api_key": "static-pat-in-params",
-            "client_id": "dep-id",
-            "client_secret": "dep-secret",
-        },
-        api_base=WORKSPACE,
-    )
-    assert headers["Authorization"] == "Bearer static-pat-in-params"
-    assert len(responses.calls) == 0
-
-
-@responses.activate
 def test_validate_environment_deployment_oauth_app_url_requires_databricks_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -856,6 +818,7 @@ def test_validate_environment_deployment_oauth_app_url_requires_databricks_host(
             api_base=APP_URL,
         )
     assert exc_info.value.status_code == 400
+    assert redact_string(exc_info.value.message) == exc_info.value.message
     assert len(responses.calls) == 0
 
 
@@ -939,3 +902,23 @@ async def test_acompletion_with_deployment_oauth_credentials(
     assert token.call_count == 1
     assert route.calls.last.request.headers["Authorization"] == "Bearer agent-deploy-token"
     assert response.choices[0].message.content == "pong"
+
+
+@responses.activate
+@respx.mock
+async def test_acompletion_deployment_oauth_credentials_win_over_ambient_global_keys(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "api_key", "ambient-litellm-key")
+    monkeypatch.setenv("DATABRICKS_API_KEY", "ambient-env-pat")
+    token = responses.post(TOKEN_URL, json={"access_token": "agent-deploy-token", "expires_in": 3600})
+    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    await litellm.acompletion(
+        model="databricks_agent/my-agent",
+        messages=[{"role": "user", "content": "ping"}],
+        api_base=WORKSPACE,
+        client_id="ambient-test-client-id",
+        client_secret="ambient-test-client-secret",
+    )
+    assert token.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == "Bearer agent-deploy-token"

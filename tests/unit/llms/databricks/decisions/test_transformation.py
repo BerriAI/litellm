@@ -174,28 +174,6 @@ def test_should_resolve_deployment_oauth_credentials_in_litellm_params(
 
 
 @responses.activate
-def test_should_resolve_deployment_oauth_credentials_with_os_environ(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DEC_CLIENT_ID", "resolved-dec-client")
-    monkeypatch.setenv("DEC_CLIENT_SECRET", "resolved-dec-secret")
-    token: Final = responses.post(f"{_HOST}/oidc/v1/token", json={"access_token": "resolved-token", "expires_in": 3600})
-
-    assert (
-        DatabricksDecisionsConfig().resolve_credential(
-            None,
-            _BASE,
-            {
-                "client_id": "os.environ/DEC_CLIENT_ID",
-                "client_secret": "os.environ/DEC_CLIENT_SECRET",
-            },
-        )
-        == "resolved-token"
-    )
-    assert token.call_count == 1
-
-
-@responses.activate
 def test_deployment_oauth_overrides_global_env_oauth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -226,9 +204,7 @@ def test_deployment_oauth_overrides_global_pat(
 
     config: Final = DatabricksDecisionsConfig()
     _, key = config.resolve_connection(_BASE, None)
-    assert key == "global-pat-key"
 
-    # With deployment OAuth credentials in litellm_params, OAuth is chosen over the global PAT
     result = config.resolve_credential(
         key, _BASE, {"client_id": "pat-override-client", "client_secret": "pat-override-secret"}
     )
@@ -239,13 +215,9 @@ def test_deployment_oauth_overrides_global_pat(
 @responses.activate
 def test_deployment_static_api_key_takes_precedence_over_deployment_oauth() -> None:
     result = DatabricksDecisionsConfig().resolve_credential(
-        None,
+        "deployment-pat-wins",
         _BASE,
-        {
-            "api_key": "deployment-pat-wins",
-            "client_id": "unused-client",
-            "client_secret": "unused-secret",
-        },
+        {"client_id": "unused-client", "client_secret": "unused-secret"},
     )
     assert result == "deployment-pat-wins"
     assert len(responses.calls) == 0
@@ -257,7 +229,7 @@ def test_deployment_incomplete_oauth_credentials_raises_400(
     from litellm.llms.databricks.common_utils import DatabricksException
 
     monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "global-secret")
-    with pytest.raises(DatabricksException, match="Incomplete Databricks deployment OAuth credentials") as exc_info:
+    with pytest.raises(DatabricksException, match="Incomplete Databricks OAuth credentials") as exc_info:
         DatabricksDecisionsConfig().resolve_credential(None, _BASE, {"client_id": "lone-client"})
     assert exc_info.value.status_code == 400
 

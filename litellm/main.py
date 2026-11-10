@@ -271,7 +271,7 @@ from .llms.cohere.embed import handler as cohere_embed
 from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import custom_chat_llm_router
-from .llms.databricks.common_utils import DatabricksBase
+from .llms.databricks.common_utils import DatabricksBase, DeploymentOAuthParams
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha
 from .llms.gdc.chat.transformation import GDCGeminiConfig
@@ -3526,7 +3526,9 @@ def _complete_oobabooga(ctx: CompletionDispatchContext) -> _CompletionDispatchRe
 def _complete_databricks(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
     api_base: Final = DatabricksBase.resolve_api_base(ctx.api_base)
-    api_key: Final = DatabricksBase.resolve_api_key(ctx.api_key)
+    api_key: Final = DatabricksBase.resolve_api_key(
+        ctx.api_key, ctx.litellm_params.get("client_id"), ctx.litellm_params.get("client_secret")
+    )
     client: Final = _dispatch_client_http(ctx)
     headers = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -5453,7 +5455,7 @@ def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDis
 
     api_base, api_key = DatabricksAgentConfig.resolve_api_base_and_key(
         api_base=ctx.api_base or litellm.api_base,
-        api_key=ctx.api_key or litellm.api_key,
+        api_key=ctx.api_key or DatabricksAgentConfig.global_api_key(ctx.litellm_params),
     )
     return base_llm_http_handler.completion(
         model=ctx.model,
@@ -7090,7 +7092,10 @@ def embedding(
             api_base = api_base or litellm.api_base or get_secret("DATABRICKS_API_BASE")
 
             # set API KEY
-            api_key = DatabricksBase.resolve_api_key(api_key)
+            databricks_oauth_params: Final = DeploymentOAuthParams.model_validate(litellm_params_dict)
+            api_key = DatabricksBase.resolve_api_key(
+                api_key, databricks_oauth_params.client_id, databricks_oauth_params.client_secret
+            )
 
             ## EMBEDDING CALL
             response = databricks_embedding.embedding(
@@ -7104,11 +7109,8 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
-                client_id=kwargs.get("client_id")
-                or (litellm_params_dict.get("client_id") if litellm_params_dict else None),
-                client_secret=kwargs.get("client_secret")
-                or (litellm_params_dict.get("client_secret") if litellm_params_dict else None),
-                litellm_params=litellm_params_dict,
+                client_id=databricks_oauth_params.client_id,
+                client_secret=databricks_oauth_params.client_secret,
             )
         elif custom_llm_provider == "hosted_vllm":
             api_base = api_base or litellm.api_base or get_secret_str("HOSTED_VLLM_API_BASE")

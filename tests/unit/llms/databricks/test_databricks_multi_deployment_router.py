@@ -130,6 +130,7 @@ async def test_multi_deployment_router_chat_completions(respx_mock: respx.MockRo
         "client-a-secret",
     )
     assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-chat-a"
+    assert b"client-a-secret" not in route_a.calls.last.request.content
 
     resp_b = await router.acompletion(
         model="workspace-b/chat",
@@ -184,6 +185,7 @@ async def test_multi_deployment_router_embeddings(respx_mock: respx.MockRouter) 
         "secret-emb-a",
     )
     assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-emb-a"
+    assert b"secret-emb-a" not in route_a.calls.last.request.content
 
     emb_b = await router.aembedding(model="workspace-b/embed", input=["text b"])
     assert emb_b.data[0]["embedding"] == [0.3, 0.4]
@@ -446,11 +448,8 @@ async def test_multi_deployment_router_incomplete_credentials_isolated_failure(
     assert resp.choices[0].message.content == "from workspace a"
     assert token_resp_a.call_count == 1
 
-    # Broken deployment raises 400 DatabricksException without affecting valid deployment
-    with pytest.raises(Exception, match="Incomplete Databricks deployment OAuth credentials") as exc_info:
+    with pytest.raises(litellm.BadRequestError, match="Incomplete Databricks OAuth credentials"):
         await router.acompletion(model="broken-deployment", messages=[{"role": "user", "content": "hi"}])
-    # Can be wrapped as litellm.BadRequestError or DatabricksException
-    assert "Incomplete Databricks deployment OAuth credentials" in str(exc_info.value)
 
     # Calling valid deployment again still works cleanly
     resp2 = await router.acompletion(model="valid-deployment", messages=[{"role": "user", "content": "hi"}])
@@ -525,3 +524,68 @@ async def test_multi_deployment_router_deployment_oauth_overrides_ambient_global
     assert token_resp.call_count == 1
     # Auth header must use the OAuth token, not the ambient DATABRICKS_API_KEY
     assert route_a.calls.last.request.headers["Authorization"] == "Bearer token-dep-oauth"
+
+
+def _token_endpoint_accepting(accepted: tuple[str, str]) -> None:
+    def answer(request: object) -> tuple[int, dict[str, str], str]:
+        sent: Final = _decode_basic_auth(getattr(request, "headers")["Authorization"])
+        if sent == accepted:
+            return 200, {}, '{"access_token": "token-a", "expires_in": 3600}'
+        return 401, {}, '{"error": "invalid_client"}'
+
+    responses.add_callback(responses.POST, _TOKEN_URL_A, callback=answer)
+
+
+def _oauth_router(litellm_params: dict[str, str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "oauth-model",
+                "litellm_params": {"model": "databricks/dbrx-instruct", "api_base": _BASE_A, **litellm_params},
+            }
+        ]
+    )
+
+
+@responses.activate
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_in", ["deployment", "environment"])
+async def test_caller_oauth_pair_rejection_leaves_the_shared_deployment_routable(
+    configured_in: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    if configured_in == "environment":
+        monkeypatch.setenv("DATABRICKS_CLIENT_ID", "configured-id")
+        monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "configured-secret")
+    _token_endpoint_accepting(("configured-id", "configured-secret"))
+    respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
+    router: Final = _oauth_router(
+        {"client_id": "configured-id", "client_secret": "configured-secret"} if configured_in == "deployment" else {}
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="oauth-model",
+            messages=[{"role": "user", "content": "hi"}],
+            client_id="caller-id",
+            client_secret="caller-secret",
+        )
+
+    response: Final = await router.acompletion(model="oauth-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "from workspace a"
+
+
+@responses.activate
+@pytest.mark.asyncio
+async def test_configured_oauth_pair_rejection_cools_down_the_deployment(respx_mock: respx.MockRouter) -> None:
+    _token_endpoint_accepting(("configured-id", "rotated-secret"))
+    respx_mock.post(_CHAT_URL_A).respond(json=_CHAT_RESPONSE_A)
+    router: Final = _oauth_router({"client_id": "configured-id", "client_secret": "revoked-secret"})
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(model="oauth-model", messages=[{"role": "user", "content": "hi"}])
+
+    with pytest.raises(litellm.RouterRateLimitError) as excinfo:
+        await router.acompletion(model="oauth-model", messages=[{"role": "user", "content": "hi"}])
+
+    assert excinfo.value.all_deployments_in_cooldown is True

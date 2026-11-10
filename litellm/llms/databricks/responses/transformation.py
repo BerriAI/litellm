@@ -11,7 +11,7 @@ import os
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.databricks.common_utils import DatabricksBase
+from litellm.llms.databricks.common_utils import DatabricksBase, deployment_oauth_credentials
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import ResponseInputParam
 from litellm.types.router import GenericLiteLLMParams
@@ -46,11 +46,11 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
-        client_id: Final = getattr(litellm_params, "client_id", None)
-        client_secret: Final = getattr(litellm_params, "client_secret", None)
-        has_deployment_oauth: Final = bool(client_id or client_secret)
-
-        api_key: Final = litellm_params.api_key or (None if has_deployment_oauth else os.getenv("DATABRICKS_API_KEY"))
+        client_id: Final = litellm_params.client_id
+        client_secret: Final = litellm_params.client_secret
+        api_key: Final = litellm_params.api_key or (
+            None if deployment_oauth_credentials(client_id, client_secret) else os.getenv("DATABRICKS_API_KEY")
+        )
         api_base: Final = litellm_params.api_base or os.getenv("DATABRICKS_API_BASE")
 
         # Reuse Databricks auth logic (OAuth M2M, PAT, SDK fallback).
@@ -65,7 +65,6 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
             headers=headers,
             client_id=client_id,
             client_secret=client_secret,
-            litellm_params=litellm_params,
         )
 
         headers["Content-Type"] = "application/json"

@@ -96,7 +96,8 @@ class TestDatabricksResponsesAPIConfig:
         assert headers["Content-Type"] == "application/json"
 
     @responses.activate
-    def test_validate_environment_with_deployment_oauth(self):
+    def test_validate_environment_with_deployment_oauth(self, monkeypatch):
+        monkeypatch.setenv("DATABRICKS_API_KEY", "ambient-env-pat")
         config = DatabricksResponsesAPIConfig()
         responses.post(
             "https://my-workspace.cloud.databricks.com/oidc/v1/token",
@@ -113,27 +114,6 @@ class TestDatabricksResponsesAPIConfig:
         )
         assert headers["Authorization"] == "Bearer responses-oauth-token"
         assert headers["Content-Type"] == "application/json"
-
-    @responses.activate
-    def test_validate_environment_with_environ_reference(self, monkeypatch):
-        monkeypatch.setenv("CUSTOM_RESP_CLIENT_ID", "env-resp-cid")
-        monkeypatch.setenv("CUSTOM_RESP_CLIENT_SECRET", "env-resp-csec")
-
-        config = DatabricksResponsesAPIConfig()
-        responses.post(
-            "https://my-workspace.cloud.databricks.com/oidc/v1/token",
-            json={"access_token": "env-responses-token", "expires_in": 3600},
-        )
-        headers = config.validate_environment(
-            headers={},
-            model="databricks-gpt-5-nano",
-            litellm_params=GenericLiteLLMParams(
-                client_id="os.environ/CUSTOM_RESP_CLIENT_ID",
-                client_secret="os.environ/CUSTOM_RESP_CLIENT_SECRET",
-                api_base="https://my-workspace.cloud.databricks.com/serving-endpoints",
-            ),
-        )
-        assert headers["Authorization"] == "Bearer env-responses-token"
 
     @responses.activate
     def test_validate_environment_static_api_key_precedence(self):
