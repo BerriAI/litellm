@@ -165,7 +165,7 @@ def test_streaming_event_reconstructs_complete_streaming_response():
     assert args.kwargs["complete_streaming_response"] == args.response_obj
 
 
-def _finished_background_response() -> dict:
+def _finished_background_response() -> dict[str, object]:
     return {
         "id": "resp_abc",
         "object": "response",
@@ -180,7 +180,9 @@ def _finished_background_response() -> dict:
     [BackgroundResponseSettlement.SETTLES, None, "settles"],
     ids=["settles_a_background_response", "settles_nothing", "lookalike_string_settles_nothing"],
 )
-def test_sidecar_names_a_passthrough_spend_row_as_the_worker_does(settlement):
+def test_sidecar_names_a_passthrough_spend_row_as_the_worker_does(
+    settlement: BackgroundResponseSettlement | str | None,
+) -> None:
     worker_kwargs: Final = {
         **_success_kwargs(),
         "call_type": "pass_through_endpoint",
