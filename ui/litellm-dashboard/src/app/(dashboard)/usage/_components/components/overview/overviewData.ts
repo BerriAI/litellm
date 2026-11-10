@@ -1,4 +1,6 @@
+import type { ParseKeys } from "i18next";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
+import i18n from "@/i18n/i18n";
 import { stackedUsageColor } from "@/components/shared/charts";
 import { EMPTY_DAILY_ACTIVITY_METADATA, type DailyActivityMetadata } from "@/components/UsagePage/dailyActivityApi";
 import type { GatewayActivity } from "../gatewayActivity";
@@ -19,7 +21,10 @@ interface RankedRow extends Record<string, unknown> {
 const EMPTY_RANKED = { spend: 0, requests: 0, successful_requests: 0, failed_requests: 0, tokens: 0 } as const;
 
 /** Sums one breakdown dimension across every day, highest spend first. */
-export const rollUpBreakdown = (results: readonly DailyData[], dimension: BreakdownDimension): RankedRow[] => {
+export const rollUpBreakdown = (
+  results: readonly DailyData[],
+  dimension: BreakdownDimension | "api_keys",
+): RankedRow[] => {
   const entries = results.flatMap((day) => Object.entries(day.breakdown[dimension] ?? {}));
   const totals = entries.reduce<ReadonlyMap<string, RankedRow>>((acc, [key, entry]) => {
     const row = acc.get(key) ?? { key, ...EMPTY_RANKED };
@@ -65,7 +70,7 @@ export const colorForModel = (model: string, colorByModel: ReadonlyMap<string, s
 };
 
 export const OTHER_COLOR = "#94a3b8";
-const OTHER_SERIES = "Other";
+const OTHER_SERIES: ParseKeys = "usage.overview.otherSeries";
 
 export interface SeriesDay extends Record<string, unknown> {
   /** ISO date, the chart's category key: unique across years, unlike its display label. */
@@ -115,7 +120,7 @@ export const rankValue = (row: RankedRow, metric: UsageMetric): number => {
  */
 export const seriesBy = (
   results: readonly DailyData[],
-  dimension: BreakdownDimension,
+  dimension: BreakdownDimension | "api_keys",
   metric: UsageMetric,
   options: number | { top?: number; colorByKey?: ReadonlyMap<string, string> } = 6,
 ): Series => {
@@ -136,7 +141,7 @@ export const seriesBy = (
     return { day, values, other: remainder > 1e-6 ? remainder : 0 };
   });
   const hasOther = days.some(({ other }) => other > 0) || leaders.length === 0;
-  const labels = hasOther ? [...leaders, OTHER_SERIES] : leaders;
+  const labels = hasOther ? [...leaders, i18n.t(OTHER_SERIES)] : leaders;
   const keys = labels.map((_, index) => seriesKey(index));
   const data = days.map(({ day, values, other }) => ({
     date: day.date,
@@ -167,7 +172,7 @@ export const bucketSeries = (series: Series, granularity: Granularity): Series =
     const members = series.data.filter((day) => bucketStart(day.date) === start);
     return {
       date: start,
-      label: `Wk of ${formatDayLabel(start)}`,
+      label: i18n.t("usage.overview.weekOf", { date: formatDayLabel(start) }),
       ...Object.fromEntries(
         series.keys.map((key) => [key, members.reduce((sum, day) => sum + Number(day[key] ?? 0), 0)]),
       ),
@@ -243,8 +248,6 @@ export const formatCompactUsd = (value: number): string => {
 
 export const formatCompact = (value: number): string =>
   Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
-
-export const formatLatency = (ms: number): string => (ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`);
 
 export interface OverviewTotals {
   spend: number;

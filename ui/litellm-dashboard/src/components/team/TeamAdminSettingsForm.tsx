@@ -1,8 +1,10 @@
 "use client";
 
+import type { ParseKeys, TFunction } from "i18next";
 import { Save } from "lucide-react";
 import { useState } from "react";
 import { useWatch } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 import type { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
@@ -77,13 +79,12 @@ const INPUT_STEP: Readonly<Record<Exclude<TeamAdminSettingsField, "team_member_b
   team_member_rpm_limit: 1,
 };
 
-const MAX_BUDGET_KEEP_OR_LOWER_HINT = "You can keep or lower this budget. Ask a proxy admin to raise it.";
-const MAX_BUDGET_RAISE_HINT =
-  "You can raise this budget. Raises are capped by your organization's budget when the team belongs to one.";
+const MAX_BUDGET_KEEP_OR_LOWER_HINT: ParseKeys = "teams.adminSettingsForm.maxBudgetKeepOrLowerHint";
+const MAX_BUDGET_RAISE_HINT: ParseKeys = "teams.adminSettingsForm.maxBudgetRaiseHint";
 
-const fieldHint = (name: TeamAdminSettingsField, mayRaiseMaxBudget: boolean): string | undefined => {
+const fieldHint = (t: TFunction, name: TeamAdminSettingsField, mayRaiseMaxBudget: boolean): string | undefined => {
   if (name !== "max_budget") return undefined;
-  return mayRaiseMaxBudget ? MAX_BUDGET_RAISE_HINT : MAX_BUDGET_KEEP_OR_LOWER_HINT;
+  return t(mayRaiseMaxBudget ? MAX_BUDGET_RAISE_HINT : MAX_BUDGET_KEEP_OR_LOWER_HINT);
 };
 
 const durationSelectValue = (value: string | number | null | undefined): string | undefined => {
@@ -123,6 +124,7 @@ function TeamAdminSettingsFormFields({
   onCancel,
   onSave,
 }: TeamAdminSettingsFormProps) {
+  const { t } = useTranslation();
   const editsMetadata = metadata !== undefined && editableFields.has(TEAM_ADMIN_METADATA_FIELD);
   const [schema] = useState(() => teamAdminSettingsSchemaFor(editsMetadata ? metadata.context : undefined));
   const form = useZodForm(schema, { defaultValues: { ...initialValues, metadata: [...(metadata?.pairs ?? [])] } });
@@ -137,23 +139,21 @@ function TeamAdminSettingsFormFields({
   return (
     <form onSubmit={(event) => void submit(event)}>
       <FieldGroup>
-        <p className="text-sm text-muted-foreground">
-          A proxy admin chose which settings team admins can change. Ask a proxy admin to change anything else.
-        </p>
+        <p className="text-sm text-muted-foreground">{t("teams.adminSettingsForm.intro")}</p>
         {TEAM_ADMIN_SETTINGS_FIELDS.filter((name) => editableFields.has(name)).map((name) => (
           <FormField
             key={name}
             control={form.control}
             name={name}
             label={teamAdminFieldLabel(name)}
-            description={fieldHint(name, mayRaiseMaxBudget)}
+            description={fieldHint(t, name, mayRaiseMaxBudget)}
           >
             {({ ref, id, value, onChange, ...field }) =>
               isTeamAdminDurationSettingsField(name) ? (
                 <BudgetDurationDropdown
                   id={id}
                   showNeverResets
-                  placeholder="Inherit team reset period"
+                  placeholder={t("teams.adminSettingsForm.inheritDurationPlaceholder")}
                   value={durationSelectValue(value)}
                   onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next ?? undefined)}
                 />
@@ -180,22 +180,18 @@ function TeamAdminSettingsFormFields({
               schemaFields={metadata.schemaFields}
               schemaLoading={metadata.schemaLoading}
             />
-            <FieldDescription>
-              {
-                'A value that is valid JSON, like 3, true or {"region": "us"}, is saved as that type, anything else as text. Keys the proxy reads as settings stay with proxy admins and are kept as they are.'
-              }
-            </FieldDescription>
+            <FieldDescription>{t("teams.adminSettingsForm.metadataDescription")}</FieldDescription>
           </Field>
         )}
       </FieldGroup>
 
       <div className="mt-6 flex items-center justify-end gap-2">
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSaving}>
-          Cancel
+          {t("teams.adminSettingsForm.cancel")}
         </Button>
         <Button type="submit" disabled={isSaving || !hasChanges}>
           {isSaving ? <UiLoadingSpinner className="size-4" /> : <Save className="size-4" />}
-          Save Changes
+          {t("teams.adminSettingsForm.save")}
         </Button>
       </div>
     </form>

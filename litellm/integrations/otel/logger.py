@@ -1034,10 +1034,12 @@ def emit_guardrail_span(entry: "StandardLoggingGuardrailInformation") -> None:
         pass
 
 
-def seed_request_identity(user_api_key_dict: object, model: str | None = None) -> None:
+def seed_request_identity(user_api_key_dict: object, model: str | None = None, request_data: object = None) -> None:
     logger: Final = _registered_v2_logger()
     if logger is not None:
-        logger.seed_request_identity(user_api_key_dict, model=model)
+        logger.seed_request_identity(
+            user_api_key_dict, model=model, request_metadata=metadata_from_request_data(request_data)
+        )
 
 
 def fan_out_provider() -> ApiTracerProvider:

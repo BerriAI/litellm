@@ -7,9 +7,11 @@ import { CellTooltip, IdentityCell, StatusBadge, type StatusTone } from "@/compo
 import { Badge } from "@/components/ui/badge";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { PUBLIC_MODEL_HUB_SORTABLE_FIELDS } from "@/components/publicModelHub/publicModelHubFilters";
+import i18n from "@/i18n/i18n";
 import { displayMode } from "@/lib/decisionModels";
 import type { ModelCustomMetadataValue } from "@/components/AIHub/ModelCustomMetadata";
 import { formatModelModeLabel, ProviderLogo } from "@/components/AIHub/ModelHubProviders";
+import type { DeploymentPricing } from "@/components/molecules/models/deploymentPricing";
 
 export interface ModelGroupInfo {
   model_group: string;
@@ -31,6 +33,7 @@ export interface ModelGroupInfo {
   description?: string;
   custom_tags?: string[] | null;
   custom_metadata?: Record<string, ModelCustomMetadataValue> | null;
+  deployment_pricing?: DeploymentPricing[] | null;
   [key: string]: any;
 }
 
@@ -88,14 +91,17 @@ const formatCapabilityName = (key: string) =>
 const formatCost = (cost: number) => `$${(cost * 1_000_000).toFixed(4)}`;
 
 const formatTokens = (tokens: number | undefined) => {
-  if (!tokens) return "N/A";
+  if (!tokens) return i18n.t("aiHub.publicModelHubColumns.notAvailable");
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(0)}K`;
   return tokens.toString();
 };
 
 const formatLimits = (rpm?: number, tpm?: number) => {
-  const limits = [...(rpm ? [`RPM: ${rpm.toLocaleString()}`] : []), ...(tpm ? [`TPM: ${tpm.toLocaleString()}`] : [])];
-  return limits.length > 0 ? limits.join(", ") : "N/A";
+  const limits = [
+    ...(rpm ? [i18n.t("aiHub.publicModelHubColumns.rpmLimit", { value: rpm.toLocaleString() })] : []),
+    ...(tpm ? [i18n.t("aiHub.publicModelHubColumns.tpmLimit", { value: tpm.toLocaleString() })] : []),
+  ];
+  return limits.length > 0 ? limits.join(", ") : i18n.t("aiHub.publicModelHubColumns.notAvailable");
 };
 
 const getModeIcon = (mode: string) => {
@@ -179,9 +185,20 @@ export const getPublicModelHubColumns = ({
     {
       id: "model_group",
       accessorKey: "model_group",
-      meta: { title: showProviderLogos ? "Model" : "Model Name" },
+      meta: {
+        title: showProviderLogos
+          ? i18n.t("aiHub.publicModelHubColumns.models.modelChat")
+          : i18n.t("aiHub.publicModelHubColumns.models.modelName"),
+      },
       header: ({ column }) => (
-        <DataTableSortHeader column={column} title={showProviderLogos ? "Model" : "Model Name"} />
+        <DataTableSortHeader
+          column={column}
+          title={
+            showProviderLogos
+              ? i18n.t("aiHub.publicModelHubColumns.models.modelChat")
+              : i18n.t("aiHub.publicModelHubColumns.models.modelName")
+          }
+        />
       ),
       size: 200,
       sortingFn: "alphanumeric",
@@ -213,8 +230,10 @@ export const getPublicModelHubColumns = ({
     {
       id: "providers",
       accessorKey: "providers",
-      meta: { title: "Providers", skeleton: "chips" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Providers" />,
+      meta: { title: i18n.t("aiHub.publicModelHubColumns.models.providers"), skeleton: "chips" },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.models.providers")} />
+      ),
       size: 150,
       sortingFn: (rowA, rowB) =>
         (rowA.original.providers ?? []).join(", ").localeCompare((rowB.original.providers ?? []).join(", ")),
@@ -223,15 +242,19 @@ export const getPublicModelHubColumns = ({
     {
       id: "mode",
       accessorKey: "mode",
-      meta: { title: "Mode" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Mode" />,
+      meta: { title: i18n.t("aiHub.publicModelHubColumns.models.mode") },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.models.mode")} />
+      ),
       size: 110,
       sortingFn: "alphanumeric",
       cell: ({ row }) => (
         <span className="flex items-center gap-2 text-sm">
           {!showProviderLogos && <span>{getModeIcon(row.original.mode || "")}</span>}
           <span>
-            {showProviderLogos ? formatModelModeLabel(row.original.mode) : displayMode(row.original.mode) ?? "Chat"}
+            {showProviderLogos
+              ? formatModelModeLabel(row.original.mode)
+              : displayMode(row.original.mode) ?? i18n.t("aiHub.publicModelHubColumns.chatMode")}
           </span>
         </span>
       ),
@@ -239,59 +262,89 @@ export const getPublicModelHubColumns = ({
     {
       id: "max_input_tokens",
       accessorKey: "max_input_tokens",
-      meta: { title: "Max Input", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Max Input" />,
+      meta: { title: i18n.t("aiHub.publicModelHubColumns.models.maxInput"), numeric: true },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.models.maxInput")} />
+      ),
       size: 100,
       cell: ({ row }) => <span className="text-sm">{formatTokens(row.original.max_input_tokens)}</span>,
     },
     {
       id: "max_output_tokens",
       accessorKey: "max_output_tokens",
-      meta: { title: "Max Output", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Max Output" />,
+      meta: { title: i18n.t("aiHub.publicModelHubColumns.models.maxOutput"), numeric: true },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.models.maxOutput")} />
+      ),
       size: 100,
       cell: ({ row }) => <span className="text-sm">{formatTokens(row.original.max_output_tokens)}</span>,
     },
     {
       id: "input_cost_per_token",
       accessorKey: "input_cost_per_token",
-      meta: { title: showProviderLogos ? "Cost / 1M tokens" : "Input $/1M", numeric: true },
+      meta: {
+        title: showProviderLogos
+          ? i18n.t("aiHub.publicModelHubColumns.models.costChat")
+          : i18n.t("aiHub.publicModelHubColumns.models.inputCost"),
+        numeric: true,
+      },
       header: ({ column }) => (
-        <DataTableSortHeader column={column} title={showProviderLogos ? "Cost / 1M tokens" : "Input $/1M"} />
+        <DataTableSortHeader
+          column={column}
+          title={
+            showProviderLogos
+              ? i18n.t("aiHub.publicModelHubColumns.models.costChat")
+              : i18n.t("aiHub.publicModelHubColumns.models.inputCost")
+          }
+        />
       ),
       size: 110,
       cell: ({ row }) =>
         showProviderLogos ? (
           <div className="flex flex-col gap-0.5 text-xs tabular-nums">
             <span>
-              Input {row.original.input_cost_per_token ? formatCost(row.original.input_cost_per_token) : "Free"}
+              {i18n.t("aiHub.publicModelHubColumns.inputCost", {
+                cost: row.original.input_cost_per_token
+                  ? formatCost(row.original.input_cost_per_token)
+                  : i18n.t("aiHub.publicModelHubColumns.free"),
+              })}
             </span>
             <span className="text-muted-foreground">
-              Output {row.original.output_cost_per_token ? formatCost(row.original.output_cost_per_token) : "Free"}
+              {i18n.t("aiHub.publicModelHubColumns.outputCost", {
+                cost: row.original.output_cost_per_token
+                  ? formatCost(row.original.output_cost_per_token)
+                  : i18n.t("aiHub.publicModelHubColumns.free"),
+              })}
             </span>
           </div>
         ) : (
           <span className="text-sm">
-            {row.original.input_cost_per_token ? formatCost(row.original.input_cost_per_token) : "Free"}
+            {row.original.input_cost_per_token
+              ? formatCost(row.original.input_cost_per_token)
+              : i18n.t("aiHub.publicModelHubColumns.free")}
           </span>
         ),
     },
     {
       id: "output_cost_per_token",
       accessorKey: "output_cost_per_token",
-      meta: { title: "Output $/1M", numeric: true },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Output $/1M" />,
+      meta: { title: i18n.t("aiHub.publicModelHubColumns.models.outputCost"), numeric: true },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.models.outputCost")} />
+      ),
       size: 110,
       cell: ({ row }) => (
         <span className="text-sm">
-          {row.original.output_cost_per_token ? formatCost(row.original.output_cost_per_token) : "Free"}
+          {row.original.output_cost_per_token
+            ? formatCost(row.original.output_cost_per_token)
+            : i18n.t("aiHub.publicModelHubColumns.free")}
         </span>
       ),
     },
     {
       id: "features",
-      meta: { title: "Features", skeleton: "chips" },
-      header: "Features",
+      meta: { title: i18n.t("aiHub.publicModelHubColumns.models.features"), skeleton: "chips" },
+      header: i18n.t("aiHub.publicModelHubColumns.models.features"),
       size: 140,
       cell: ({ row }) => {
         const features = Object.entries(row.original)
@@ -302,25 +355,29 @@ export const getPublicModelHubColumns = ({
     },
     {
       id: "custom_tags",
-      meta: { title: "Tags", skeleton: "chips" },
-      header: "Tags",
+      meta: { title: i18n.t("aiHub.publicModelHubColumns.models.tags"), skeleton: "chips" },
+      header: i18n.t("aiHub.publicModelHubColumns.models.tags"),
       size: 140,
       cell: ({ row }) => <OverflowChips items={row.original.custom_tags ?? []} />,
     },
     {
       id: "health_status",
       accessorKey: "health_status",
-      meta: { title: "Health Status", skeleton: "badge" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Health Status" />,
+      meta: { title: i18n.t("aiHub.publicModelHubColumns.models.healthStatus"), skeleton: "badge" },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.models.healthStatus")} />
+      ),
       size: 130,
       cell: ({ row }) => {
         const model = row.original;
         const responseTimeLabel = model.health_response_time
-          ? `Response Time: ${Number(model.health_response_time).toFixed(2)}ms`
-          : "N/A";
+          ? i18n.t("aiHub.publicModelHubColumns.responseTime", { ms: Number(model.health_response_time).toFixed(2) })
+          : i18n.t("aiHub.publicModelHubColumns.notAvailable");
         const lastCheckedLabel = model.health_checked_at
-          ? `Last Checked: ${new Date(model.health_checked_at).toLocaleString()}`
-          : "N/A";
+          ? i18n.t("aiHub.publicModelHubColumns.lastChecked", {
+              date: new Date(model.health_checked_at).toLocaleString(),
+            })
+          : i18n.t("aiHub.publicModelHubColumns.notAvailable");
         return (
           <CellTooltip
             content={
@@ -333,7 +390,7 @@ export const getPublicModelHubColumns = ({
               <span className="capitalize">
                 <StatusBadge
                   tone={HEALTH_TONES[model.health_status ?? ""] || "neutral"}
-                  label={model.health_status ?? "Unknown"}
+                  label={model.health_status ?? i18n.t("aiHub.publicModelHubColumns.healthUnknown")}
                 />
               </span>
             }
@@ -344,8 +401,10 @@ export const getPublicModelHubColumns = ({
     {
       id: "rpm",
       accessorKey: "rpm",
-      meta: { title: "Limits" },
-      header: ({ column }) => <DataTableSortHeader column={column} title="Limits" />,
+      meta: { title: i18n.t("aiHub.publicModelHubColumns.models.limits") },
+      header: ({ column }) => (
+        <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.models.limits")} />
+      ),
       size: 150,
       cell: ({ row }) => (
         <span className="text-xs text-muted-foreground">{formatLimits(row.original.rpm, row.original.tpm)}</span>
@@ -378,8 +437,10 @@ export const getPublicAgentHubColumns = ({ onAgentClick }: PublicAgentHubColumns
   {
     id: "name",
     accessorKey: "name",
-    meta: { title: "Agent Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Agent Name" />,
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.agents.name") },
+    header: ({ column }) => (
+      <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.agents.name")} />
+    ),
     size: 200,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -395,8 +456,8 @@ export const getPublicAgentHubColumns = ({ onAgentClick }: PublicAgentHubColumns
   {
     id: "description",
     accessorKey: "description",
-    meta: { title: "Description" },
-    header: "Description",
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.agents.description") },
+    header: i18n.t("aiHub.publicModelHubColumns.agents.description"),
     size: 260,
     enableSorting: false,
     cell: ({ row }) => (
@@ -408,8 +469,10 @@ export const getPublicAgentHubColumns = ({ onAgentClick }: PublicAgentHubColumns
   {
     id: "version",
     accessorKey: "version",
-    meta: { title: "Version" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Version" />,
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.agents.version") },
+    header: ({ column }) => (
+      <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.agents.version")} />
+    ),
     size: 90,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -417,8 +480,8 @@ export const getPublicAgentHubColumns = ({ onAgentClick }: PublicAgentHubColumns
   },
   {
     id: "provider",
-    meta: { title: "Provider" },
-    header: "Provider",
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.agents.provider") },
+    header: i18n.t("aiHub.publicModelHubColumns.agents.provider"),
     size: 130,
     enableSorting: false,
     cell: ({ row }) =>
@@ -430,16 +493,16 @@ export const getPublicAgentHubColumns = ({ onAgentClick }: PublicAgentHubColumns
   },
   {
     id: "skills",
-    meta: { title: "Skills", skeleton: "chips" },
-    header: "Skills",
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.agents.skills"), skeleton: "chips" },
+    header: i18n.t("aiHub.publicModelHubColumns.agents.skills"),
     size: 160,
     enableSorting: false,
     cell: ({ row }) => <OverflowChips items={(row.original.skills || []).map((skill) => skill.name)} />,
   },
   {
     id: "capabilities",
-    meta: { title: "Capabilities", skeleton: "chips" },
-    header: "Capabilities",
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.agents.capabilities"), skeleton: "chips" },
+    header: i18n.t("aiHub.publicModelHubColumns.agents.capabilities"),
     size: 160,
     enableSorting: false,
     cell: ({ row }) => {
@@ -470,8 +533,10 @@ export const getPublicMCPHubColumns = ({ onServerClick }: PublicMCPHubColumnsDep
   {
     id: "server_name",
     accessorKey: "server_name",
-    meta: { title: "Server Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Server Name" />,
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.mcp.serverName") },
+    header: ({ column }) => (
+      <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.mcp.serverName")} />
+    ),
     size: 180,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -486,8 +551,8 @@ export const getPublicMCPHubColumns = ({ onServerClick }: PublicMCPHubColumnsDep
   },
   {
     id: "description",
-    meta: { title: "Description" },
-    header: "Description",
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.mcp.description") },
+    header: i18n.t("aiHub.publicModelHubColumns.mcp.description"),
     size: 260,
     enableSorting: false,
     cell: ({ row }) => {
@@ -502,8 +567,10 @@ export const getPublicMCPHubColumns = ({ onServerClick }: PublicMCPHubColumnsDep
   {
     id: "transport",
     accessorKey: "transport",
-    meta: { title: "Transport", skeleton: "badge" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Transport" />,
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.mcp.transport"), skeleton: "badge" },
+    header: ({ column }) => (
+      <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.mcp.transport")} />
+    ),
     size: 110,
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -516,8 +583,10 @@ export const getPublicMCPHubColumns = ({ onServerClick }: PublicMCPHubColumnsDep
   {
     id: "auth_type",
     accessorKey: "auth_type",
-    meta: { title: "Auth Type", skeleton: "badge" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Auth Type" />,
+    meta: { title: i18n.t("aiHub.publicModelHubColumns.mcp.authType"), skeleton: "badge" },
+    header: ({ column }) => (
+      <DataTableSortHeader column={column} title={i18n.t("aiHub.publicModelHubColumns.mcp.authType")} />
+    ),
     size: 110,
     enableSorting: true,
     sortingFn: "alphanumeric",
