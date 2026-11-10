@@ -29393,7 +29393,8 @@
         "supports_video_input": false,
         "mode": "chat",
         "comment": "Strong GLM coding model for agentic engineering, terminals, and repository generation",
-        "source": "https://api.friendli.ai/serverless/v1/models"
+        "source": "https://api.friendli.ai/serverless/v1/models",
+        "deprecation_date": "2026-11-20"
     },
     "ft:babbage-002": {
         "deprecation_date": "2026-09-28",
