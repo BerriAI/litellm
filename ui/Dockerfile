@@ -17,7 +17,6 @@ WORKDIR /app
 # Layer the lockfile-only install above the source copy so source-only
 # edits don't bust the install cache.
 COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
-COPY ui/litellm-dashboard/vendor/ ./vendor/
 RUN --mount=type=cache,target=/root/.npm \
     npm ci --prefer-offline
 
