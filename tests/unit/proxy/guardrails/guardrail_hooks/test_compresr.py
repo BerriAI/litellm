@@ -18,6 +18,7 @@ Tests cover:
 import hashlib
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, create_autospec, patch
 
 import httpx
@@ -2181,14 +2182,14 @@ def _model_response_calling(tool_name: str) -> ModelResponse:
 
 
 def test_allowed_tools_choice_lets_the_retrieve_call_run_and_still_refuses_a_client_tool_it_excludes():
-    weather_only = {
+    weather_only: Final = {
         AGENTIC_LOOP_TOOL_CHOICE_KEY: {
             "type": "allowed_tools",
             "mode": "auto",
             "tools": [{"type": "function", "name": "get_weather"}],
         }
     }
-    callbacks = [_make_guardrail()]
+    callbacks: Final = [_make_guardrail()]
 
     refuse_a_call_the_choice_excludes(
         _model_response_calling(COMPRESR_RETRIEVE_TOOL_NAME), weather_only, callbacks, "gpt-5.6"
