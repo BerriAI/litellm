@@ -70,7 +70,7 @@ def test_config_deployment_dropped_by_stale_boot_cost_map_is_restored_after_relo
                 lambda served: model in served,
                 seconds=30,
             )
-            upstream.get("/__observations").raise_for_status()
+            upstream.delete("/__observations").raise_for_status()
             response: Final = candidate.request(
                 "POST",
                 "/v1/chat/completions",
@@ -81,6 +81,8 @@ def test_config_deployment_dropped_by_stale_boot_cost_map_is_restored_after_relo
                 {
                     "path": "/v1/chat/completions",
                     "authorization": "Bearer sk-upstream",
+                    "method": "POST",
+                    "api_key": "",
                     "body": {"model": model, "messages": [{"role": "user", "content": "stale cost map control"}]},
                 }
             ]

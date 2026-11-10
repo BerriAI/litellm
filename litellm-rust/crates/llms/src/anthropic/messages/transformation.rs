@@ -1,32 +1,29 @@
 use litellm_auth::CredentialPlacement;
-use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
-use litellm_types::{
-    llms::{
-        anthropic::{AnthropicBeta, BetaSet},
-        anthropic_messages::anthropic_request::{
-            AnthropicMessage, AnthropicMessagesOptionalParams, AnthropicMessagesRequest,
-            ContextEdit, ContextManagement, Speed,
-        },
+use litellm_llms_types::{
+    formats::messages::{
+        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message,
+        MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
+    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet, DEFAULT_HEADERS},
     recognized::Recognized,
 };
+use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
-use super::thinking::{ThinkingBudgets, ThinkingContext, translate_thinking};
+use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
+use crate::base_llm::messages::context::MessagesTransformContext;
 use crate::{
     Error,
     anthropic::common_utils::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
-        ANTHROPIC_BASE_URL_ENV, AnthropicModelCapabilities, OauthHandling, complete_anthropic_url,
-        get_auth_header, has_advisor_tool, has_anthropic_credential, is_tool_search_used,
-        merge_beta_headers, optionally_handle_anthropic_oauth, requires_native_compaction_beta,
-        strip_advisor_blocks, strip_encrypted_reasoning_blocks,
+        ANTHROPIC_BASE_URL_ENV, OauthHandling, complete_anthropic_url, get_auth_header,
+        has_advisor_tool, has_anthropic_credential, is_tool_search_used, merge_beta_headers,
+        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
+        strip_encrypted_reasoning_blocks,
     },
     base_llm::{
-        anthropic_messages::transformation::{
-            BaseAnthropicMessagesConfig, Headers, MessagesTransformContext, ValidatedEnvironment,
-        },
         auth::AuthScheme,
+        messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
     },
 };
 
@@ -34,31 +31,21 @@ pub struct AnthropicMessagesConfig;
 
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
-impl MessagesTransformContext {
-    pub fn new(capabilities: AnthropicModelCapabilities, drop_params: bool) -> Self {
-        Self::with_lookup(capabilities, drop_params, &ProcessEnvironment)
+impl BaseMessagesConfig for AnthropicMessagesConfig {
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        reasoning_auto_summary: bool,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, reasoning_auto_summary)
     }
 
-    pub fn with_lookup(
-        capabilities: AnthropicModelCapabilities,
-        drop_params: bool,
-        env: &impl Lookup,
-    ) -> Self {
-        Self {
-            thinking: ThinkingContext {
-                capabilities,
-                budgets: ThinkingBudgets::from_lookup(env),
-            },
-            drop_params,
-        }
-    }
-}
-
-impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
         _model: &str,
+        _litellm_params: &LitellmParams,
+        _stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
@@ -66,32 +53,10 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
 
     fn transform_anthropic_messages_request(
         &self,
-        request: AnthropicMessagesRequest,
+        request: MessagesRequest,
         context: &MessagesTransformContext,
-    ) -> Result<AnthropicMessagesRequest, Error> {
-        if request.params.max_tokens.is_none() {
-            return Err(Error::MissingField("max_tokens"));
-        }
-        let request = drop_unsupported_params(request, context)?;
-        let request = translate_thinking(request, &context.thinking)?;
-        let context_management = request
-            .params
-            .context_management
-            .clone()
-            .map(map_openai_context_management_to_anthropic);
-        let messages = if has_advisor_tool(request.params.tools.as_deref()) {
-            request.messages
-        } else {
-            strip_advisor_blocks(request.messages)
-        };
-        Ok(AnthropicMessagesRequest {
-            messages: strip_encrypted_reasoning_blocks(messages),
-            params: AnthropicMessagesOptionalParams {
-                context_management,
-                ..request.params
-            },
-            ..request
-        })
+    ) -> Result<MessagesRequest, Error> {
+        transform_messages_request(request, &context.keeping_display_updates())
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -110,6 +75,8 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _optional_params: &MessagesOptionalParams,
+        _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let headers = match optionally_handle_anthropic_oauth(headers, api_key) {
@@ -139,19 +106,94 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         Ok(ValidatedEnvironment { headers, auth })
     }
 
-    fn request_headers(&self, headers: Headers, request: &AnthropicMessagesRequest) -> Headers {
-        update_headers_with_anthropic_beta(headers, request)
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        DEFAULT_HEADERS
+    }
+
+    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+        merge_beta_headers(
+            headers,
+            provider_feature_betas(request, BetaProvider::Anthropic),
+        )
     }
 }
 
-fn update_headers_with_anthropic_beta(
+pub(crate) fn transform_messages_request(
+    request: MessagesRequest,
+    context: &MessagesTransformContext,
+) -> Result<MessagesRequest, Error> {
+    if request.params.max_tokens.is_none() {
+        return Err(Error::MissingField("max_tokens"));
+    }
+    let request = drop_unsupported_params(request, context)?;
+    let request = translate_thinking(request, &context.thinking)?;
+    let context_management = request
+        .params
+        .context_management
+        .clone()
+        .map(map_openai_context_management_to_anthropic);
+    let messages = if has_advisor_tool(request.params.tools.as_deref()) {
+        request.messages
+    } else {
+        strip_advisor_blocks(request.messages)
+    };
+    Ok(MessagesRequest {
+        messages: strip_encrypted_reasoning_blocks(messages),
+        params: MessagesOptionalParams {
+            context_management,
+            extra: without_null_safeguards(request.params.extra),
+            ..request.params
+        },
+        ..request
+    })
+}
+
+fn without_null_safeguards(extra: Map<String, Value>) -> Map<String, Value> {
+    extra
+        .into_iter()
+        .filter(|(key, value)| key != "safeguards" || !value.is_null())
+        .collect()
+}
+
+pub(crate) fn update_headers_with_anthropic_beta(
     headers: Headers,
-    request: &AnthropicMessagesRequest,
+    request: &MessagesRequest,
 ) -> Headers {
     merge_beta_headers(headers, feature_betas(request))
 }
 
-fn feature_betas(request: &AnthropicMessagesRequest) -> BetaSet {
+pub(crate) fn update_headers_with_safeguards_beta(
+    headers: Headers,
+    request: &MessagesRequest,
+    provider: BetaProvider,
+) -> Headers {
+    merge_beta_headers(
+        headers,
+        feature_betas(request).union(on_provider(mapped_host_betas(&request.params), provider)),
+    )
+}
+
+/// The betas a request needs on a host with a column in the beta map, filtered and renamed
+/// through that column.
+pub(crate) fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
+    on_provider(
+        feature_betas(request).union(mapped_host_betas(&request.params)),
+        provider,
+    )
+}
+
+fn on_provider(betas: BetaSet, provider: BetaProvider) -> BetaSet {
+    betas.iter().filter_map(|beta| beta.on(provider)).collect()
+}
+
+fn mapped_host_betas(params: &MessagesOptionalParams) -> BetaSet {
+    carries_safeguards(params)
+        .then_some(AnthropicBeta::DangerousToolUse20260903)
+        .into_iter()
+        .collect()
+}
+
+fn feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
     let tools = params.tools.as_deref();
     [
@@ -162,6 +204,12 @@ fn feature_betas(request: &AnthropicMessagesRequest) -> BetaSet {
             .then_some(AnthropicBeta::FastMode20260201),
         messages_carry_output_config(&request.messages)
             .then_some(AnthropicBeta::PerTurnControl20260701),
+        uses_thinking_display_updates(params)
+            .then_some(AnthropicBeta::ThinkingDisplayUpdates20260818),
+        uses_thinking_block_binding(params)
+            .then_some(AnthropicBeta::ThinkingBindingControls20260801),
+        messages_carry_tool_changes(&request.messages)
+            .then_some(AnthropicBeta::MidConversationToolChanges20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
     ]
@@ -190,7 +238,7 @@ fn context_management_betas(
         .chain(other.then_some(AnthropicBeta::ContextManagement20250627))
 }
 
-fn uses_structured_output(params: &AnthropicMessagesOptionalParams) -> bool {
+fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
     params.output_format.is_some()
         || params
             .output_config
@@ -199,22 +247,82 @@ fn uses_structured_output(params: &AnthropicMessagesOptionalParams) -> bool {
             .is_some_and(|config| config.format.is_some())
 }
 
-fn messages_carry_output_config(messages: &[AnthropicMessage]) -> bool {
+fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
+    params
+        .extra
+        .get("safeguards")
+        .is_some_and(|value| !value.is_null())
+}
+
+fn messages_carry_output_config(messages: &[Message]) -> bool {
     messages
         .iter()
         .any(|message| message.extra.contains_key("output_config"))
 }
 
-fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error {
-    Error::InvalidRequest(format!(
-        "{model} does not support {param}={value}. {hint}To drop unsupported params, set `litellm.drop_params = True`."
-    ))
+fn uses_thinking_display_updates(params: &MessagesOptionalParams) -> bool {
+    let display = match params.thinking.as_ref().and_then(Recognized::known) {
+        Some(ThinkingConfig::Enabled(thinking)) => thinking.display.as_ref(),
+        Some(ThinkingConfig::Adaptive(thinking)) => thinking.display.as_ref(),
+        _ => None,
+    };
+    display.and_then(Recognized::known) == Some(&ThinkingDisplay::Updates)
 }
 
-fn drop_unsupported_params(
-    request: AnthropicMessagesRequest,
+/// `AnthropicModelInfo.thinking_betas`: any thinking object carrying `block_binding`.
+fn uses_thinking_block_binding(params: &MessagesOptionalParams) -> bool {
+    match params.thinking.as_ref() {
+        Some(Recognized::Known(ThinkingConfig::Enabled(thinking))) => {
+            thinking.extra.contains_key("block_binding")
+        }
+        Some(Recognized::Known(ThinkingConfig::Adaptive(thinking))) => {
+            thinking.extra.contains_key("block_binding")
+        }
+        Some(Recognized::Known(ThinkingConfig::Disabled(thinking))) => {
+            thinking.extra.contains_key("block_binding")
+        }
+        Some(Recognized::Unrecognized(Value::Object(thinking))) => {
+            thinking.contains_key("block_binding")
+        }
+        Some(Recognized::Unrecognized(_)) | None => false,
+    }
+}
+
+fn is_tool_reference_change(block: &ContentBlock) -> bool {
+    matches!(
+        &block.block_type,
+        Some(ContentBlockType::Other(block_type))
+            if block_type == "tool_addition" || block_type == "tool_removal"
+    ) && block
+        .extra
+        .get("tool")
+        .and_then(|tool| tool.get("type"))
+        .and_then(Value::as_str)
+        == Some("tool_reference")
+}
+
+fn messages_carry_tool_changes(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .filter(|message| message.role == "system")
+        .flat_map(Message::blocks)
+        .any(is_tool_reference_change)
+}
+
+fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error {
+    Error::InvalidRequest(crate::ErrorDetail::UnsupportedParameter {
+        model: model.into(),
+        param: param.into(),
+        value: value.into(),
+        hint: hint.into(),
+    })
+}
+
+/// The speed and sampling gates of Python's `get_requested_anthropic_messages_optional_param`.
+pub fn drop_unsupported_params(
+    request: MessagesRequest,
     context: &MessagesTransformContext,
-) -> Result<AnthropicMessagesRequest, Error> {
+) -> Result<MessagesRequest, Error> {
     let capabilities = &context.thinking.capabilities;
     let model = request.model.clone();
     let reject = |param: &str, value: String, hint: &str| -> Result<(), Error> {
@@ -232,8 +340,8 @@ fn drop_unsupported_params(
         _ => params.speed.clone(),
     };
     if capabilities.supports_sampling_params {
-        return Ok(AnthropicMessagesRequest {
-            params: AnthropicMessagesOptionalParams { speed, ..params },
+        return Ok(MessagesRequest {
+            params: MessagesOptionalParams { speed, ..params },
             ..request
         });
     }
@@ -254,8 +362,8 @@ fn drop_unsupported_params(
     if let Some(top_k) = params.top_k {
         reject("top_k", json!(top_k).to_string(), "")?;
     }
-    Ok(AnthropicMessagesRequest {
-        params: AnthropicMessagesOptionalParams {
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
             speed,
             temperature,
             top_p: None,
@@ -268,7 +376,7 @@ fn drop_unsupported_params(
 
 fn speed_text(speed: &Recognized<Speed>) -> String {
     match speed {
-        Recognized::Known(speed) => speed.as_str().to_string(),
+        Recognized::Known(speed) => <&'static str>::from(*speed).to_string(),
         Recognized::Unrecognized(Value::String(text)) => text.clone(),
         Recognized::Unrecognized(other) => other.to_string(),
     }
@@ -320,6 +428,9 @@ pub fn map_openai_context_management_to_anthropic(
 
 #[cfg(test)]
 mod tests {
+    use crate::base_llm::messages::context::{
+        MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
+    };
     use std::process::Command;
 
     use rstest::{fixture, rstest};
@@ -358,7 +469,7 @@ mod tests {
         )
     }
 
-    fn request(fields: Value) -> AnthropicMessagesRequest {
+    fn request(fields: Value) -> MessagesRequest {
         serde_json::from_value(body(fields)).unwrap()
     }
 
@@ -383,7 +494,7 @@ mod tests {
 
     fn transform(
         fields: Value,
-        capabilities: AnthropicModelCapabilities,
+        capabilities: MessagesModelCapabilities,
         drop_params: bool,
     ) -> Result<Value, Error> {
         ANTHROPIC_MESSAGES_CONFIG
@@ -392,10 +503,6 @@ mod tests {
                 &MessagesTransformContext::with_lookup(capabilities, drop_params, &no_env),
             )
             .map(|transformed| serde_json::to_value(transformed).unwrap())
-    }
-
-    fn invalid(message: &str) -> Result<Value, Error> {
-        Err(Error::InvalidRequest(message.to_string()))
     }
 
     fn advisor_history() -> Value {
@@ -411,21 +518,21 @@ mod tests {
     }
 
     #[fixture]
-    fn unmapped() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities::default()
+    fn unmapped() -> MessagesModelCapabilities {
+        MessagesModelCapabilities::default()
     }
 
     #[fixture]
-    fn sampling_removed() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities {
+    fn sampling_removed() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
             supports_sampling_params: false,
             ..Default::default()
         }
     }
 
     #[fixture]
-    fn fast_mode() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities {
+    fn fast_mode() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
             supports_speed: true,
             ..Default::default()
         }
@@ -434,7 +541,7 @@ mod tests {
     #[rstest]
     #[case::alone(json!({"max_tokens": null}))]
     #[case::ahead_of_the_param_gate(json!({"max_tokens": null, "speed": "fast"}))]
-    fn missing_max_tokens_is_rejected(#[case] fields: Value, unmapped: AnthropicModelCapabilities) {
+    fn missing_max_tokens_is_rejected(#[case] fields: Value, unmapped: MessagesModelCapabilities) {
         assert_eq!(
             transform(fields, unmapped, false),
             Err(Error::MissingField("max_tokens"))
@@ -489,7 +596,7 @@ mod tests {
         "tools": [{"type": "advisor_20260301", "name": "advisor"}]
     }))]
     fn request_is_forwarded_unchanged(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] drop_params: bool,
         #[case] fields: Value,
     ) {
@@ -519,7 +626,7 @@ mod tests {
         json!({"temperature": 1.0})
     )]
     fn removed_params_are_dropped_under_drop_params(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] fields: Value,
         #[case] expected: Value,
     ) {
@@ -578,11 +685,15 @@ mod tests {
         "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
     )]
     fn removed_params_are_rejected_without_drop_params(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] fields: Value,
         #[case] message: &str,
     ) {
-        assert_eq!(transform(fields, capabilities, false), invalid(message));
+        let Error::InvalidRequest(detail) = transform(fields, capabilities, false).unwrap_err()
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(detail.to_string(), message);
     }
 
     #[rstest]
@@ -655,7 +766,7 @@ mod tests {
     fn context_management_reaches_the_wire(
         #[case] context_management: Value,
         #[case] expected: Value,
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
         assert_eq!(
             transform(
@@ -672,7 +783,7 @@ mod tests {
     #[case::with_only_other_tools(json!({"tools": [{"name": "get_weather", "input_schema": {"type": "object"}}]}))]
     fn advisor_history_is_stripped_without_the_advisor_tool(
         #[case] tools: Value,
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
         let stripped = json!([
             {"role": "user", "content": "Build a worker pool."},
@@ -692,7 +803,7 @@ mod tests {
     }
 
     #[rstest]
-    fn bridge_minted_reasoning_is_stripped_from_the_wire(unmapped: AnthropicModelCapabilities) {
+    fn bridge_minted_reasoning_is_stripped_from_the_wire(unmapped: MessagesModelCapabilities) {
         let messages = json!([
             {"role": "user", "content": "Solve it."},
             {"role": "assistant", "content": [
@@ -715,7 +826,7 @@ mod tests {
     #[test]
     fn thinking_is_translated_with_the_context_budgets() {
         let context = MessagesTransformContext::with_lookup(
-            AnthropicModelCapabilities {
+            MessagesModelCapabilities {
                 supports_reasoning: true,
                 ..Default::default()
             },
@@ -749,6 +860,8 @@ mod tests {
                             low: 2000,
                             ..ThinkingBudgets::default()
                         },
+                        drop_params: true,
+                        keeps_display_updates: false,
                     },
                     drop_params: true,
                 }
@@ -810,7 +923,13 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(api_base, "claude", &env(vars)),
+            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+                api_base,
+                "claude",
+                &LitellmParams::default(),
+                false,
+                &env(vars),
+            ),
             Ok(expected.to_string())
         );
     }
@@ -828,6 +947,8 @@ mod tests {
             headers(forwarded),
             api_key,
             "claude",
+            &MessagesOptionalParams::default(),
+            &LitellmParams::default(),
             &env(vars),
         )
     }
@@ -1005,8 +1126,104 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
     )]
+    #[case::safeguards(
+        json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]}),
+        &[]
+    )]
+    #[case::adaptive_display_updates(
+        json!({"thinking": {"type": "adaptive", "display": "updates"}}),
+        &["thinking-display-updates-2026-08-18"]
+    )]
+    #[case::enabled_display_updates(
+        json!({"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "updates"}}),
+        &["thinking-display-updates-2026-08-18"]
+    )]
+    #[case::summarized_display(json!({"thinking": {"type": "adaptive", "display": "summarized"}}), &[])]
+    #[case::disabled_thinking(json!({"thinking": {"type": "disabled"}}), &[])]
+    #[case::system_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": "Use the ping tool"},
+            {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::system_tool_removal(
+        json!({"messages": [
+            {"role": "system", "content": [{"type": "tool_removal", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &["mid-conversation-tool-changes-2026-07-01"]
+    )]
+    #[case::user_tool_addition(
+        json!({"messages": [
+            {"role": "user", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+        ]}),
+        &[]
+    )]
+    #[case::tool_addition_without_a_tool_reference(
+        json!({"messages": [
+            {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_definition"}}]},
+        ]}),
+        &[]
+    )]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
+    }
+
+    #[rstest]
+    #[case::anthropic(BetaProvider::Anthropic, json!([{"type": "dangerous_tool_use"}]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::vertex_ai(BetaProvider::VertexAi, json!([{"type": "dangerous_tool_use"}]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::empty_list(BetaProvider::Anthropic, json!([]), &["dangerous-tool-use-2026-09-03"])]
+    #[case::not_a_list(BetaProvider::Anthropic, json!(1), &["dangerous-tool-use-2026-09-03"])]
+    #[case::null(BetaProvider::Anthropic, Value::Null, &[])]
+    #[case::bedrock_converse_has_a_null_cell(BetaProvider::BedrockConverse, json!([{"type": "dangerous_tool_use"}]), &[])]
+    fn safeguards_add_the_dangerous_tool_use_beta_where_the_beta_map_has_a_cell(
+        #[case] provider: BetaProvider,
+        #[case] safeguards: Value,
+        #[case] expected: &[&str],
+    ) {
+        assert_eq!(
+            provider_feature_betas(&request(json!({"safeguards": safeguards})), provider),
+            betas(expected)
+        );
+    }
+
+    #[rstest]
+    #[case::vertex_ai(
+        BetaProvider::VertexAi,
+        &["mid-conversation-tool-changes-2026-07-01", "thinking-display-updates-2026-08-18"]
+    )]
+    #[case::azure_ai(
+        BetaProvider::AzureAi,
+        &["mid-conversation-tool-changes-2026-07-01", "thinking-display-updates-2026-08-18"]
+    )]
+    #[case::bedrock_converse(BetaProvider::BedrockConverse, &["thinking-display-updates-2026-08-18"])]
+    #[case::databricks(BetaProvider::Databricks, &["thinking-display-updates-2026-08-18"])]
+    fn tool_change_and_display_betas_reach_the_providers_that_accept_them(
+        #[case] provider: BetaProvider,
+        #[case] expected: &[&str],
+    ) {
+        let fields = json!({
+            "thinking": {"type": "adaptive", "display": "updates"},
+            "messages": [
+                {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+            ],
+        });
+        assert_eq!(
+            provider_feature_betas(&request(fields), provider),
+            betas(expected)
+        );
+    }
+
+    #[rstest]
+    fn hosts_without_a_beta_map_column_get_safeguards_without_a_derived_beta() {
+        let client = headers(&[("anthropic-beta", "claude-code-20250219")]);
+        assert_eq!(
+            update_headers_with_anthropic_beta(
+                client.clone(),
+                &request(json!({"safeguards": [{"type": "dangerous_tool_use"}]}))
+            ),
+            client
+        );
     }
 
     #[rstest]
@@ -1046,6 +1263,11 @@ mod tests {
         &[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,effort-2025-11-24")],
         json!({"messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]}),
         &[("anthropic-beta", "claude-code-20250219,context-management-2025-06-27,effort-2025-11-24,interleaved-thinking-2025-05-14,per-turn-control-2026-07-01")],
+    )]
+    #[case::safeguards_add_the_dangerous_tool_use_beta_to_the_client_betas(
+        &[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14")],
+        json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
+        &[("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14")],
     )]
     fn request_headers_merge_the_feature_betas(
         #[case] input: &[(&str, &str)],
@@ -1103,8 +1325,21 @@ mod tests {
             requested.borrow_mut().push(name.to_string());
             None
         };
-        let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(Vec::new(), None, "claude", &record);
-        let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
+        let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(
+            Vec::new(),
+            None,
+            "claude",
+            &MessagesOptionalParams::default(),
+            &LitellmParams::default(),
+            &record,
+        );
+        let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+            None,
+            "claude",
+            &LitellmParams::default(),
+            false,
+            &record,
+        );
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
         let undeclared: Vec<&String> = requested

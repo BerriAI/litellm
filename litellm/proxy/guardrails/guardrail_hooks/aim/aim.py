@@ -181,6 +181,7 @@ class AimGuardrail(CustomGuardrail):
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
             json={"messages": self._build_aim_inspection_messages(data)},
+            timeout=self.timeout,
         )
         response.raise_for_status()
         res: Final[AimAnalyzeResponse] = response.json()
@@ -285,6 +286,7 @@ class AimGuardrail(CustomGuardrail):
                 "messages": self._build_aim_inspection_messages(request_data)
                 + [{"role": "assistant", "content": output}]
             },
+            timeout=self.timeout,
         )
         response.raise_for_status()
         res: Final[AimAnalyzeResponse] = response.json()

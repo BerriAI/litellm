@@ -1,4 +1,5 @@
 import { useQuery, useInfiniteQuery, useQueryClient, UseQueryResult } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { modelInfoCall, modelHubCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "../useAuthorized";
@@ -23,12 +24,13 @@ export interface PaginatedModelInfoResponse {
   size: number;
 }
 
-const modelKeys = createQueryKeys("models");
+export const modelKeys = createQueryKeys("models");
 const modelHubKeys = createQueryKeys("modelHub");
 const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
 const infiniteModelKeys = createQueryKeys("infiniteModels");
 const userModelsKeys = createQueryKeys("userModels");
+const modelAccessGroupNameKeys = createQueryKeys("modelAccessGroupNames");
 
 export const useModelsInfo = (
   page: number = 1,
@@ -42,6 +44,8 @@ export const useModelsInfo = (
   modelName?: string,
   accessGroup?: string,
   wildcardOnly: boolean = false,
+  blocked?: boolean,
+  options: { useStoredParams?: boolean } = {},
 ) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
@@ -54,6 +58,7 @@ export const useModelsInfo = (
         ...(search && { search }),
         ...(modelName && { modelName }),
         ...(modelId && { modelId }),
+        useStoredParams: Boolean(options.useStoredParams),
         ...(teamId && { teamId }),
         ...(sortBy && { sortBy }),
         ...(sortOrder && { sortOrder }),
@@ -62,6 +67,8 @@ export const useModelsInfo = (
         ...(excludeAutoRouters && { excludeAutoRouters: "true" }),
         ...(accessGroup && { accessGroup }),
         ...(wildcardOnly && { wildcardOnly: "true" }),
+        // `blocked !== undefined` (not truthiness): false is a meaningful filter value.
+        ...(blocked !== undefined && { blocked }),
       },
     }),
     queryFn: async () =>
@@ -80,6 +87,8 @@ export const useModelsInfo = (
         modelName,
         accessGroup,
         wildcardOnly,
+        blocked,
+        options,
       ),
     enabled: Boolean(accessToken && userId && userRole),
   });
@@ -100,6 +109,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     model?: string | null;
     base_model?: string | null;
     custom_llm_provider?: string | null;
+    switchyard_router_config?: unknown;
     complexity_router_config?: unknown;
     complexity_router_default_model?: string | null;
     auto_router_config?: unknown;
@@ -115,6 +125,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
     /** False for config.yaml-defined deployments, which the update and delete routes refuse. */
     db_model?: boolean | null;
     base_model?: string | null;
+    blocked?: boolean | null;
     mode?: string | null;
     created_at?: string | null;
     updated_at?: string | null;
@@ -263,6 +274,31 @@ export const useUserModels = (): UseQueryResult<string[]> => {
     },
     enabled: Boolean(accessToken && userId && userRole),
   });
+};
+
+export const useModelAccessGroupNames = (): ReadonlySet<string> | undefined => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  const { data, isError } = useQuery<string[]>({
+    queryKey: modelAccessGroupNameKeys.list({}),
+    queryFn: async () => {
+      const response: AllProxyModelsResponse = await modelAvailableCall(
+        accessToken!,
+        userId!,
+        userRole!,
+        false,
+        null,
+        true,
+        true,
+      );
+      return response.data.map((model) => model.id);
+    },
+    enabled: Boolean(accessToken && userId && userRole),
+  });
+  return useMemo(() => {
+    if (data !== undefined) return new Set(data);
+    if (isError) return new Set<string>();
+    return undefined;
+  }, [data, isError]);
 };
 
 export const useSelectedTeamModels = (teamID: string | null) => {

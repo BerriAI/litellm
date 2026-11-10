@@ -2,12 +2,14 @@ use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{
     BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, ConnectionCache, Error,
-    FlushCache,
+    FlushCache, ShortBatch,
     semantic::{SemanticCache, SemanticLookup},
 };
 use serde_json::Value;
 
-use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
+use crate::{
+    CacheControls, CacheEntry, CacheKeyInput, PartialHits, ResponseCacheConfig, cache_key,
+};
 
 #[derive(Clone)]
 pub struct ResponseCacheRequest<C: CacheContext = litellm_cache::ExactCacheContext> {
@@ -50,6 +52,7 @@ where
     B::Context: Default + PartialEq,
 {
     backend: Arc<B>,
+    config: ResponseCacheConfig,
 }
 
 impl<B> ResponseCache<B>
@@ -58,7 +61,18 @@ where
     B::Context: Default + PartialEq,
 {
     pub fn new(backend: Arc<B>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            config: ResponseCacheConfig::default(),
+        }
+    }
+
+    pub fn with_config(self, config: ResponseCacheConfig) -> Self {
+        Self { config, ..self }
+    }
+
+    pub fn config(&self) -> &ResponseCacheConfig {
+        &self.config
     }
 
     pub fn backend(&self) -> &B {
@@ -100,7 +114,7 @@ where
             .get_cache(&cache_key(&request.key), &request.context)
         {
             Ok(entry) => entry,
-            Err(Error::InvalidEntry) => None,
+            Err(Error::InvalidEntry(_)) => None,
             Err(error) => return Err(error),
         };
         Ok(Self::fresh_or_miss(entry, now, request.max_age))
@@ -120,7 +134,7 @@ where
             .await
         {
             Ok(entry) => entry,
-            Err(Error::InvalidEntry) => None,
+            Err(Error::InvalidEntry(_)) => None,
             Err(error) => return Err(error),
         };
         Ok(Self::fresh_or_miss(entry, now, request.max_age))
@@ -221,7 +235,7 @@ where
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        if !request.controls.writes() {
+        if !request.controls.writes() || !self.fits(&response) {
             return Ok(());
         }
         self.backend.set_cache(
@@ -240,7 +254,7 @@ where
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        if !request.controls.writes() {
+        if !request.controls.writes() || !self.fits(&response) {
             return Ok(());
         }
         self.backend
@@ -277,7 +291,7 @@ where
     ) -> Result<(), Error> {
         let writable = entries
             .into_iter()
-            .filter(|(request, _, _)| request.controls.writes())
+            .filter(|(request, response, _)| request.controls.writes() && self.fits(response))
             .map(|(request, response, now)| {
                 (
                     cache_key(&request.key),
@@ -312,6 +326,11 @@ where
         Ok(())
     }
 
+    fn fits(&self, response: &Value) -> bool {
+        self.config.max_entry_bytes == usize::MAX
+            || response.to_string().len() <= self.config.max_entry_bytes
+    }
+
     fn partial_hits(
         requests: &[ResponseCacheRequest<B::Context>],
         readable: Vec<(usize, &ResponseCacheRequest<B::Context>)>,
@@ -319,7 +338,10 @@ where
         now: Duration,
     ) -> Result<PartialHits, Error> {
         if readable.len() != entries.len() {
-            return Err(Error::Unavailable);
+            return Err(Error::unavailable(ShortBatch {
+                requested: readable.len(),
+                returned: entries.len(),
+            }));
         }
         let mut values = vec![None; requests.len()];
         for ((index, request), entry) in readable.into_iter().zip(entries) {
@@ -342,7 +364,7 @@ where
                 value: Self::fresh_or_miss(lookup.value, now, max_age),
                 similarity: lookup.similarity,
             }),
-            Err(Error::InvalidEntry) => Ok(SemanticLookup::miss(None)),
+            Err(Error::InvalidEntry(_)) => Ok(SemanticLookup::miss(None)),
             Err(error) => Err(error),
         }
     }

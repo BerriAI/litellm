@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 
 if TYPE_CHECKING:
@@ -16,7 +17,7 @@ else:
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import HuggingFaceError, _fetch_inference_provider_mapping
+from ..common_utils import HuggingFaceError, fetch_inference_provider_mapping
 
 logger: Final = logging.getLogger(__name__)
 
@@ -29,11 +30,11 @@ def _build_chat_completion_url(model_url: str) -> str:
 
     # Append /chat/completions if not already present
     if model_url.endswith("/v1"):
-        model_url += "/chat/completions"
+        model_url = join_api_base(model_url, "chat/completions")
 
     # Append /v1/chat/completions if not already present
     if not model_url.endswith("/chat/completions"):
-        model_url += "/v1/chat/completions"
+        model_url = join_api_base(model_url, "v1/chat/completions")
 
     return model_url
 
@@ -138,7 +139,7 @@ class HuggingFaceChatConfig(OpenAIGPTConfig):
         if "/" in remaining:
             provider: Final = first_part
             model_id: Final = remaining
-            provider_mapping = _fetch_inference_provider_mapping(model_id)
+            provider_mapping = fetch_inference_provider_mapping(model_id)
             if provider not in provider_mapping:
                 raise HuggingFaceError(
                     message=f"Model {model_id} is not supported for provider {provider}",

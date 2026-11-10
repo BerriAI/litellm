@@ -13,6 +13,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
     Resolved,
     Section,
     SettingValue,
+    is_resource_list,
     resolve,
     rule_for,
 )
@@ -41,16 +42,23 @@ _EMPTY_ROWS: Final[Mapping[DbRow, Mapping[str, JsonValue]]] = MappingProxyType({
 
 
 class SettingsStore(MutableMapping[str, JsonValue]):
-    def __init__(self, section: Section) -> None:
+    def __init__(self, section: Section, *, managed_db_keys: frozenset[str] | None = None) -> None:
         self._section: Final = section
+        self._managed_db_keys: Final = managed_db_keys
         self._yaml_values: Mapping[str, JsonValue] = _EMPTY_VALUES
         self._database_rows: Mapping[DbRow, Mapping[str, JsonValue]] = _EMPTY_ROWS
+        self._unmanaged_db_keys: frozenset[str] = frozenset()
         self._runtime_values: Mapping[str, JsonValue] = _EMPTY_VALUES
         self._deleted_runtime_keys: frozenset[str] = frozenset()
 
     def load_yaml(self, mapping: Mapping[str, JsonValue]) -> None:
-        self._yaml_values = MappingProxyType(dict(mapping))
-        self._clear_runtime()
+        self._yaml_values = MappingProxyType(
+            {key: value for key, value in mapping.items() if not is_resource_list(self._section, key)}
+        )
+        self._runtime_values = MappingProxyType(
+            {key: value for key, value in self._runtime_values.items() if is_resource_list(self._section, key)}
+        )
+        self._deleted_runtime_keys = frozenset()
 
     def config_value(self, key: str) -> JsonValue:
         return self._yaml_values.get(key)
@@ -71,14 +79,23 @@ class SettingsStore(MutableMapping[str, JsonValue]):
         return self.owned_by_config(key) and self._db_value_is_shadowed(key)
 
     def apply_db_row(self, row: DbRow, db_row: Mapping[str, JsonValue]) -> None:
+        applied_row: Final = MappingProxyType({key: db_row[key] for key in db_row if self._db_manages(row, key)})
         previous_row: Final = self._database_rows.get(row, _EMPTY_VALUES)
         changed: Final = frozenset(
             key
-            for key in (*previous_row, *db_row)
-            if previous_row.get(key, ABSENT) != db_row.get(key, ABSENT)  # pyright: ignore[reportUnknownArgumentType]  # JsonValue vs Absent compare
+            for key in (*previous_row, *applied_row)
+            if previous_row.get(key, ABSENT) != applied_row.get(key, ABSENT)  # pyright: ignore[reportUnknownArgumentType]  # JsonValue vs Absent compare
         )
-        self._database_rows = MappingProxyType({**self._database_rows, row: MappingProxyType(dict(db_row))})
+        self._database_rows = MappingProxyType({**self._database_rows, row: applied_row})
+        if row == self._section:
+            self._unmanaged_db_keys = frozenset(key for key in db_row if key not in applied_row)
         self._clear_runtime_keys(changed)
+
+    def unmanaged_db_keys(self) -> tuple[str, ...]:
+        return tuple(sorted(self._unmanaged_db_keys))
+
+    def _db_manages(self, row: DbRow, key: str) -> bool:
+        return row != self._section or self._managed_db_keys is None or key in self._managed_db_keys
 
     def resolved(self) -> Mapping[str, JsonValue]:
         return MappingProxyType(dict(self))
@@ -136,10 +153,6 @@ class SettingsStore(MutableMapping[str, JsonValue]):
     def __bool__(self) -> bool:
         return any(True for _ in self)
 
-    def _clear_runtime(self) -> None:
-        self._runtime_values = _EMPTY_VALUES
-        self._deleted_runtime_keys = frozenset()
-
     def _clear_runtime_keys(self, keys: frozenset[str]) -> None:
         stale: Final = frozenset(key for key in keys if not self.owned_by_config(key))
         if not stale:
@@ -159,6 +172,9 @@ class SettingsStore(MutableMapping[str, JsonValue]):
                 )
             )
         )
+
+    def db_value(self, key: str) -> SettingValue:
+        return self._db_value(key) if is_resource_list(self._section, key) else ABSENT
 
     def _db_value(self, key: str) -> SettingValue:
         rule: Final = rule_for(self._section, key)

@@ -25,6 +25,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             guardrail_name=guardrail.get("guardrail_name", ""),
             event_hook=litellm_params.mode,
             default_on=litellm_params.default_on,
+            timeout=litellm_params.timeout,
         )
     else:
         _hiddenlayer_callback = HiddenlayerGuardrailV2(
@@ -35,6 +36,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             guardrail_name=guardrail.get("guardrail_name", ""),
             event_hook=litellm_params.mode,
             default_on=litellm_params.default_on,
+            timeout=litellm_params.timeout,
         )
 
     litellm.logging_callback_manager.add_litellm_callback(_hiddenlayer_callback)

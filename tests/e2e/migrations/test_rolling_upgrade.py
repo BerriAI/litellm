@@ -14,11 +14,17 @@ from .upgrade import (
     migration_names,
     provision,
 )
+from e2e_metadata import Domain, Subject, meta
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.migration_startup]
 
 
 class TestRollingUpgrade:
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_baseline_replica_keeps_serving_while_the_candidate_migrates(
         self, containers: Containers, baseline_image: str, baseline_database: Database
     ) -> None:
@@ -38,6 +44,11 @@ class TestRollingUpgrade:
             assert CACHED_PLAN not in old.logs(), "The baseline replica hit a stale prepared statement"
             assert old.state().Running, "The baseline replica died during the upgrade"
 
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
     def test_both_releases_serve_and_share_keys_during_the_overlap(
         self, containers: Containers, baseline_image: str, baseline_database: Database
     ) -> None:

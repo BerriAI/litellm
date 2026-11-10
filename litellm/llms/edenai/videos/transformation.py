@@ -15,7 +15,7 @@ from httpx._types import RequestFiles
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.videos.main import VideoObject
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
 
 from ..common_utils import EdenAIException, authorized_headers, endpoint_url, reported_cost
 
@@ -28,7 +28,7 @@ def _usage_with_reported_cost(
     usage: Mapping[str, object] | None, body: bytes
 ) -> dict[str, object]:  # mutable-ok: VideoObject.usage is a plain dict field
     cost: Final = reported_cost(body)
-    return {  # mutable-ok: VideoObject.usage is a plain dict field
+    return {
         key: value
         for key, value in (*(usage.items() if usage else ()), ("provider_reported_cost_usd", cost))
         if value is not None
@@ -36,6 +36,14 @@ def _usage_with_reported_cost(
 
 
 class EdenAIVideoConfig(OpenAIVideoConfig):
+    def map_openai_params(
+        self,
+        video_create_optional_params: VideoCreateOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: inherited BaseVideoConfig return contract
+        return dict(video_create_optional_params)
+
     def validate_environment(
         self,
         headers: dict[str, object],  # mutable-ok: inherited contract
@@ -80,13 +88,13 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
             model=model,
             prompt=prompt,
             api_base=api_base,
-            video_create_optional_request_params={  # mutable-ok: inherited contract
+            video_create_optional_request_params={
                 key: value for key, value in video_create_optional_request_params.items() if key != "input_reference"
             },
             litellm_params=litellm_params,
             headers=headers,
         )
-        return {**data, "input_reference": dict(reference)}, files, url  # mutable-ok: JSON body
+        return {**data, "input_reference": dict(reference)}, files, url
 
     def transform_video_create_response(
         self,
@@ -124,6 +132,7 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         raw_response.raise_for_status()  # the shared GET helpers return error bodies instead of raising
         return raw_response.content

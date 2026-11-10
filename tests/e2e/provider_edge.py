@@ -66,6 +66,7 @@ from e2e_http import (
     StreamTruncation,
     forward_stream,
 )
+from e2e_metadata import step
 from fixture_bundle import (
     BundleRecorder,
     Interaction,
@@ -1176,6 +1177,7 @@ class RunningEdge:
         self.server.server_close()
 
 
+@step("Start a provider edge server")
 def start_provider_edge(
     backend: EdgeBackend,
     *,
@@ -1335,6 +1337,7 @@ def _shared_cache_edge(bind_host: str, advertise_host: str, forward_timeout: flo
     ).edge
 
 
+@step("Run an observed provider edge server")
 @contextmanager
 def observed_provider_edge(
     observation: ProviderRequestObservation,

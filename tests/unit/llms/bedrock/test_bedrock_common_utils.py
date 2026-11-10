@@ -1,8 +1,31 @@
+import asyncio, importlib, litellm, pytest
+import respx
+from httpx import Response
+from typing import Final
 
-import pytest
 
-
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.common_utils import (
+    AmazonBedrockGlobalConfig,
+    BedrockModelInfo,
+    NativeOutputFallback,
+    bedrock_native_output_is_opt_in,
+    bedrock_strict_tools_fallback,
+    bedrock_model_name_without_provider,
+    deployment_model_info,
+    extract_model_name_from_bedrock_arn,
+    for_bedrock_json_tool_retry,
+    get_bedrock_base_model,
+    get_bedrock_cross_region_inference_regions,
+    is_bedrock_native_output_rejection,
+    strip_bedrock_routing_prefix,
+    strip_bedrock_throughput_suffix,
+    without_bedrock_native_output_opt_in,
+)
+from collections.abc import Iterator
+from litellm import completion
+from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from unittest.mock import Mock, patch
 
 # --------------------------------------------------------------------------- #
 # get_bedrock_response_stream_shape lazy-load tests                           #
@@ -30,9 +53,7 @@ def test_bedrock_response_stream_shape_lazy_loads_once():
     import litellm.llms.bedrock.common_utils as mod
 
     sentinel = MagicMock()
-    with patch.object(
-        mod, "_load_bedrock_response_stream_shape", return_value=sentinel
-    ) as mock_load:
+    with patch.object(mod, "_load_bedrock_response_stream_shape", return_value=sentinel) as mock_load:
         assert mod.get_bedrock_response_stream_shape() is sentinel
         assert mod.get_bedrock_response_stream_shape() is sentinel
         mock_load.assert_called_once()
@@ -79,9 +100,7 @@ def test_bedrock_response_stream_shape_is_structure_shape():
     from litellm.llms.bedrock.common_utils import get_bedrock_response_stream_shape
 
     loaded_shape = get_bedrock_response_stream_shape()
-    assert (
-        loaded_shape is not None
-    ), "get_bedrock_response_stream_shape() is None — botocore may not be installed"
+    assert loaded_shape is not None, "get_bedrock_response_stream_shape() is None — botocore may not be installed"
     shape: StructureShape = loaded_shape
     assert isinstance(shape, StructureShape)
     assert shape.name == "ResponseStream"
@@ -146,9 +165,7 @@ def test_deepseek_cris():
     Test that DeepSeek models with cross-region inference prefix use converse route
     """
     bedrock_model_info = BedrockModelInfo
-    bedrock_route = bedrock_model_info.get_bedrock_route(
-        model="bedrock/us.deepseek.r1-v1:0"
-    )
+    bedrock_route = bedrock_model_info.get_bedrock_route(model="bedrock/us.deepseek.r1-v1:0")
     assert bedrock_route == "converse"
 
 
@@ -194,24 +211,20 @@ def test_system_defined_inference_profile_arn_still_routes_to_converse():
     assert route == "converse"
 
 
-def test_other_opaque_arn_types_still_route_to_invoke():
-    """
-    Only application-inference-profile ARNs are auto-routed to converse. Other
-    opaque ARNs (provisioned-model, imported-model, custom-model-deployment)
-    also yield no invoke provider, but they are frequently invoke-only with
-    provider-specific body formats, so routing them to converse could break
-    them. Guards the deliberate scope against an over-broad "any opaque ARN ->
-    converse" generalization.
-    """
-    for arn_segment in (
-        "provisioned-model/abcdefgh1234",
-        "imported-model/abcdefgh1234",
-        "custom-model-deployment/abcdefgh1234",
-    ):
-        route = BedrockModelInfo.get_bedrock_route(
-            model=f"bedrock/arn:aws:bedrock:us-east-1:123412341234:{arn_segment}"
-        )
-        assert route == "invoke", f"{arn_segment} should stay on invoke route"
+@pytest.mark.parametrize(
+    "arn_segment",
+    ["provisioned-model/abcdefgh1234", "imported-model/abcdefgh1234", "custom-model-deployment/abcdefgh1234"],
+)
+def test_bare_opaque_arn_with_no_invoke_provider_routes_to_converse(arn_segment: str):
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    model: Final = f"bedrock/arn:aws:bedrock:us-east-1:123412341234:{arn_segment}"
+    assert BaseAWSLLM.get_bedrock_invoke_provider(model) is None
+    assert BedrockModelInfo.get_bedrock_route(model) == "converse"
+    assert (
+        BedrockModelInfo.get_bedrock_route(f"bedrock/llama/arn:aws:bedrock:us-east-1:123412341234:{arn_segment}")
+        == "invoke"
+    )
 
 
 def test_govcloud_cross_region_inference_prefix():
@@ -221,27 +234,19 @@ def test_govcloud_cross_region_inference_prefix():
     bedrock_model_info = BedrockModelInfo
 
     # Test us-gov prefix is stripped correctly for Claude models
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.anthropic.claude-haiku-4-5-20251001-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.anthropic.claude-haiku-4-5-20251001-v1:0")
     assert base_model == "anthropic.claude-haiku-4-5-20251001-v1:0"
 
     # Test us-gov prefix is stripped correctly for different Claude versions
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0")
     assert base_model == "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
     # Test us-gov prefix is stripped correctly for Haiku models
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.anthropic.claude-3-haiku-20240307-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.anthropic.claude-3-haiku-20240307-v1:0")
     assert base_model == "anthropic.claude-3-haiku-20240307-v1:0"
 
     # Test us-gov prefix is stripped correctly for Meta models
-    base_model = bedrock_model_info.get_base_model(
-        model="bedrock/us-gov.meta.llama3-8b-instruct-v1:0"
-    )
+    base_model = bedrock_model_info.get_base_model(model="bedrock/us-gov.meta.llama3-8b-instruct-v1:0")
     assert base_model == "meta.llama3-8b-instruct-v1:0"
 
 
@@ -255,23 +260,14 @@ def test_context_window_suffix_stripped_for_cost_lookup():
     """
     from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
-    assert (
-        get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1[1m]")
-        == "anthropic.claude-opus-4-6-v1"
-    )
-    assert (
-        get_bedrock_base_model("us.anthropic.claude-sonnet-4-6[1m]")
-        == "anthropic.claude-sonnet-4-6"
-    )
+    assert get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1[1m]") == "anthropic.claude-opus-4-6-v1"
+    assert get_bedrock_base_model("us.anthropic.claude-sonnet-4-6[1m]") == "anthropic.claude-sonnet-4-6"
     assert (
         get_bedrock_base_model("global.anthropic.claude-opus-4-5-20251101-v1:0[1m]")
         == "anthropic.claude-opus-4-5-20251101-v1:0"
     )
     # Ensure models without suffix are unaffected
-    assert (
-        get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1")
-        == "anthropic.claude-opus-4-6-v1"
-    )
+    assert get_bedrock_base_model("us.anthropic.claude-opus-4-6-v1") == "anthropic.claude-opus-4-6-v1"
     # Ensure :51k throughput suffix still works
     assert (
         get_bedrock_base_model("anthropic.claude-3-5-sonnet-20241022-v2:0:51k")
@@ -287,6 +283,26 @@ def test_legacy_mantle_route_prefix_stripped_for_cost_lookup():
     assert strip_bedrock_routing_prefix("mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
     assert get_bedrock_base_model("bedrock/mantle/anthropic.claude-sonnet-5") == "anthropic.claude-sonnet-5"
     assert BedrockModelInfo.get_bedrock_route("bedrock/mantle/anthropic.claude-sonnet-5") == "mantle"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("bedrock/us.openai.gpt-6.1-sol", "gpt-6.1-sol"),
+        ("global.openai.gpt-6.1-sol", "gpt-6.1-sol"),
+        ("bedrock/converse/eu.anthropic.claude-sonnet-5-5", "claude-sonnet-5-5"),
+        ("us-east-1/openai.gpt-6.1-sol", "gpt-6.1-sol"),
+        ("openai.gpt-5.5", "gpt-5.5"),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.meta.llama4-scout-17b", "llama4-scout-17b"),
+        ("us.deepseek.r1-v1:0", "r1-v1:0"),
+        ("moonshotai.kimi-k2-thinking", "kimi-k2-thinking"),
+        ("bedrock/qwen.qwen3-32b-v1:0", "qwen3-32b-v1:0"),
+        ("gpt-5.5", "gpt-5.5"),
+        ("arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123", "abc123"),
+    ],
+)
+def test_bedrock_model_name_without_provider_strips_routing_region_and_provider_prefixes_only(model, expected):
+    assert bedrock_model_name_without_provider(model) == expected
 
 
 def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch):
@@ -321,9 +337,7 @@ def test_output_config_effort_normalization_uses_model_info_ceiling(monkeypatch)
         ("us.anthropic.claude-opus-4-7", "xhigh"),
     ],
 )
-def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
-    model, expected_ceiling
-):
+def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(model, expected_ceiling):
     from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
     model_info = GetModelCostMap.load_local_model_cost_map()[model]
@@ -342,54 +356,24 @@ def test_route_prefix_matched_as_path_segment_not_substring():
     or a ``/`` boundary.
     """
     # The bedrock_mantle/ provider prefix must NOT be read as the mantle/ route.
-    assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
-    )
-    assert (
-        BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "converse"
-    )
-    assert (
-        BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5")
-        is False
-    )
+    assert BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.5") != "mantle"
+    assert BedrockModelInfo.get_bedrock_route("bedrock_mantle/openai.gpt-5.4") == "converse"
+    assert BedrockModelInfo._explicit_mantle_route("bedrock_mantle/openai.gpt-5.5") is False
 
     # A genuine mantle route still resolves, via the startswith branch...
-    assert (
-        BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview")
-        == "mantle"
-    )
+    assert BedrockModelInfo.get_bedrock_route("mantle/anthropic.claude-mythos-preview") == "mantle"
     # ...and via the mid-path "/mantle/" branch (after the bedrock/ provider prefix).
-    assert (
-        BedrockModelInfo.get_bedrock_route(
-            "bedrock/mantle/anthropic.claude-mythos-preview"
-        )
-        == "mantle"
-    )
+    assert BedrockModelInfo.get_bedrock_route("bedrock/mantle/anthropic.claude-mythos-preview") == "mantle"
 
 
 def test_model_has_route_prefix_exercises_both_branches():
     """``_model_has_route_prefix`` matches on ``startswith`` or a ``/`` boundary only."""
     # startswith branch
-    assert (
-        BedrockModelInfo._model_has_route_prefix(
-            "mantle/anthropic.claude-mythos-preview", "mantle/"
-        )
-        is True
-    )
+    assert BedrockModelInfo._model_has_route_prefix("mantle/anthropic.claude-mythos-preview", "mantle/") is True
     # f"/{prefix}" boundary branch
-    assert (
-        BedrockModelInfo._model_has_route_prefix(
-            "bedrock/mantle/anthropic.claude-mythos-preview", "mantle/"
-        )
-        is True
-    )
+    assert BedrockModelInfo._model_has_route_prefix("bedrock/mantle/anthropic.claude-mythos-preview", "mantle/") is True
     # neither branch: the token only appears glued to another segment
-    assert (
-        BedrockModelInfo._model_has_route_prefix(
-            "bedrock_mantle/openai.gpt-5.5", "mantle/"
-        )
-        is False
-    )
+    assert BedrockModelInfo._model_has_route_prefix("bedrock_mantle/openai.gpt-5.5", "mantle/") is False
 
 
 @pytest.mark.parametrize(
@@ -439,16 +423,10 @@ def test_explicit_invoke_route_does_not_match_async_invoke():
     """
     async_invoke_model = "async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
     assert BedrockModelInfo._explicit_invoke_route(async_invoke_model) is False
-    assert (
-        BedrockModelInfo._explicit_invoke_route(f"bedrock/{async_invoke_model}")
-        is False
-    )
+    assert BedrockModelInfo._explicit_invoke_route(f"bedrock/{async_invoke_model}") is False
     # ...while async_invoke/ is still detected as its own route.
     assert BedrockModelInfo._explicit_async_invoke_route(async_invoke_model) is True
-    assert (
-        BedrockModelInfo._explicit_async_invoke_route(f"bedrock/{async_invoke_model}")
-        is True
-    )
+    assert BedrockModelInfo._explicit_async_invoke_route(f"bedrock/{async_invoke_model}") is True
 
 
 def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_field(monkeypatch):
@@ -460,7 +438,7 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
     import litellm
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_supports_parallel_tool_use_config,
-        is_claude_4_5_on_bedrock,
+        supports_bedrock_prompt_cache_ttl,
     )
 
     base = "anthropic.claude-fallback-test"
@@ -475,8 +453,288 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
         },
     )
 
-    assert is_claude_4_5_on_bedrock(regional) is True
+    assert supports_bedrock_prompt_cache_ttl(regional) is True
     assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
+
+
+def test_deprecated_is_claude_4_5_on_bedrock_warns_and_matches_new_name(monkeypatch):
+    import litellm
+    from litellm.llms.bedrock.common_utils import (
+        is_claude_4_5_on_bedrock,
+        supports_bedrock_prompt_cache_ttl,
+    )
+
+    with_ttl = "anthropic.claude-ttl-supported"
+    without_ttl = "anthropic.claude-ttl-unsupported"
+    monkeypatch.setitem(litellm.model_cost, with_ttl, {"cache_creation_input_token_cost_above_1hr": 1e-05})
+    monkeypatch.setitem(litellm.model_cost, without_ttl, {"input_cost_per_token": 1e-06})
+
+    with pytest.warns(UserWarning, match="supports_bedrock_prompt_cache_ttl"):
+        assert is_claude_4_5_on_bedrock(with_ttl) is True
+    with pytest.warns(UserWarning, match="supports_bedrock_prompt_cache_ttl"):
+        assert is_claude_4_5_on_bedrock(without_ttl) is False
+    assert supports_bedrock_prompt_cache_ttl(with_ttl) is True
+    assert supports_bedrock_prompt_cache_ttl(without_ttl) is False
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        pytest.param(
+            {"supports_prompt_caching": True, "supports_prompt_cache_breakpoint": False},
+            False,
+            id="priced-cached-tokens-but-rejects-the-explicit-marker",
+        ),
+        pytest.param(
+            {"supports_prompt_caching": False, "supports_prompt_cache_breakpoint": True},
+            True,
+            id="explicit-marker-flag-wins-over-the-caching-flag",
+        ),
+        pytest.param({"supports_prompt_caching": True}, True, id="caching-flag-alone-keeps-emitting"),
+        pytest.param({"supports_prompt_caching": False}, False, id="no-caching-and-no-marker-flag"),
+    ],
+)
+def test_bedrock_model_accepts_cache_points_prefers_the_explicit_breakpoint_flag(monkeypatch, entry, expected):
+    import litellm
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    base = "vendor.breakpoint-flag-test"
+    monkeypatch.setitem(litellm.model_cost, f"us.{base}", {"input_cost_per_token": 1e-06})
+    monkeypatch.setitem(litellm.model_cost, base, entry)
+
+    assert bedrock_model_accepts_cache_points(f"us.{base}") is expected
+
+
+@pytest.mark.parametrize("model", ["moonshotai.kimi-k3", "us.moonshotai.kimi-k3", "global.moonshotai.kimi-k3"])
+def test_kimi_k3_keeps_cached_token_pricing_while_refusing_converse_cache_points(model, local_model_cost_map):
+    import litellm
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    assert bedrock_model_accepts_cache_points(model) is False
+    assert litellm.utils.supports_prompt_caching(model=model, custom_llm_provider="bedrock") is True
+    assert litellm.model_cost[model]["cache_read_input_token_cost"] > 0
+
+
+def test_deployment_model_info_breakpoint_flag_covers_an_unmapped_arn(local_model_cost_map):
+    from litellm import Router
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    flagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/flagged"
+    unflagged_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unflagged"
+    converse_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/converse"
+    Router(
+        model_list=[
+            {
+                "model_name": "kimi-k3-profile-converse",
+                "litellm_params": {"model": f"bedrock/converse/{converse_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": False},
+            },
+            {
+                "model_name": "kimi-k3-profile",
+                "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": False},
+            },
+            {
+                "model_name": "kimi-k3-profile-unflagged",
+                "litellm_params": {"model": f"bedrock/{unflagged_arn}", "aws_region_name": "us-east-1"},
+            },
+        ]
+    )
+
+    assert bedrock_model_accepts_cache_points(flagged_arn) is False
+    assert bedrock_model_accepts_cache_points(converse_arn) is False
+    assert bedrock_model_accepts_cache_points(unflagged_arn) is True
+
+
+_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 5, "outputTokens": 1, "totalTokens": 6},
+}
+_CACHE_MARK: Final = {"type": "ephemeral"}
+_MARKED_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}},
+    "cache_control": _CACHE_MARK,
+}
+_COMPUTER_TOOL: Final = {
+    "type": "computer_20250124",
+    "name": "computer",
+    "display_width_px": 1024,
+    "display_height_px": 768,
+}
+_MARKED_TOOL_CONVERSATION: Final = (
+    {"role": "system", "content": "stable"},
+    {"role": "user", "content": [{"type": "text", "text": "Weather in Paris and Rome?", "cache_control": _CACHE_MARK}]},
+    {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Checking both.", "cache_control": _CACHE_MARK}],
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}{"city": "Rome"}'},
+                "cache_control": _CACHE_MARK,
+            }
+        ],
+    },
+    {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [{"type": "text", "text": "Sunny", "cache_control": _CACHE_MARK}],
+    },
+    {"role": "tool", "tool_call_id": "call_1_1", "content": "Cloudy"},
+    {"role": "assistant", "content": "Paris is sunny, Rome is cloudy.", "cache_control": _CACHE_MARK},
+    {"role": "user", "content": "Thanks"},
+)
+
+
+@pytest.mark.parametrize(
+    ("model", "flagged", "declared", "tools"),
+    [
+        pytest.param("moonshotai.kimi-k3", "opted-in", True, (_MARKED_WEATHER_TOOL,), id="kimi-opted-in"),
+        pytest.param(
+            "us.anthropic.claude-sonnet-5-5",
+            "opted-out",
+            False,
+            (_COMPUTER_TOOL, _MARKED_WEATHER_TOOL),
+            id="claude-opted-out-next-to-computer-use",
+        ),
+    ],
+)
+@pytest.mark.parametrize("entrypoint", ["completion", "acompletion"])
+@pytest.mark.parametrize("flagless_registers_first", [False, True])
+async def test_a_bedrock_deployment_sends_cache_points_by_its_own_flag_not_a_siblings_on_the_same_model(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    model: str,
+    flagged: str,
+    declared: bool,
+    tools: tuple[dict[str, object], ...],
+    entrypoint: str,
+    flagless_registers_first: bool,
+) -> None:
+    from litellm import Router
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    converse: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/converse").mock(
+        return_value=Response(200, json=_CONVERSE_REPLY)
+    )
+    flags: Final = {flagged: {"supports_prompt_cache_breakpoint": declared}}
+    registration_order: Final = ("flagless", flagged) if flagless_registers_first else (flagged, "flagless")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": f"bedrock/{model}",
+                    "aws_access_key_id": "bedrock-test-key",
+                    "aws_secret_access_key": "bedrock-test-secret",
+                    "aws_region_name": "us-east-1",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                },
+                "model_info": {"id": f"{name}-id", **flags.get(name, {})},
+            }
+            for name in registration_order
+        ],
+        num_retries=0,
+    )
+    messages: Final = [dict(message) for message in _MARKED_TOOL_CONVERSATION]
+
+    async def sends_a_cache_point(name: str) -> bool:
+        match entrypoint:
+            case "completion":
+                router.completion(model=name, messages=messages, tools=list(tools))
+            case "acompletion":
+                await router.acompletion(model=name, messages=messages, tools=list(tools))
+        return b"cachePoint" in converse.calls.last.request.content
+
+    assert {name: await sends_a_cache_point(name) for name in registration_order} == {
+        flagged: declared,
+        "flagless": not declared,
+    }
+
+
+async def test_a_routed_bedrock_deployment_sends_cache_points_when_register_model_opted_its_model_in(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    from litellm import Router
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    converse: Final = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/moonshotai.kimi-k3/converse"
+    ).mock(return_value=Response(200, json=_CONVERSE_REPLY))
+    litellm.register_model({"bedrock/moonshotai.kimi-k3": {"supports_prompt_cache_breakpoint": True}})
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "flagless",
+                "litellm_params": {
+                    "model": "bedrock/moonshotai.kimi-k3",
+                    "aws_access_key_id": "bedrock-test-key",
+                    "aws_secret_access_key": "bedrock-test-secret",
+                    "aws_region_name": "us-east-1",
+                    "cache_control_injection_points": [{"location": "message", "role": "system"}],
+                },
+                "model_info": {"id": "flagless-id"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    await router.acompletion(
+        model="flagless", messages=[{"role": "system", "content": "stable"}, {"role": "user", "content": "hi"}]
+    )
+
+    assert b"cachePoint" in converse.calls.last.request.content
+
+
+@pytest.mark.parametrize(
+    ("catalog_caching", "deployment_caching", "expected"),
+    [(None, True, True), (True, False, False), (True, None, True), (None, None, False)],
+)
+def test_a_routed_deployments_own_prompt_caching_flag_decides_cache_points_for_a_catalogued_model(
+    catalog_caching: bool | None, deployment_caching: bool | None, expected: bool, local_model_cost_map: None
+) -> None:
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    model: Final = f"qa-catalogued-model-{catalog_caching}-{deployment_caching}"
+    catalog_flag: Final = {} if catalog_caching is None else {"supports_prompt_caching": catalog_caching}
+    deployment_flag: Final = {} if deployment_caching is None else {"supports_prompt_caching": deployment_caching}
+    litellm.register_model({model: {"litellm_provider": "bedrock", "mode": "chat", **catalog_flag}})
+
+    assert bedrock_model_accepts_cache_points(model, model_info={"id": "qa-deployment", **deployment_flag}) is expected
+
+
+@pytest.mark.parametrize(
+    ("declared", "catalog_caching", "expected"),
+    [
+        ("true", False, True),
+        (1, False, True),
+        (" TRUE ", False, True),
+        ("false", True, False),
+        (0, True, False),
+        ("maybe", True, True),
+        ("maybe", False, False),
+    ],
+)
+def test_a_deployments_prompt_caching_flag_written_as_a_string_or_number_decides_cache_points_as_the_bool_it_spells(
+    declared: object, catalog_caching: bool, expected: bool, local_model_cost_map: None
+) -> None:
+    from litellm.llms.bedrock.common_utils import bedrock_model_accepts_cache_points
+
+    model: Final = f"qa-catalogued-model-lax-{catalog_caching}"
+    litellm.register_model(
+        {model: {"litellm_provider": "bedrock", "mode": "chat", "supports_prompt_caching": catalog_caching}}
+    )
+
+    assert (
+        bedrock_model_accepts_cache_points(
+            model, model_info={"id": "qa-deployment", "supports_prompt_caching": declared}
+        )
+        is expected
+    )
 
 
 def test_merge_bedrock_aws_request_params_strips_caller_identity_when_deployment_has_static_credentials():
@@ -557,8 +815,14 @@ def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_m
         apply_bedrock_invoke_structured_output,
     )
 
-    legacy = {"type": "json_schema", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
-    newer = {"type": "json_schema", "schema": {"type": "object", "properties": {"b": {"type": "string"}}}}
+    legacy = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "additionalProperties": False},
+    }
+    newer = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"b": {"type": "string"}}, "additionalProperties": False},
+    }
     body = {
         "messages": [{"role": "user", "content": "hi"}],
         "output_format": legacy,
@@ -582,6 +846,7 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     import boto3
     from botocore.exceptions import ClientError
 
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
 
     monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
@@ -615,7 +880,7 @@ def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     }
 
     with patch.object(boto3, "client", return_value=FakeSTSClient()):
-        signed_headers, signed_data = CommonBatchFilesUtils().sign_aws_request(
+        signed_headers, signed_data = CommonBatchFilesUtils(BaseAWSLLM()).sign_aws_request(
             service_name="bedrock",
             data={"jobName": "litellm-batch-job"},
             endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
@@ -635,6 +900,7 @@ def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
     import boto3
     from botocore.exceptions import ClientError
 
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
     from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
 
     monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
@@ -670,7 +936,7 @@ def test_sign_aws_request_assumes_role_with_session_tags(monkeypatch):
     }
 
     with patch.object(boto3, "client", return_value=FakeSTSClient()):
-        signed_headers, _signed_data = CommonBatchFilesUtils().sign_aws_request(
+        signed_headers, _signed_data = CommonBatchFilesUtils(BaseAWSLLM()).sign_aws_request(
             service_name="bedrock",
             data={"jobName": "litellm-batch-job"},
             endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
@@ -981,3 +1247,1288 @@ def test_unmapped_openai_family_model_routes_to_converse():
     assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
     imported: Final = "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123"
     assert BedrockModelInfo.get_bedrock_route(imported) == "openai"
+
+
+@pytest.mark.parametrize(
+    "unmapped",
+    [
+        "bedrock/minimax.minimax-m99-unmapped",
+        "bedrock/us.nvidia.nemotron-99b-unmapped",
+        "bedrock/writer.palmyra-x99-unmapped",
+        "bedrock/zai.glm-99-unmapped",
+        "bedrock/google.gemma-99-unmapped",
+        "bedrock/global.xai.grok-99-unmapped",
+    ],
+)
+def test_unmapped_converse_only_family_model_routes_to_converse(unmapped: str):
+    import litellm
+
+    assert BedrockModelInfo.get_base_model(unmapped) not in litellm.bedrock_converse_models
+    assert BedrockModelInfo.get_bedrock_route(unmapped) == "converse"
+
+
+def test_unmapped_model_of_family_with_invoke_handler_still_routes_to_invoke():
+    from typing import Final
+
+    import litellm
+
+    unmapped: Final = "bedrock/meta.llama99-unmapped-v1:0"
+    assert BedrockModelInfo.get_base_model(unmapped) not in litellm.bedrock_converse_models
+    assert BedrockModelInfo.get_bedrock_route(unmapped) == "invoke"
+
+
+@pytest.mark.parametrize(
+    ("model", "model_path", "response_json"),
+    [
+        (
+            "bedrock/us.newvendor.model-1",
+            b"/model/us.newvendor.model-1/converse",
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        ),
+        (
+            "bedrock/mistral.mistral-99-unmapped-v1:0",
+            b"/model/mistral.mistral-99-unmapped-v1:0/invoke",
+            {"outputs": [{"text": "ok", "stop_reason": "stop"}]},
+        ),
+    ],
+)
+def test_completion_on_unmapped_model_posts_converse_unless_its_id_names_an_invoke_provider(
+    model: str, model_path: bytes, response_json: dict[str, object]
+):
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    assert BedrockModelInfo.get_base_model(model) not in litellm.bedrock_converse_models
+    sent: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(
+            200,
+            json=response_json,
+            headers={"x-amzn-bedrock-input-token-count": "1", "x-amzn-bedrock-output-token-count": "1"},
+        )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        aws_region_name="us-west-2",
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert [request.url.raw_path for request in sent] == [model_path]
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("converse/us.anthropic.claude-haiku-4-5-20251001-v1:0", "us.anthropic.claude-haiku-4-5-20251001-v1:0"),
+        ("chat_completions/us.xai.grok-4.6", "us.xai.grok-4.6"),
+        ("global.openai.gpt-5.6-sol", "global.openai.gpt-5.6-sol"),
+    ],
+)
+def test_without_bedrock_route_prefix_hands_converse_the_bare_model_id(model, expected):
+    from litellm.llms.bedrock.common_utils import without_bedrock_route_prefix
+
+    assert without_bedrock_route_prefix(model) == expected
+
+
+def test_bedrock_stream_event_statuses_cover_every_modeled_member_of_both_stream_shapes():
+    pytest.importorskip("botocore")
+    from botocore.loaders import Loader
+    from botocore.model import ServiceModel
+
+    import litellm.llms.bedrock.common_utils as mod
+
+    mod.get_bedrock_stream_event_statuses.cache_clear()
+    statuses = mod.get_bedrock_stream_event_statuses()
+    assert statuses is not None
+
+    service_model = ServiceModel(Loader().load_service_model("bedrock-runtime", "service-2"))
+    for shape_name in ("ConverseStreamOutput", "ResponseStream"):
+        for name, member in service_model.shape_for(shape_name).members.items():
+            modeled = (member.metadata or {}).get("error", {}).get("httpStatusCode")
+            assert statuses[name] == (None if modeled is None else int(modeled))
+            assert mod.bedrock_stream_event_error_status(name) == statuses[name]
+
+    assert any(status is not None for status in statuses.values())
+    assert any(status is None for status in statuses.values())
+    assert mod.bedrock_stream_event_error_status("notAModeledEvent") is None
+    assert mod.bedrock_stream_event_error_status(None) is None
+
+
+def test_bedrock_stream_event_statuses_load_failure_returns_none():
+    from unittest.mock import patch
+
+    import litellm.llms.bedrock.common_utils as mod
+
+    pytest.importorskip("botocore")
+    mod.get_bedrock_stream_event_statuses.cache_clear()
+    with patch("botocore.loaders.Loader.load_service_model", side_effect=Exception("no data")):
+        assert mod._load_bedrock_stream_event_statuses() is None
+        assert mod.get_bedrock_stream_event_statuses() is None
+        assert mod.bedrock_stream_event_error_status("validationException") is None
+    mod.get_bedrock_stream_event_statuses.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_status", "expected_message"),
+    [
+        ({":message-type": "error"}, 400, '{"message":"upstream failed"}'),
+        (
+            {":message-type": "exception", ":exception-type": "somethingNotModeled"},
+            400,
+            'somethingNotModeled {"message":"upstream failed"}',
+        ),
+        (
+            {":message-type": "exception", ":exception-type": "throttlingException"},
+            429,
+            'throttlingException {"message":"upstream failed"}',
+        ),
+    ],
+)
+def test_build_bedrock_stream_error_resolves_status_from_the_exception_type(
+    headers: dict[str, str], expected_status: int, expected_message: str
+):
+    pytest.importorskip("botocore")
+    from litellm.llms.bedrock.common_utils import build_bedrock_stream_error, get_bedrock_response_stream_shape
+
+    error = build_bedrock_stream_error(
+        {"status_code": 400, "headers": headers, "body": b'{"message":"upstream failed"}'},
+        get_bedrock_response_stream_shape(),
+    )
+
+    assert error.status_code == expected_status
+    assert error.message == expected_message
+
+
+@pytest.mark.parametrize(
+    ("header_value", "expected"),
+    [
+        (
+            '["interleaved-thinking-2025-05-14", "claude-code-20250219"]',
+            ["interleaved-thinking-2025-05-14", "claude-code-20250219"],
+        ),
+        (' [" context-1m-2025-08-07 "] ', ["context-1m-2025-08-07"]),
+        ("[]", []),
+        ("[not-json]", ["[not-json]"]),
+    ],
+)
+def test_get_anthropic_beta_from_headers_reads_a_json_array_header(header_value: str, expected: list[str]):
+    from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+
+    assert get_anthropic_beta_from_headers({"anthropic-beta": header_value}) == expected
+
+
+def test_get_anthropic_beta_from_headers_never_splits_a_json_array_of_numbers_as_text():
+    from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
+
+    betas: Final = get_anthropic_beta_from_headers({"anthropic-beta": "[1, 2]"})
+
+    assert all(isinstance(beta, str) for beta in betas)
+    assert not any("[" in beta or "]" in beta for beta in betas)
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture(scope="function")
+def setup_and_teardown(event_loop):
+    import litellm
+
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    importlib.reload(litellm)
+    asyncio.set_event_loop(event_loop)
+    yield
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    pending = asyncio.all_tasks(event_loop)
+    for task in pending:
+        task.cancel()
+    if pending:
+        event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+    "cohere_key": getattr(litellm, "cohere_key", None),
+}
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestStripBedrockRoutingPrefix:
+    """Tests for strip_bedrock_routing_prefix function."""
+
+    def test_strips_bedrock_prefix(self):
+        assert strip_bedrock_routing_prefix("bedrock/claude-3-sonnet") == "claude-3-sonnet"
+
+    def test_strips_converse_prefix(self):
+        assert strip_bedrock_routing_prefix("converse/claude-3-sonnet") == "claude-3-sonnet"
+
+    def test_strips_invoke_prefix(self):
+        assert strip_bedrock_routing_prefix("invoke/claude-3-sonnet") == "claude-3-sonnet"
+
+    def test_strips_openai_prefix(self):
+        assert strip_bedrock_routing_prefix("openai/gpt-4") == "gpt-4"
+
+    def test_strips_all_known_prefixes(self):
+        # Function strips all known prefixes iteratively
+        # bedrock/converse/model -> converse/model -> model
+        assert strip_bedrock_routing_prefix("bedrock/converse/claude-3") == "claude-3"
+
+    def test_no_prefix_unchanged(self):
+        assert strip_bedrock_routing_prefix("claude-3-sonnet") == "claude-3-sonnet"
+
+    def test_model_with_dots_unchanged(self):
+        assert (
+            strip_bedrock_routing_prefix("anthropic.claude-3-sonnet-20240229-v1:0")
+            == "anthropic.claude-3-sonnet-20240229-v1:0"
+        )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestStripBedrockThroughputSuffix:
+    """Tests for strip_bedrock_throughput_suffix function."""
+
+    @pytest.mark.parametrize(
+        "input_model,expected",
+        [
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0:51k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0:18k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            ("model:1:51k", "model:1"),
+            ("model:123:18k", "model:123"),
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            ("anthropic.claude-3-sonnet", "anthropic.claude-3-sonnet"),
+        ],
+    )
+    def test_strip_throughput_suffix(self, input_model, expected):
+        assert strip_bedrock_throughput_suffix(input_model) == expected
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestExtractModelNameFromBedrockArn:
+    """Tests for extract_model_name_from_bedrock_arn function."""
+
+    def test_extracts_from_provisioned_model_arn(self):
+        arn = "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/my-model-id"
+        assert extract_model_name_from_bedrock_arn(arn) == "my-model-id"
+
+    def test_extracts_from_foundation_model_arn(self):
+        arn = "arn:aws:bedrock:us-west-2:123456789012:foundation-model/anthropic.claude-v2"
+        assert extract_model_name_from_bedrock_arn(arn) == "anthropic.claude-v2"
+
+    def test_non_arn_unchanged(self):
+        model = "anthropic.claude-3-sonnet-20240229-v1:0"
+        assert extract_model_name_from_bedrock_arn(model) == model
+
+    def test_case_insensitive_arn_detection(self):
+        arn = "ARN:aws:bedrock:us-east-1:123456789012:model/my-model"
+        assert extract_model_name_from_bedrock_arn(arn) == "my-model"
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestGetBedrockCrossRegionInferenceRegions:
+    """Tests for get_bedrock_cross_region_inference_regions function."""
+
+    def test_returns_expected_regions(self):
+        regions = get_bedrock_cross_region_inference_regions()
+        assert "us" in regions
+        assert "eu" in regions
+        assert "global" in regions
+        assert "apac" in regions
+
+    def test_returns_list(self):
+        regions = get_bedrock_cross_region_inference_regions()
+        assert isinstance(regions, list)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestGetBedrockBaseModel:
+    """Tests for get_bedrock_base_model function."""
+
+    def test_strips_bedrock_prefix(self):
+        assert get_bedrock_base_model("bedrock/claude-3-sonnet") == "claude-3-sonnet"
+
+    def test_strips_converse_prefix(self):
+        assert get_bedrock_base_model("bedrock/converse/claude-3-sonnet") == "claude-3-sonnet"
+
+    def test_strips_us_region_prefix(self):
+        # us.anthropic.model -> anthropic.model
+        assert (
+            get_bedrock_base_model("us.anthropic.claude-3-sonnet-20240229-v1:0")
+            == "anthropic.claude-3-sonnet-20240229-v1:0"
+        )
+
+    def test_strips_eu_region_prefix(self):
+        assert (
+            get_bedrock_base_model("eu.anthropic.claude-3-sonnet-20240229-v1:0")
+            == "anthropic.claude-3-sonnet-20240229-v1:0"
+        )
+
+    def test_extracts_from_arn(self):
+        arn = "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/my-model"
+        assert get_bedrock_base_model(arn) == "my-model"
+
+    def test_model_without_prefix_unchanged(self):
+        model = "anthropic.claude-3-sonnet-20240229-v1:0"
+        assert get_bedrock_base_model(model) == model
+
+    def test_combined_bedrock_and_region_prefix(self):
+        # bedrock/us.anthropic.model -> anthropic.model
+        assert (
+            get_bedrock_base_model("bedrock/us.anthropic.claude-3-sonnet-20240229-v1:0")
+            == "anthropic.claude-3-sonnet-20240229-v1:0"
+        )
+
+    @pytest.mark.parametrize(
+        "input_model,expected",
+        [
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0:51k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            (
+                "anthropic.claude-haiku-4-5-20251001-v1:0:18k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            (
+                "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0:51k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+            (
+                "us.anthropic.claude-haiku-4-5-20251001-v1:0:51k",
+                "anthropic.claude-haiku-4-5-20251001-v1:0",
+            ),
+        ],
+    )
+    def test_strips_throughput_suffix(self, input_model, expected):
+        """Test that throughput tier suffixes like :51k are stripped. Issue #19113."""
+        assert get_bedrock_base_model(input_model) == expected
+
+
+def test_region_only_deployment_takes_no_traffic_from_a_valid_model_group() -> None:
+    valid_model: Final = "bedrock/us.anthropic.claude-opus-4-6-v1"
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "group", "litellm_params": {"model": "bedrock/us", "aws_region_name": "us-east-1"}},
+            {"model_name": "group", "litellm_params": {"model": valid_model, "aws_region_name": "us-east-1"}},
+        ],
+        ignore_invalid_deployments=True,
+    )
+
+    assert [deployment["litellm_params"]["model"] for deployment in router.get_model_list(model_name="group")] == [
+        valid_model
+    ]
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestBedrockModelInfoWrappers:
+    """Tests that BedrockModelInfo methods correctly wrap standalone functions."""
+
+    def test_get_base_model_matches_standalone(self):
+        test_cases = [
+            "bedrock/claude-3-sonnet",
+            "us.anthropic.claude-3-sonnet-20240229-v1:0",
+            "arn:aws:bedrock:us-east-1:123:model/my-model",
+        ]
+        for model in test_cases:
+            assert BedrockModelInfo.get_base_model(model) == get_bedrock_base_model(model)
+
+    def test_extract_model_name_from_arn_matches_standalone(self):
+        arn = "arn:aws:bedrock:us-east-1:123456789012:provisioned-model/my-model"
+        assert BedrockModelInfo.extract_model_name_from_arn(arn) == extract_model_name_from_bedrock_arn(arn)
+
+    def test_get_non_litellm_routing_model_name_matches_standalone(self):
+        model = "bedrock/converse/claude-3"
+        assert BedrockModelInfo.get_non_litellm_routing_model_name(model) == strip_bedrock_routing_prefix(model)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestBedrockTokenCounter:
+    """Tests for BedrockTokenCounter class."""
+
+    def test_should_use_token_counting_api_for_bedrock(self):
+        counter = BedrockTokenCounter()
+        assert counter.should_use_token_counting_api("bedrock") is True
+
+    def test_should_not_use_token_counting_api_for_other_providers(self):
+        counter = BedrockTokenCounter()
+        assert counter.should_use_token_counting_api("openai") is False
+        assert counter.should_use_token_counting_api("anthropic") is False
+        assert counter.should_use_token_counting_api(None) is False
+
+    def test_get_token_counter_returns_bedrock_token_counter(self):
+        model_info = BedrockModelInfo()
+        token_counter = model_info.get_token_counter()
+        assert isinstance(token_counter, BedrockTokenCounter)
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_returns_none_for_empty_messages(self):
+        counter = BedrockTokenCounter()
+        result = await counter.count_tokens(
+            model_to_use="anthropic.claude-3-sonnet",
+            messages=None,
+            contents=None,
+        )
+        assert result is None
+
+        result = await counter.count_tokens(
+            model_to_use="anthropic.claude-3-sonnet",
+            messages=[],
+            contents=None,
+        )
+        assert result is None
+
+
+@pytest.fixture
+def _pr4_bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "pr4-test-aws-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "pr4-test-aws-secret-key")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+
+
+@pytest.fixture(scope="module")
+def _use_local_model_cost_map() -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        importlib.reload(litellm)
+        yield
+
+
+@pytest.mark.usefixtures(
+    "_pr4_bedrock_env",
+    "_use_local_model_cost_map",
+    "_vcr_outcome_gate",
+    "setup_and_teardown",
+)
+class TestBedrockGovCloudSupport:
+    """Test suite for GovCloud model support in Bedrock"""
+
+    def test_govcloud_regions_in_config(self):
+        """Test that GovCloud regions are included in the configuration"""
+        config = AmazonBedrockGlobalConfig()
+        us_regions = config.get_us_regions()
+
+        assert "us-gov-east-1" in us_regions
+        assert "us-gov-west-1" in us_regions
+
+        all_regions = config.get_all_regions()
+        assert "us-gov-east-1" in all_regions
+        assert "us-gov-west-1" in all_regions
+
+    def test_govcloud_model_routing(self):
+        """Test that GovCloud models are routed correctly"""
+        # Test Claude model routing
+        route = BedrockModelInfo.get_bedrock_route("bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0")
+        assert route == "converse"
+
+        route = BedrockModelInfo.get_bedrock_route("bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0")
+        assert route == "converse"
+
+        # Test Llama model routing
+        route = BedrockModelInfo.get_bedrock_route("bedrock/us-gov-east-1/meta.llama3-8b-instruct-v1:0")
+        assert route == "converse"
+
+        route = BedrockModelInfo.get_bedrock_route("bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0")
+        assert route == "converse"
+
+        # Test Titan model routing (should use invoke)
+        route = BedrockModelInfo.get_bedrock_route("bedrock/us-gov-east-1/amazon.titan-text-lite-v1")
+        assert route == "invoke"
+
+    def test_base_model_extraction(self):
+        """Test that base model names are correctly extracted from GovCloud models"""
+        # Test GovCloud model extraction
+        base_model = BedrockModelInfo.get_base_model("bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0")
+        assert base_model == "anthropic.claude-haiku-4-5-20251001-v1:0"
+
+        base_model = BedrockModelInfo.get_base_model("bedrock/us-gov-west-1/meta.llama3-8b-instruct-v1:0")
+        assert base_model == "meta.llama3-8b-instruct-v1:0"
+
+    @patch("litellm.llms.bedrock.common_utils.init_bedrock_client")
+    def test_govcloud_client_initialization(self, mock_init_client):
+        """Test that Bedrock client can be initialized with GovCloud regions"""
+        mock_client = Mock()
+        mock_init_client.return_value = mock_client
+
+        # Test that init_bedrock_client accepts GovCloud regions
+        from litellm.llms.bedrock.common_utils import init_bedrock_client
+
+        # This should not raise an error
+        client = init_bedrock_client(
+            region_name="us-gov-east-1",
+            aws_access_key_id=None,
+            aws_secret_access_key=None,
+            aws_region_name="us-gov-east-1",
+            aws_bedrock_runtime_endpoint=None,
+            aws_session_name=None,
+            aws_profile_name=None,
+            aws_role_name=None,
+            aws_web_identity_token=None,
+            extra_headers=None,
+            timeout=None,
+        )
+
+        assert mock_init_client.called
+
+    def test_govcloud_model_in_bedrock_models_list(self):
+        """Test that GovCloud models are NOT included in bedrock_models list (they are pricing-only)"""
+        # Regional models including GovCloud should be excluded from bedrock_models list
+        # They are only in model_cost for pricing purposes
+        assert not any("us-gov-east-1" in model for model in litellm.bedrock_models)
+        assert not any("us-gov-west-1" in model for model in litellm.bedrock_models)
+
+    @patch("litellm.completion")
+    def test_govcloud_completion_cost_calculation(self, mock_completion):
+        """Test that completion requests use correct pricing for GovCloud models"""
+        from litellm import Choices, Message, ModelResponse, completion_cost
+        from litellm.utils import Usage
+
+        # Mock completion response for base model
+        # Use us.* inference profile ID to match us.* pricing ($1.10/$5.50 per MTok)
+        base_model_response = ModelResponse(
+            id="test-base",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+        base_model_response._hidden_params = {
+            "custom_llm_provider": "bedrock",
+            "region_name": "us-east-1",
+        }
+
+        # Mock completion response for gov model
+        # GovCloud responses use base anthropic.* model ID; pricing is looked up
+        # via bedrock/us-gov-east-1/anthropic.* entries in model_cost
+        gov_model_response = ModelResponse(
+            id="test-gov",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+        gov_model_response._hidden_params = {
+            "custom_llm_provider": "bedrock",
+            "region_name": "us-gov-east-1",
+        }
+
+        # Mock completion response for gov-west model
+        gov_west_model_response = ModelResponse(
+            id="test-gov-west",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        )
+        gov_west_model_response._hidden_params = {
+            "custom_llm_provider": "bedrock",
+            "region_name": "us-gov-west-1",
+        }
+
+        # Test messages
+        messages = [{"role": "user", "content": "Hello, how are you?"}]
+
+        # Calculate costs using the standard Bedrock format with region parameter
+        # Base model uses us.* inference profile — no region_name needed since
+        # the response model already contains the us.* prefix for pricing lookup.
+        base_cost = completion_cost(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            completion_response=base_model_response,
+            messages=messages,
+        )
+
+        # GovCloud models use region_name to look up bedrock/us-gov-*/anthropic.* pricing
+        gov_east_cost = completion_cost(
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            completion_response=gov_model_response,
+            messages=messages,
+            region_name="us-gov-east-1",
+        )
+
+        gov_west_cost = completion_cost(
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            completion_response=gov_west_model_response,
+            messages=messages,
+            region_name="us-gov-west-1",
+        )
+
+        # Expected costs based on pricing:
+        # Base model (us.*): 10 * 1.1e-06 + 5 * 5.5e-06 = 1.1e-05 + 2.75e-05 = 3.85e-05
+        # Gov models: 10 * 1.2e-06 + 5 * 6e-06 = 1.2e-05 + 3e-05 = 4.2e-05
+        expected_base_cost = 10 * 1.1e-06 + 5 * 5.5e-06
+        expected_gov_cost = 10 * 1.2e-06 + 5 * 6e-06
+
+        # Verify costs are calculated correctly
+        assert abs(base_cost - expected_base_cost) < 1e-10, (
+            f"Base cost mismatch: got {base_cost}, expected {expected_base_cost}"
+        )
+        assert abs(gov_east_cost - expected_gov_cost) < 1e-10, (
+            f"Gov East cost mismatch: got {gov_east_cost}, expected {expected_gov_cost}"
+        )
+        assert abs(gov_west_cost - expected_gov_cost) < 1e-10, (
+            f"Gov West cost mismatch: got {gov_west_cost}, expected {expected_gov_cost}"
+        )
+
+        # Verify GovCloud costs are approximately 20% higher than base cost
+        assert abs(gov_east_cost / base_cost - 1.2) < 0.15, (
+            f"Gov East cost should be ~20% higher than base: got {gov_east_cost}, base {base_cost}"
+        )
+        assert abs(gov_west_cost / base_cost - 1.2) < 0.15, (
+            f"Gov West cost should be ~20% higher than base: got {gov_west_cost}, base {base_cost}"
+        )
+
+        # Test with different token counts
+        large_response = ModelResponse(
+            id="test-large",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="A longer response", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        )
+        large_response._hidden_params = {
+            "custom_llm_provider": "bedrock",
+            "region_name": "us-east-1",
+        }
+
+        large_base_cost = completion_cost(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            completion_response=large_response,
+            messages=messages,
+        )
+
+        # Create large response for gov model
+        large_gov_response = ModelResponse(
+            id="test-large-gov",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="A longer response", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            object="chat.completion",
+            system_fingerprint=None,
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        )
+        large_gov_response._hidden_params = {
+            "custom_llm_provider": "bedrock",
+            "region_name": "us-gov-east-1",
+        }
+
+        large_gov_cost = completion_cost(
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            completion_response=large_gov_response,
+            messages=messages,
+            region_name="us-gov-east-1",
+        )
+
+        # Expected costs for larger response:
+        # Base model (us.*): 100 * 1.1e-06 + 50 * 5.5e-06 = 1.1e-04 + 2.75e-04 = 3.85e-04
+        # Gov model: 100 * 1.2e-06 + 50 * 6e-06 = 1.2e-04 + 3e-04 = 4.2e-04
+        expected_large_base_cost = 100 * 1.1e-06 + 50 * 5.5e-06
+        expected_large_gov_cost = 100 * 1.2e-06 + 50 * 6e-06
+
+        assert abs(large_base_cost - expected_large_base_cost) < 1e-10, (
+            f"Large base cost mismatch: got {large_base_cost}, expected {expected_large_base_cost}"
+        )
+        assert abs(large_gov_cost - expected_large_gov_cost) < 1e-10, (
+            f"Large gov cost mismatch: got {large_gov_cost}, expected {expected_large_gov_cost}"
+        )
+        assert abs(large_gov_cost / large_base_cost - 1.2) < 0.15, (
+            f"Large gov cost should be ~20% higher than base: got {large_gov_cost}, base {large_base_cost}"
+        )
+
+    @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
+    def test_govcloud_completion_with_cost_tracking(self, mock_post):
+        """Test that completion requests with cost tracking use correct pricing for GovCloud models"""
+        import json
+        from unittest.mock import Mock
+
+        # Mock the HTTP client's post method to return responses
+        def mock_post_side_effect(url, headers=None, data=None, **kwargs):
+            # Extract region from the URL to determine which response to return
+            region = "us-east-1"  # default
+            if "us-gov-east-1" in url:
+                region = "us-gov-east-1"
+            elif "us-gov-west-1" in url:
+                region = "us-gov-west-1"
+
+            # Create mock response based on region
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.headers = {}
+
+            # Create a realistic Bedrock converse response structure
+            bedrock_response = {
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": f"Hello from {region}"}],
+                    }
+                },
+                "usage": {"inputTokens": 15, "outputTokens": 8, "totalTokens": 23},
+                "stopReason": "end_turn",
+            }
+
+            mock_response.json.return_value = bedrock_response
+            mock_response.text = json.dumps(bedrock_response)
+            mock_response.raise_for_status = Mock()  # Don't raise exceptions
+
+            return mock_response
+
+        mock_post.side_effect = mock_post_side_effect
+
+        # Test base model completion
+        base_result = completion(
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "Hello"}],
+            aws_region_name="us-east-1",
+        )
+
+        # Test gov-east model completion
+        # GovCloud users specify the base anthropic.* model ID with the gov region
+        gov_east_result = completion(
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "Hello"}],
+            aws_region_name="us-gov-east-1",
+        )
+
+        # Test gov-west model completion
+        gov_west_result = completion(
+            model="bedrock/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "Hello"}],
+            aws_region_name="us-gov-west-1",
+        )
+
+        # Verify the mock was called correctly
+        assert mock_post.call_count == 3
+
+        # Verify usage information is present
+        from litellm.types.utils import ModelResponse
+
+        assert isinstance(base_result, ModelResponse)
+        assert isinstance(gov_east_result, ModelResponse)
+        assert isinstance(gov_west_result, ModelResponse)
+
+        base_result_typed: ModelResponse = base_result
+        gov_east_result_typed: ModelResponse = gov_east_result
+        gov_west_result_typed: ModelResponse = gov_west_result
+
+        # Verify usage information is present
+        assert hasattr(base_result_typed, "usage") and base_result_typed.usage.prompt_tokens == 15
+        assert hasattr(base_result_typed, "usage") and base_result_typed.usage.completion_tokens == 8
+        assert hasattr(gov_east_result_typed, "usage") and gov_east_result_typed.usage.prompt_tokens == 15
+        assert hasattr(gov_east_result_typed, "usage") and gov_east_result_typed.usage.completion_tokens == 8
+        assert hasattr(gov_west_result_typed, "usage") and gov_west_result_typed.usage.prompt_tokens == 15
+        assert hasattr(gov_west_result_typed, "usage") and gov_west_result_typed.usage.completion_tokens == 8
+
+        # Verify cost calculation uses correct pricing for each region
+        # Get costs directly from the completion response _hidden_params
+        base_cost = base_result_typed._hidden_params.get("response_cost", 0.0)
+        gov_east_cost = gov_east_result_typed._hidden_params.get("response_cost", 0.0)
+        gov_west_cost = gov_west_result_typed._hidden_params.get("response_cost", 0.0)
+
+        print(f"Base cost: {base_cost}")
+        print(f"Gov East cost: {gov_east_cost}")
+        print(f"Gov West cost: {gov_west_cost}")
+
+        # Expected costs based on pricing:
+        # Base model (us.*): 15 * 1.1e-06 + 8 * 5.5e-06 = 1.65e-05 + 4.4e-05 = 6.05e-05
+        # Gov models: 15 * 1.2e-06 + 8 * 6e-06 = 1.8e-05 + 4.8e-05 = 6.6e-05
+        expected_base_cost = 15 * 1.1e-06 + 8 * 5.5e-06
+        expected_gov_cost = 15 * 1.2e-06 + 8 * 6e-06
+
+        # Verify costs are calculated correctly
+        assert abs(base_cost - expected_base_cost) < 1e-10, (
+            f"Base cost mismatch: got {base_cost}, expected {expected_base_cost}"
+        )
+        assert abs(gov_east_cost - expected_gov_cost) < 1e-10, (
+            f"Gov East cost mismatch: got {gov_east_cost}, expected {expected_gov_cost}"
+        )
+        assert abs(gov_west_cost - expected_gov_cost) < 1e-10, (
+            f"Gov West cost mismatch: got {gov_west_cost}, expected {expected_gov_cost}"
+        )
+
+        # Verify GovCloud costs are approximately 20% higher than base cost
+        assert abs(gov_east_cost / base_cost - 1.2) < 0.15, (
+            f"Gov East cost should be ~20% higher than base: got {gov_east_cost}, base {base_cost}"
+        )
+        assert abs(gov_west_cost / base_cost - 1.2) < 0.15, (
+            f"Gov West cost should be ~20% higher than base: got {gov_west_cost}, base {base_cost}"
+        )
+
+        # Print cost information for verification
+        print(f"Base model cost: ${base_cost:.6f}")
+        print(f"GovCloud East cost: ${gov_east_cost:.6f}")
+        print(f"GovCloud West cost: ${gov_west_cost:.6f}")
+        print(f"GovCloud cost increase: {((gov_east_cost / base_cost) - 1) * 100:.1f}%")
+
+    def test_govcloud_cost_per_token_with_region(self):
+        """Test that cost_per_token function correctly uses region-based pricing for GovCloud models"""
+        from litellm import cost_per_token
+        from litellm.utils import Usage
+
+        # Test usage object
+        usage = Usage(prompt_tokens=20, completion_tokens=10, total_tokens=30)
+
+        # Commercial list pricing uses the us.* inference profile id; GovCloud keys use anthropic.* + region
+        haiku_us_id = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        haiku_anthropic_id = "anthropic.claude-haiku-4-5-20251001-v1:0"
+        # Test base model with standard region
+        base_prompt_cost, base_completion_cost = cost_per_token(
+            model=haiku_us_id,
+            prompt_tokens=20,
+            completion_tokens=10,
+            custom_llm_provider="bedrock",
+            region_name="us-east-1",
+        )
+
+        # Test gov models with gov regions
+        gov_east_prompt_cost, gov_east_completion_cost = cost_per_token(
+            model=haiku_anthropic_id,
+            prompt_tokens=20,
+            completion_tokens=10,
+            custom_llm_provider="bedrock",
+            region_name="us-gov-east-1",
+        )
+
+        gov_west_prompt_cost, gov_west_completion_cost = cost_per_token(
+            model=haiku_anthropic_id,
+            prompt_tokens=20,
+            completion_tokens=10,
+            custom_llm_provider="bedrock",
+            region_name="us-gov-west-1",
+        )
+
+        # Expected costs:
+        # Base model (us.*): 20 * 1.1e-06 + 10 * 5.5e-06 = 2.2e-05 + 5.5e-05 = 7.7e-05
+        # Gov models: 20 * 1.2e-06 + 10 * 6e-06 = 2.4e-05 + 6e-05 = 8.4e-05
+        expected_base_prompt_cost = 20 * 1.1e-06
+        expected_base_completion_cost = 10 * 5.5e-06
+        expected_gov_prompt_cost = 20 * 1.2e-06
+        expected_gov_completion_cost = 10 * 6e-06
+
+        # Verify costs are calculated correctly
+        assert abs(base_prompt_cost - expected_base_prompt_cost) < 1e-10, (
+            f"Base prompt cost mismatch: got {base_prompt_cost}, expected {expected_base_prompt_cost}"
+        )
+        assert abs(base_completion_cost - expected_base_completion_cost) < 1e-10, (
+            f"Base completion cost mismatch: got {base_completion_cost}, expected {expected_base_completion_cost}"
+        )
+
+        assert abs(gov_east_prompt_cost - expected_gov_prompt_cost) < 1e-10, (
+            f"Gov East prompt cost mismatch: got {gov_east_prompt_cost}, expected {expected_gov_prompt_cost}"
+        )
+        assert abs(gov_east_completion_cost - expected_gov_completion_cost) < 1e-10, (
+            f"Gov East completion cost mismatch: got {gov_east_completion_cost}, expected {expected_gov_completion_cost}"
+        )
+
+        assert abs(gov_west_prompt_cost - expected_gov_prompt_cost) < 1e-10, (
+            f"Gov West prompt cost mismatch: got {gov_west_prompt_cost}, expected {expected_gov_prompt_cost}"
+        )
+        assert abs(gov_west_completion_cost - expected_gov_completion_cost) < 1e-10, (
+            f"Gov West completion cost mismatch: got {gov_west_completion_cost}, expected {expected_gov_completion_cost}"
+        )
+
+        # Verify GovCloud costs are approximately 20% higher than base costs
+        # (uses 1e-8 tolerance because GovCloud prices are independently rounded, not exact * 1.2)
+        assert abs(gov_east_prompt_cost / base_prompt_cost - 1.2) < 0.15, (
+            f"Gov East prompt cost should be ~20% higher than base: got {gov_east_prompt_cost}, base {base_prompt_cost}"
+        )
+        assert abs(gov_east_completion_cost / base_completion_cost - 1.2) < 0.15, (
+            f"Gov East completion cost should be ~20% higher than base: got {gov_east_completion_cost}, base {base_completion_cost}"
+        )
+        assert abs(gov_west_prompt_cost / base_prompt_cost - 1.2) < 0.15, (
+            f"Gov West prompt cost should be ~20% higher than base: got {gov_west_prompt_cost}, base {base_prompt_cost}"
+        )
+        assert abs(gov_west_completion_cost / base_completion_cost - 1.2) < 0.15, (
+            f"Gov West completion cost should be ~20% higher than base: got {gov_west_completion_cost}, base {base_completion_cost}"
+        )
+
+        # Test total costs
+        base_total_cost = base_prompt_cost + base_completion_cost
+        gov_east_total_cost = gov_east_prompt_cost + gov_east_completion_cost
+        gov_west_total_cost = gov_west_prompt_cost + gov_west_completion_cost
+
+        expected_base_total = expected_base_prompt_cost + expected_base_completion_cost
+        expected_gov_total = expected_gov_prompt_cost + expected_gov_completion_cost
+
+        assert abs(base_total_cost - expected_base_total) < 1e-10, (
+            f"Base total cost mismatch: got {base_total_cost}, expected {expected_base_total}"
+        )
+        assert abs(gov_east_total_cost - expected_gov_total) < 1e-10, (
+            f"Gov East total cost mismatch: got {gov_east_total_cost}, expected {expected_gov_total}"
+        )
+        assert abs(gov_west_total_cost - expected_gov_total) < 1e-10, (
+            f"Gov West total cost mismatch: got {gov_west_total_cost}, expected {expected_gov_total}"
+        )
+        assert abs(gov_east_total_cost / base_total_cost - 1.2) < 0.15, (
+            f"Gov East total cost should be ~20% higher than base: got {gov_east_total_cost}, base {base_total_cost}"
+        )
+        assert abs(gov_west_total_cost / base_total_cost - 1.2) < 0.15, (
+            f"Gov West total cost should be ~20% higher than base: got {gov_west_total_cost}, base {base_total_cost}"
+        )
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0",
+            "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0",
+            "bedrock/us-gov-east-1/meta.llama3-8b-instruct-v1:0",
+            "bedrock/us-gov-west-1/meta.llama3-70b-instruct-v1:0",
+        ],
+    )
+    def test_govcloud_converse_models(self, model_name):
+        """Test that GovCloud Claude and Llama models support Converse API"""
+        route = BedrockModelInfo.get_bedrock_route(model_name)
+        assert route == "converse"
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "bedrock/us-gov-east-1/amazon.titan-text-lite-v1",
+            "bedrock/us-gov-west-1/amazon.titan-text-express-v1",
+            "bedrock/us-gov-east-1/amazon.titan-text-premier-v1:0",
+        ],
+    )
+    def test_govcloud_invoke_models(self, model_name):
+        """Test that GovCloud Titan models use Invoke API"""
+        route = BedrockModelInfo.get_bedrock_route(model_name)
+        assert route == "invoke"
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_event_decoder_reports_only_missing_aws_dependency(missing):
+    from unittest.mock import patch
+    from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
+
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            BedrockEventStreamDecoderBase()
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model", "expected"),
+    [
+        (
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "us.anthropic.claude-opus-4-8",
+        ),
+        (
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
+            None,
+            "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id",
+        ),
+        ("us.anthropic.claude-opus-4-8", "anthropic.claude-sonnet-4-5", "us.anthropic.claude-opus-4-8"),
+    ],
+    ids=["profile-arn-with-base-model", "profile-arn-without-base-model", "named-model-keeps-its-name"],
+)
+def test_bedrock_capability_model_reads_base_model_only_for_application_profile_arns(model, base_model, expected):
+    from litellm.llms.bedrock.common_utils import bedrock_capability_model
+
+    assert bedrock_capability_model(model, base_model) == expected
+
+
+_FORMAT_REJECTION: Final = (
+    "The model returned the following errors: output_config.format: Extra inputs are not permitted"
+)
+_COMPILE_REJECTION: Final = (
+    "The model returned the following errors: compilation exceeded limits: Schema is too complex."
+)
+_GRAMMAR_REJECTION: Final = (
+    "The model returned the following errors: The compiled grammar is too large, which would cause performance issues. "
+    "Simplify your tool schemas or reduce the number of strict tools."
+)
+_SCHEMA_PATTERN_REJECTION: Final = (
+    "The model returned the following errors: output_config.format.schema: Unsupported regex feature in pattern "
+    "field: pattern is too complex for structured output: reduce the {n,m} upper bound, narrow the character class "
+    "range, or avoid nesting quantified groups"
+)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error_text", "expected"),
+    [
+        (400, f'{{"message":"{_FORMAT_REJECTION}"}}', True),
+        (400, f'{{"message":"{_COMPILE_REJECTION}"}}', True),
+        (400, _GRAMMAR_REJECTION, True),
+        (400, f'{{"message":"{_SCHEMA_PATTERN_REJECTION}"}}', True),
+        (400, "Malformed input request: #: extraneous key [output_config] is not permitted", False),
+        (400, "The model returned the following errors: messages.0.content: Field required", False),
+        (500, _FORMAT_REJECTION, False),
+        (429, _COMPILE_REJECTION, False),
+    ],
+    ids=[
+        "format_not_permitted",
+        "schema_too_complex",
+        "compiled_grammar_too_large",
+        "schema_pattern_too_complex",
+        "other_key_not_permitted",
+        "other_400",
+        "500",
+        "429",
+    ],
+)
+def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_native_output(
+    status_code, error_text, expected
+):
+    assert is_bedrock_native_output_rejection(status_code, error_text) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info", "expected"),
+    [
+        ("us.anthropic.claude-opus-4-8", None, False),
+        ("global.anthropic.claude-sonnet-5", None, False),
+        ("us-gov.anthropic.claude-opus-4-8", None, False),
+        ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
+        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}, False),
+        ("us.anthropic.claude-sonnet-4-6", {"supports_bedrock_native_structured_output": True}, False),
+    ],
+    ids=["opus_4_8", "sonnet_5", "govcloud_opus_4_8", "deployment_opt_out", "deployment_opt_in", "native_model"],
+)
+def test_bedrock_native_output_is_opt_in_only_where_the_opt_in_key_turns_native_output_on(
+    local_model_cost_map, model, model_info, expected
+):
+    assert bedrock_native_output_is_opt_in(model, model_info=model_info) is expected
+
+
+def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the_deployment(local_model_cost_map):
+    litellm_params: Final = {"api_base": "https://bedrock.example", "model_info": {"id": "deployment-1"}}
+
+    turned_off: Final = without_bedrock_native_output_opt_in(litellm_params)
+
+    assert not bedrock_native_output_is_opt_in(
+        "us.anthropic.claude-opus-4-8", model_info=deployment_model_info(turned_off)
+    )
+    assert turned_off["api_base"] == "https://bedrock.example"
+    assert deployment_model_info(turned_off) == {
+        "id": "deployment-1",
+        "supports_bedrock_native_structured_output": False,
+    }
+    assert litellm_params["model_info"] == {"id": "deployment-1"}
+
+    native_default: Final = without_bedrock_native_output_opt_in(
+        {"model_info": {"supports_native_structured_output": True}}
+    )
+    assert deployment_model_info(native_default) == {
+        "supports_native_structured_output": True,
+        "supports_bedrock_native_structured_output": False,
+    }
+
+
+def test_for_bedrock_json_tool_retry_disables_both_native_output_flags(local_model_cost_map: None) -> None:
+    litellm_params: Final = {
+        "model_info": {
+            "id": "deployment-1",
+            "supports_native_structured_output": True,
+            "supports_bedrock_native_structured_output": True,
+        }
+    }
+
+    retry_params: Final = for_bedrock_json_tool_retry(litellm_params)
+
+    assert deployment_model_info(retry_params) == {
+        "id": "deployment-1",
+        "supports_native_structured_output": False,
+        "supports_bedrock_native_structured_output": False,
+    }
+    assert litellm_params["model_info"] == {
+        "id": "deployment-1",
+        "supports_native_structured_output": True,
+        "supports_bedrock_native_structured_output": True,
+    }
+
+
+def test_bedrock_response_stream_shape_is_unavailable_when_botocore_describes_the_service_as_a_list():
+    import litellm.llms.bedrock.common_utils as mod
+
+    pytest.importorskip("botocore")
+    with (
+        patch("botocore.loaders.Loader.load_service_model", return_value=["only-in-the-description"]),
+        patch.object(mod.verbose_logger, "warning") as warning,
+    ):
+        shape: Final = mod._load_bedrock_response_stream_shape()
+
+    assert shape is None
+    (logged,) = warning.call_args_list
+    assert "only-in-the-description" not in logged.args[0] % logged.args[1:]
+
+
+def test_bedrock_strict_tools_fallback_drops_only_strict_and_keeps_everything_else():
+    strict_tool: Final = {
+        "type": "function",
+        "cache_control": {"type": "ephemeral"},
+        "function": {"name": "lookup", "description": "Look up", "strict": True, "parameters": {"type": "object"}},
+    }
+    plain_tool: Final = {"type": "function", "function": {"name": "plain", "parameters": {"type": "object"}}}
+    anthropic_tool: Final = {"name": "native", "input_schema": {"type": "object"}}
+    bedrock_tool: Final = {"toolSpec": {"name": "spec", "strict": True, "inputSchema": {"json": {"type": "object"}}}}
+    litellm_params: Final = {"drop_params": True}
+
+    fallback: Final = bedrock_strict_tools_fallback(
+        "us.anthropic.claude-sonnet-4-6",
+        {"tools": [strict_tool, plain_tool, anthropic_tool, bedrock_tool], "maxTokens": 16, "stream": True},
+        litellm_params,
+    )
+
+    assert fallback == NativeOutputFallback(
+        optional_params={
+            "tools": [
+                {
+                    **strict_tool,
+                    "function": {"name": "lookup", "description": "Look up", "parameters": {"type": "object"}},
+                },
+                plain_tool,
+                anthropic_tool,
+                {"toolSpec": {"name": "spec", "inputSchema": {"json": {"type": "object"}}}},
+            ],
+            "maxTokens": 16,
+            "stream": True,
+        },
+        litellm_params=litellm_params,
+    )
+    assert strict_tool["function"]["strict"] is True
+    assert bedrock_tool["toolSpec"]["strict"] is True
+
+
+@pytest.mark.parametrize(
+    "optional_params",
+    [
+        {"maxTokens": 16},
+        {"tools": [{"type": "function", "function": {"name": "plain", "parameters": {}}}]},
+        {"tools": [{"toolSpec": {"name": "spec", "inputSchema": {"json": {}}}}]},
+    ],
+    ids=["no_tools", "no_strict_tool", "no_strict_tool_spec"],
+)
+def test_bedrock_strict_tools_fallback_is_none_without_a_strict_tool(optional_params: dict[str, object]) -> None:
+    assert bedrock_strict_tools_fallback("us.anthropic.claude-sonnet-4-6", optional_params, {}) is None
+
+
+_CLAUDE_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude"
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params"),
+    [
+        ("us.anthropic.claude-sonnet-4-6", {}),
+        ("us.amazon.nova-pro-v1:0", {}),
+        (_CLAUDE_PROFILE_ARN, {"base_model": "bedrock/us.anthropic.claude-sonnet-4-6"}),
+        (_CLAUDE_PROFILE_ARN, {}),
+    ],
+    ids=["claude", "nova", "claude_profile_with_base_model", "profile_without_base_model"],
+)
+@pytest.mark.parametrize("strict", [True, False])
+def test_bedrock_strict_tools_fallback_retries_only_when_the_request_sent_strict(
+    model: str, litellm_params: dict[str, object], strict: bool
+) -> None:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    tools: Final = [{"type": "function", "function": {"name": "lookup", "strict": strict, "parameters": {}}}]
+    request: Final = AmazonConverseConfig().transform_request(
+        model, [{"role": "user", "content": "hi"}], {"tools": tools}, {**litellm_params}, {}
+    )
+    sent_strict: Final = any("strict" in tool["toolSpec"] for tool in request["toolConfig"]["tools"])
+
+    fallback: Final = bedrock_strict_tools_fallback(model, {"tools": tools}, litellm_params)
+
+    assert (fallback is not None) == sent_strict

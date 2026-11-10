@@ -6,8 +6,6 @@ services:
       context: .
       dockerfile: docker/Dockerfile.non_root
       target: runtime
-      args:
-        PROXY_EXTRAS_SOURCE: "local"
     depends_on:
       - squid
     user: "101:101"

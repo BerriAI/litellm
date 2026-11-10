@@ -144,9 +144,15 @@ variable "image_registry" {
 }
 
 variable "image_tag" {
-  description = "Tag applied to all four litellm-* images when composed from `image_registry`. Bump in lockstep when bumping LiteLLM. Must match a tag actually published to GHCR — the split images use the `v`-prefixed semver convention (e.g. `v1.86.0-dev`)."
+  description = "Tag applied to all four litellm-* images when composed from `image_registry`. A published module version ships with this stamped to its own release tag, which matches the `v`-prefixed tag published to GHCR for the same LiteLLM release. Set it to pin a different LiteLLM release. When sourcing the module from a git ref of the monorepo it has no default and must be set."
   type        = string
-  default     = "v1.86.0-dev"
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = !var.create_runtime || var.image_tag != "" || (var.gateway_image != "" && var.backend_image != "" && var.ui_image != "" && var.migrations_image != "")
+    error_message = "image_tag is empty. Published module versions (registry.terraform.io/modules/BerriAI/litellm) ship with it stamped to their own release. A git ref of the monorepo has no published images of its own, so set image_tag to a published LiteLLM release tag or set all four *_image URIs."
+  }
 }
 
 variable "gateway_image" {
@@ -596,14 +602,7 @@ variable "gateway_metrics_collector_image" {
 
 # ---------- Enterprise billing metrics ----------
 #
-# License-gated request metering. Opt-in and gated entirely on
-# billing_metrics_endpoint: leave it empty (the default) and nothing
-# metering-related is added to the container env. Set it and gateway +
-# backend export billable-request counts over OTLP/HTTP, authenticating to
-# the collector with an mTLS client cert. The proxy accepts the cert, key,
-# and CA as either a file path or literal PEM content, so on Cloud Run they
-# are injected straight from Secret Manager as env vars and no volume is
-# needed.
+# License-gated request metering. The client secret is stored in Secret Manager.
 
 variable "billing_metrics_endpoint" {
   description = <<-EOT
@@ -617,44 +616,34 @@ variable "billing_metrics_endpoint" {
   default     = ""
 }
 
-variable "billing_metrics_client_cert_pem" {
+variable "billing_metrics_client_id" {
   description = <<-EOT
-    PEM content of the mTLS client certificate issued for this deployment.
-    When billing_metrics_endpoint is set, the stack stores this in a
-    `<tenant>-litellm-<env>-billing-metrics-client-cert` Secret Manager
-    entry, grants the runtime SA accessor on it, and exposes it to gateway +
-    backend as LITELLM_BILLING_METRICS_CLIENT_CERT. Required whenever
-    metering is enabled.
+    Cognito OAuth2 client ID exposed to the gateway and backend as
+    LITELLM_BILLING_METRICS_CLIENT_ID. Required when billing_metrics_endpoint
+    is set.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "billing_metrics_client_secret" {
+  description = <<-EOT
+    Cognito OAuth2 client secret stored in Secret Manager and exposed to
+    the gateway and backend as LITELLM_BILLING_METRICS_CLIENT_SECRET.
+    Required when billing_metrics_endpoint is set.
   EOT
   type        = string
   default     = ""
   sensitive   = true
 }
 
-variable "billing_metrics_client_key_pem" {
+variable "billing_metrics_token_url" {
   description = <<-EOT
-    PEM content of the private key matching
-    billing_metrics_client_cert_pem. Stored in a
-    `<tenant>-litellm-<env>-billing-metrics-client-key` Secret Manager entry
-    and exposed as LITELLM_BILLING_METRICS_CLIENT_KEY. Required whenever
-    metering is enabled.
+    Cognito OAuth2 client-credentials token endpoint exposed to gateway and
+    backend as LITELLM_BILLING_METRICS_TOKEN_URL.
   EOT
   type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "billing_metrics_ca_cert_pem" {
-  description = <<-EOT
-    PEM content of the CA bundle used to verify the metering collector.
-    Only needed for private or test collectors whose CA is not in the
-    system trust store; telemetry.litellm.ai is publicly trusted, so leave
-    this empty for production. When set, it is exposed as
-    LITELLM_BILLING_METRICS_CA_CERT.
-  EOT
-  type        = string
-  default     = ""
-  sensitive   = true
+  default     = "https://litellm-prod.auth.us-west-1.amazoncognito.com/oauth2/token"
 }
 
 # ---------- Collector sidecar ----------

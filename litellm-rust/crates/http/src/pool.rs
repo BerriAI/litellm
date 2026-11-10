@@ -6,7 +6,12 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{client::Client, config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
+use crate::{
+    client::Client,
+    config::{HttpClientConfig, Verify},
+    error::{Error, Repr},
+    proxy::EnvironmentProxies,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -14,6 +19,7 @@ pub enum ClientVariant {
     NoRedirect,
     Media,
     UnpinnedMedia,
+    WebSocket,
 }
 
 const CLIENT_TTL: Duration = Duration::from_secs(3600);
@@ -49,27 +55,13 @@ impl HttpClientPool {
         config: &HttpClientConfig,
         variant: ClientVariant,
     ) -> Result<Client, Error> {
-        let effective = match variant {
-            ClientVariant::Media => HttpClientConfig {
-                client_certificate: None,
-                proxies: EnvironmentProxies::default(),
-                ..config.clone()
-            },
-            ClientVariant::UnpinnedMedia => HttpClientConfig {
-                client_certificate: None,
-                ..config.clone()
-            },
-            ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
-        };
-        let key = (effective, variant);
+        let key = (effective(config, variant), variant);
         if let Some(pooled) = self.lock().get(&key)
             && pooled.built_at.elapsed() < self.ttl
         {
             return Ok(Client::new(pooled.client.clone()));
         }
-        let client = self
-            .apply(variant, reqwest::ClientBuilder::try_from(&key.0)?)
-            .build()?;
+        let client = self.build(&key.0, variant)?;
         self.lock().insert(
             key,
             PooledClient {
@@ -78,6 +70,26 @@ impl HttpClientPool {
             },
         );
         Ok(Client::new(client))
+    }
+
+    /// A client nobody else holds, for a caller that drives it on a runtime of its own and drops both together
+    pub fn unpooled(
+        &self,
+        config: &HttpClientConfig,
+        variant: ClientVariant,
+    ) -> Result<Client, Error> {
+        self.build(&effective(config, variant), variant)
+            .map(Client::new)
+    }
+
+    fn build(
+        &self,
+        config: &HttpClientConfig,
+        variant: ClientVariant,
+    ) -> Result<reqwest::Client, Error> {
+        self.apply(variant, reqwest::ClientBuilder::try_from(config)?)
+            .build()
+            .map_err(|error| Error::from(Repr::Client(error)))
     }
 
     fn lock(&self) -> MutexGuard<'_, Clients> {
@@ -91,13 +103,36 @@ impl HttpClientPool {
     ) -> reqwest::ClientBuilder {
         match variant {
             ClientVariant::Provider => builder,
-            ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia => {
+            ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia | ClientVariant::WebSocket => {
                 builder.redirect(reqwest::redirect::Policy::none())
             }
             ClientVariant::Media => builder
                 .redirect(reqwest::redirect::Policy::none())
-                .dns_resolver2(Arc::clone(&self.media_resolver)),
+                .dns_resolver(Arc::clone(&self.media_resolver)),
         }
+    }
+}
+
+fn effective(config: &HttpClientConfig, variant: ClientVariant) -> HttpClientConfig {
+    match variant {
+        ClientVariant::Media => HttpClientConfig {
+            client_certificate: None,
+            proxies: EnvironmentProxies::default(),
+            ..config.clone()
+        },
+        ClientVariant::UnpinnedMedia => HttpClientConfig {
+            client_certificate: None,
+            ..config.clone()
+        },
+        ClientVariant::WebSocket => HttpClientConfig {
+            http2: false,
+            verify: match &config.verify {
+                Verify::BuiltInRoots => Verify::NativeRoots,
+                verify => verify.clone(),
+            },
+            ..config.clone()
+        },
+        ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
     }
 }
 

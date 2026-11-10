@@ -17,10 +17,9 @@ use litellm_cache_response::{
     CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
     WriteBuffer, cache_key,
 };
-use redis_test::MockCmd;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use serde_json::{Value, json};
-use support::{keyed, memory, redis, request};
+use support::{keyed, memory, request};
 
 type Memory = Arc<ResponseCache<InMemoryCache<CacheEntry>>>;
 
@@ -158,8 +157,16 @@ fn scored(timestamp: f64, similarity: f64) -> Result<SemanticLookup<CacheEntry>,
 )]
 #[case::no_search(Ok(SemanticLookup::miss(None)), true, Ok(SemanticLookup::miss(None)))]
 #[case::disabled_reads_skip_the_backend(scored(95.0, 0.95), false, Ok(SemanticLookup::miss(None)))]
-#[case::invalid_entry_is_a_miss(Err(Error::InvalidEntry), true, Ok(SemanticLookup::miss(None)))]
-#[case::backend_errors_propagate(Err(Error::Unavailable), true, Err(Error::Unavailable))]
+#[case::invalid_entry_is_a_miss(
+    Err(Error::InvalidEntry(None)),
+    true,
+    Ok(SemanticLookup::miss(None))
+)]
+#[case::backend_errors_propagate(
+    Err(Error::Unavailable(None)),
+    true,
+    Err(Error::Unavailable(None))
+)]
 #[tokio::test]
 async fn semantic_lookup_applies_freshness_to_the_value_only(
     #[case] backend: Result<SemanticLookup<CacheEntry>, Error>,
@@ -324,79 +331,6 @@ async fn directives_skip_io_and_keep_reads_and_writes_independent(
 }
 
 #[rstest]
-#[case::python_sync_literal(
-    br#"{'timestamp': 100.0, 'response': '{"ok": true, "text": "cached"}'}"#.as_slice()
-)]
-#[case::python_async_json(br#"{"timestamp":100.0,"response":{"ok":true,"text":"cached"}}"#.as_slice())]
-#[tokio::test]
-async fn redis_consumer_reads_python_sync_and_async_envelopes(
-    request: ResponseCacheRequest,
-    #[case] stored: &[u8],
-    #[values(false, true)] asynchronous: bool,
-) {
-    let cache = redis(
-        vec![MockCmd::new(
-            redis::cmd("GET").arg("tenant:key"),
-            Ok(stored.to_vec()),
-        )],
-        Some("tenant"),
-    );
-    let now = Duration::from_secs(101);
-    let found = if asynchronous {
-        cache.async_lookup(&request, now).await.unwrap()
-    } else {
-        cache.lookup(&request, now).unwrap()
-    };
-    assert_eq!(found, Some(json!({"ok": true, "text": "cached"})));
-}
-
-#[rstest]
-#[case::object(
-    json!({"ok": true, "text": "cached"}),
-    br#"{"timestamp":100.0,"response":{"ok":true,"text":"cached"}}"#.as_slice()
-)]
-#[case::array(json!([1, 2]), br#"{"timestamp":100.0,"response":"[1,2]"}"#.as_slice())]
-#[tokio::test]
-async fn redis_consumer_writes_python_compatible_json(
-    request: ResponseCacheRequest,
-    #[case] response: Value,
-    #[case] wire: &[u8],
-) {
-    let cache = redis(
-        vec![MockCmd::new(
-            redis::cmd("SETEX").arg("tenant:key").arg(600).arg(wire),
-            Ok("OK"),
-        )],
-        Some("tenant"),
-    );
-    cache
-        .async_store(&request, response, Duration::from_secs(100))
-        .await
-        .unwrap();
-}
-
-#[rstest]
-#[tokio::test]
-async fn invalid_entries_are_misses_and_disabled_reads_do_not_touch_redis(
-    mut request: ResponseCacheRequest,
-) {
-    let cache = redis(
-        vec![MockCmd::new(
-            redis::cmd("GET").arg("tenant:key"),
-            Ok(b"invalid".to_vec()),
-        )],
-        None,
-    );
-    request.controls.no_cache = true;
-    assert_eq!(cache.lookup(&request, Duration::ZERO).unwrap(), None);
-    request.controls.no_cache = false;
-    assert_eq!(
-        cache.async_lookup(&request, Duration::ZERO).await.unwrap(),
-        None
-    );
-}
-
-#[rstest]
 #[tokio::test]
 async fn captured_service_keeps_the_selected_backend_for_background_writes(
     #[from(memory)] original: Memory,
@@ -535,27 +469,6 @@ async fn batch_lookup_reports_partial_hits_and_batch_store_populates_misses(
 
 #[rstest]
 #[tokio::test]
-async fn batch_lookup_with_no_readable_request_skips_the_backend(
-    #[values(false, true)] asynchronous: bool,
-) {
-    let cache = redis(Vec::new(), None);
-    let mut request = keyed("key");
-    request.controls.no_cache = true;
-    let requests = [request.clone(), request];
-    let partial = if asynchronous {
-        cache
-            .async_lookup_batch(&requests, Duration::ZERO)
-            .await
-            .unwrap()
-    } else {
-        cache.lookup_batch(&requests, Duration::ZERO).unwrap()
-    };
-    assert_eq!(partial.values, vec![None, None]);
-    assert_eq!(partial.missing_indices, vec![0, 1]);
-}
-
-#[rstest]
-#[tokio::test]
 async fn deferred_entries_keep_the_time_they_were_produced(
     memory: Memory,
     mut request: ResponseCacheRequest,
@@ -647,4 +560,130 @@ async fn write_buffer_clear_drops_pending_entries(memory: Memory, request: Respo
 
     assert_eq!(memory.lookup(&request, now).unwrap(), None);
     assert_eq!(memory.lookup(&other, now).unwrap(), None);
+}
+
+#[rstest]
+#[case::python_sync("{'timestamp': 100.0, 'response': '{\"answer\": 7}'}")]
+#[case::python_async(r#"{"timestamp":100.0,"response":{"answer":7}}"#)]
+#[case::bare_response(r#"{"answer":7}"#)]
+#[tokio::test]
+async fn gcs_reads_python_entries_and_writes_python_compatible_envelopes(
+    #[case] encoded: &str,
+    #[values(false, true)] asynchronous: bool,
+    #[future(awt)] gcs: (wiremock::MockServer, Gcs),
+) {
+    use wiremock::{
+        Mock, ResponseTemplate,
+        matchers::{body_json, header, method, path, query_param},
+    };
+
+    let (server, cache) = gcs;
+    let response = json!({"answer": 7});
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/bucket/o/cache%2Fpython"))
+        .and(query_param("alt", "media"))
+        .and(header("authorization", "Bearer token"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(encoded))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/upload/storage/v1/b/bucket/o"))
+        .and(query_param("uploadType", "media"))
+        .and(query_param("name", "cache/native"))
+        .and(header("authorization", "Bearer token"))
+        .and(header("content-type", "application/json"))
+        .and(body_json(json!({"timestamp": 102.0, "response": response})))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let lookup = if asynchronous {
+        cache
+            .async_lookup(&keyed("python"), Duration::from_secs(102))
+            .await
+    } else {
+        cache.lookup(&keyed("python"), Duration::from_secs(102))
+    };
+    assert_eq!(lookup.unwrap(), Some(response.clone()));
+    let request = ResponseCacheRequest {
+        context: litellm_cache::ExactCacheContext {
+            ttl: Some(Duration::from_secs(12)),
+        },
+        ..keyed("native")
+    };
+    let stored = if asynchronous {
+        cache
+            .async_store(&request, response, Duration::from_secs(102))
+            .await
+    } else {
+        cache.store(&request, response, Duration::from_secs(102))
+    };
+    assert_eq!(stored, Ok(()));
+    let requests = server.received_requests().await.unwrap();
+    let upload = requests
+        .iter()
+        .find(|request| request.method.as_str() == "POST")
+        .unwrap();
+    assert_eq!(
+        upload.url.query(),
+        Some("uploadType=media&name=cache%2Fnative")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn gcs_batch_reads_preserve_order_and_treat_invalid_entries_as_misses(
+    #[future(awt)] gcs: (wiremock::MockServer, Gcs),
+) {
+    use wiremock::{
+        Mock, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    let (server, cache) = gcs;
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/bucket/o/cache%2Fhit"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"timestamp": 100.0, "response": {"answer":7}})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/bucket/o/cache%2Finvalid"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not an entry"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/bucket/o/cache%2Fmissing"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    let requests = [keyed("hit"), keyed("missing"), keyed("invalid")];
+    let partial = cache
+        .async_lookup_batch(&requests, Duration::from_secs(102))
+        .await
+        .unwrap();
+    assert_eq!(partial.values, vec![Some(json!({"answer":7})), None, None]);
+    assert_eq!(partial.missing_indices, vec![1, 2]);
+}
+
+type Gcs = ResponseCache<litellm_cache_gcs::GcsCache<litellm_cache_response::ResponseCacheCodec>>;
+
+#[fixture]
+async fn gcs() -> (wiremock::MockServer, Gcs) {
+    let server = wiremock::MockServer::start().await;
+    let cache = ResponseCache::new(Arc::new(litellm_cache_gcs::GcsCache::with_token_source(
+        litellm_cache_gcs::GcsConfig {
+            bucket_name: "bucket".into(),
+            gcs_path: Some("cache".into()),
+            path_service_account: None,
+            endpoint: server.uri(),
+        },
+        litellm_http::Client::for_test(),
+        litellm_cache_response::ResponseCacheCodec,
+        Arc::new(litellm_cache_gcs::StaticTokenSource("token".into())),
+    )));
+    (server, cache)
 }

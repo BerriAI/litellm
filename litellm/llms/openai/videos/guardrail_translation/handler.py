@@ -6,7 +6,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class OpenAIVideoGenerationHandler(BaseTranslation):
@@ -21,7 +21,7 @@ class OpenAIVideoGenerationHandler(BaseTranslation):
             return data
 
         model: Final = data.get("model")
-        texts: Final = [prompt]  # mutable-ok: GenericGuardrailAPIInputs.texts is declared list[str]
+        texts: Final = [prompt]
         inputs: Final = (
             GenericGuardrailAPIInputs(texts=texts, model=model)
             if isinstance(model, str)
@@ -35,7 +35,7 @@ class OpenAIVideoGenerationHandler(BaseTranslation):
         )
         guardrailed_texts: Final = guardrailed_inputs.get("texts")
         guardrailed_prompt: Final = guardrailed_texts[0] if guardrailed_texts else prompt
-        return {**data, "prompt": guardrailed_prompt}  # mutable-ok: BaseTranslation contract returns a dict
+        return {**data, "prompt": guardrailed_prompt}
 
     async def process_output_response(
         self,

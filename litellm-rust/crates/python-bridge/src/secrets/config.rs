@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use litellm_secret_value::SecretValue;
 use litellm_secrets::{SecretManager, SecretManagerState};
-use litellm_secrets_types::{AccessMode, KeyManagementSettings, KeyManagementSystem, SecretValue};
+use litellm_secrets_types::{AccessMode, KeyManagementSettings, KeyManagementSystem};
+
 use pyo3::prelude::*;
 use serde_json::Value;
 
@@ -128,9 +130,7 @@ pub(crate) fn read(py: Python<'_>) -> PyResult<SecretManagerSnapshot> {
         .system
         .is_some_and(|system| system != backend.system())
     {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "native secret manager system does not match configuration",
-        ));
+        return Err(super::ManagerError::SystemMismatch.into());
     }
     Ok(SecretManagerSnapshot {
         client: SecretManagerClient::Native(Box::new(backend)),
@@ -182,14 +182,20 @@ fn parse_optional_system(
     serde_json::from_value(Value::String(value))
         .map(Some)
         .map_err(|error| {
-            ProjectionError::InvalidConfiguration(format!("secret manager system: {error}"))
+            ProjectionError::InvalidConfiguration(crate::coercion::ProjectionDetail::InvalidField {
+                field: "secret manager system",
+                source: error,
+            })
         })
 }
 
 fn parse_access_mode(field: &Field<'_>) -> Result<AccessMode, ProjectionError> {
     let value = field.strict_string()?;
     serde_json::from_value(Value::String(value)).map_err(|error| {
-        ProjectionError::InvalidConfiguration(format!("secret manager access mode: {error}"))
+        ProjectionError::InvalidConfiguration(crate::coercion::ProjectionDetail::InvalidField {
+            field: "secret manager access mode",
+            source: error,
+        })
     })
 }
 

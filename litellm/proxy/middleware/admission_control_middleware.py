@@ -10,6 +10,9 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.anthropic_error_payload import route_error_content
+
+ADMISSION_LEASE_SCOPE_KEY: Final = "litellm.admission_lease"
 
 _EXEMPT_PATHS: Final[frozenset[str]] = frozenset(
     {
@@ -130,6 +133,12 @@ class AdmissionControlState:
         return self._metrics
 
 
+class _AdmissionLease:
+    def __init__(self, state: AdmissionControlState) -> None:
+        self.state: Final = state
+        self.active: bool = True
+
+
 class AdmissionControlMiddleware:
     def __init__(
         self,
@@ -146,6 +155,15 @@ class AdmissionControlMiddleware:
             await self.app(scope, receive, send)
             return
 
+        inherited_lease: Final = scope.get(ADMISSION_LEASE_SCOPE_KEY)
+        if (
+            isinstance(inherited_lease, _AdmissionLease)
+            and inherited_lease.state is self.state
+            and inherited_lease.active
+        ):
+            await self.app(scope, receive, send)
+            return
+
         settings: Final = self.get_settings()
         if settings is None or _get_route_path(scope) in _EXEMPT_PATHS:
             await self.app(scope, receive, send)
@@ -158,7 +176,7 @@ class AdmissionControlMiddleware:
             state.record_admission()
         elif state.get_stats().queued >= settings.max_queued_requests:
             state.record_rejection("queue_full")
-            await _overloaded_response(state)(scope, receive, send)
+            await _overloaded_response(state, scope)(scope, receive, send)
             return
         else:
             state.record_queue()
@@ -170,7 +188,7 @@ class AdmissionControlMiddleware:
             except asyncio.TimeoutError:
                 state.record_dequeue()
                 state.record_rejection("queue_timeout")
-                await _overloaded_response(state)(scope, receive, send)
+                await _overloaded_response(state, scope)(scope, receive, send)
                 return
             except asyncio.CancelledError:
                 state.record_dequeue()
@@ -178,9 +196,13 @@ class AdmissionControlMiddleware:
             state.record_dequeue()
             state.record_admission()
 
+        lease: Final = _AdmissionLease(state)
+        scope[ADMISSION_LEASE_SCOPE_KEY] = lease  # rebind-ok: outer ASGI wrappers must see downstream route metadata
         try:
             await self.app(scope, receive, send)
         finally:
+            lease.active = False
+            scope.pop(ADMISSION_LEASE_SCOPE_KEY, None)
             semaphore.release()
             state.record_release()
 
@@ -224,7 +246,7 @@ def create_prometheus_admission_metrics() -> AdmissionControlMetrics | None:
                 "litellm_admission_queued_requests",
                 "Number of requests queued by this worker",
             ),
-            rejected_counter=Counter(  # mutable-ok: Prometheus requires runtime Counter construction
+            rejected_counter=Counter(
                 "litellm_admission_rejected_requests_total",
                 "Number of requests rejected by this worker",
                 labelnames=("reason",),
@@ -292,18 +314,16 @@ def get_admission_control_settings(settings: Mapping[str, object]) -> AdmissionC
     )
 
 
-def _overloaded_response(state: AdmissionControlState) -> JSONResponse:
+def _overloaded_response(state: AdmissionControlState, scope: Scope) -> JSONResponse:
     stats: Final = state.get_stats()
+    message: Final = f"Worker at capacity: {stats.admitted} in-flight, {stats.queued} queued requests. Retry later."
     return JSONResponse(
         status_code=503,
-        headers={"retry-after": "1"},  # mutable-ok: Starlette expects a plain headers mapping
-        content={  # mutable-ok: Starlette serializes a plain response mapping
-            "error": {  # mutable-ok: nested response mapping
-                "message": (
-                    f"Worker at capacity: {stats.admitted} in-flight, {stats.queued} queued requests. Retry later."
-                ),
-                "type": "overloaded_error",
-                "code": "503",
-            }
-        },
+        headers={"retry-after": "1"},
+        content=route_error_content(
+            scope,
+            "overloaded_error",
+            message,
+            {"error": {"message": message, "type": "overloaded_error", "code": "503"}},
+        ),
     )

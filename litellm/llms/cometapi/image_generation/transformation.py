@@ -1,7 +1,10 @@
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -19,6 +22,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 
 
 class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
@@ -72,16 +78,13 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         """
         Get the complete url for the request
         """
-        complete_url: str = (
+        base_url: Final = (
             api_base
             or get_secret_str("COMETAPI_BASE_URL")
             or get_secret_str("COMETAPI_API_BASE")
             or self.DEFAULT_BASE_URL
         )
-
-        complete_url = complete_url.rstrip("/")
-        complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
-        return complete_url
+        return join_api_base(base_url, self.IMAGE_GENERATION_ENDPOINT)
 
     def validate_environment(
         self,
@@ -155,7 +158,8 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         # CometAPI returns OpenAI-compatible format
         # Expected format: {"created": timestamp, "data": [{"url": "...", "b64_json": "..."}]}
         if "data" in response_data:
-            for image_data in response_data["data"]:
+            payload: Final = _JSON_OBJECT.validate_python(response_data)
+            for image_data in _JSON_OBJECTS.validate_python(payload["data"]):
                 image_obj = ImageObject(
                     b64_json=image_data.get("b64_json"),
                     url=image_data.get("url"),

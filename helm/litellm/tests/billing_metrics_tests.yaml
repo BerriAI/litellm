@@ -1,39 +1,30 @@
-suite: test billingMetrics wiring on gateway and backend
+suite: test bearer-only billingMetrics wiring
 templates:
   - gateway/deployment.yaml
   - gateway/configmap.yaml
   - backend/deployment.yaml
+  - backend/configmap.yaml
   - migrations-job.yaml
 values:
   - ./values/required.yaml
 tests:
-  - it: is off by default, adding no env, volume, or mount
+  - it: is disabled by default
     template: gateway/deployment.yaml
     asserts:
-      - notContains:
-          path: spec.template.spec.volumes
-          content:
-            name: billing-metrics-mtls
-            secret:
-              secretName: billing-mtls
-      - equal:
-          path: spec.template.spec.containers[0].volumeMounts
-          value:
-            - name: gateway-config
-              mountPath: /app/config/config.yaml
-              subPath: config.yaml
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
             name: LITELLM_BILLING_METRICS_ENDPOINT
-            value: https://telemetry.litellm.ai
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: billing-metrics
 
-  - it: renders the endpoint and the mounted cert paths when enabled
+  - it: wires gateway URLs and bearer credentials from Secret keys
     template: gateway/deployment.yaml
     set:
       billingMetrics:
         enabled: true
-        secretName: billing-mtls
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -43,87 +34,68 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_BILLING_METRICS_CLIENT_CERT
-            value: /etc/litellm/billing-mtls/tls.crt
+            name: LITELLM_BILLING_METRICS_TOKEN_URL
+            value: https://litellm-prod.auth.us-west-1.amazoncognito.com/oauth2/token
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_BILLING_METRICS_CLIENT_KEY
-            value: /etc/litellm/billing-mtls/tls.key
-
-  - it: mounts the cert secret read-only alongside the config volume
-    template: gateway/deployment.yaml
-    set:
-      billingMetrics:
-        enabled: true
-        secretName: billing-mtls
-    asserts:
+            name: LITELLM_BILLING_METRICS_CLIENT_ID
+            valueFrom:
+              secretKeyRef:
+                name: litellm-billing-metrics
+                key: client-id
       - contains:
-          path: spec.template.spec.volumes
+          path: spec.template.spec.containers[0].env
           content:
-            name: billing-metrics-mtls
-            secret:
-              secretName: billing-mtls
-      - contains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: billing-metrics-mtls
-            mountPath: /etc/litellm/billing-mtls
-            readOnly: true
-
-  # The production collector presents a public web-PKI certificate, so the CA
-  # override must stay absent unless a private collector is configured.
-  - it: omits the CA env, volume, and mount when no caSecretName is set
-    template: gateway/deployment.yaml
-    set:
-      billingMetrics:
-        enabled: true
-        secretName: billing-mtls
-    asserts:
+            name: LITELLM_BILLING_METRICS_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: litellm-billing-metrics
+                key: client-secret
       - notContains:
           path: spec.template.spec.volumes
           content:
-            name: billing-metrics-mtls-ca
-            secret:
-              secretName: billing-ca
+            name: billing-metrics
       - notContains:
-          path: spec.template.spec.containers[0].env
+          path: spec.template.spec.containers[0].volumeMounts
           content:
-            name: LITELLM_BILLING_METRICS_CA_CERT
-            value: /etc/litellm/billing-mtls-ca/ca.crt
+            name: billing-metrics
 
-  - it: mounts the CA secret when caSecretName is set
-    template: gateway/deployment.yaml
+  - it: wires billing metrics on the backend without volumes
+    template: backend/deployment.yaml
     set:
       billingMetrics:
         enabled: true
-        secretName: billing-mtls
-        caSecretName: billing-ca
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: LITELLM_BILLING_METRICS_CA_CERT
-            value: /etc/litellm/billing-mtls-ca/ca.crt
-      - contains:
+            name: LITELLM_BILLING_METRICS_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: litellm-billing-metrics
+                key: client-secret
+      - notContains:
           path: spec.template.spec.volumes
           content:
-            name: billing-metrics-mtls-ca
-            secret:
-              secretName: billing-ca
-      - contains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: billing-metrics-mtls-ca
-            mountPath: /etc/litellm/billing-mtls-ca
-            readOnly: true
+            name: billing-metrics
 
-  - it: passes the export interval through only when set
+  - it: does not add billing metrics to migrations
+    template: migrations-job.yaml
+    set:
+      billingMetrics:
+        enabled: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_BILLING_METRICS_ENDPOINT
+
+  - it: renders an optional export interval
     template: gateway/deployment.yaml
     set:
       billingMetrics:
         enabled: true
-        secretName: billing-mtls
         exportIntervalMs: 5000
     asserts:
       - contains:
@@ -132,102 +104,27 @@ tests:
             name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
             value: "5000"
 
-  - it: keeps user-supplied gateway volumes alongside the billing secret
+  - it: requires the endpoint when enabled
     template: gateway/deployment.yaml
     set:
       billingMetrics:
         enabled: true
-        secretName: billing-mtls
-      gateway.volumes:
-        - name: custom-callbacks
-          configMap:
-            name: my-callbacks
-      gateway.volumeMounts:
-        - name: custom-callbacks
-          mountPath: /app/callbacks
+        endpoint: ""
     asserts:
-      - contains:
-          path: spec.template.spec.volumes
-          content:
-            name: custom-callbacks
-            configMap:
-              name: my-callbacks
-      - contains:
-          path: spec.template.spec.volumes
-          content:
-            name: billing-metrics-mtls
-            secret:
-              secretName: billing-mtls
+      - failedTemplate:
+          errorMessage: billingMetrics.endpoint is required when billingMetrics.enabled is true
 
-  # The backend keeps the named-server MCP transport (/{mcp_server_name}/mcp),
-  # which writes a SpendLogs row, so it must meter too or that traffic is lost.
-  - it: meters the backend as well, since it serves the MCP transport
-    template: backend/deployment.yaml
-    set:
-      billingMetrics:
-        enabled: true
-        secretName: billing-mtls
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: LITELLM_BILLING_METRICS_ENDPOINT
-            value: https://telemetry.litellm.ai
-      - contains:
-          path: spec.template.spec.containers[0].volumeMounts
-          content:
-            name: billing-metrics-mtls
-            mountPath: /etc/litellm/billing-mtls
-            readOnly: true
-      - contains:
-          path: spec.template.spec.volumes
-          content:
-            name: billing-metrics-mtls
-            secret:
-              secretName: billing-mtls
-
-  - it: leaves the backend alone when metering is off
-    template: backend/deployment.yaml
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: LITELLM_BILLING_METRICS_ENDPOINT
-            value: https://telemetry.litellm.ai
-
-  # The migrations job runs prisma and serves no traffic; it must never receive
-  # the client key.
-  - it: never mounts the billing cert on the migrations job
-    template: migrations-job.yaml
-    set:
-      billingMetrics:
-        enabled: true
-        secretName: billing-mtls
-    asserts:
-      - notContains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: LITELLM_BILLING_METRICS_ENDPOINT
-            value: https://telemetry.litellm.ai
-      - isNull:
-          path: spec.template.spec.volumes
-
-  # The conventional Secret name is the default, so enabling metering needs no
-  # secretName at all; the guard below only fires on an explicitly blanked one.
-  - it: uses the conventional secret name by default
+  - it: requires the token URL when enabled
     template: gateway/deployment.yaml
     set:
       billingMetrics:
         enabled: true
+        tokenUrl: ""
     asserts:
-      - contains:
-          path: spec.template.spec.volumes
-          content:
-            name: billing-metrics-mtls
-            secret:
-              secretName: litellm-billing-metrics-mtls
+      - failedTemplate:
+          errorMessage: billingMetrics.tokenUrl is required when billingMetrics.enabled is true
 
-  - it: fails loudly when the secretName is explicitly blanked
+  - it: requires the secret name when enabled
     template: gateway/deployment.yaml
     set:
       billingMetrics:
@@ -235,15 +132,4 @@ tests:
         secretName: ""
     asserts:
       - failedTemplate:
-          errorMessage: billingMetrics.secretName is required when billingMetrics.enabled is true (an existing Secret with tls.crt and tls.key)
-
-  - it: fails loudly when enabled without an endpoint
-    template: gateway/deployment.yaml
-    set:
-      billingMetrics:
-        enabled: true
-        endpoint: ""
-        secretName: billing-mtls
-    asserts:
-      - failedTemplate:
-          errorMessage: billingMetrics.endpoint is required when billingMetrics.enabled is true
+          errorMessage: billingMetrics.secretName is required when billingMetrics.enabled is true

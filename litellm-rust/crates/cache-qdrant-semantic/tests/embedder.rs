@@ -108,7 +108,7 @@ fn config(base: String, timeout: Option<Duration>) -> OpenAiEmbedderConfig {
 async fn posts_embeddings_request_and_parses_vector() {
     let server = TestHttpServer::response("200 OK", r#"{"data":[{"embedding":[0.1,0.2]}]}"#).await;
     let embedder = OpenAiEmbedder::new(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         config(
             format!("{}/", server.base_url()),
             Some(Duration::from_secs(1)),
@@ -134,13 +134,19 @@ async fn posts_embeddings_request_and_parses_vector() {
 }
 
 #[rstest]
-#[case::error_status("500 Internal Server Error", "{}", 0, None, Err(Error::Unavailable))]
+#[case::error_status(
+    "500 Internal Server Error",
+    "{}",
+    0,
+    None,
+    Err(Error::Unavailable(None))
+)]
 #[case::timed_out(
     "200 OK",
     r#"{"data":[{"embedding":[0.1,0.2]}]}"#,
     500,
     Some(Duration::from_millis(200)),
-    Err(Error::Unavailable)
+    Err(Error::Unavailable(None))
 )]
 #[case::within_timeout(
     "200 OK",
@@ -149,7 +155,7 @@ async fn posts_embeddings_request_and_parses_vector() {
     Some(Duration::from_secs(1)),
     Ok(vec![0.1, 0.2])
 )]
-#[case::missing_embedding("200 OK", r#"{"data":[]}"#, 0, None, Err(Error::Unavailable))]
+#[case::missing_embedding("200 OK", r#"{"data":[]}"#, 0, None, Err(Error::Unavailable(None)))]
 #[tokio::test]
 async fn status_timeout_and_body_errors_are_unavailable(
     #[case] status: &str,
@@ -161,16 +167,23 @@ async fn status_timeout_and_body_errors_are_unavailable(
     let server =
         TestHttpServer::response_after(status, body, Duration::from_millis(delay_ms)).await;
     let embedder = OpenAiEmbedder::new(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         config(server.base_url(), timeout),
     );
-    assert_eq!(embedder.async_embed("hello", None).await, expected);
+    let result = embedder.async_embed("hello", None).await;
+    if let Err(error) = &result {
+        let report = litellm_error::Report::new(error).to_string();
+        assert!(!report.contains(&server.base_url()), "{report}");
+    }
+    let kind =
+        |result: Result<Vec<f32>, Error>| result.map_err(|error| std::mem::discriminant(&error));
+    assert_eq!(kind(result), kind(expected));
 }
 
 #[rstest]
 fn sync_embedding_is_unsupported() {
     let embedder = OpenAiEmbedder::new(
-        litellm_http::Client::plain_for_test(),
+        litellm_http::Client::for_test(),
         config("http://127.0.0.1:9".to_owned(), None),
     );
     assert_eq!(

@@ -20,6 +20,7 @@ from __future__ import annotations
 import pytest
 
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from e2e_http import unwrap
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, ThinkingParam
@@ -49,6 +50,16 @@ def _reasoning_content(response: ChatResponse) -> str | None:
 
 
 class TestDeepSeekReasoningDisable:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.DEEPSEEK,),
+            models=(REASONER,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_reasoner_returns_reasoning_by_default(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -71,6 +82,16 @@ class TestDeepSeekReasoningDisable:
             f"disable param, so the disable assertions below can't be trusted: {response}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.DEEPSEEK,),
+            models=(REASONER,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_reasoning_effort_none_disables_reasoning(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
@@ -93,6 +114,16 @@ class TestDeepSeekReasoningDisable:
             f"is still present: {response}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.DEEPSEEK,),
+            models=(REASONER,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_thinking_disabled_disables_reasoning(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:

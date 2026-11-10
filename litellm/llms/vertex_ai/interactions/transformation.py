@@ -2,7 +2,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
 from litellm.llms.vertex_ai.common_utils import validate_vertex_location
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -22,9 +22,9 @@ class VertexInteractionsTarget:
 
     @property
     def collection_url(self) -> str:
-        return (
-            f"{self.base_url}/{VERTEX_INTERACTIONS_API_VERSION}"
-            f"/projects/{self.project_id}/locations/{self.location}/interactions"
+        return join_api_base(
+            self.base_url,
+            f"{VERTEX_INTERACTIONS_API_VERSION}/projects/{self.project_id}/locations/{self.location}/interactions",
         )
 
     def interaction_url(self, interaction_id: str) -> str:
@@ -91,7 +91,7 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:  # mutable-ok: BaseInteractionsAPIConfig declares plain-dict headers
         access_token, _ = self._mint(litellm_params or GenericLiteLLMParams())
-        return {  # mutable-ok: BaseInteractionsAPIConfig declares plain-dict headers
+        return {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
             **headers,
@@ -119,7 +119,7 @@ class VertexAIInteractionsConfig(VertexBase, GoogleAIStudioInteractionsConfig):
         url_suffix: str = "",
     ) -> tuple[str, dict]:  # mutable-ok: BaseInteractionsAPIConfig declares a plain-dict request body
         target: Final = self._target(api_base or None, litellm_params)
-        return f"{target.interaction_url(interaction_id)}{url_suffix}", {}  # mutable-ok: same base contract
+        return f"{target.interaction_url(interaction_id)}{url_suffix}", {}
 
     def transform_get_interaction_request(
         self,

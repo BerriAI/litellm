@@ -19,8 +19,9 @@
 """Output modules for writing CBF data to various destinations."""
 
 import zoneinfo
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Final
 
 import httpx
 import polars as pl
@@ -68,7 +69,7 @@ class CloudZeroStreamer:
 
     def _group_by_date(self, data: pl.DataFrame) -> dict[str, pl.DataFrame]:
         """Group data by date, converting to UTC and validating dates."""
-        daily_batches: Final[dict[str, list[dict[str, Any]]]] = {}
+        daily_batches: Final[dict[str, list[dict[str, object]]]] = {}
 
         # Ensure we have the required columns
         if "time/usage_start" not in data.columns:
@@ -188,7 +189,7 @@ class CloudZeroStreamer:
             )
             raise
 
-    def _prepare_batch_payload(self, batch_date: str, batch_data: pl.DataFrame, operation: str) -> dict[str, Any]:
+    def _prepare_batch_payload(self, batch_date: str, batch_data: pl.DataFrame, operation: str) -> Mapping[str, object]:
         """Prepare batch payload according to CloudZero AnyCost API format."""
         # Convert batch_date to month for the API (YYYY-MM format)
         try:
@@ -205,11 +206,11 @@ class CloudZeroStreamer:
             if record:
                 data_records.append(record)
 
-        payload: Final = {"month": month_str, "operation": operation, "data": data_records}
+        payload: Final[Mapping[str, object]] = {"month": month_str, "operation": operation, "data": data_records}
 
         return payload
 
-    def _convert_cbf_to_api_format(self, row: dict[str, Any]) -> dict[str, Any] | None:
+    def _convert_cbf_to_api_format(self, row: dict[str, object]) -> dict[str, object] | None:
         """Convert CBF row to CloudZero API format - keeping CBF field names as CloudZero expects them."""
         try:
             # CloudZero expects CBF format field names directly, not converted names

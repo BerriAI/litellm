@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
 if TYPE_CHECKING:
@@ -22,6 +23,9 @@ class _ConfigRow(Protocol):
     @property
     def param_value(self) -> object: ...
 
+    @property
+    def reload_revision(self) -> int | None: ...
+
 
 class _ConfigTable(Protocol):
     async def find_unique(self, *, where: Mapping[str, str]) -> _ConfigRow | None: ...
@@ -31,6 +35,12 @@ class _ConfigTable(Protocol):
     async def upsert(self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> _ConfigRow: ...
 
     async def delete(self, *, where: Mapping[str, str]) -> _ConfigRow | None: ...
+
+    async def delete_many(self, *, where: Mapping[str, object]) -> int: ...
+
+
+class _ConfigDatabase(Protocol):
+    async def query_raw(self, query: str, *args: object) -> object: ...
 
 
 class ConfigParam:
@@ -44,8 +54,9 @@ class ConfigParam:
 class ConfigRepository:
     """Repository for config database operations."""
 
-    def __init__(self, prisma_client: PrismaClient | None):
+    def __init__(self, prisma_client: PrismaClient | None, *, use_writer: bool = False):
         self._prisma_client: Final = prisma_client
+        self._use_writer: Final = use_writer
 
     @property
     def prisma_client(self) -> PrismaClient:
@@ -55,7 +66,8 @@ class ConfigRepository:
 
     @property
     def _config_table(self) -> _ConfigTable:
-        return cast(_ConfigTable, self.prisma_client.db.litellm_config)
+        database: Final = self.prisma_client.writer_db if self._use_writer else self.prisma_client.db
+        return cast(_ConfigTable, database.litellm_config)
 
     @property
     def table(self) -> _ConfigTable:
@@ -83,6 +95,26 @@ class ConfigRepository:
         )
         return ConfigParam(param_name=param_name, param_value=param_value)
 
+    async def set_param_if_revision(self, param_name: str, param_value: object, revision: int) -> bool:
+        delegate: Final = self.prisma_client.writer_db
+        database: Final = cast(_ConfigDatabase, delegate)  # cast-ok: Prisma delegates database methods dynamically
+        rows: Final = await database.query_raw(
+            """INSERT INTO "LiteLLM_Config" (param_name, param_value, last_run_at)
+               SELECT $1, $2::jsonb, NOW() WHERE $3::int = 0
+               ON CONFLICT (param_name) DO UPDATE
+               SET param_value = EXCLUDED.param_value, last_run_at = NOW()
+               WHERE COALESCE(("LiteLLM_Config".param_value->>'revision')::int, 0) = $3::int
+               RETURNING param_name"""
+            if revision == 0
+            else """UPDATE "LiteLLM_Config" SET param_value = $2::jsonb, last_run_at = NOW()
+               WHERE param_name = $1 AND COALESCE((param_value->>'revision')::int, 0) = $3::int
+               RETURNING param_name""",
+            param_name,
+            json.dumps(param_value),
+            revision,
+        )
+        return bool(rows)
+
     async def delete_param(self, param_name: str) -> bool:
         """Delete a config parameter from the database."""
         try:
@@ -101,3 +133,9 @@ class ConfigRepository:
                 param_value = _decoded_json(param_value)
             result[record.param_name] = param_value
         return result
+
+    async def delete_params_older_than(self, prefix: str, before: datetime) -> int:
+        """Expire operational config records using the timestamp written by revision claims."""
+        return await self._config_table.delete_many(
+            where={"param_name": {"startswith": prefix}, "last_run_at": {"lt": before}}
+        )

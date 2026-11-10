@@ -3,13 +3,16 @@ package litellm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
@@ -22,6 +25,7 @@ func newKeyResourceData(t *testing.T, raw map[string]interface{}) *schema.Resour
 
 func TestMapResourceDataToKeyNewFields(t *testing.T) {
 	d := newKeyResourceData(t, map[string]interface{}{
+		"key_type":                   "llm_api",
 		"budget_id":                  "budget-1",
 		"enforced_params":            []interface{}{"user"},
 		"allowed_routes":             []interface{}{"/chat/completions"},
@@ -36,6 +40,9 @@ func TestMapResourceDataToKeyNewFields(t *testing.T) {
 	key := &Key{}
 	mapResourceDataToKey(d, key)
 
+	if key.KeyType != "llm_api" {
+		t.Errorf("KeyType = %q, want llm_api", key.KeyType)
+	}
 	if key.BudgetID != "budget-1" {
 		t.Errorf("BudgetID = %q, want budget-1", key.BudgetID)
 	}
@@ -139,6 +146,7 @@ func TestParseKeyResponseNewFields(t *testing.T) {
 	client := NewClient("http://localhost:4000", "test-key", true)
 	resp := map[string]interface{}{
 		"key":                        "sk-test",
+		"key_type":                   "llm_api",
 		"budget_id":                  "budget-1",
 		"enforced_params":            []interface{}{"user"},
 		"allowed_routes":             []interface{}{"/chat/completions"},
@@ -153,6 +161,9 @@ func TestParseKeyResponseNewFields(t *testing.T) {
 	key, err := client.parseKeyResponse(resp)
 	if err != nil {
 		t.Fatalf("parseKeyResponse returned error: %v", err)
+	}
+	if key.KeyType != "llm_api" {
+		t.Errorf("KeyType = %q, want llm_api", key.KeyType)
 	}
 	if key.BudgetID != "budget-1" || key.OrganizationID != "org-1" || key.ProjectID != "proj-1" {
 		t.Errorf("string fields not parsed: %+v", key)
@@ -183,7 +194,10 @@ func TestCreateKeySendsConfigSuppliedKey(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-key", true)
-	d := newKeyResourceData(t, map[string]interface{}{"key": "sk-custom"})
+	d := newKeyResourceData(t, map[string]interface{}{
+		"key":      "sk-custom",
+		"key_type": "llm_api",
+	})
 
 	diags := resourceKeyCreate(context.Background(), d, client)
 	if diags.HasError() {
@@ -192,9 +206,384 @@ func TestCreateKeySendsConfigSuppliedKey(t *testing.T) {
 	if captured["key"] != "sk-custom" {
 		t.Errorf("create payload key = %v, want sk-custom", captured["key"])
 	}
+	if captured["key_type"] != "llm_api" {
+		t.Errorf("create payload key_type = %v, want llm_api", captured["key_type"])
+	}
 	if d.Id() != "hash-1" {
 		t.Errorf("resource ID = %q, want hash-1", d.Id())
 	}
+}
+
+func TestKeyTypeRejectsUnknownValue(t *testing.T) {
+	_, errs := resourceKey().Schema["key_type"].ValidateFunc("unrestricted", "key_type")
+	if len(errs) == 0 {
+		t.Fatal("key_type accepted an unknown value")
+	}
+}
+
+func TestKeyTypeChangeForcesReplacement(t *testing.T) {
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{"key_type": "default"})
+	priorData.SetId("hash-1")
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"key_type": "llm_api"})
+	diff, err := res.Diff(context.Background(), priorData.State(), config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if diff == nil || !diff.RequiresNew() {
+		t.Fatalf("changing key_type must force replacement, diff = %+v", diff)
+	}
+}
+
+func TestKeyTypePresetRoutesDoNotDrift(t *testing.T) {
+	cases := map[string]struct {
+		read   *Key
+		config map[string]interface{}
+	}{
+		"llm_api preset":    {read: &Key{KeyType: "llm_api", AllowedRoutes: []string{"llm_api_routes"}}, config: map[string]interface{}{"key_type": "llm_api"}},
+		"default no routes": {read: &Key{KeyType: "default"}, config: map[string]interface{}{}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			res := resourceKey()
+			priorData := newKeyResourceData(t, map[string]interface{}{})
+			priorData.SetId("hash-1")
+			if err := priorData.Set("server_metadata", serverKeyMetadata(tc.read.Metadata)); err != nil {
+				t.Fatalf("set server_metadata: %v", err)
+			}
+			mapKeyToResourceData(priorData, tc.read)
+			diff, err := res.Diff(context.Background(), priorData.State(), terraform.NewResourceConfigRaw(tc.config), nil)
+			if err != nil {
+				t.Fatalf("diff failed: %v", err)
+			}
+			if diff != nil && !diff.Empty() {
+				t.Fatalf("server-derived allowed_routes must not drift, diff = %+v", diff)
+			}
+		})
+	}
+}
+
+// A config that omits allowed_routes must stay KNOWN at plan time: marking it
+// computed makes it "known after apply", which fails any plan that consumes
+// the attribute (e.g. for_each = toset(coalesce(..., []))) before the key
+// exists.
+func TestAllowedRoutesOmittedIsKnownAtPlan(t *testing.T) {
+	res := resourceKey()
+	prior := &terraform.InstanceState{}
+	prior.RawConfig = keyRawConfig(t, nil)
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"key_alias": "example"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	for k, attr := range diff.Attributes {
+		if !strings.HasPrefix(k, "allowed_routes") {
+			continue
+		}
+		if attr.NewComputed {
+			t.Fatalf("omitted allowed_routes is computed (unknown) at plan time: %+v", attr)
+		}
+		t.Errorf("omitted allowed_routes produced a plan diff %q = %+v, want none", k, attr)
+	}
+}
+
+// Suppressing unconfigured routes must not swallow real config changes: a
+// config that shrinks the declared list still has to diff.
+func TestAllowedRoutesConfiguredShrinkStillDiffs(t *testing.T) {
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{
+		"allowed_routes": []interface{}{"/a", "/b", "/c"},
+	})
+	priorData.SetId("hash-1")
+	prior := priorData.State()
+	prior.RawConfig = keyRawConfig(t, []string{"/a", "/b"})
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"allowed_routes": []interface{}{"/a", "/b"},
+	})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	if diff == nil || diff.Attributes["allowed_routes.#"] == nil {
+		t.Fatalf("config shrinking allowed_routes must still diff, diff = %+v", diff)
+	}
+}
+
+// The diff for server-derived routes in state is suppressed via the raw
+// config, the same signal real terraform runs carry.
+func TestAllowedRoutesUnconfiguredDoesNotDriftWithRawConfig(t *testing.T) {
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":      "old",
+		"allowed_routes": []interface{}{"/v1/models"},
+	})
+	priorData.SetId("hash-1")
+	prior := priorData.State()
+	prior.RawConfig = keyRawConfig(t, nil)
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"key_alias": "old"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	for k := range diff.Attributes {
+		if strings.HasPrefix(k, "allowed_routes") {
+			t.Fatalf("unconfigured allowed_routes drifted at plan: %q = %+v", k, diff.Attributes[k])
+		}
+	}
+}
+
+func keyRawConfig(t *testing.T, routes []string) cty.Value {
+	t.Helper()
+	return cty.ObjectVal(map[string]cty.Value{
+		"key_alias":      cty.StringVal("example"),
+		"allowed_routes": keyRawConfigRoutes(t, routes),
+	})
+}
+
+// An update must never POST allowed_routes the config does not declare: the
+// value d.Get returns is whatever the last refresh stored (stale with
+// -refresh=false), and /key/update would overwrite externally managed routes
+// with it. The alias-only rename below must leave the field out.
+func TestResourceKeyUpdateOmitsUnconfiguredAllowedRoutes(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/update" {
+			w.Write([]byte(`{"key": "hash-1"}`))
+			return
+		}
+		w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"renamed","allowed_routes":["/v1/models"]}}`))
+	}))
+	defer srv.Close()
+
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":      "old",
+		"allowed_routes": []interface{}{"/chat/completions"},
+	})
+	priorData.SetId("hash-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{"key_alias": "renamed"})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	diff.RawConfig = keyRawConfig(t, nil)
+
+	_, diags := res.Apply(context.Background(), prior, diff, NewClient(srv.URL, "test-key", true))
+	if diags.HasError() {
+		t.Fatalf("apply failed: %+v", diags)
+	}
+	if _, present := captured["allowed_routes"]; present {
+		t.Fatalf("update POSTed allowed_routes %v although the config does not declare it", captured["allowed_routes"])
+	}
+	if captured["key_alias"] != "renamed" {
+		t.Errorf("update payload key_alias = %v, want renamed", captured["key_alias"])
+	}
+}
+
+// Declaring allowed_routes keeps owning them: an update still re-asserts the
+// configured routes, matching the pre-key_type behavior.
+func TestResourceKeyUpdateSendsConfiguredAllowedRoutes(t *testing.T) {
+	var captured map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/update" {
+			w.Write([]byte(`{"key": "hash-1"}`))
+			return
+		}
+		w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"renamed","allowed_routes":["/v1/models"]}}`))
+	}))
+	defer srv.Close()
+
+	res := resourceKey()
+	priorData := newKeyResourceData(t, map[string]interface{}{
+		"key_alias":      "old",
+		"allowed_routes": []interface{}{"/v1/models"},
+	})
+	priorData.SetId("hash-1")
+	prior := priorData.State()
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"key_alias":      "renamed",
+		"allowed_routes": []interface{}{"/v1/models"},
+	})
+	diff, err := res.Diff(context.Background(), prior, config, nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	diff.RawConfig = keyRawConfig(t, []string{"/v1/models"})
+
+	_, diags := res.Apply(context.Background(), prior, diff, NewClient(srv.URL, "test-key", true))
+	if diags.HasError() {
+		t.Fatalf("apply failed: %+v", diags)
+	}
+	routes, ok := captured["allowed_routes"].([]interface{})
+	if !ok || len(routes) != 1 || routes[0] != "/v1/models" {
+		t.Fatalf("update payload allowed_routes = %v, want [/v1/models]", captured["allowed_routes"])
+	}
+}
+
+// /key/generate replaces declared routes with the key_type preset while
+// /key/update stores them verbatim, so create must re-assert the declared
+// list; the restore body may only touch allowed_routes plus the two fields
+// /key/update requires non-null.
+func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
+	cases := map[string]struct {
+		generateRoutes []interface{}
+		suppliedKey    string
+		permissions    map[string]interface{}
+		generateStores bool
+		generateBudget map[string]interface{}
+		restoreFails   bool
+		wantUpdate     bool
+	}{
+		"preset overwrote declared":        {generateRoutes: []interface{}{"llm_api_routes"}, wantUpdate: true},
+		"declared permissions are echoed":  {generateRoutes: []interface{}{"llm_api_routes"}, permissions: map[string]interface{}{"get_server_info": "true"}, generateStores: true, wantUpdate: true},
+		"declared budgets are echoed":      {generateRoutes: []interface{}{"llm_api_routes"}, generateBudget: map[string]interface{}{"x": true}, wantUpdate: true},
+		"generate honored declared":        {generateRoutes: []interface{}{"/v1/models"}, wantUpdate: false},
+		"restore update rejected":          {generateRoutes: []interface{}{"llm_api_routes"}, restoreFails: true, wantUpdate: true},
+		"rejected restore keeps supplied":  {generateRoutes: []interface{}{"llm_api_routes"}, suppliedKey: "sk-custom", restoreFails: true, wantUpdate: true},
+		"supplied key still gets restored": {generateRoutes: []interface{}{"llm_api_routes"}, suppliedKey: "sk-custom", wantUpdate: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var generateBody, updateBody, deleteBody map[string]interface{}
+			updateCalled, deleteCalled := false, false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/key/generate":
+					json.Unmarshal(body, &generateBody)
+					extra := ""
+					if tc.generateStores {
+						extra = `, "permissions": {"get_server_info": true}`
+					}
+					if tc.generateBudget != nil {
+						extra += `, "model_max_budget": {"gpt-4o-mini": {"budget_limit": 5, "time_period": "30d"}}`
+					}
+					w.Write([]byte(`{"key": "sk-new", "token_id": "hash-1", "allowed_routes": ["` + tc.generateRoutes[0].(string) + `"]` + extra + `}`))
+				case "/key/update":
+					updateCalled = true
+					json.Unmarshal(body, &updateBody)
+					if tc.restoreFails {
+						w.WriteHeader(http.StatusBadRequest)
+						w.Write([]byte(`{"error":{"message":"rejected"}}`))
+						return
+					}
+					w.Write([]byte(`{"key": "hash-1"}`))
+				case "/key/delete":
+					deleteCalled = true
+					json.Unmarshal(body, &deleteBody)
+					w.Write([]byte(`{}`))
+				default:
+					w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"typed","key_type":"llm_api","allowed_routes":["/v1/models"]}}`))
+				}
+			}))
+			defer srv.Close()
+
+			raw := map[string]interface{}{
+				"key_alias":      "typed",
+				"key_type":       "llm_api",
+				"allowed_routes": []interface{}{"/v1/models"},
+			}
+			if tc.permissions != nil {
+				raw["permissions"] = tc.permissions
+			}
+			if tc.generateBudget != nil {
+				raw["model_max_budget"] = `{"gpt-4o-mini": {"budget_limit": 5, "time_period": "30d"}}`
+			}
+			if tc.suppliedKey != "" {
+				raw["key"] = tc.suppliedKey
+			}
+			d := newKeyResourceData(t, raw)
+			diags := resourceKeyCreate(context.Background(), d, NewClient(srv.URL, "test-key", true))
+			if tc.restoreFails {
+				if !diags.HasError() {
+					t.Fatal("create succeeded although the restore update was rejected")
+				}
+				if tc.suppliedKey != "" {
+					if deleteCalled {
+						t.Fatal("failed restore deleted a config-supplied key, which /key/generate may have upserted onto an existing credential")
+					}
+					return
+				}
+				if !deleteCalled {
+					t.Fatal("failed restore did not delete the created key; a retried apply would orphan it")
+				}
+				if keys, _ := deleteBody["keys"].([]interface{}); len(keys) != 1 || keys[0] != "hash-1" {
+					t.Errorf("delete payload keys = %v, want [hash-1]", deleteBody["keys"])
+				}
+				if d.Id() != "" {
+					t.Errorf("state recorded id %q for a key the provider deleted", d.Id())
+				}
+				return
+			}
+			if diags.HasError() {
+				t.Fatalf("create failed: %+v", diags)
+			}
+			if generateBody["key_type"] != "llm_api" {
+				t.Errorf("generate payload key_type = %v, want llm_api", generateBody["key_type"])
+			}
+			if tc.generateBudget != nil {
+				want := map[string]interface{}{"gpt-4o-mini": map[string]interface{}{"budget_limit": float64(5), "time_period": "30d"}}
+				if fmt.Sprint(generateBody["model_max_budget"]) != fmt.Sprint(want) {
+					t.Errorf("generate payload model_max_budget = %v, want the declared %v", generateBody["model_max_budget"], want)
+				}
+			}
+			if tc.wantUpdate {
+				if !updateCalled {
+					t.Fatal("create did not re-assert declared allowed_routes after the preset overwrote them")
+				}
+				wantPerms := map[string]interface{}{}
+				if tc.generateStores {
+					wantPerms = map[string]interface{}{"get_server_info": true}
+				}
+				wantBudget := map[string]interface{}{}
+				if tc.generateBudget != nil {
+					wantBudget = map[string]interface{}{"gpt-4o-mini": map[string]interface{}{"budget_limit": float64(5), "time_period": "30d"}}
+				}
+				wantBody := map[string]interface{}{
+					"key":              "hash-1",
+					"allowed_routes":   []interface{}{"/v1/models"},
+					"permissions":      wantPerms,
+					"model_max_budget": wantBudget,
+				}
+				if len(updateBody) != len(wantBody) {
+					t.Fatalf("restore payload = %v, want exactly %v (anything else rewrites fields the config did not declare)", updateBody, wantBody)
+				}
+				for k, v := range wantBody {
+					if fmt.Sprint(updateBody[k]) != fmt.Sprint(v) {
+						t.Errorf("restore payload %s = %v (%T), want %v (%T)", k, updateBody[k], updateBody[k], v, v)
+					}
+				}
+			} else if updateCalled {
+				t.Fatal("create re-asserted routes although the generate already stored the declared list")
+			}
+			if deleteCalled {
+				t.Fatal("create deleted a key although nothing failed")
+			}
+			if got := d.Get("allowed_routes").([]interface{}); len(got) != 1 || got[0] != "/v1/models" {
+				t.Errorf("state allowed_routes = %v, want [/v1/models]", got)
+			}
+		})
+	}
+}
+
+func keyRawConfigRoutes(t *testing.T, routes []string) cty.Value {
+	t.Helper()
+	if routes == nil {
+		return cty.NullVal(cty.List(cty.String))
+	}
+	vals := make([]cty.Value, len(routes))
+	for i, r := range routes {
+		vals[i] = cty.StringVal(r)
+	}
+	return cty.ListVal(vals)
 }
 
 // The proxy validates each model_max_budget entry as a BudgetConfig object and
@@ -370,6 +759,7 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 		w.Write([]byte(`{
 			"key": "hash-1",
 			"info": {
+				"key_type": "llm_api",
 				"key_alias": "envelope-alias",
 				"models": ["gpt-4o-mini"],
 				"budget_id": "budget-1",
@@ -388,11 +778,30 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 	if key.KeyAlias != "envelope-alias" {
 		t.Errorf("KeyAlias = %q, want envelope-alias (info envelope not unwrapped)", key.KeyAlias)
 	}
+	if key.KeyType != "llm_api" {
+		t.Errorf("KeyType = %q, want llm_api", key.KeyType)
+	}
 	if key.BudgetID != "budget-1" || key.TeamID != "team-1" {
 		t.Errorf("nested fields not parsed: %+v", key)
 	}
 	if key.RPMLimit == nil || *key.RPMLimit != 100 {
 		t.Errorf("RPMLimit not parsed: %+v", key.RPMLimit)
+	}
+}
+
+func TestGetKeyReturnsNilForDeletedStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key":"hash-1","info":{"token":"hash-1","key_alias":"gone","status":"deleted","deleted_at":"2026-10-05T00:00:00Z","deleted_by":"admin"}}`))
+	}))
+	defer srv.Close()
+
+	key, err := NewClient(srv.URL, "test-key", true).GetKey("hash-1")
+	if err != nil {
+		t.Fatalf("GetKey returned error: %v", err)
+	}
+	if key != nil {
+		t.Errorf("GetKey returned %+v, want nil for deleted status", key)
 	}
 }
 
@@ -504,6 +913,48 @@ func TestResourceKeyReadDropsMissingKeyFromState(t *testing.T) {
 	}
 }
 
+func TestResourceKeyReadDropsDeletedKeyFromState(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"key":"hash-1","info":{"token":"hash-1","key_alias":"gone","status":"deleted","deleted_at":"2026-10-05T00:00:00Z","deleted_by":"admin"}}`))
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{"key_alias": "gone"})
+	d.SetId("hash-1")
+
+	diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if diags.HasError() {
+		t.Fatalf("read of a deleted key must not error, got: %v", diags)
+	}
+	if d.Id() != "" {
+		t.Errorf("Id = %q, want empty so Terraform plans a recreate", d.Id())
+	}
+}
+
+func TestResourceKeyReadKeepsKeyWithLiveStatus(t *testing.T) {
+	for _, status := range []string{"active", "revoked", "expired"} {
+		t.Run(status, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"key":"hash-1","info":{"token":"hash-1","status":%q}}`, status)
+			}))
+			defer srv.Close()
+
+			d := newKeyResourceData(t, map[string]interface{}{})
+			d.SetId("hash-1")
+
+			diags := resourceKeyRead(context.Background(), d, NewClient(srv.URL, "test-key", true))
+			if diags.HasError() {
+				t.Fatalf("read of a %s key returned error: %v", status, diags)
+			}
+			if d.Id() != "hash-1" {
+				t.Errorf("Id = %q, want unchanged for %s status", d.Id(), status)
+			}
+		})
+	}
+}
+
 func TestResourceKeyReadStillFailsOnNon404Errors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -520,6 +971,109 @@ func TestResourceKeyReadStillFailsOnNon404Errors(t *testing.T) {
 	}
 	if d.Id() != "still-exists" {
 		t.Errorf("Id = %q, want unchanged on a transient error", d.Id())
+	}
+}
+
+func TestResourceKeyDeleteTreatsAlreadyDeletedKeyAsGone(t *testing.T) {
+	for _, infoStatus := range []int{http.StatusOK, http.StatusNotFound} {
+		t.Run(http.StatusText(infoStatus), func(t *testing.T) {
+			infoCalls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/key/delete":
+					w.WriteHeader(http.StatusNotFound)
+					w.Write([]byte(`{"error":{"message":"{'error': 'No keys found'}","type":"internal_server_error","param":null,"code":"404"}}`))
+				case "/key/info":
+					infoCalls++
+					if infoStatus == http.StatusNotFound {
+						w.WriteHeader(http.StatusNotFound)
+						w.Write([]byte(keyNotFoundBody))
+						return
+					}
+					w.Write([]byte(`{"key":"hash-1","info":{"token":"hash-1","status":"deleted"}}`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+
+			d := newKeyResourceData(t, map[string]interface{}{})
+			d.SetId("hash-1")
+
+			diags := resourceKeyDelete(context.Background(), d, NewClient(srv.URL, "test-key", true))
+			if diags.HasError() {
+				t.Fatalf("deleting an already deleted key must not error, got: %v", diags)
+			}
+			if d.Id() != "" {
+				t.Errorf("Id = %q, want empty after confirming the key is gone", d.Id())
+			}
+			if infoCalls != 1 {
+				t.Errorf("expected one /key/info confirmation, got %d calls", infoCalls)
+			}
+		})
+	}
+}
+
+func TestResourceKeyDelete404WithLiveKeyFails(t *testing.T) {
+	infoCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/key/delete":
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"message":"{'error': 'No keys found'}","type":"internal_server_error","param":null,"code":"404"}}`))
+		case "/key/info":
+			infoCalls++
+			w.Write([]byte(`{"key":"hash-1","info":{"token":"hash-1","status":"active"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{})
+	d.SetId("hash-1")
+
+	diags := resourceKeyDelete(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if !diags.HasError() {
+		t.Fatal("a /key/delete 404 with a live key must remain an error")
+	}
+	if d.Id() != "hash-1" {
+		t.Errorf("Id = %q, want unchanged when /key/info confirms a live key", d.Id())
+	}
+	if infoCalls != 1 {
+		t.Errorf("expected one /key/info confirmation, got %d calls", infoCalls)
+	}
+}
+
+func TestResourceKeyDeleteServerErrorFailsWithoutInfoLookup(t *testing.T) {
+	infoCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/delete" {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":{"message":"server error"}}`))
+			return
+		}
+		if r.URL.Path == "/key/info" {
+			infoCalls++
+		}
+	}))
+	defer srv.Close()
+
+	d := newKeyResourceData(t, map[string]interface{}{})
+	d.SetId("hash-1")
+
+	diags := resourceKeyDelete(context.Background(), d, NewClient(srv.URL, "test-key", true))
+	if !diags.HasError() {
+		t.Fatal("a /key/delete 500 must remain an error")
+	}
+	if d.Id() != "hash-1" {
+		t.Errorf("Id = %q, want unchanged after a server error", d.Id())
+	}
+	if infoCalls != 0 {
+		t.Errorf("expected no /key/info lookup after a /key/delete 500, got %d calls", infoCalls)
 	}
 }
 
@@ -742,11 +1296,12 @@ func newKeyUpdateResourceData(t *testing.T, id, oldTeamID, newTeamID string) *sc
 // turns on: what POST /key/update returns, and whether GET /key/info still
 // finds the key afterwards.
 type keyRecoveryProxy struct {
-	updateStatus  int
-	updateBody    string
-	staleKeyGone  bool
-	updateCalls   int32
-	generateCalls int32
+	updateStatus    int
+	updateBody      string
+	staleKeyGone    bool
+	staleKeyDeleted bool
+	updateCalls     int32
+	generateCalls   int32
 }
 
 const keyNotFoundBody = `{"error":{"message":"Key not found.","type":"not_found_error","param":"key","code":"404"}}`
@@ -765,6 +1320,10 @@ func (p *keyRecoveryProxy) handler() http.HandlerFunc {
 		case "/key/info":
 			requested := r.URL.Query().Get("key")
 			if p.staleKeyGone && requested != "new-token" {
+				if p.staleKeyDeleted {
+					io.WriteString(w, `{"key":"stale-token","info":{"token":"stale-token","status":"deleted","deleted_at":"2026-10-05T00:00:00Z","deleted_by":"admin"}}`)
+					return
+				}
 				w.WriteHeader(http.StatusNotFound)
 				io.WriteString(w, keyNotFoundBody)
 				return
@@ -814,6 +1373,26 @@ func TestResourceKeyUpdateRecreatesCascadeDeletedKey(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&proxy.updateCalls); got != 1 {
 		t.Errorf("expected 1 /key/update attempt before recovering, got %d", got)
+	}
+	if got := atomic.LoadInt32(&proxy.generateCalls); got != 1 {
+		t.Errorf("expected exactly 1 /key/generate recreate, got %d", got)
+	}
+	if d.Id() != "new-token" {
+		t.Errorf("Id = %q, want the recreated key's new-token", d.Id())
+	}
+}
+
+func TestResourceKeyUpdateRecreatesCascadeDeletedKeyWithDeletedStatus(t *testing.T) {
+	proxy := &keyRecoveryProxy{
+		updateStatus:    http.StatusNotFound,
+		updateBody:      keyNotFoundBody,
+		staleKeyGone:    true,
+		staleKeyDeleted: true,
+	}
+	d := newKeyUpdateResourceData(t, "stale-token", "team-a", "team-b")
+
+	if diags := runKeyUpdate(t, proxy, d); diags.HasError() {
+		t.Fatalf("a cascade-deleted key must be recreated, not error: %v", diags)
 	}
 	if got := atomic.LoadInt32(&proxy.generateCalls); got != 1 {
 		t.Errorf("expected exactly 1 /key/generate recreate, got %d", got)

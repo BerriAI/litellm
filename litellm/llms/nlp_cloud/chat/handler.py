@@ -6,7 +6,7 @@ import litellm
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
 )
 from litellm.utils import ModelResponse
 
@@ -73,7 +73,7 @@ def completion(
     )
     ## COMPLETION CALL
     if client is None or not isinstance(client, HTTPHandler):
-        client = _get_httpx_client()
+        client = get_httpx_client()
 
     response: Final = client.post(
         completion_url,

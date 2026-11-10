@@ -1,7 +1,45 @@
+use strum::{EnumString, IntoStaticStr};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomLlmProvider<'a> {
     pub model: &'a str,
     pub custom_llm_provider: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr)]
+pub enum LlmProviders {
+    #[strum(serialize = "anthropic")]
+    Anthropic,
+    #[strum(serialize = "aws_textract")]
+    AwsTextract,
+    #[strum(serialize = "azure_ai")]
+    AzureAi,
+    #[strum(serialize = "bedrock")]
+    Bedrock,
+    #[strum(serialize = "bedrock_mantle")]
+    BedrockMantle,
+    #[strum(serialize = "cohere")]
+    Cohere,
+    #[strum(serialize = "deepseek")]
+    Deepseek,
+    #[strum(serialize = "edenai")]
+    Edenai,
+    #[strum(serialize = "minimax")]
+    Minimax,
+    #[strum(serialize = "mistral")]
+    Mistral,
+    #[strum(serialize = "openai")]
+    Openai,
+    #[strum(serialize = "openai_like")]
+    OpenaiLike,
+    #[strum(serialize = "openrouter")]
+    Openrouter,
+    #[strum(serialize = "reducto")]
+    Reducto,
+    #[strum(serialize = "tencent")]
+    Tencent,
+    #[strum(serialize = "vertex_ai")]
+    VertexAi,
 }
 
 pub fn get_custom_llm_provider<'a>(

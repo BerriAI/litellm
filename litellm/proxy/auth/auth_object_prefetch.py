@@ -5,16 +5,17 @@ the readers and the fallback, so enforcement never depends on this running."""
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.redis_cache import RedisCache
-from litellm.constants import DEFAULT_IN_MEMORY_TTL
+from litellm.caching.redis_batch import Batch
+from litellm.constants import DEFAULT_IN_MEMORY_TTL, REGISTRY_ERROR_NEGATIVE_CACHE_TTL
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.team_membership import LiteLLM_TeamMembership
@@ -22,12 +23,15 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, UserAPIKeyAuth
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
     get_management_object_ttl,
     team_membership_auth_cache_key,
     team_membership_reservation_cache_key,
 )
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.auth_cache import AuthCacheStore
 
 _RowKind: TypeAlias = Literal["user_row", "team_row", "membership_row", "organization_row", "project_row"]
 
@@ -158,11 +162,6 @@ class AuthObjectRefs:
         )
 
 
-class _InMemoryCache(Protocol):
-    def get_cache(self, key: str) -> object: ...
-    def set_cache(self, key: str, value: object, *, ttl: float | None = ...) -> None: ...
-
-
 @dataclass(frozen=True, slots=True)
 class _CacheEntry:
     cache_key: str
@@ -207,26 +206,32 @@ def _entries(refs: AuthObjectRefs, cache: UserApiKeyCache) -> tuple[_CacheEntry,
     return tuple(_iter_entries(refs, get_management_object_ttl(cache)))
 
 
-def _missing_in_memory(entries: Sequence[_CacheEntry], memory: _InMemoryCache) -> tuple[_CacheEntry, ...]:
-    return tuple(entry for entry in entries if memory.get_cache(key=entry.cache_key) is None)
+def _missing_in_memory(entries: Sequence[_CacheEntry], cache: UserApiKeyCache) -> tuple[_CacheEntry, ...]:
+    return tuple(entry for entry in entries if cache.get_local(entry.cache_key) is None)
 
 
-def _set_in_memory(memory: _InMemoryCache, cache_key: str, value: object, ttl: float | None) -> None:
-    if ttl is None:
-        memory.set_cache(key=cache_key, value=value)
-    else:
-        memory.set_cache(key=cache_key, value=value, ttl=ttl)
+def _nothing_to_arm() -> None:
+    return None
 
 
-async def _fill_from_redis(entries: Sequence[_CacheEntry], redis_cache: RedisCache, memory: _InMemoryCache) -> None:
+async def _fill_from_redis(
+    entries: Sequence[_CacheEntry], shared: AuthCacheStore, cache: UserApiKeyCache, before_read: Callable[[], None]
+) -> None:
+    """On the request's native pipeline when one is open; a failed read is a miss, like ``async_batch_get_cache``."""
     if not entries:
         return
-    found: Final = _RowValues.validate_python(
-        await redis_cache.async_batch_get_cache(key_list=sorted(entry.cache_key for entry in entries))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped cache API
-    )
+    before_read()
+    try:
+        with service_target(AUTH_OBJECTS_TARGET):
+            found: Final = await shared.read_missing(sorted(entry.cache_key for entry in entries), batch=Batch.PRE_CALL)
+    except Exception as e:  # noqa: BLE001  # the DB fill below takes over, as it does after a failed MGET
+        verbose_proxy_logger.debug("auth prefetch Redis read failed, filling from the database: %s", e)
+        return
     for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
         if value is not None:
-            _set_in_memory(memory, entry.cache_key, value, entry.ttl)
+            shared.set_local(
+                entry.cache_key, value, cache.in_memory_cache.default_ttl if entry.ttl is None else entry.ttl
+            )
 
 
 def _validate_row(
@@ -237,7 +242,7 @@ def _validate_row(
     try:
         columns: Final = _RowValues.validate_python(row_value)
         if row in _REFRESH_STAMPED_ROWS:
-            stamped: Final = {**columns, "last_refreshed_at": refreshed_at}  # mutable-ok: validators write into it
+            stamped: Final = {**columns, "last_refreshed_at": refreshed_at}
             return model_type.model_validate(stamped)
         return model_type.model_validate(columns)
     except ValidationError as e:
@@ -248,14 +253,15 @@ def _validate_row(
 async def _fetch_rows(
     refs: AuthObjectRefs, kinds: frozenset[_RowKind], prisma_client: PrismaClient
 ) -> Mapping[str, object]:
-    row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
-        _SQL,
-        refs.user_id if "user_row" in kinds else None,
-        refs.team_id if kinds & _TEAM_BOUND_ROWS else None,
-        refs.membership_user_id if "membership_row" in kinds else None,
-        refs.organization_id if "organization_row" in kinds else None,
-        refs.project_id if "project_row" in kinds else None,
-    )
+    async with db_span("prefetch_auth_objects", AUTH_OBJECTS_TARGET):
+        row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
+            _SQL,
+            refs.user_id if "user_row" in kinds else None,
+            refs.team_id if kinds & _TEAM_BOUND_ROWS else None,
+            refs.membership_user_id if "membership_row" in kinds else None,
+            refs.organization_id if "organization_row" in kinds else None,
+            refs.project_id if "project_row" in kinds else None,
+        )
     return _RowValues.validate_python(row) if row is not None else _NO_ROWS
 
 
@@ -264,11 +270,13 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
         (entry.cache_key, CacheCodec.serialize(value, model_type=entry.model_type), entry.ttl)
         for entry, value in entries
     )
-    memory: Final[_InMemoryCache] = cache.in_memory_cache
+    shared: Final = cache.shared
+    if shared is not None:
+        with service_target(AUTH_OBJECTS_TARGET):
+            await shared.write_back(payloads, batch=Batch.PRE_CALL)
+        return
     for cache_key, payload, ttl in payloads:
-        _set_in_memory(memory, cache_key, payload, cache.default_in_memory_ttl if ttl is None else ttl)
-    if cache.redis_cache is not None:
-        await cache.redis_cache.async_set_cache_pipeline_with_ttls(payloads)
+        cache.set_local(cache_key, payload, ttl)
 
 
 async def _fill_from_db(
@@ -293,15 +301,50 @@ async def prefetch_auth_objects(
     refs: AuthObjectRefs,
     user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient | None,
+    before_read: Callable[[], None] = _nothing_to_arm,
 ) -> None:
-    """Best effort: any failure leaves the per-object getters to fetch as before."""
+    """Best effort: any failure leaves the per-object getters to fetch as before. ``before_read`` runs right before
+    a Redis read goes out, so a caller can declare other reads into the same round trip."""
     try:
-        memory: Final[_InMemoryCache] = user_api_key_cache.in_memory_cache
-        missing: Final = _missing_in_memory(_entries(refs, user_api_key_cache), memory)
-        if user_api_key_cache.redis_cache is not None:
-            await _fill_from_redis(missing, user_api_key_cache.redis_cache, memory)
+        missing: Final = _missing_in_memory(_entries(refs, user_api_key_cache), user_api_key_cache)
+        shared: Final = user_api_key_cache.shared
+        if shared is not None:
+            await _fill_from_redis(missing, shared, user_api_key_cache, before_read)
         if prisma_client is None:
             return
-        await _fill_from_db(refs, _missing_in_memory(missing, memory), user_api_key_cache, prisma_client)
+        await _fill_from_db(refs, _missing_in_memory(missing, user_api_key_cache), user_api_key_cache, prisma_client)
     except Exception as e:  # noqa: BLE001  # warm-up only; the getters enforce and fail closed on their own
         verbose_proxy_logger.warning("auth prefetch skipped, falling back to per-object lookups: %s", e)
+
+
+def _identity_memory_ttl(value: object, management_ttl: float) -> float:
+    """A registry stored as a string is a sentinel, written with the shorter of the two registry TTLs."""
+    return min(REGISTRY_ERROR_NEGATIVE_CACHE_TTL, management_ttl) if isinstance(value, str) else management_ttl
+
+
+async def prefetch_identity_keys(
+    cache_keys: Sequence[str],
+    user_api_key_cache: UserApiKeyCache,
+    before_read: Callable[[], None] = _nothing_to_arm,
+) -> None:
+    """Warm the entries auth reads before it knows the key's owners (the key object, the end user and the two
+    registries) in one read on the request's native pipeline. Keys it finds absent stay noted on the request, so the
+    per-key getters that follow go to the database without a GET of their own. Best effort, like the
+    owner prefetch: the getters read and enforce on their own."""
+    try:
+        shared: Final = user_api_key_cache.shared
+        if shared is None:
+            return
+        missing: Final = tuple(key for key in dict.fromkeys(cache_keys) if shared.get_local(key) is None)
+        if not missing:
+            return
+        before_read()
+        with service_target(AUTH_OBJECTS_TARGET):
+            found: Final = await shared.read_missing(sorted(missing), batch=Batch.PRE_CALL)
+        management_ttl: Final = get_management_object_ttl(user_api_key_cache)
+    except Exception as e:  # noqa: BLE001  # warm-up only; the getters read Redis and the database on their own
+        verbose_proxy_logger.warning("auth identity prefetch skipped, falling back to per-key lookups: %s", e)
+        return
+    for key, value in ((key, found.get(key)) for key in missing):
+        if value is not None:
+            shared.set_local(key, value, _identity_memory_ttl(value, management_ttl))

@@ -14,6 +14,7 @@ import os
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
@@ -80,6 +81,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         else:
             self.increment_script = None
 
+    @with_service_target("session_iterations")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -189,7 +191,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         """
         if self.increment_script is not None:
             try:
-                result: Final = await self.increment_script(
+                result: Final[int] = await self.increment_script(
                     keys=[cache_key],
                     args=[self.ttl],
                 )
@@ -205,7 +207,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
     async def _in_memory_increment(self, cache_key: str) -> int:
         """Increment counter in in-memory cache with TTL."""
-        current: Final = await self.internal_usage_cache.async_get_cache(
+        current: Final[int | None] = await self.internal_usage_cache.async_get_cache(
             key=cache_key,
             litellm_parent_otel_span=None,
             local_only=True,
@@ -219,3 +221,6 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
             local_only=True,
         )
         return new_value
+
+
+PROXY_MaxIterationsHandler: Final = _PROXY_MaxIterationsHandler

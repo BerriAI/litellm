@@ -1,24 +1,26 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { PlayCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import AgentBuilderView from "@/app/(dashboard)/playground/components/chat_ui/AgentBuilderView";
-import ChatUI from "@/app/(dashboard)/playground/components/chat_ui/ChatUI";
+import { PlaygroundChat, type ProxySettings } from "@/app/(dashboard)/playground/components/chat/PlaygroundChat";
 import CompareUI from "@/app/(dashboard)/playground/components/compareUI/CompareUI";
 import ComplianceUI from "@/app/(dashboard)/playground/components/complianceUI/ComplianceUI";
-import { DeprecationBanner } from "@/components/DeprecationBanner";
+import SystemOneUI from "@/app/(dashboard)/playground/components/systemOneUI/SystemOneUI";
+import BetaBadge from "@/components/BetaBadge";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUrlTab } from "@/hooks/useUrlTab";
+import { Page, PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 
-const PLAYGROUND_TABS = ["chat", "compare", "compliance", "agent-builder"] as const;
+const PLAYGROUND_TABS = ["chat", "compare", "compliance", "system-one", "agent-builder"] as const;
 
-interface ProxySettings {
-  PROXY_BASE_URL?: string;
-  LITELLM_UI_API_DOC_BASE_URL?: string | null;
-}
+const TAB_TRIGGER = "h-full group-data-horizontal/tabs:after:-bottom-0.5";
 
 export default function PlaygroundPage() {
+  const { t } = useTranslation();
   const { accessToken, userRole, userId, disabledPersonalKeyCreation, token, isViewOnly } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
   const [activeTab, setActiveTab] = useUrlTab(PLAYGROUND_TABS, "chat");
@@ -42,57 +44,56 @@ export default function PlaygroundPage() {
   if (isViewOnly) {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-8 text-center">
-        <h1 className="text-2xl font-semibold">Access Denied</h1>
-        <p className="text-muted-foreground">
-          Your role does not have access to the Playground. Ask your proxy admin for access to test models.
-        </p>
+        <h1 className="text-2xl font-semibold">{t("playground.page.accessDenied.title")}</h1>
+        <p className="text-muted-foreground">{t("playground.page.accessDenied.description")}</p>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
-      <Tabs
-        value={activeTab}
-        onValueChange={setActiveTab}
-        className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-hidden"
-      >
-        <TabsList variant="line" className="w-full shrink-0 justify-start overflow-x-auto pb-1">
-          <TabsTrigger value="chat" className="flex-none">
-            Chat
-          </TabsTrigger>
-          <TabsTrigger value="compare" className="flex-none">
-            Compare
-          </TabsTrigger>
-          <TabsTrigger value="compliance" className="flex-none">
-            Compliance
-          </TabsTrigger>
-          <TabsTrigger value="agent-builder" className="flex-none">
-            Agent Builder (Experimental)
-          </TabsTrigger>
-        </TabsList>
-        <TabsContent
-          value="chat"
-          className="mt-0 h-full min-h-0 min-w-0 overflow-hidden data-hidden:hidden"
-          keepMounted
-        >
-          <ChatUI
+    <Page className="h-full overflow-hidden pb-0 sm:pb-0">
+      <PageHeader>
+        <PageHeaderTitle>
+          <PlayCircle />
+          {t("playground.page.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("playground.page.description")}</PageHeaderDescription>
+      </PageHeader>
+      <PageTabs value={activeTab} onValueChange={setActiveTab} className="gap-0">
+        <PageTabsList>
+          <PageTabsTrigger value="chat" className={TAB_TRIGGER}>
+            {t("playground.page.tabs.chat")}
+          </PageTabsTrigger>
+          <PageTabsTrigger value="compare" className={TAB_TRIGGER}>
+            {t("playground.page.tabs.compare")}
+          </PageTabsTrigger>
+          <PageTabsTrigger value="compliance" className={TAB_TRIGGER}>
+            {t("playground.page.tabs.compliance")}
+          </PageTabsTrigger>
+          <PageTabsTrigger value="system-one" className={TAB_TRIGGER}>
+            <BetaBadge>{t("playground.page.tabs.decisions")}</BetaBadge>
+          </PageTabsTrigger>
+          <PageTabsTrigger value="agent-builder" className={TAB_TRIGGER}>
+            {t("playground.page.tabs.agentBuilder")}
+          </PageTabsTrigger>
+        </PageTabsList>
+        <PageTabsContent value="chat" className="overflow-hidden data-hidden:hidden" keepMounted>
+          <PlaygroundChat
             accessToken={accessToken}
-            token={token}
-            userRole={userRole}
-            userID={userId}
             disabledPersonalKeyCreation={disabledPersonalKeyCreation}
             proxySettings={proxySettings}
           />
-        </TabsContent>
-        <TabsContent value="compare" className="mt-0 h-full data-hidden:hidden" keepMounted>
+        </PageTabsContent>
+        <PageTabsContent value="compare" className="overflow-y-auto pt-4 data-hidden:hidden" keepMounted>
           <CompareUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
-        </TabsContent>
-        <TabsContent value="compliance" className="mt-0 h-full data-hidden:hidden" keepMounted>
+        </PageTabsContent>
+        <PageTabsContent value="compliance" className="overflow-y-auto pt-4 data-hidden:hidden" keepMounted>
           <ComplianceUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
-        </TabsContent>
-        <TabsContent value="agent-builder" className="mt-0 h-full data-hidden:hidden" keepMounted>
-          <DeprecationBanner featureName="The Playground's Agent Builder" />
+        </PageTabsContent>
+        <PageTabsContent value="system-one" className="overflow-y-auto pt-4 data-hidden:hidden" keepMounted>
+          <SystemOneUI accessToken={accessToken} disabledPersonalKeyCreation={disabledPersonalKeyCreation} />
+        </PageTabsContent>
+        <PageTabsContent value="agent-builder" className="overflow-y-auto pt-4 data-hidden:hidden" keepMounted>
           <AgentBuilderView
             accessToken={accessToken}
             token={token}
@@ -102,8 +103,8 @@ export default function PlaygroundPage() {
             proxySettings={proxySettings}
             customProxyBaseUrl={proxySettings?.LITELLM_UI_API_DOC_BASE_URL ?? proxySettings?.PROXY_BASE_URL}
           />
-        </TabsContent>
-      </Tabs>
-    </div>
+        </PageTabsContent>
+      </PageTabs>
+    </Page>
   );
 }

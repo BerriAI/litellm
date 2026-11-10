@@ -21,6 +21,7 @@ from typing import Final
 import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import Headers, Success, get_external
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 import litellm
@@ -31,6 +32,7 @@ pytestmark = pytest.mark.e2e
 
 class LangsmithHeaders(Headers):
     x_api_key: str = Field(serialization_alias="x-api-key")
+    x_tenant_id: str | None = Field(default=None, serialization_alias="x-tenant-id")
 
 
 class LangsmithRunExtra(BaseModel):
@@ -49,6 +51,7 @@ class LangsmithCreds:
     api_key: str
     base_url: str
     project: str
+    tenant_id: str | None
 
 
 def load_langsmith_creds() -> LangsmithCreds:
@@ -61,6 +64,7 @@ def load_langsmith_creds() -> LangsmithCreds:
         api_key=api_key,
         base_url=(os.getenv("LANGSMITH_BASE_URL") or "https://api.smith.langchain.com").rstrip("/"),
         project=os.getenv("LANGSMITH_PROJECT") or "litellm-e2e",
+        tenant_id=os.getenv("LANGSMITH_TENANT_ID"),
     )
 
 
@@ -68,7 +72,7 @@ def _fetch_run(creds: LangsmithCreds, run_id: uuid.UUID) -> LangsmithRun | None:
     result = get_external(
         f"{creds.base_url}/runs/{run_id}",
         response_type=LangsmithRun,
-        headers=LangsmithHeaders(x_api_key=creds.api_key),
+        headers=LangsmithHeaders(x_api_key=creds.api_key, x_tenant_id=creds.tenant_id),
     )
     match result:
         case Success(data=run):
@@ -90,10 +94,21 @@ def _poll_run(creds: LangsmithCreds, run_id: uuid.UUID) -> LangsmithRun:
 class TestLangsmithBatchSerialization:
     @pytest.mark.asyncio
     @pytest.mark.covers("logging.langsmith.success.serializes_non_native_metadata")
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            providers=(Provider.OPENAI,),
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     async def test_non_json_native_metadata_reaches_langsmith(self) -> None:
         creds: Final = load_langsmith_creds()
         logger: Final = LangsmithLogger(
-            langsmith_api_key=creds.api_key, langsmith_project=creds.project, langsmith_base_url=creds.base_url
+            langsmith_api_key=creds.api_key,
+            langsmith_project=creds.project,
+            langsmith_base_url=creds.base_url,
+            langsmith_tenant_id=creds.tenant_id,
         )
         assert not logger.is_mock_mode, "LangsmithLogger initialised in mock mode; this e2e needs the real API"
         marker: Final = unique_marker()

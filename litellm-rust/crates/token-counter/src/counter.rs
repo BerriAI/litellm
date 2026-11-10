@@ -1,12 +1,12 @@
 use serde::Serialize;
 
-use crate::Error;
 use crate::python_json;
 use crate::tools::format_function_definitions;
 use crate::types::{
-    ContentBlock, ContentItem, CountableRequest, Message, MessageContent, TextValue, ToolChoice,
-    ToolDefinition,
+    ContentItem, CountableContentBlock, CountableRequest, Message, MessageContent, TextValue,
+    ToolChoice, ToolDefinition,
 };
+use crate::{Error, Unsupported};
 
 const TOKENS_PER_MESSAGE: usize = 3;
 const TOKENS_PER_NAME: usize = 1;
@@ -53,7 +53,7 @@ impl TokenCounter {
             self.count_optional_text_value(request.query.as_ref())?
                 + self.count_optional_text_value(request.documents.as_ref())?
         } else {
-            return Err(Error::MissingInput);
+            return Err(Unsupported::MissingInput.into());
         };
         Ok(InputTokenCount {
             model: request.model.clone(),
@@ -96,7 +96,7 @@ impl TokenCounter {
             TextValue::Number(number) => match (number.as_i64(), number.as_u64()) {
                 (Some(number), _) => self.count_text(itoa::Buffer::new().format(number)),
                 (_, Some(number)) => self.count_text(itoa::Buffer::new().format(number)),
-                _ => Err(Error::FloatText),
+                _ => Err(Unsupported::FloatText.into()),
             },
             TextValue::Text(text) => self.count_text(text),
             TextValue::List(items) => items
@@ -130,20 +130,22 @@ impl TokenCounter {
     fn count_content_item(&self, item: &ContentItem) -> Result<usize, Error> {
         match item {
             ContentItem::Text(text) => self.count_text(text),
-            ContentItem::Block(ContentBlock::Text { text }) => self.count_text(text),
-            ContentItem::Block(ContentBlock::Thinking { thinking }) => {
+            ContentItem::Block(CountableContentBlock::Text { text }) => self.count_text(text),
+            ContentItem::Block(CountableContentBlock::Thinking { thinking }) => {
                 if thinking.is_empty() {
                     return Ok(0);
                 }
                 self.count_text(thinking)
             }
-            ContentItem::Block(ContentBlock::ToolReference { tool_name }) => {
+            ContentItem::Block(CountableContentBlock::ToolReference { tool_name }) => {
                 match tool_name.as_deref().filter(|name| !name.is_empty()) {
                     Some(name) => self.count_text(name),
                     None => Ok(0),
                 }
             }
-            ContentItem::Block(ContentBlock::Unsupported) => Err(Error::ContentBlock),
+            ContentItem::Block(CountableContentBlock::Unsupported) => {
+                Err(Unsupported::ContentBlock.into())
+            }
         }
     }
 

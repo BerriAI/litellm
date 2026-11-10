@@ -31,10 +31,13 @@ class httpxSpecialProvider(str, Enum):
     A2A = "a2a"
     PromptManagement = "prompt_management"
     UI = "ui"
+    ROICalculator = "roi_calculator"
     Sandbox = "sandbox"
     ModelCostMap = "model_cost_map"
+    CodexModelCatalog = "codex_model_catalog"
     PasswordBreachCheck = "password_breach_check"
     ASGI = "asgi"
+    AgentHarness = "agent_harness"
 
 
 VerifyTypes = str | bool | ssl.SSLContext

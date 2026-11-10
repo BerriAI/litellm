@@ -6,12 +6,12 @@ It searches the vector store for relevant context, runs the request's pre-call g
 over that context, and appends it to the messages.
 """
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_args
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
@@ -27,7 +27,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import CallTypes, StandardCallbackDynamicParams
+from litellm.types.utils import CallTypes, LLMResponseTypes, ModelResponse, StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
     VectorStoreSearchFailure,
@@ -44,9 +44,12 @@ else:
     LiteLLMLoggingObj = Any
 
 SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
+_PROVIDER_FIELDS_ATTRIBUTE: Final = "provider_specific_fields"
 _DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
 _FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
+_OBJECT_ADAPTER: Final = TypeAdapter(object)
 _STR_KEYED_ADAPTER: Final = TypeAdapter(dict[str, object])
+_ITERABLE_ADAPTER: Final = TypeAdapter(Iterable[object], config=ConfigDict(hide_input_in_errors=True))
 _GUARDRAIL_KEYS_THE_PROXY_MERGES_INTO_METADATA: Final = frozenset(
     {"guardrails", "guardrail_config", "policies", "include_guardrail_response"}
 )
@@ -269,7 +272,9 @@ class VectorStorePreCallHook(CustomLogger):
             verbose_logger.debug("No query found in messages for vector store search")
             return None
 
-        request_litellm_params: Final = litellm_logging_obj.model_call_details.get("litellm_params", {})
+        request_litellm_params: Final = _OBJECT_ADAPTER.validate_python(
+            litellm_logging_obj.model_call_details.get("litellm_params", {})
+        )
         request_metadata: Final = (
             request_litellm_params.get("metadata", {}) if isinstance(request_litellm_params, dict) else {}
         )
@@ -415,9 +420,9 @@ class VectorStorePreCallHook(CustomLogger):
     async def async_post_call_success_deployment_hook(
         self,
         request_data: dict,
-        response: Any,
+        response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> Any | None:
+    ) -> LLMResponseTypes | None:
         """
         Add search results to the response after successful LLM call.
 
@@ -451,7 +456,7 @@ class VectorStorePreCallHook(CustomLogger):
                 return response
 
             # Add search results to response object
-            if hasattr(response, "choices") and response.choices:
+            if isinstance(response, ModelResponse) and response.choices:
                 for choice in response.choices:
                     if hasattr(choice, "message") and choice.message:
                         provider_fields = getattr(choice.message, "provider_specific_fields", None) or {}
@@ -472,7 +477,7 @@ class VectorStorePreCallHook(CustomLogger):
     async def async_post_call_streaming_deployment_hook(
         self,
         request_data: dict,
-        response_chunk: Any,
+        response_chunk: object,
         call_type: CallTypes | None,
     ) -> object | None:
         """
@@ -493,15 +498,17 @@ class VectorStorePreCallHook(CustomLogger):
                 return response_chunk
 
             # Add search results to streaming chunk
-            if hasattr(response_chunk, "choices") and response_chunk.choices:
-                for choice in response_chunk.choices:
-                    if hasattr(choice, "delta") and choice.delta:
-                        provider_fields = getattr(choice.delta, "provider_specific_fields", None) or {}
+            choices: Final[object] = getattr(response_chunk, "choices", None)
+            if choices:
+                for choice in _ITERABLE_ADAPTER.validate_python(choices):
+                    delta: object = getattr(choice, "delta", None)
+                    if delta:
+                        provider_fields = getattr(delta, _PROVIDER_FIELDS_ATTRIBUTE, None) or {}
                         if search_results:
                             provider_fields["search_results"] = search_results
                         if search_failures:
                             provider_fields[SEARCH_FAILURES_FIELD] = search_failures
-                        choice.delta.provider_specific_fields = provider_fields
+                        setattr(delta, _PROVIDER_FIELDS_ATTRIBUTE, provider_fields)
 
             # Return modified chunk
             return response_chunk

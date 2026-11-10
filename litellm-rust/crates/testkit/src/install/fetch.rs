@@ -38,9 +38,9 @@ impl Fetch for HttpFetch {
             (Some(token), true) => request.bearer_auth(token),
             _ => request,
         };
-        let request_error = |source| Error::Request {
+        let request_error = |source: reqwest::Error| Error::Request {
             url: url.to_owned(),
-            source,
+            source: source.into(),
         };
         let response = request.send().await.map_err(request_error)?;
         let status = response.status();

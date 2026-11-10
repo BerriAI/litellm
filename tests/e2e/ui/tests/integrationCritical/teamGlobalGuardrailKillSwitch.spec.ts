@@ -5,8 +5,9 @@ import {
   Page as PlaywrightPage,
 } from "@playwright/test";
 import { randomUUID } from "node:crypto";
+import { masterKey } from "../../helpers/traffic";
 
-const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
+const master = masterKey();
 const headers = { Authorization: `Bearer ${master}` };
 
 async function createTeam(request: APIRequestContext): Promise<string> {

@@ -5,6 +5,7 @@ export interface SearchToolFormValues {
   search_provider: string;
   api_key?: string | null;
   description?: string | null;
+  input_cost_per_query?: number | null;
 }
 
 export interface SearchToolPayload {
@@ -18,6 +19,7 @@ export const buildSearchToolPayload = (values: SearchToolFormValues): SearchTool
   litellm_params: {
     search_provider: values.search_provider,
     api_key: values.api_key,
+    input_cost_per_query: values.input_cost_per_query,
   },
   search_tool_info: values.description ? { description: values.description } : undefined,
 });

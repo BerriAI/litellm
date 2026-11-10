@@ -1,5 +1,6 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import moment from "moment";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import AdvancedDatePicker from "./advanced_date_picker";
 
@@ -37,6 +38,32 @@ describe("AdvancedDatePicker", () => {
       fireEvent.click(trigger);
     }
   };
+
+  it.each([
+    ["MTD", "Month to date"],
+    ["YTD", "Year to date"],
+  ])("keeps %s selected when calendar ranges coincide", (preset, label) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2027, 0, 1, 12));
+    try {
+      render(
+        <AdvancedDatePicker
+          value={{ from: new Date(2027, 0, 1), to: new Date(2027, 0, 1, 23, 59, 59, 999) }}
+          onValueChange={mockOnValueChange}
+          presetShortLabel={preset}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "1 Jan, 00:00 - 1 Jan, 23:59" }));
+      expect(screen.getByRole("button", { name: new RegExp(label) })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: /Today/ })).toHaveAttribute("aria-pressed", "false");
+      fireEvent.click(screen.getByRole("button", { name: /Today/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      fireEvent.click(screen.getByRole("button", { name: "1 Jan, 00:00 - 1 Jan, 23:59" }));
+      expect(screen.getByRole("button", { name: new RegExp(label) })).toHaveAttribute("aria-pressed", "true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("should render with default label", () => {
     render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
@@ -166,6 +193,82 @@ describe("AdvancedDatePicker", () => {
     });
   });
 
+  it("passes the clicked preset label when applying", async () => {
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+    openDropdown(container);
+    fireEvent.click(screen.getByText("Today"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "today");
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "today");
+    });
+  });
+
+  it("passes a null preset label when typed dates match today", async () => {
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+    const today = moment().format("YYYY-MM-DD");
+
+    openDropdown(container);
+    fireEvent.change(screen.getByDisplayValue("2025-01-01"), { target: { value: today } });
+    fireEvent.change(screen.getByDisplayValue("2025-01-31"), { target: { value: today } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), null);
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), null);
+    });
+  });
+
+  it("resets the preset label when the parent switches to a custom range", async () => {
+    const { container, rerender } = render(
+      <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />,
+    );
+
+    openDropdown(container);
+    fireEvent.click(screen.getByText("Today"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "today");
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "today");
+    });
+
+    mockOnValueChange.mockClear();
+    const customValue = {
+      from: new Date("2025-02-01T00:00:00.000Z"),
+      to: new Date("2025-02-10T23:59:59.999Z"),
+    };
+    rerender(<AdvancedDatePicker value={customValue} onValueChange={mockOnValueChange} presetShortLabel={null} />);
+
+    openDropdown(container);
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), null);
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), null);
+    });
+  });
+
+  it("preserves the parent preset label when applying an unchanged range", async () => {
+    const value = {
+      from: moment().subtract(30, "days").startOf("day").toDate(),
+      to: moment().endOf("day").toDate(),
+    };
+    const { container } = render(
+      <AdvancedDatePicker value={value} onValueChange={mockOnValueChange} presetShortLabel="30d" />,
+    );
+
+    openDropdown(container);
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "30d");
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "30d");
+    });
+  });
+
   it("should select relative time option", () => {
     const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
 
@@ -234,5 +337,49 @@ describe("AdvancedDatePicker", () => {
       const applyButton = screen.getByText("Apply").closest("button");
       expect(applyButton).toBeDisabled();
     });
+  });
+
+  it("should label compact custom date inputs, validate their order and apply the corrected range", async () => {
+    const user = userEvent.setup();
+    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} compact />);
+
+    await user.click(screen.getByRole("button", { expanded: false }));
+    const start = screen.getByLabelText("Start date");
+    const end = screen.getByLabelText("End date");
+    expect(start).toHaveValue("2025-01-01");
+    expect(end).toHaveValue("2025-01-31");
+
+    act(() => fireEvent.change(start, { target: { value: "2025-02-01" } }));
+    expect(screen.getByText("End date cannot be before start date")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(mockOnValueChange).not.toHaveBeenCalled();
+
+    act(() => fireEvent.change(end, { target: { value: "2025-02-05" } }));
+    expect(screen.queryByText("End date cannot be before start date")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
+    expect(mockOnValueChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    const expectedRange = {
+      from: new Date(2025, 1, 1),
+      to: new Date(2025, 1, 5, 23, 59, 59, 999),
+    };
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expectedRange, null);
+    await waitFor(() => expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expectedRange, null));
+    expect(screen.queryByLabelText("Start date")).not.toBeInTheDocument();
+  });
+
+  it("should keep compact preset selection pending until Apply is clicked", async () => {
+    const user = userEvent.setup();
+    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} compact />);
+
+    await user.click(screen.getByRole("button", { expanded: false }));
+    await user.click(screen.getByRole("button", { name: /Last 7 days/ }));
+    expect(screen.getByRole("button", { name: /Last 7 days/ })).toHaveAttribute("aria-pressed", "true");
+    expect(mockOnValueChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Apply" }));
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "7d");
+    await waitFor(() => expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "7d"));
   });
 });

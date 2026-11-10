@@ -32,6 +32,7 @@ from typing import Final
 import pytest
 from e2e_config import provider_edge_base, unique_marker
 from e2e_http import ProbeResult
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, KeyGenerateBody, LiteLLMParamsBody, TeamNewBody
 from prometheus_client.parser import text_string_to_metric_families
@@ -41,6 +42,7 @@ from spend_reconciliation import INPUT_RATE, OUTPUT_RATE
 
 pytestmark = pytest.mark.e2e
 
+BACKEND: Final = "openai/gpt-5.6-luna"
 SPEND_METRIC: Final = "litellm_spend_metric_total"
 KEY_HASH_LABEL: Final = "hashed_api_key"
 TEAM_LABEL: Final = "team"
@@ -86,6 +88,14 @@ def _same_spend(actual: float | None, expected: float) -> bool:
 class TestSpendSurfaceConsistency:
     @pytest.mark.replayable
     @pytest.mark.covers("quota_management.spend_tracking.surface_consistency.matches_every_surface")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_one_request_lands_the_same_spend_on_every_surface(
         self, client: SpendClient, resources: ResourceManager
     ) -> None:
@@ -96,7 +106,7 @@ class TestSpendSurfaceConsistency:
         model_id: Final = client.proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model="openai/gpt-5.6-luna",
+                model=BACKEND,
                 api_key="os.environ/OPENAI_API_KEY",
                 api_base=None if base is None else f"{base}/v1",
                 input_cost_per_token=INPUT_RATE,

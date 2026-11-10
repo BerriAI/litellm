@@ -1,7 +1,7 @@
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class TagBase(BaseModel):
+class TagBase(LiteLLMBaseModel):
     name: str
     description: str | None = None
     models: list[str] | None = None
@@ -27,6 +27,7 @@ class TagNewRequest(TagBase):
 
 
 class TagUpdateRequest(TagBase):
+    spend: float | None = None
     budget_id: str | None = None
     # Budget fields - if provided, will update the budget
     max_budget: float | None = None
@@ -38,9 +39,9 @@ class TagUpdateRequest(TagBase):
     budget_duration: str | None = None
 
 
-class TagDeleteRequest(BaseModel):
+class TagDeleteRequest(LiteLLMBaseModel):
     name: str
 
 
-class TagInfoRequest(BaseModel):
+class TagInfoRequest(LiteLLMBaseModel):
     names: list[str]

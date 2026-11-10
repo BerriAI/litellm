@@ -1,7 +1,11 @@
+import { useTerminology } from "@/contexts/TerminologyContext";
+import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 import { BarChart3, Bot, Building2, Globe, LineChart, ShoppingCart, Tags, User, Users } from "lucide-react";
 import React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import i18n from "@/i18n/i18n";
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import { all_admin_roles } from "@/utils/roles";
 export type UsageOption =
@@ -26,108 +30,120 @@ export interface UsageViewSelectProps {
 }
 interface OptionConfig {
   value: UsageOption;
-  label: string;
-  description: string;
+  label: ParseKeys;
+  description: ParseKeys;
   icon: React.ReactNode;
   capability?: Capability;
   adminOnly?: boolean;
-  showForAdmin?: string;
-  showForNonAdmin?: string;
-  descriptionForAdmin?: string;
-  descriptionForNonAdmin?: string;
+  showForAdmin?: ParseKeys;
+  showForNonAdmin?: ParseKeys;
+  descriptionForAdmin?: ParseKeys;
+  descriptionForNonAdmin?: ParseKeys;
   badgeText?: string;
 }
 const OPTIONS: OptionConfig[] = [
   {
     value: "global",
-    label: "Global Usage",
-    showForAdmin: "Global Usage",
-    showForNonAdmin: "Your Usage",
-    description: "View usage across all resources",
-    descriptionForAdmin: "View usage across all resources",
-    descriptionForNonAdmin: "View your usage",
+    label: "usage.viewSelect.options.global.label",
+    showForAdmin: "usage.viewSelect.options.global.adminLabel",
+    showForNonAdmin: "usage.viewSelect.options.global.nonAdminLabel",
+    description: "usage.viewSelect.options.global.description",
+    descriptionForAdmin: "usage.viewSelect.options.global.adminDescription",
+    descriptionForNonAdmin: "usage.viewSelect.options.global.nonAdminDescription",
     icon: <Globe className="size-4" />,
   },
   {
     value: "my-usage",
-    label: "Your Usage",
-    description: "View your own usage",
+    label: "usage.viewSelect.options.myUsage.label",
+    description: "usage.viewSelect.options.myUsage.description",
     icon: <User className="size-4" />,
     adminOnly: true,
   },
   {
     value: "organization",
-    label: "Organization Usage",
-    description: "View usage across all organizations",
+    label: "usage.viewSelect.options.organization.label",
+    description: "usage.viewSelect.options.organization.description",
     icon: <Building2 className="size-4" />,
     capability: "viewOrganizationUsage",
   },
   {
     value: "team",
-    label: "Team Usage",
-    description: "View usage by team",
+    label: "usage.viewSelect.options.team.label",
+    description: "usage.viewSelect.options.team.description",
     icon: <Users className="size-4" />,
   },
   {
     value: "customer",
-    label: "Customer Usage",
-    description: "View usage by customer accounts",
+    label: "usage.viewSelect.options.customer.label",
+    description: "usage.viewSelect.options.customer.description",
     icon: <ShoppingCart className="size-4" />,
     adminOnly: true,
   },
   {
     value: "tag",
-    label: "Tag Usage",
-    description: "View usage grouped by tags",
+    label: "usage.viewSelect.options.tag.label",
+    description: "usage.viewSelect.options.tag.description",
     icon: <Tags className="size-4" />,
     adminOnly: true,
   },
   {
     value: "agent",
-    label: "Agent Usage (A2A)",
-    description: "View usage by AI agents",
+    label: "usage.viewSelect.options.agent.label",
+    description: "usage.viewSelect.options.agent.description",
     icon: <Bot className="size-4" />,
     capability: "viewAgentUsage",
   },
   {
     value: "user",
-    label: "User Usage",
-    description: "View usage by individual users",
+    label: "usage.viewSelect.options.user.label",
+    description: "usage.viewSelect.options.user.description",
     icon: <User className="size-4" />,
     adminOnly: true,
   },
   {
     value: "user-agent-activity",
-    label: "User Agent Activity",
-    description: "View detailed user agent activity logs",
+    label: "usage.viewSelect.options.userAgentActivity.label",
+    description: "usage.viewSelect.options.userAgentActivity.description",
     icon: <LineChart className="size-4" />,
     adminOnly: true,
   },
 ];
+const visibleOptions = (userRole: string | null, canViewTagUsage: boolean, isOrgAdmin: boolean): OptionConfig[] => {
+  const isAdmin = all_admin_roles.includes(userRole ?? "");
+  return OPTIONS.filter((option) => {
+    if (option.capability) {
+      return hasCapability(userRole, option.capability, isOrgAdmin);
+    }
+    if (option.value === "tag" && canViewTagUsage) {
+      return true;
+    }
+    return !(option.adminOnly && !isAdmin);
+  });
+};
+
+export const USAGE_OPTIONS: readonly UsageOption[] = OPTIONS.map((option) => option.value);
+
+export const allowedUsageOptions = (
+  userRole: string | null,
+  canViewTagUsage: boolean,
+  isOrgAdmin: boolean,
+): readonly UsageOption[] => visibleOptions(userRole, canViewTagUsage, isOrgAdmin).map((option) => option.value);
+
 export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   value,
   onChange,
   userRole,
   canViewTagUsage = false,
   isOrgAdmin = false,
-  title = "Usage View",
-  description = "Select the usage data you want to view",
+  title = i18n.t("usage.viewSelect.title"),
+  description = i18n.t("usage.viewSelect.description"),
   "data-id": dataId,
 }) => {
+  const { t } = useTranslation();
+  const term = useTerminology();
   const isAdmin = all_admin_roles.includes(userRole ?? "");
   const getFilteredOptions = () => {
-    return OPTIONS.filter((option) => {
-      if (option.capability) {
-        return hasCapability(userRole, option.capability, isOrgAdmin);
-      }
-      if (option.value === "tag" && canViewTagUsage) {
-        return true;
-      }
-      if (option.adminOnly && !isAdmin) {
-        return false;
-      }
-      return true;
-    }).map((option) => {
+    return visibleOptions(userRole, canViewTagUsage, isOrgAdmin).map((option) => {
       let label = option.label;
       let desc = option.description;
       if (option.showForAdmin && option.showForNonAdmin) {
@@ -138,8 +154,8 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
       }
       return {
         value: option.value,
-        label,
-        description: desc,
+        label: t(label),
+        description: term(t(desc)),
         icon: option.icon,
         badgeText: option.badgeText,
       };
@@ -148,51 +164,43 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   const filteredOptions = getFilteredOptions();
   const selectedOption = filteredOptions.find((option) => option.value === value);
   return (
-    <div className="w-full" data-id={dataId}>
-      <div className="flex flex-wrap items-center justify-start gap-4">
-        <div className="flex items-stretch gap-2 min-w-0">
-          <div className="shrink-0 flex items-center">
-            <BarChart3 className="size-8" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-foreground mb-0.5 leading-tight">{title}</h3>
-            <p className="text-xs text-muted-foreground leading-tight">{description}</p>
-          </div>
-        </div>
-        <div className="shrink-0">
-          <Select
-            value={value}
-            onValueChange={(next: UsageOption | null) => {
-              if (next) onChange(next);
-            }}
-          >
-            <SelectTrigger className="w-54 sm:w-64 md:w-72">
-              <SelectValue>
-                {selectedOption && (
-                  <span className="flex items-center gap-2">
-                    {selectedOption.icon}
-                    <span className="text-sm">{selectedOption.label}</span>
-                  </span>
-                )}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {filteredOptions.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  <span className="flex items-center gap-2 py-1">
-                    <span className="shrink-0 mt-0.5">{option.icon}</span>
-                    <span className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium text-foreground">{option.label}</span>
-                      <span className="block text-xs text-muted-foreground mt-0.5">{option.description}</span>
-                    </span>
-                    {option.badgeText && <Badge>{option.badgeText}</Badge>}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+    <div className="flex items-center gap-3" data-id={dataId}>
+      <h1 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+        <BarChart3 aria-hidden="true" className="size-4" strokeWidth={2} />
+        {title}
+      </h1>
+      <Select
+        value={value}
+        onValueChange={(next: UsageOption | null) => {
+          if (next) onChange(next);
+        }}
+      >
+        <SelectTrigger aria-label={description} className="h-8 w-52">
+          <SelectValue>
+            {selectedOption && (
+              <span className="flex items-center gap-2">
+                {selectedOption.icon}
+                <span className="text-sm">{selectedOption.label}</span>
+              </span>
+            )}
+          </SelectValue>
+        </SelectTrigger>
+        {/* Sized to its content rather than the narrow trigger, so descriptions never clip. */}
+        <SelectContent align="start" className="w-auto min-w-72 p-1">
+          {filteredOptions.map((option) => (
+            <SelectItem key={option.value} value={option.value} className="rounded-md py-2 pr-8 pl-2">
+              <span className="flex items-start gap-2.5">
+                <span className="mt-0.5 shrink-0 text-muted-foreground">{option.icon}</span>
+                <span className="min-w-0">
+                  <span className="block text-sm leading-5 text-foreground">{option.label}</span>
+                  <span className="block text-xs leading-4 text-muted-foreground">{option.description}</span>
+                </span>
+                {option.badgeText && <Badge>{option.badgeText}</Badge>}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   );
 };

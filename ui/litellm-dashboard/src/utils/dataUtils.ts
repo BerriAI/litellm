@@ -1,3 +1,4 @@
+import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
 
 export function updateExistingKeys<Source extends object>(target: Source, source: object): Source {
@@ -52,15 +53,13 @@ export const getSpendString = (value: number | null | undefined, decimals: numbe
     return "-";
   }
 
-  const formatted = formatNumberWithCommas(value, decimals, false, false);
-  const numericFormatted = Number(formatted.replace(/,/g, ""));
-
-  if (numericFormatted === 0) {
+  const halfSmallestUnit = Number(`5e-${decimals + 1}`);
+  if (Math.abs(value) < halfSmallestUnit) {
     const threshold = (1 / 10 ** decimals).toFixed(decimals);
     return `< $${threshold}`;
   }
 
-  return `$${formatted}`;
+  return `$${formatNumberWithCommas(value, decimals, false, false)}`;
 };
 
 export const formatPerSecondCost = (cost: number): string =>
@@ -68,7 +67,7 @@ export const formatPerSecondCost = (cost: number): string =>
 
 export const copyToClipboard = async (
   text: string | null | undefined,
-  messageText: string = "Copied to clipboard",
+  messageText: string = i18n.t("utils.dataUtils.copiedToClipboard"),
 ): Promise<boolean> => {
   if (!text) return false;
 
@@ -92,6 +91,7 @@ export const copyToClipboard = async (
 // Fallback method using document.execCommand (deprecated but widely supported)
 const fallbackCopyToClipboard = (text: string, messageText: string): boolean => {
   try {
+    const previouslyFocused = document.activeElement;
     const textArea = document.createElement("textarea");
     textArea.value = text;
 
@@ -102,20 +102,22 @@ const fallbackCopyToClipboard = (text: string, messageText: string): boolean => 
     textArea.setAttribute("readonly", "");
 
     document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
+    try {
+      textArea.focus();
+      textArea.select();
 
-    const successful = document.execCommand("copy");
-    document.body.removeChild(textArea);
-
-    if (successful) {
-      toast.success(messageText);
-      return true;
-    } else {
-      throw new Error("execCommand failed");
+      if (document.execCommand("copy")) {
+        toast.success(messageText);
+        return true;
+      }
+    } finally {
+      textArea.remove();
+      if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
     }
+    toast.fromError(i18n.t("utils.dataUtils.copyFailed"));
+    return false;
   } catch (err) {
-    toast.fromError("Failed to copy to clipboard");
+    toast.fromError(i18n.t("utils.dataUtils.copyFailed"));
     console.error("Failed to copy: ", err);
     return false;
   }

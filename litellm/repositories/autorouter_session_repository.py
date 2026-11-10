@@ -7,15 +7,20 @@ from typing import TYPE_CHECKING, Final
 from litellm.models.autorouter_session import LiteLLM_AutoRouterSession
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
+class _AutoRouterSessionTable(PrismaTableRepository["prisma_models.LiteLLM_AutoRouterSession"]):
+    table_name = "litellm_autoroutersession"
+
+
 class AutoRouterSessionRepository(BaseRepository[LiteLLM_AutoRouterSession]):
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_AutoRouterSession"]:
-        return self.prisma_client.db.litellm_autoroutersession
+        return _AutoRouterSessionTable(self._prisma_client).table
 
     @property
     def model_class(self) -> type[LiteLLM_AutoRouterSession]:
@@ -28,7 +33,7 @@ class AutoRouterSessionRepository(BaseRepository[LiteLLM_AutoRouterSession]):
         row under the caller's api_key, so a key can only ever see what it wrote itself.
         """
         record: Final = await self.table.find_first(
-            where={"api_key": api_key, "session_id": session_id},  # mutable-ok: Prisma where filter must be a dict
-            order={"last_turn_at": "desc"},  # mutable-ok: Prisma order clause must be a dict
+            where={"api_key": api_key, "session_id": session_id},
+            order={"last_turn_at": "desc"},
         )
         return self._to_model(record)

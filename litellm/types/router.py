@@ -4,23 +4,53 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+import functools
+import re
+from collections.abc import Container, Mapping, Sequence
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Final,
+    Generic,
+    Literal,
+    TypeAlias,
+    TypeVar,
+    get_type_hints,
+)
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from openai import Timeout as SDKTimeout
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictInt,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
-    from litellm.router import Router
+    from litellm.router_api import RoutingContext as RouterContext
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
@@ -29,11 +59,42 @@ from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
 from .utils import (
+    # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
+    API_KEY_SECRET_REFERENCE_REJECTION as _API_KEY_SECRET_REFERENCE_REJECTION,
+)
+from .utils import (
+    OIDC_SECRET_REFERENCE_PREFIX as _OIDC_SECRET_REFERENCE_PREFIX,
+)
+from .utils import (
+    AdminApiKeySecretReference as _AdminApiKeySecretReference,
+)
+from .utils import (
+    CooldownDeploymentInfo,
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     ModelResponse,
     StandardLoggingRoutingDecision,
 )
+from .utils import (
+    server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
+)
+
+AllowedModelRegion: TypeAlias = Literal["eu", "us"]
+
+
+class SilentExperimentFlag(TypedDict, total=False):
+    is_silent_experiment: ReadOnly[bool]
+
+
+class FallbackSkipReason(str, enum.Enum):
+    NOT_AUTHORIZED = "not_authorized"
+    OVER_BUDGET = "over_budget"
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedFallbackTarget:
+    target: str
+    reason: FallbackSkipReason
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -43,7 +104,7 @@ class ConfigurableClientsideParamsCustomAuth(TypedDict):
 CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = list[str | ConfigurableClientsideParamsCustomAuth] | None
 
 
-class ModelConfig(BaseModel):
+class ModelConfig(LiteLLMBaseModel):
     model_name: str
     litellm_params: CompletionRequest | EmbeddingRequest
     tpm: int
@@ -52,7 +113,7 @@ class ModelConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class RoutingGroup(BaseModel):
+class RoutingGroup(LiteLLMBaseModel):
     """
     A group of models that share a routing strategy.
     """
@@ -84,7 +145,7 @@ class RoutingGroup(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class RouterConfig(BaseModel):
+class RouterConfig(LiteLLMBaseModel):
     model_list: list[ModelConfig]
 
     redis_url: str | None = None
@@ -93,17 +154,17 @@ class RouterConfig(BaseModel):
     redis_password: str | None = None
 
     cache_responses: bool | None = False
-    cache_kwargs: dict | None = {}
+    cache_kwargs: dict | None = Field(default={})
     caching_groups: list[tuple[str, list[str]]] | None = None
     client_ttl: int | None = 3600
     num_retries: int | None = 0
     timeout: float | None = None
-    default_litellm_params: dict[str, str] | None = {}
+    default_litellm_params: dict[str, str] | None = Field(default={})
     set_verbose: bool | None = False
-    fallbacks: list | None = []
+    fallbacks: list | None = Field(default=[])
     allowed_fails: int | None = None
-    context_window_fallbacks: list | None = []
-    model_group_alias: dict[str, list[str]] | None = {}
+    context_window_fallbacks: list | None = Field(default=[])
+    model_group_alias: dict[str, list[str]] | None = Field(default={})
     retry_after: int | None = 0
     routing_strategy: RoutingStrategyName = "simple-shuffle"
     routing_groups: list[RoutingGroup] | None = None
@@ -111,7 +172,7 @@ class RouterConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class RetryPolicy(BaseModel):
+class RetryPolicy(LiteLLMBaseModel):
     """
     Use this to set a custom number of retries per exception type
     If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
@@ -144,7 +205,12 @@ OptionalPreCallChecks = list[
 ]
 
 
-class UpdateRouterConfig(BaseModel):
+FallbackTargets: TypeAlias = Sequence[str | Mapping[str, JsonValue]]
+ContentPolicyFallbackRule: TypeAlias = Annotated[Mapping[str, FallbackTargets], Field(min_length=1, max_length=1)]
+ContentPolicyFallbackRules: TypeAlias = Sequence[ContentPolicyFallbackRule]
+
+
+class UpdateRouterConfig(LiteLLMBaseModel):
     """
     Set of params that you can modify via `router.update_settings()`.
     """
@@ -163,11 +229,13 @@ class UpdateRouterConfig(BaseModel):
     retry_after: float | None = None
     fallbacks: list[dict] | None = None
     context_window_fallbacks: list[dict] | None = None
-    model_group_alias: dict[str, str | dict] | None = {}
+    content_policy_fallbacks: ContentPolicyFallbackRules | None = None
+    model_group_alias: dict[str, str | dict] | None = Field(default={})
     enable_tag_filtering: bool | None = None
     weights: RouterWeights | None = None
     tag_routing_prefix: str | None = None
     optional_pre_call_checks: OptionalPreCallChecks | None = None
+    fallback_on_unsupported_params: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -180,7 +248,7 @@ def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
     return value.astimezone(datetime.timezone.utc)
 
 
-class ModelAccessWindow(BaseModel):
+class ModelAccessWindow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     start: datetime.time
@@ -218,7 +286,12 @@ class ModelAccessWindow(BaseModel):
         return self
 
 
+def _whole_float_as_int(value: object) -> object:
+    return int(value) if isinstance(value, float) and value.is_integer() else value
+
+
 class ModelInfo(MirroredPricingParams):
+    enforce_supported_endpoints: bool | None = None
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: datetime.datetime | None = None
@@ -228,6 +301,7 @@ class ModelInfo(MirroredPricingParams):
     created_by: str | None = None
 
     base_model: str | None = None  # specify if the base model is azure/gpt-3.5-turbo etc for accurate cost tracking
+    pricing_provider: str | None = None  # provider whose cost-map rows price this deployment, else custom_llm_provider
     tier: Literal["free", "paid"] | None = None
 
     """
@@ -256,6 +330,7 @@ class ModelInfo(MirroredPricingParams):
     cost_per_ptu_per_hour: float | None = None
     ptu_effective_from: datetime.datetime | None = None
     ptu_effective_to: datetime.datetime | None = None
+    ptu_shares: Mapping[str, Annotated[StrictInt, BeforeValidator(_whole_float_as_int)]] | None = None
 
     # when tag-based routing's "!" or "&" constraints eliminate every deployment
     # in this model group, fall back to the default-tagged pool instead of
@@ -275,6 +350,12 @@ class ModelInfo(MirroredPricingParams):
     # (requested model group, selected model + provider, router correlation id)
     # in the spend log row's metadata. Set it on every deployment of the group.
     internal_router_model: bool | None = None
+
+    max_embedding_batch_size: Annotated[int, Field(gt=0)] | None = None
+
+    # deployments that set the same value share one provider encryption boundary, so encrypted reasoning
+    # minted on one can be replayed to another (e.g. regional endpoints of one OpenAI organization)
+    encrypted_content_boundary: Annotated[str, Field(min_length=1)] | None = None
 
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
@@ -319,8 +400,12 @@ class ModelInfo(MirroredPricingParams):
         setattr(self, key, value)
 
 
-class CredentialLiteLLMParams(BaseModel):
-    api_key: str | None = None
+class CredentialLiteLLMParams(LiteLLMBaseModel):
+    if TYPE_CHECKING:
+
+        def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: credential fields vary by provider
+
+    api_key: _AdminApiKeySecretReference | str | None = None
     api_base: str | None = None
     api_version: str | None = None
     ## AZURE OAUTH ##
@@ -346,6 +431,7 @@ class CredentialLiteLLMParams(BaseModel):
     ## OBJECT STORAGE (files / batches) ##
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
+    allow_legacy_cloud_file_ids: bool | None = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None
@@ -360,6 +446,7 @@ class CredentialLiteLLMParams(BaseModel):
     aws_external_id: str | None = None
     aws_session_tags: Sequence[AwsSessionTag] | None = None
     aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_control_plane_endpoint: str | None = None
     aws_bedrock_project_id: str | None = None
     s3_bucket_name: str | None = None
     s3_endpoint_url: str | None = None
@@ -374,8 +461,127 @@ class CredentialLiteLLMParams(BaseModel):
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
 
+    ## ANTHROPIC WORKLOAD IDENTITY FEDERATION ##
+    # Without these, get_deployment_credentials_with_provider silently drops a
+    # litellm_params-configured WIF setup before files/batches/passthrough callers see
+    # it, the same #30235-shaped gap azure_ad_token above was added to close.
+    anthropic_federation_rule_id: str | None = None
+    anthropic_organization_id: str | None = None
+    anthropic_service_account_id: str | None = None
+    anthropic_federation_workspace_id: str | None = None
+    anthropic_identity_token_file: str | None = None
+    anthropic_identity_token: str | None = None
+    anthropic_identity_source: str | None = None
+    anthropic_issuer_url: str | None = None
+    anthropic_issuer_subject: str | None = None
+    anthropic_issuer_audience: str | None = None
+    anthropic_issuer_ttl_seconds: int | None = None
+    anthropic_issuer_signing_key_ref: str | None = None
+    anthropic_keycloak_token_url: str | None = None
+    anthropic_keycloak_client_id: str | None = None
+    anthropic_keycloak_auth_method: str | None = None
+    anthropic_keycloak_client_secret_ref: str | None = None
+    anthropic_keycloak_scope: str | None = None
+    # Server-set when a client redirects api_base. Declared so it survives the strict dump the
+    # other federation fields above are declared for, rather than being rebuilt away in transit.
+    anthropic_disable_workload_identity_federation: bool | None = None
+
+    ## OPENAI WORKLOAD IDENTITY FEDERATION ##
+    openai_identity_provider_id: str | None = None
+    openai_service_account_id: str | None = None
+    openai_identity_token_file: str | None = None
+    token_exchange_endpoint: str | None = None
+    token_exchange_profile: str | None = None
+    token_exchange_scope: str | None = None
+    token_exchange_audience: str | None = None
+
+
+def _api_key_secret_reference(fields: Mapping[str, object]) -> tuple[str, ...]:
+    """The call path reads an ``oidc/`` api_key reference from the proxy's own filesystem or environment
+    and sends the result upstream, so it is server-owned the same way a federation field is."""
+    api_key: Final = fields.get("api_key")
+    return ("api_key",) if isinstance(api_key, str) and api_key.startswith(_OIDC_SECRET_REFERENCE_PREFIX) else ()
+
+
+def holds_api_key_secret_reference(fields: Mapping[str, object]) -> bool:
+    return bool(_api_key_secret_reference(fields))
+
+
+def server_owned_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
+    """Server-owned federation or OAuth token-exchange field names set in ``fields``, plus ``api_key``
+    when it holds an ``oidc/`` secret reference.
+
+    ``fields`` is a ``litellm_params`` dict (or a credential's ``credential_values`` mapping,
+    which feeds the same resolution when referenced by name). Derived from
+    ``server_owned_wif_litellm_params`` rather than hand-copied, so a persistence gate built on
+    this stays correct when a server-owned field is added there.
+    """
+    return tuple(
+        name for name in _server_owned_wif_litellm_params if fields.get(name) is not None
+    ) + _api_key_secret_reference(fields)
+
+
+def server_owned_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
+    """Server-owned federation or OAuth token-exchange field names appearing in ``keys``, whatever
+    value they carry.
+
+    The write gates on credentials need this key-based sibling of ``server_owned_wif_fields_present``:
+    ``get_litellm_params`` forwards a server-owned field on key presence, so a persisted
+    ``{"anthropic_issuer_url": None}`` can wedge every deployment that references the credential
+    even though no value is set. Pass a mapping (its keys are tested) or a plain collection of key
+    names.
+    """
+    return tuple(name for name in _server_owned_wif_litellm_params if name in keys)
+
+
+def server_owned_wif_fields_written(values: Mapping[str, object]) -> tuple[str, ...]:
+    return server_owned_wif_fields_named(values) + _api_key_secret_reference(values)
+
+
+_WIF_POINTER_FIELDS: Final = frozenset(name for name in _server_owned_wif_litellm_params if name.endswith("_ref"))
+
+
+def holds_secret_pointer(param_name: str) -> bool:
+    """A ``*_ref`` federation field is a secret POINTER the identity source dereferences at use
+    time, so a loader expanding ``os.environ/`` values must leave it as written."""
+    return param_name in _WIF_POINTER_FIELDS
+
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
+
+_STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
+
+_StrictlyValidatedParams: Final = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
+
+
+def validate_litellm_params_strictly(
+    params_model: type[_StrictlyValidatedParams], params: Mapping[str, object]
+) -> _StrictlyValidatedParams:
+    return params_model.model_validate(params, context=_STRICT_LITELLM_PARAMS)
+
+
+def _none_when_malformed_outside_strict_validation(
+    value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
+) -> object:
+    try:
+        return handler(value)
+    except ValidationError:
+        if info.context is _STRICT_LITELLM_PARAMS:
+            raise
+        return None
+
+
+_DAILY_RESET_TIME_PATTERN: Final = re.compile(r"\d{2}:\d{2}")
+
+
+def parse_daily_reset_time(value: str | None) -> datetime.timedelta:
+    """`daily_reset_time` is "HH:MM" in UTC, when the rpd/tpd window starts over; unset means midnight UTC."""
+    if value is None:
+        return datetime.timedelta(0)
+    if _DAILY_RESET_TIME_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"daily_reset_time must be HH:MM in UTC, got {value!r}")
+    parsed: Final = datetime.time.fromisoformat(value)
+    return datetime.timedelta(hours=parsed.hour, minutes=parsed.minute)
 
 
 class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
@@ -383,13 +589,25 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
 
+    if TYPE_CHECKING:
+
+        def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
+
     custom_llm_provider: str | None = None
+    responses_api_version: str | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
-    timeout: float | str | httpx.Timeout | None = None  # if str, pass in as os.environ/
-    stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
+    tpd: int | None = None
+    rpd: int | None = None
+    daily_reset_time: str | None = None
+    timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
+    # read timeout of a live stream, a faked stream takes the longer of this and timeout. If str, pass in as os.environ/
+    stream_timeout: float | str | None = None
+    # per service_tier overrides of timeout / stream_timeout, used when the request's service_tier matches a key
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
@@ -423,8 +641,19 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
     )
+    chatgpt_auth_file: str | None = Field(
+        default=None,
+        description="Path to a ChatGPT OAuth auth.json for this deployment.",
+    )
+    fireworks_forward_user_id: bool | None = Field(
+        default=None,
+        description="Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.",
+    )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
+    thought_signature_in_tool_call_id: Annotated[
+        bool | None, WrapValidator(_none_when_malformed_outside_strict_validation)
+    ] = None
     model_info: dict | None = None
     mock_response: str | ModelResponse | Exception | object | None = None
 
@@ -434,6 +663,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     tag_regex: list[str] | None = None
 
     # auto-router params
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -466,6 +696,20 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_ssl: bool | None = None
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
+
+    @field_validator("daily_reset_time")
+    @classmethod
+    def _daily_reset_time_is_utc_hh_mm(cls, value: str | None) -> str | None:
+        if value is not None:
+            parse_daily_reset_time(value)
+        return value
+
+    @field_validator("timeout")
+    @classmethod
+    def normalize_timeout(
+        cls, value: float | str | httpx.Timeout | SDKTimeout | None
+    ) -> float | str | httpx.Timeout | None:
+        return CompletionTimeout.normalize(value) if isinstance(value, (httpx.Timeout, SDKTimeout)) else value
 
     @field_validator("provider_affinity_header")
     @classmethod
@@ -524,6 +768,10 @@ class LiteLLM_Params(GenericLiteLLMParams):
     LiteLLM Params with 'model' requirement - used for completions
     """
 
+    if TYPE_CHECKING:
+
+        def __init__(self, *, model: str, **data: object) -> None: ...  # kwargs-ok: provider fields vary by model
+
     model: str
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
@@ -547,10 +795,14 @@ class LiteLLM_Params(GenericLiteLLMParams):
 class updateLiteLLMParams(GenericLiteLLMParams):
     # This class is used to update the LiteLLM_Params
     # only differece is model is optional
+    if TYPE_CHECKING:
+
+        def __init__(self, *, model: str | None = None, **data: object) -> None: ...  # kwargs-ok: per-provider
+
     model: str | None = None
 
 
-class updateDeployment(BaseModel):
+class updateDeployment(LiteLLMBaseModel):
     model_name: str | None = None
     litellm_params: updateLiteLLMParams | None = None
     model_info: ModelInfo | None = None
@@ -566,14 +818,20 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     rpm: int | None
     itpm: int | None
     otpm: int | None
+    tpd: ReadOnly[int | None]
+    rpd: ReadOnly[int | None]
+    daily_reset_time: ReadOnly[str | None]
     order: int | None
     weight: int | None
     max_parallel_requests: int | None
     api_key: str | None
     api_base: str | None
     api_version: str | None
-    timeout: float | str | httpx.Timeout | None
+    responses_api_version: ReadOnly[str | None]
+    timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
+    timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
+    stream_timeout_by_service_tier: ReadOnly[Mapping[str, float] | None]
     max_retries: int | None
     organization: list | str | None  # for openai orgs
     provider_affinity_header: ReadOnly[str | None]
@@ -586,6 +844,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     use_chat_completions_api: bool | None
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
+    kubernetes_pod_discovery: ReadOnly[bool | None]
     litellm_credential_name: str | None
     ## UNIFIED PROJECT/REGION ##
     region_name: str | None
@@ -606,7 +865,9 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## CUSTOM PRICING ##
     input_cost_per_token: float | None
     output_cost_per_token: float | None
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
+    input_cost_per_text_message: ReadOnly[float | None]
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
@@ -643,10 +904,13 @@ class DeploymentTypedDict(TypedDict, total=False):
 SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 
 
-class Deployment(BaseModel):
+class Deployment(LiteLLMBaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
+    # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked. None means "don't set it
+    # on create" -- the Prisma column defaults to False -- rather than "explicitly unblocked".
+    blocked: bool | None = None
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
@@ -740,7 +1004,7 @@ class RouterErrors(enum.Enum):
     )
 
 
-class AllowedFailsPolicy(BaseModel):
+class AllowedFailsPolicy(LiteLLMBaseModel):
     """
     Use this to set a custom number of allowed fails/minute before cooling down a deployment
     If `AuthenticationErrorAllowedFails = 1000`, then 1000 AuthenticationError will be allowed before cooling down a deployment
@@ -760,7 +1024,7 @@ class AllowedFailsPolicy(BaseModel):
     NotFoundErrorAllowedFails: int | None = None
 
 
-class AlertingConfig(BaseModel):
+class AlertingConfig(LiteLLMBaseModel):
     """
     Use this configure alerting for the router. Receive alerts on the following events
     - LLM API Exceptions
@@ -776,12 +1040,28 @@ class AlertingConfig(BaseModel):
     alerting_threshold: float | None = 300
 
 
+@functools.cache
 def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     """Resolve a class's annotations, keeping each resolved annotation opaque."""
-    return get_type_hints(model_class)
+    return MappingProxyType(get_type_hints(model_class))
 
 
-class ModelGroupInfo(BaseModel):
+class PriceTier(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    range: tuple[float, float]
+    costs: Mapping[str, float]
+
+
+class DeploymentPricing(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    costs: Mapping[str, float]
+    tiered_pricing: tuple[PriceTier, ...] = ()
+
+
+class ModelGroupInfo(LiteLLMBaseModel):
     model_group: str
     providers: list[str]
     max_input_tokens: float | None = None
@@ -802,12 +1082,16 @@ class ModelGroupInfo(BaseModel):
     supports_vision: bool = Field(default=False)
     supports_web_search: bool = Field(default=False)
     supports_url_context: bool = Field(default=False)
+    supports_continuation: bool = Field(default=False)
     supports_reasoning: bool = Field(default=False)
     supports_function_calling: bool = Field(default=False)
     supports_fast_mode: bool = Field(default=False)
     supported_reasoning_efforts: tuple[str, ...] | None = Field(default=None)
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
+    description: str | None = None
+    supported_endpoints: tuple[str, ...] | None = None
+    deployment_pricing: tuple[DeploymentPricing, ...] = ()
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():
@@ -832,6 +1116,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     api_base: str | None
     timeout: float | str | httpx.Timeout | None
     max_retries: int | None
+    input_cost_per_query: ReadOnly[float | None]
 
 
 class SearchToolInfoTypedDict(TypedDict, total=False):
@@ -882,7 +1167,7 @@ class GuardrailTypedDict(TypedDict, total=False):
     id: str | None  # Unique identifier for the guardrail deployment
 
 
-class FineTuningConfig(BaseModel):
+class FineTuningConfig(LiteLLMBaseModel):
     custom_llm_provider: Literal["azure", "openai"]
 
 
@@ -891,9 +1176,9 @@ class CustomRoutingStrategyBase:
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ) -> None:
         """
         Asynchronously retrieves the available deployment based on the given parameters.
@@ -914,9 +1199,9 @@ class CustomRoutingStrategyBase:
         self,
         model: str,
         messages: list[dict[str, str]] | None = None,
-        input: str | list | None = None,
+        input: str | list[object] | None = None,
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ) -> None:
         """
         Synchronously retrieves the available deployment based on the given parameters.
@@ -934,7 +1219,7 @@ class CustomRoutingStrategyBase:
         """
 
 
-class RouterGeneralSettings(BaseModel):
+class RouterGeneralSettings(LiteLLMBaseModel):
     async_only_mode: bool = Field(default=False)  # this will only initialize async clients. Good for memory utils
     pass_through_all_models: bool = Field(
         default=False
@@ -945,6 +1230,8 @@ class RouterRateLimitErrorBasic(ValueError):
     """
     Raise a basic error inside helper functions.
     """
+
+    status_code: Final = 429
 
     def __init__(
         self,
@@ -961,6 +1248,9 @@ class RouterErrorTypes(str, enum.Enum):
 
 
 class RouterRateLimitError(ValueError):
+    status_code: Final = 429
+    cooldown_deployments: tuple[CooldownDeploymentInfo, ...] | None = None
+
     def __init__(
         self,
         model: str,
@@ -968,11 +1258,13 @@ class RouterRateLimitError(ValueError):
         enable_pre_call_checks: bool,
         cooldown_list: list,
         model_ids: Sequence[str] = (),
+        cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
         self.model = model
         self.cooldown_time = cooldown_time
         self.enable_pre_call_checks = enable_pre_call_checks
         self.cooldown_list = cooldown_list
+        self.cooldown_deployments = None if cooldown_deployments is None else tuple(cooldown_deployments)
         self.all_deployments_in_cooldown = bool(model_ids) and frozenset(model_ids) <= frozenset(cooldown_list)
         self.type = (
             RouterErrorTypes.all_deployments_in_cooldown.value
@@ -997,6 +1289,8 @@ class RouterModelGroupAliasItem(TypedDict):
 class RetryAttemptRecord(TypedDict):
     model_group: ReadOnly[str | None]
     deployment_id: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    base_model: ReadOnly[str | None]
     exception_type: ReadOnly[str]
     exception_string: ReadOnly[str]
     attempted_retries: ReadOnly[int | None]
@@ -1025,7 +1319,7 @@ class RouterCacheEnum(enum.Enum):
     OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
 
 
-class GenericBudgetWindowDetails(BaseModel):
+class GenericBudgetWindowDetails(LiteLLMBaseModel):
     """Details about a provider's budget window"""
 
     budget_start: float
@@ -1042,7 +1336,7 @@ class FallbackAccessCheck(Protocol):
     rejects, so a fallback can never reach a model the caller could not have requested directly.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class FallbackBudgetCheck(Protocol):
@@ -1055,7 +1349,7 @@ class FallbackBudgetCheck(Protocol):
     and skips targets it rejects, leaving the free attempt itself untouched.
     """
 
-    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
+    async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], ctx: "RouterContext") -> bool: ...
 
 
 class AutoRouterCapabilityLimit(Protocol):
@@ -1100,11 +1394,11 @@ class MockRouterTestingParams:
         )
 
 
-class ModelGroupSettings(BaseModel):
+class ModelGroupSettings(LiteLLMBaseModel):
     forward_client_headers_to_llm_api: list[str] | None = None
 
 
-class PreRoutingHookResponse(BaseModel):
+class PreRoutingHookResponse(LiteLLMBaseModel):
     """
     Response object from the pre-routing hook.
 
@@ -1129,6 +1423,8 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
     tags: tuple[str, ...]
     strategy: _PreRoutingStrategyT_co
+    definition_fingerprint: str | None = None
+    deployment: Deployment | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1136,6 +1432,7 @@ class BaselineRouteStamp:
     router_name: str
     baseline_model: str
     baseline_deployment_id: str
+    request_parameters: Mapping[str, JsonValue] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1144,6 +1441,18 @@ class ConsumedRequestTagsStamp:
 
     model_group: str
     tags: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BaggageMappedTagsStamp:
+    """Request tags added by baggage mappings, which classify spend and budgets but never select deployments.
+
+    The serving deployment's own tags are kept beside them, so a mapped tag that the deployment also carries
+    still picks that deployment's guardrail mode.
+    """
+
+    tags: tuple[str, ...]
+    serving_deployment_tags: tuple[str, ...] = ()
 
 
 @runtime_checkable
@@ -1157,10 +1466,11 @@ class PreRoutingStrategy(Protocol):
         messages: list[dict[str, Any]] | None = None,
         input: "str | list[Any] | None" = None,
         specific_deployment: bool | None = False,
+        call_type: str | None = None,
     ) -> "PreRoutingHookResponse | None": ...
 
 
-class RoutingContext(BaseModel):
+class RoutingContext(LiteLLMBaseModel):
     """
     Passed through a Router's `plugins` pipeline before the routing decision is made.
 
@@ -1217,7 +1527,7 @@ class RequestType(str, enum.Enum):
     GENERAL = "general"
 
 
-class AdaptiveRouterWeights(BaseModel):
+class AdaptiveRouterWeights(LiteLLMBaseModel):
     quality: float = Field(default=0.7, ge=0.0, le=1.0)
     cost: float = Field(default=0.3, ge=0.0, le=1.0)
 
@@ -1230,15 +1540,46 @@ class AdaptiveRouterWeights(BaseModel):
         return v
 
 
-class AdaptiveRouterConfig(BaseModel):
+class AdaptiveRouterConfig(LiteLLMBaseModel):
     available_models: list[str]
     weights: AdaptiveRouterWeights = Field(default_factory=AdaptiveRouterWeights)
 
 
-class AdaptiveRouterPreferences(BaseModel):
+class AdaptiveRouterPreferences(LiteLLMBaseModel):
     """model_info.adaptive_router_preferences — declared by each model."""
 
     model_config = ConfigDict(use_enum_values=False)
 
     quality_tier: int = Field(ge=1, le=3)
     strengths: list[RequestType] = Field(default_factory=list)
+
+
+def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
+    """Raise ``ValueError`` if a mapping that did not come from deployment config carries a
+    server-owned workload identity federation or OAuth token-exchange field, or an ``api_key``
+    holding an ``oidc/`` secret reference.
+
+    These are never settable inline on a client surface, with or without a client-side credential
+    opt-in. Naming a stored credential that already holds them is the other way in and has its own
+    gate: ``_check_banned_params`` resolves ``litellm_credential_name`` and refuses a credential
+    carrying one of these server-owned fields.
+    This lives here rather than under ``litellm.proxy`` so the router can call it on a
+    post-authentication merge without core importing from the proxy package.
+    """
+    reject_server_owned_wif_fields(body)
+    if holds_api_key_secret_reference(body):
+        raise ValueError(_API_KEY_SECRET_REFERENCE_REJECTION)
+
+
+def reject_server_owned_wif_fields(body: Mapping[str, object]) -> None:
+    """``reject_server_owned_wif_params`` without the ``oidc/`` api_key check, for the deployment writes whose
+    role gate already refuses a non-admin setting one."""
+    submitted_names: Final = frozenset(key.removesuffix("[]") for key in body)
+    for param in _server_owned_wif_litellm_params:
+        if param in submitted_names:
+            raise ValueError(
+                f"Rejected Request: {param} is a server-owned workload identity federation or OAuth token exchange "
+                "parameter "
+                "and cannot be set in a request body. A proxy admin configures it on the deployment "
+                "or on a stored credential."
+            )

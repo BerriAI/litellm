@@ -1,55 +1,52 @@
-import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { createTeamAliasMap } from "@/utils/teamUtils";
+import type { ParseKeys } from "i18next";
 import { Loader2 } from "lucide-react";
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/lib/toast";
 import ExportFormatSelector from "./ExportFormatSelector";
 import ExportSummary from "./ExportSummary";
 import ExportTypeSelector from "./ExportTypeSelector";
-import type { EntityUsageExportModalProps, ExportFormat, ExportScope } from "./types";
-import { handleExportCSV, handleExportJSON, handleServerExport } from "./utils";
+import type { EntityType, EntityUsageExportModalProps, ExportFormat, ExportType } from "./types";
+import { downloadBlob, exportFilename } from "./utils";
+
+const ENTITY_LABEL_KEYS: Record<EntityType, ParseKeys> = {
+  user: "usage.export.modal.entities.user",
+  team: "usage.export.modal.entities.team",
+  tag: "usage.export.modal.entities.tag",
+  organization: "usage.export.modal.entities.organization",
+  customer: "usage.export.modal.entities.customer",
+  agent: "usage.export.modal.entities.agent",
+};
 
 const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   isOpen,
   onClose,
   entityType,
-  spendData,
+  onExport,
   dateRange,
-  selectedFilters,
+  selectedFilters = [],
   customTitle,
-  serverExport,
 }) => {
+  const { t } = useTranslation();
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
-  const [exportScope, setExportScope] = useState<ExportScope>("daily");
+  const [exportType, setExportType] = useState<ExportType>("daily");
   const [isExporting, setIsExporting] = useState(false);
-  const { data: teams, isLoading: isLoadingTeams } = useTeams();
 
-  const entityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
-  const modalTitle = customTitle || `Export ${entityLabel} Usage`;
+  const entityLabel = t(ENTITY_LABEL_KEYS[entityType]);
+  const modalTitle = customTitle || t("usage.export.modal.title", { entity: entityLabel });
 
-  // Cache team alias map using useMemo
-  const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
-  const handleExport = async (format?: ExportFormat) => {
-    const formatToUse = format || exportFormat;
+  const handleExport = async () => {
     setIsExporting(true);
     try {
-      if (serverExport) {
-        await handleServerExport(serverExport, exportScope, entityType, formatToUse);
-        toast.success(`${entityLabel} usage data exported successfully as ${formatToUse.toUpperCase()}`);
-      } else if (formatToUse === "csv") {
-        handleExportCSV(spendData, exportScope, entityLabel, entityType, teamAliasMap);
-        toast.success(`${entityLabel} usage data exported successfully as CSV`);
-      } else {
-        handleExportJSON(spendData, exportScope, entityLabel, entityType, dateRange, selectedFilters, teamAliasMap);
-        toast.success(`${entityLabel} usage data exported successfully as JSON`);
-      }
+      const blob = await onExport(exportType, exportFormat);
+      downloadBlob(blob, exportFilename(entityType, exportType, exportFormat, dateRange));
+      toast.success(t("usage.export.modal.success", { entity: entityLabel, format: exportFormat.toUpperCase() }));
       onClose();
     } catch (error) {
       console.error("Error exporting data:", error);
-      toast.fromError("Failed to export data");
+      toast.fromError(t("usage.export.modal.failed"));
     } finally {
       setIsExporting(false);
     }
@@ -67,36 +64,19 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
           <DialogTitle className="text-base font-semibold">{modalTitle}</DialogTitle>
         </DialogHeader>
         <div className="space-y-5 py-2">
-          {isLoadingTeams ? (
-            <div className="space-y-3">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-4 w-full" />
-              <Skeleton className="h-4 w-2/3" />
-            </div>
-          ) : (
-            <>
-              <ExportSummary dateRange={dateRange} selectedFilters={selectedFilters} />
-              <ExportTypeSelector value={exportScope} onChange={setExportScope} entityType={entityType} />
-              <ExportFormatSelector value={exportFormat} onChange={setExportFormat} />
-            </>
-          )}
+          <ExportSummary dateRange={dateRange} selectedFilters={selectedFilters} />
+          <ExportTypeSelector value={exportType} onChange={setExportType} entityType={entityType} />
+          <ExportFormatSelector value={exportFormat} onChange={setExportFormat} />
           <div className="flex items-center justify-end gap-2 pt-4 border-t">
-            {isLoadingTeams ? (
-              <>
-                <Skeleton className="h-9 w-20" />
-                <Skeleton className="h-9 w-28" />
-              </>
-            ) : (
-              <>
-                <Button variant="outline" onClick={onClose} disabled={isExporting}>
-                  Cancel
-                </Button>
-                <Button onClick={() => handleExport()} disabled={isExporting}>
-                  {isExporting && <Loader2 className="animate-spin" />}
-                  {isExporting ? "Exporting..." : `Export ${exportFormat.toUpperCase()}`}
-                </Button>
-              </>
-            )}
+            <Button variant="outline" onClick={onClose} disabled={isExporting}>
+              {t("usage.export.modal.cancel")}
+            </Button>
+            <Button onClick={handleExport} disabled={isExporting}>
+              {isExporting && <Loader2 className="animate-spin" />}
+              {isExporting
+                ? t("usage.export.modal.exporting")
+                : t("usage.export.modal.exportFormat", { format: exportFormat.toUpperCase() })}
+            </Button>
           </div>
         </div>
       </DialogContent>

@@ -1,4 +1,5 @@
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final
 
 from litellm.a2a_protocol.utils import (
     get_session_id_from_a2a_params,
@@ -7,10 +8,10 @@ from litellm.a2a_protocol.utils import (
 
 
 def merge_a2a_session_into_litellm_params(
-    litellm_params: dict[str, Any],
-    params: dict[str, Any],
+    litellm_params: Mapping[str, object],
+    params: Mapping[str, object],
     principal: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     merged: Final = dict(litellm_params)
     session_id: Final = get_session_id_from_a2a_params(params)
     if session_id and "session_id" not in merged:

@@ -1,7 +1,7 @@
 """Shared VCR (Redis-backed) plumbing imported by per-directory conftests.
 
-See ``tests/llm_translation/Readme.md`` for the full design and
-``tests/llm_translation/conftest.py`` for the reference wiring."""
+See ``tests/VCR_TESTING.md`` for the full design and
+``tests/_vcr_conftest_common.py`` for the shared wiring."""
 
 from __future__ import annotations
 

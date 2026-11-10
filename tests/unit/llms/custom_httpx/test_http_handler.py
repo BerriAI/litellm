@@ -1,31 +1,49 @@
-import asyncio
+import asyncio, importlib, json, time
 import gc
 import io
+import logging
 import os
 import pathlib
 import ssl
 import threading
 import weakref
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from contextvars import Context
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import certifi
 import httpx
 import pytest
-from aiohttp import ClientSession, TCPConnector
+import respx
+from aiohttp import ClientResponse, ClientSession, RequestInfo, TCPConnector
+from aiohttp.tracing import Trace
+from multidict import CIMultiDict, CIMultiDictProxy
+from yarl import URL
 
 import litellm
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine, default_token_exchange_engine
+from litellm.llms.base_llm.auth.types import MintedToken, TokenExchangeSpec
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
     AsyncHTTPHandler,
     HTTPHandler,
     MaskedHTTPStatusError,
-    _get_httpx_client,
+    get_httpx_client,
+    get_shared_realtime_ssl_context,
     get_ssl_configuration,
+    realtime_ssl_for_url,
 )
 from litellm.types.llms.custom_http import VerifyTypes
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from litellm.exceptions import Timeout as LitellmTimeout
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.rust_bridge.host.model_cost import publish
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
 @pytest.mark.asyncio
@@ -143,7 +161,7 @@ async def test_ssl_security_level(monkeypatch):
             assert isinstance(transport, LiteLLMAiohttpTransport)
 
             # Get the aiohttp ClientSession
-            client_session = transport._get_valid_client_session()
+            client_session = transport.get_valid_client_session()
 
             # Get the connector from the session
             connector = client_session.connector
@@ -164,7 +182,7 @@ async def test_force_ipv4_transport(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "force_ipv4", True)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
-    transport = AsyncHTTPHandler._create_async_transport()
+    transport = AsyncHTTPHandler.create_async_transport()
 
     # Should get an AsyncHTTPTransport (no real HTTP call — avoids CI hangs)
     assert isinstance(transport, httpx.AsyncHTTPTransport)
@@ -176,7 +194,7 @@ async def test_aiohttp_disabled_transport(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "force_ipv4", False)
 
-    transport = AsyncHTTPHandler._create_async_transport()
+    transport = AsyncHTTPHandler.create_async_transport()
 
     # Should get None when both aiohttp is disabled and force_ipv4 is False
     assert transport is None
@@ -200,7 +218,7 @@ async def test_ssl_verification_with_aiohttp_transport(monkeypatch: pytest.Monke
     try:
         transport = litellm_async_client.client._transport
         assert isinstance(transport, LiteLLMAiohttpTransport)
-        transport_connector = transport._get_valid_client_session().connector
+        transport_connector = transport.get_valid_client_session().connector
         assert isinstance(transport_connector, TCPConnector)
 
         aiohttp_session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False))
@@ -222,7 +240,7 @@ async def test_ssl_verification_with_shared_session(monkeypatch: pytest.MonkeyPa
     Test that ssl_verify=False is respected even with shared sessions.
 
     This was a bug where shared sessions bypassed SSL configuration because
-    _create_aiohttp_transport returned immediately without passing ssl_verify
+    create_aiohttp_transport returned immediately without passing ssl_verify
     to the LiteLLMAiohttpTransport constructor.
 
     The fix stores ssl_verify in the transport and passes it per-request.
@@ -236,7 +254,7 @@ async def test_ssl_verification_with_shared_session(monkeypatch: pytest.MonkeyPa
 
     try:
         # Create transport with shared session and ssl_verify=False
-        transport = AsyncHTTPHandler._create_aiohttp_transport(
+        transport = AsyncHTTPHandler.create_aiohttp_transport(
             ssl_verify=False,
             shared_session=shared_session,
         )
@@ -267,7 +285,7 @@ async def test_ssl_context_with_shared_session(monkeypatch: pytest.MonkeyPatch):
 
     try:
         # Create transport with shared session and custom ssl_context
-        transport = AsyncHTTPHandler._create_aiohttp_transport(
+        transport = AsyncHTTPHandler.create_aiohttp_transport(
             ssl_context=custom_ssl_context,
             shared_session=shared_session,
         )
@@ -331,14 +349,14 @@ class MockClientSession:
 
 @pytest.mark.asyncio
 async def test_create_aiohttp_transport_with_shared_session():
-    """Test that _create_aiohttp_transport reuses shared session when provided"""
+    """Test that create_aiohttp_transport reuses shared session when provided"""
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     # Create a mock shared session that's not callable
     mock_session = MockClientSession()
 
     # Test with shared session
-    transport = AsyncHTTPHandler._create_aiohttp_transport(
+    transport = AsyncHTTPHandler.create_aiohttp_transport(
         shared_session=mock_session  # type: ignore
     )
 
@@ -414,7 +432,7 @@ async def test_session_reuse_chain():
     mock_session = MockClientSession()
 
     # Test the entire chain
-    transport = AsyncHTTPHandler._create_async_transport(
+    transport = AsyncHTTPHandler.create_async_transport(
         shared_session=mock_session  # type: ignore
     )
 
@@ -627,11 +645,11 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
 
 def test_get_httpx_client_applies_float_timeout_without_mocking_handler():
     """
-    Exercise real _get_httpx_client + HTTPHandler: params={'timeout': x} must reach httpx.Client(timeout=...).
+    Exercise real get_httpx_client + HTTPHandler: params={'timeout': x} must reach httpx.Client(timeout=...).
     Uses an uncommon timeout value to avoid colliding with other cached clients in-process.
     """
     timeout = 3847.291
-    handler = _get_httpx_client(params={"timeout": timeout})
+    handler = get_httpx_client(params={"timeout": timeout})
     try:
         assert isinstance(handler, HTTPHandler)
         assert handler.client.timeout == httpx.Timeout(timeout)
@@ -641,7 +659,7 @@ def test_get_httpx_client_applies_float_timeout_without_mocking_handler():
 
 def test_get_httpx_client_applies_httpx_timeout_object_without_mocking_handler():
     t = httpx.Timeout(40.0, connect=5.0)
-    handler = _get_httpx_client(params={"timeout": t})
+    handler = get_httpx_client(params={"timeout": t})
     try:
         assert handler.client.timeout == t
     finally:
@@ -704,7 +722,7 @@ async def test_async_get_forwards_per_request_timeout():
 class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
     """Cached default httpx clients must fall back to an explicit litellm.request_timeout.
 
-    Regression for LIT-2369: get_async_httpx_client / _get_httpx_client hardcoded a
+    Regression for LIT-2369: get_async_httpx_client / get_httpx_client hardcoded a
     600s default and never consulted litellm.request_timeout, so provider calls with
     no per-model timeout (e.g. Bedrock) hung for 600s.
     """
@@ -1156,7 +1174,7 @@ async def test_async_close_leaves_assigned_client_open():
 def test_client_handed_out_by_sync_cache_survives_eviction_and_collection(fresh_llm_client_cache):
     from litellm.caching.llm_caching_handler import LLMClientCache
 
-    handler = _get_httpx_client()
+    handler = get_httpx_client()
     consumer_client = handler.client
     handler_ref = weakref.ref(handler)
 
@@ -1246,6 +1264,53 @@ def test_sync_client_never_replays_one_upstreams_cookie_to_another():
     assert seen == [None, None]
 
 
+def _redirecting_upstream():
+    """A host that answers every request with a redirect somewhere else, and records who was asked."""
+    hosts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "token.example":
+            return httpx.Response(302, headers={"location": "https://elsewhere.example/v1/oauth/token"})
+        return httpx.Response(200, json={"access_token": "sk-ant-oat01-leaked"})
+
+    return handler, hosts
+
+
+def test_a_handler_that_refuses_redirects_still_refuses_them_after_its_client_is_healed():
+    """The token exchange handler refuses redirects because following one replays a signed identity
+    assertion at whatever host the Location header names. A closed client is healed by building a
+    fresh one, so a rebuild that read the setting off the code default rather than off the handler
+    would quietly start chasing them again for the rest of the process's life."""
+    transport, hosts = _redirecting_upstream()
+    handler = HTTPHandler(follow_redirects=False)
+    handler.client._transport = httpx.MockTransport(transport)
+
+    first = handler.client.get("https://token.example/v1/oauth/token")
+    handler.client.close()
+
+    healed = handler.client
+    healed._transport = httpx.MockTransport(transport)
+    second = healed.get("https://token.example/v1/oauth/token")
+
+    assert healed.is_closed is False
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert hosts == ["token.example", "token.example"]
+
+
+def test_a_handler_left_on_the_default_still_follows_redirects():
+    """Every other caller of the pool is an LLM provider call that has always followed redirects."""
+    transport, hosts = _redirecting_upstream()
+    handler = HTTPHandler()
+    handler.client._transport = httpx.MockTransport(transport)
+
+    response = handler.client.get("https://token.example/v1/oauth/token")
+
+    assert response.status_code == 200
+    assert hosts == ["token.example", "elsewhere.example"]
+
+
 @pytest.mark.asyncio
 async def test_aiohttp_session_never_replays_one_upstreams_cookie_to_another():
     """The httpx jar is not the only one. AiohttpTransport is litellm's default transport
@@ -1283,7 +1348,7 @@ def _mint_session_on_dead_loop(handler: AsyncHTTPHandler) -> ClientSession:
     loop = asyncio.new_event_loop()
 
     async def _create() -> ClientSession:
-        return transport._get_valid_client_session()
+        return transport.get_valid_client_session()
 
     session = loop.run_until_complete(_create())
     loop.close()
@@ -1315,7 +1380,7 @@ async def test_finalizer_with_running_loop_schedules_close_and_holds_task_ref():
     handler = AsyncHTTPHandler(timeout=61.0)
     transport = handler.client._transport
     assert isinstance(transport, LiteLLMAiohttpTransport)
-    session = transport._get_valid_client_session()
+    session = transport.get_valid_client_session()
     assert not session.closed
     del transport
 
@@ -1331,6 +1396,55 @@ async def test_finalizer_with_running_loop_schedules_close_and_holds_task_ref():
     assert not (AsyncHTTPHandler._finalizer_close_tasks & scheduled)
 
 
+async def _drop_unused_handler() -> None:
+    AsyncHTTPHandler(timeout=61.0)
+    gc.collect()
+
+
+def test_finalizer_close_does_not_keep_a_loop_closed_right_after_it_alive():
+    loop: Final = asyncio.new_event_loop()
+    loop.run_until_complete(_drop_unused_handler())
+    loop.close()
+    closed_loop: Final = weakref.ref(loop)
+    del loop
+    gc.collect()
+
+    assert closed_loop() is None
+
+
+class _TransportFailingToClose(httpx.AsyncBaseTransport):
+    async def aclose(self) -> None:
+        raise RuntimeError("close failed")
+
+
+async def _drop_handler_whose_close_fails() -> None:
+    AsyncHTTPHandler(timeout=61.0, transport=_TransportFailingToClose())
+    gc.collect()
+
+
+def test_failed_finalizer_close_in_a_loops_last_step_reports_no_unretrieved_exception():
+    loop: Final = asyncio.new_event_loop()
+    exception_handler: Final = MagicMock()
+    loop.set_exception_handler(exception_handler)
+    loop.run_until_complete(_drop_handler_whose_close_fails())
+    loop.close()
+    del loop
+    gc.collect()
+
+    exception_handler.assert_not_called()
+
+
+async def _sync_client_with_timeout_62() -> HTTPHandler:
+    return get_httpx_client(params={"timeout": 62.0})
+
+
+def test_sync_client_is_shared_by_short_lived_loops_and_callers_outside_a_loop():
+    built_in_first_loop: Final = asyncio.run(_sync_client_with_timeout_62())
+
+    assert asyncio.run(_sync_client_with_timeout_62()) is built_in_first_loop
+    assert get_httpx_client(params={"timeout": 62.0}) is built_in_first_loop
+
+
 @pytest.mark.asyncio
 async def test_sync_close_helper_respects_session_ownership():
     """The loop-less fallback closes only sessions the transport owns; a
@@ -1338,7 +1452,7 @@ async def test_sync_close_helper_respects_session_ownership():
     owned_handler = AsyncHTTPHandler(timeout=61.0)
     owned_transport = owned_handler.client._transport
     assert isinstance(owned_transport, LiteLLMAiohttpTransport)
-    owned_session = owned_transport._get_valid_client_session()
+    owned_session = owned_transport.get_valid_client_session()
 
     baseline = set(LiteLLMAiohttpTransport._background_close_tasks)
     owned_handler._dispose_wrapped_aiohttp_session()
@@ -1388,7 +1502,8 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
     another, dead loop must not schedule aclose() here — that is the cross-loop
     path the transport refuses — and must still dispose the session."""
     handler = AsyncHTTPHandler(timeout=61.0)
-    session = await asyncio.to_thread(_mint_session_on_dead_loop, handler)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        session = pool.submit(_mint_session_on_dead_loop, handler).result()
     assert not session.closed
 
     baseline_tasks = set(AsyncHTTPHandler._finalizer_close_tasks)
@@ -1400,9 +1515,14 @@ async def test_finalizer_on_live_loop_disposes_foreign_loop_session_without_sche
 
 
 class _RetryClientHandler(AsyncHTTPHandler):
-    def __init__(self, first: httpx.AsyncClient, retry: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        first: httpx.AsyncClient,
+        retry: httpx.AsyncClient,
+        token_exchange_engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
+    ) -> None:
         self._retry_client: Final = retry
-        super().__init__()
+        super().__init__(token_exchange_engine=token_exchange_engine)
         self.client = first
 
     def create_client(
@@ -1418,13 +1538,13 @@ class _RetryClientHandler(AsyncHTTPHandler):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
 async def test_connection_error_retry_forwards_content(method: str):
-    captured: list[bytes] = []  # mutable-ok: async closure capture buffer
+    captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
 
     async def raise_connection_error(request: httpx.Request) -> httpx.Response:
-        raise httpx.RemoteProtocolError("connection dropped", request=request)
+        raise httpx.ConnectError("connection dropped", request=request)
 
     async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
-        captured.append(request.content)
+        captured.append((request.method, request.content))
         return httpx.Response(200, request=request)
 
     first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
@@ -1432,12 +1552,189 @@ async def test_connection_error_retry_forwards_content(method: str):
     async with first, retry:
         handler: Final = _RetryClientHandler(first=first, retry=retry)
 
-        body = b'{"post": ["run1"]}'
+        body: Final = b'{"post": ["run1"]}'
         await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
 
-        assert captured == [body], "the retried request must carry the same content= body"
+        assert captured == [(method.upper(), body)]
         await handler.close()
 
+
+class _WifClock:
+    def __init__(self) -> None:
+        self.now = 1_000.0  # mutable-ok: fake clock advanced by the test
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _CountingIssuer:
+    def __init__(self) -> None:
+        self.mints = 0  # mutable-ok: counts tokens minted so each one is distinct
+
+    def post(self, url: str, *, content: bytes, headers: Mapping[str, str], timeout: float) -> httpx.Response:
+        self.mints += 1
+        return httpx.Response(
+            200, json={"access_token": f"wif-token-{self.mints}", "expires_in": 600, "token_type": "Bearer"}
+        )
+
+
+_WIF_SPEC: Final = TokenExchangeSpec(
+    token_url="https://api.anthropic.com/v1/oauth/token",
+    assertion_ref="oidc/env/ANTHROPIC_IDENTITY_TOKEN",
+    assertion_field="assertion",
+    static_body={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "federation_rule_id": "fdrl_1"},
+    body_encoding="json",
+    request_headers={},
+    cache_key_identity=("fdrl_1", "org-1", "", ""),
+    timeout_seconds=2.0,
+)
+
+
+def _minted_bearer(engine: JwtBearerTokenExchangeEngine) -> str:
+    minted: Final = engine.get_token(_WIF_SPEC)
+    assert isinstance(minted, MintedToken)
+    return minted.access_token.get_secret_value()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+@pytest.mark.parametrize("refreshed_by_another_request", [False, True])
+async def test_connection_error_retry_sends_current_wif_token(method: str, refreshed_by_another_request: bool) -> None:
+    clock: Final = _WifClock()
+    engine: Final = JwtBearerTokenExchangeEngine(
+        poster=_CountingIssuer(),
+        assertion_reader=lambda ref: "identity-jwt",
+        clock=clock,
+        refresh_executor=ThreadPoolExecutor(max_workers=1),
+    )
+    first_token: Final = _minted_bearer(engine)
+    sent: Final[list[str]] = []  # mutable-ok: async closure capture buffer
+
+    async def expire_then_drop(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        clock.now += 601
+        if refreshed_by_another_request:
+            _minted_bearer(engine)
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(expire_then_drop))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry, token_exchange_engine=engine)
+        await getattr(handler, method)(
+            "https://api.anthropic.com/v1/messages",
+            headers={"authorization": f"Bearer {first_token}", "x-trace": "kept"},
+            content=b"{}",
+        )
+        await handler.close()
+
+    assert sent == [f"Bearer {first_token}", f"Bearer {_minted_bearer(engine)}"]
+    assert first_token != _minted_bearer(engine)
+
+
+@pytest.mark.asyncio
+async def test_connection_error_retry_keeps_bearer_the_engine_did_not_mint() -> None:
+    engine: Final = JwtBearerTokenExchangeEngine(
+        poster=_CountingIssuer(), assertion_reader=lambda ref: "identity-jwt", clock=_WifClock()
+    )
+    _minted_bearer(engine)
+    sent: Final[list[str]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_connection_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_connection_error))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry, token_exchange_engine=engine)
+        await handler.post("https://api.anthropic.com/v1/messages", headers={"Authorization": "Bearer sk-static"})
+        await handler.close()
+
+    assert sent == ["Bearer sk-static"]
+
+
+@pytest.mark.asyncio
+async def test_connection_error_retry_keeps_wif_token_sent_to_another_host() -> None:
+    clock: Final = _WifClock()
+    engine: Final = JwtBearerTokenExchangeEngine(
+        poster=_CountingIssuer(), assertion_reader=lambda ref: "identity-jwt", clock=clock
+    )
+    first_token: Final = _minted_bearer(engine)
+    sent: Final[list[str]] = []  # mutable-ok: async closure capture buffer
+
+    async def expire_then_drop(request: httpx.Request) -> httpx.Response:
+        clock.now += 601
+        raise httpx.ConnectError("connection dropped", request=request)
+
+    async def capture_and_succeed(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers["authorization"])
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(expire_then_drop))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_and_succeed))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry, token_exchange_engine=engine)
+        await handler.post("https://elsewhere.example/v1/messages", headers={"authorization": f"Bearer {first_token}"})
+        await handler.close()
+
+    assert sent == [f"Bearer {first_token}"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["post", "patch"])
+async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
+    retried_requests: Final[list[httpx.Request]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_disconnect(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+
+    async def capture_retry(request: httpx.Request) -> httpx.Response:
+        retried_requests.append(request)
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_disconnect))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_retry))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            await getattr(handler, method)("https://api.example.com/runs/batch", content=b'{"a":1}')
+
+        assert retried_requests == []
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["put", "delete"])
+async def test_idempotent_disconnect_is_replayed(method: str) -> None:
+    captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_disconnect(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+
+    async def capture_retry(request: httpx.Request) -> httpx.Response:
+        captured.append((request.method, request.content))
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_disconnect))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_retry))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        body: Final = b'{"a":1}'
+        response: Final = await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+
+        assert response.status_code == 200
+        assert captured == [(method.upper(), body)]
+        await handler.close()
 
 
 @pytest.fixture
@@ -1570,9 +1867,7 @@ def private_ca_tls_upstream(tmp_path: pathlib.Path):
     ca_pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     key_pem = tmp_path / "key.pem"
     key_pem.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-        )
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     )
 
     class OkTlsHandler(BaseHTTPRequestHandler):
@@ -1747,8 +2042,11 @@ async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_
     handler = AsyncHTTPHandler()
     try:
         response = await handler.get(
-            "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
-            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
+            "https://example.com/spec.json?original=1",
+            max_response_bytes=100,
+            follow_redirects=True,
+            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"},
+            timeout=2.0,
         )
     finally:
         await handler.close()
@@ -1809,13 +2107,13 @@ async def test_http2_flag_bypasses_aiohttp_transport(monkeypatch: pytest.MonkeyP
     monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
 
     monkeypatch.setattr(litellm, "http2", True)
-    assert AsyncHTTPHandler._should_use_aiohttp_transport() is False
-    assert AsyncHTTPHandler._create_async_transport() is None
+    assert AsyncHTTPHandler.should_use_aiohttp_transport() is False
+    assert not isinstance(AsyncHTTPHandler.create_async_transport(), LiteLLMAiohttpTransport)
 
     monkeypatch.setattr(litellm, "http2", False)
     monkeypatch.setenv("LITELLM_HTTP2", "True")
-    assert AsyncHTTPHandler._should_use_aiohttp_transport() is False
-    assert AsyncHTTPHandler._create_async_transport() is None
+    assert AsyncHTTPHandler.should_use_aiohttp_transport() is False
+    assert not isinstance(AsyncHTTPHandler.create_async_transport(), LiteLLMAiohttpTransport)
 
 
 @pytest.mark.asyncio
@@ -1825,4 +2123,540 @@ async def test_http2_disabled_by_default(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("DISABLE_AIOHTTP_TRANSPORT", raising=False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
 
-    assert AsyncHTTPHandler._should_use_aiohttp_transport() is True
+    assert AsyncHTTPHandler.should_use_aiohttp_transport() is True
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+@pytest.fixture(scope="function")
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm globals to their true defaults before each test and
+    restores them afterward, so tests don't leak side effects.
+    Works safely under pytest-xdist parallel execution.
+    """
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in ("pre_call_rules", "post_call_rules"):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+        "pre_call_rules",
+        "post_call_rules",
+    ):
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, [])
+    for attr, default_val in _SCALAR_DEFAULTS.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, default_val)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    publish(litellm.model_cost)
+
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
+    "request_timeout": getattr(litellm, "request_timeout", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "default_fallbacks": getattr(litellm, "default_fallbacks", None),
+    "enable_azure_ad_token_refresh": getattr(litellm, "enable_azure_ad_token_refresh", None),
+    "tag_budget_config": getattr(litellm, "tag_budget_config", None),
+    "model_cost": getattr(litellm, "model_cost", None),
+    "token_counter": getattr(litellm, "token_counter", None),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+}
+
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+
+_SERVER_DELAY_S = 5
+
+_PER_REQUEST_TIMEOUT_S = 1.0
+
+_CLIENT_DEFAULT_TIMEOUT_S = 60.0
+
+
+class _SlowHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        time.sleep(_SERVER_DELAY_S)
+        try:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+        except OSError:
+            pass
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+def test_post_delay_exceeds_per_request_timeout_raises():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host, port = server.server_address
+
+    handler = get_httpx_client(params={"timeout": _CLIENT_DEFAULT_TIMEOUT_S})
+    try:
+        with pytest.raises(LitellmTimeout):
+            handler.post(
+                f"http://{host}:{port}/delay",
+                headers={"content-type": "application/json"},
+                data=json.dumps({"model": "claude", "messages": []}),
+                timeout=_PER_REQUEST_TIMEOUT_S,
+            )
+    except MaskedHTTPStatusError as e:
+        pytest.skip(f"httpbin.org unavailable: {e}")
+    finally:
+        handler.close()
+        server.shutdown()
+        server.server_close()
+
+
+def test_realtime_ssl_for_url_sends_no_tls_argument_for_a_plain_ws_endpoint() -> None:
+    assert (
+        realtime_ssl_for_url("ws://127.0.0.1:8080/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent")
+        is None
+    )
+
+
+def test_realtime_ssl_for_url_keeps_the_shared_context_for_wss_endpoints() -> None:
+    shared: Final = get_shared_realtime_ssl_context()
+    assert isinstance(shared, ssl.SSLContext)
+    assert realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws") is shared
+
+
+def test_realtime_ssl_for_url_turns_ssl_verify_false_into_an_unverified_tls_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", False)
+    selected: Final = realtime_ssl_for_url("wss://aiplatform.us.rep.googleapis.com/ws")
+    assert isinstance(selected, ssl.SSLContext)
+    assert selected.verify_mode == ssl.CERT_NONE
+    assert selected.check_hostname is False
+
+
+def _ollama_ssl_messages() -> list[dict[str, str]]:
+    return [{"role": "user", "content": "What's the weather like in San Francisco?"}]
+
+
+def _ollama_generate_route(respx_mock: respx.MockRouter, stream: bool) -> respx.Route:
+    final: Final = {"model": "llama3.1", "response": "", "done": True, "prompt_eval_count": 2, "eval_count": 1}
+    if stream:
+        return respx_mock.post("http://ollama.test:11434/api/generate").respond(
+            text=json.dumps({"model": "llama3.1", "response": "Sunny", "done": False}) + "\n" + json.dumps(final) + "\n",
+            headers={"content-type": "application/x-ndjson"},
+        )
+    return respx_mock.post("http://ollama.test:11434/api/generate").respond(json={**final, "response": "Sunny"})
+
+
+def _cached_clients_verify_modes(
+    cache: LLMClientCache, client_type: type[HTTPHandler | AsyncHTTPHandler]
+) -> tuple[ssl.VerifyMode, ...]:
+    return tuple(
+        client.client._transport._pool._ssl_context.verify_mode
+        for client in cache.cache_dict.values()
+        if isinstance(client, client_type)
+    )
+
+
+def test_ollama_ssl_verify_false_builds_a_client_that_skips_certificate_checks(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    route: Final = _ollama_generate_route(respx_mock, stream=False)
+
+    response: Final = litellm.completion(
+        model="ollama/llama3.1",
+        messages=_ollama_ssl_messages(),
+        api_base="http://ollama.test:11434",
+        ssl_verify=False,
+    )
+
+    assert route.call_count == 1
+    assert response.choices[0].message.content == "Sunny"
+    assert _cached_clients_verify_modes(client_cache, HTTPHandler) == (ssl.CERT_NONE,)
+
+
+@pytest.mark.parametrize("stream", [True, False])
+async def test_async_ollama_ssl_verify_false_builds_a_client_that_skips_certificate_checks(
+    stream: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client_cache: Final = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", client_cache)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = _ollama_generate_route(respx_mock, stream=stream)
+
+    response: Final = await litellm.acompletion(
+        model="ollama/llama3.1",
+        messages=_ollama_ssl_messages(),
+        api_base="http://ollama.test:11434",
+        ssl_verify=False,
+        stream=stream,
+    )
+    text: Final = (
+        "".join([chunk.choices[0].delta.content or "" async for chunk in response])
+        if stream
+        else response.choices[0].message.content
+    )
+
+    assert route.call_count == 1
+    assert text == "Sunny"
+    assert _cached_clients_verify_modes(client_cache, AsyncHTTPHandler) == (ssl.CERT_NONE,)
+
+
+_TIMEOUT_CLIENT_LIMITS: Final = httpx.Timeout(42.0, connect=7.0)
+_TIMEOUT_PHASES: Final = (
+    (httpx.ConnectTimeout, "Connection timed out", "Timeout passed=7.0"),
+    (httpx.ReadTimeout, "Read timed out", "Timeout passed=42.0"),
+    (httpx.WriteTimeout, "Write timed out", "Timeout passed=42.0"),
+    (httpx.PoolTimeout, "Connection pool timed out", "Timeout passed=42.0"),
+)
+
+
+def _timing_out(kind: type[httpx.TimeoutException]) -> httpx.MockTransport:
+    def _raise(request: httpx.Request) -> httpx.Response:
+        raise kind("simulated", request=request)
+
+    return httpx.MockTransport(_raise)
+
+
+@pytest.mark.parametrize("verb", ["post", "put", "patch", "delete"])
+@pytest.mark.parametrize(("kind", "label", "limit"), _TIMEOUT_PHASES)
+def test_sync_timeout_without_a_per_call_timeout_names_the_phase_and_the_limit_that_fired(
+    verb: str, kind: type[httpx.TimeoutException], label: str, limit: str
+) -> None:
+    """Issue #14635: the handler used to print the caller's absent argument as 'after None seconds'."""
+    handler: Final = HTTPHandler()
+    handler.client.close()
+    handler.client = httpx.Client(transport=_timing_out(kind), timeout=_TIMEOUT_CLIENT_LIMITS)
+    try:
+        with pytest.raises(LitellmTimeout) as raised:
+            getattr(handler, verb)("https://example.com/v1/embeddings", json={"input": "hi"})
+    finally:
+        handler.close()
+
+    message: Final = str(raised.value)
+    assert label in message, message
+    assert limit in message, message
+    assert "None" not in message, message
+
+
+@pytest.mark.parametrize("verb", ["post", "put", "patch"])
+@pytest.mark.parametrize(("kind", "label", "limit"), _TIMEOUT_PHASES)
+async def test_async_timeout_without_a_per_call_timeout_names_the_phase_and_the_limit_that_fired(
+    verb: str, kind: type[httpx.TimeoutException], label: str, limit: str
+) -> None:
+    handler: Final = AsyncHTTPHandler(timeout=_TIMEOUT_CLIENT_LIMITS)
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=_timing_out(kind), timeout=_TIMEOUT_CLIENT_LIMITS)
+    try:
+        with pytest.raises(LitellmTimeout) as raised:
+            await getattr(handler, verb)("https://example.com/v1/embeddings", json={"input": "hi"})
+    finally:
+        await handler.close()
+
+    message: Final = str(raised.value)
+    assert label in message, message
+    assert limit in message, message
+    assert "None" not in message, message
+
+
+def test_sync_timeout_reports_the_per_call_timeout_as_a_float_when_one_is_given() -> None:
+    handler: Final = HTTPHandler()
+    handler.client.close()
+    handler.client = httpx.Client(transport=_timing_out(httpx.ReadTimeout), timeout=_TIMEOUT_CLIENT_LIMITS)
+    try:
+        with pytest.raises(LitellmTimeout) as raised:
+            handler.post("https://example.com/v1/embeddings", json={"input": "hi"}, timeout=30)
+    finally:
+        handler.close()
+
+    assert "Read timed out. Timeout passed=30.0, time taken=" in str(raised.value), str(raised.value)
+
+
+async def test_async_timeout_reports_the_per_call_timeout_as_a_float_when_one_is_given() -> None:
+    handler: Final = AsyncHTTPHandler(timeout=_TIMEOUT_CLIENT_LIMITS)
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=_timing_out(httpx.ReadTimeout), timeout=_TIMEOUT_CLIENT_LIMITS)
+    try:
+        with pytest.raises(LitellmTimeout) as raised:
+            await handler.post("https://example.com/v1/embeddings", json={"input": "hi"}, timeout=30)
+    finally:
+        await handler.close()
+
+    assert "Read timed out. Timeout passed=30.0, time taken=" in str(raised.value), str(raised.value)
+
+
+class _PoolDiagnosticClock:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.now = 1000.0
+        self.loop = loop
+        self.schedule = loop.call_later
+        self.timers: list[asyncio.TimerHandle] = []
+
+    def time(self) -> float:
+        return self.now
+
+    def call_later(
+        self, delay: float, callback: Callable[..., object],
+        *args: object, context: Context | None = None,
+    ) -> asyncio.TimerHandle:
+        timer: Final = self.schedule(delay, callback, *args, context=context)
+        self.timers.append(timer)
+        return timer
+
+    async def advance(self, seconds: float) -> None:
+        self.now += seconds
+        checkpoint: Final[asyncio.Future[None]] = self.loop.create_future()
+        self.loop.call_soon(checkpoint.set_result, None)
+        await checkpoint
+
+
+def _pool_diagnostic_clock(monkeypatch: pytest.MonkeyPatch) -> _PoolDiagnosticClock:
+    loop: Final = asyncio.get_running_loop()
+    clock: Final = _PoolDiagnosticClock(loop)
+    monkeypatch.setattr(loop, "time", clock.time)
+    monkeypatch.setattr(loop, "call_later", clock.call_later)
+    return clock
+
+
+@asynccontextmanager
+async def _pool_diagnostic_session(source: str) -> AsyncIterator[ClientSession]:
+    if source == "proxy":
+        from litellm.proxy.proxy_server import initialize_shared_aiohttp_session
+
+        session: Final = await initialize_shared_aiohttp_session()
+        assert session is not None
+        async with session:
+            yield session
+        return
+    if source == "native-connector":
+        from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
+
+        handler: Final = BaseLLMAIOHTTPHandler(connector=TCPConnector(limit=7, limit_per_host=2))
+        try:
+            yield handler._get_async_client_session()
+        finally:
+            await handler.close()
+        return
+    transport: Final = AsyncHTTPHandler.create_aiohttp_transport()
+    if source == "rebuilt":
+        await transport.get_valid_client_session().close()
+    try:
+        yield transport.get_valid_client_session()
+    finally:
+        await transport.aclose()
+
+
+async def _pool_diagnostic_request(session: ClientSession, url: URL) -> tuple[Trace, ...]:
+    traces: Final = tuple(Trace(session, config, config.trace_config_ctx()) for config in session.trace_configs)
+    for trace in traces:
+        await trace.send_request_start("POST", url, CIMultiDict())
+    return traces
+
+
+def _pool_diagnostic_messages(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(record.getMessage() for record in caplog.records if "connection pool" in record.getMessage())
+
+
+@pytest.mark.parametrize("source", ["sdk", "proxy", "native-connector", "rebuilt"])
+@pytest.mark.parametrize("error", [TimeoutError("private timeout"), asyncio.CancelledError("private cancellation")])
+async def test_aiohttp_pool_failure_identifies_queue_wait_and_cleans_up_timer(
+    source: str, error: BaseException, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool_diagnostic_clock: Final = _pool_diagnostic_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    url: Final = URL("https://private-user:private-password@pool.test:8443/private-path?token=private-query")
+    async with _pool_diagnostic_session(source) as session:
+        connector: Final = session.connector
+        assert connector is not None
+        traces: Final = await _pool_diagnostic_request(session, url)
+        for trace in traces:
+            await trace.send_connection_queued_start()
+        await pool_diagnostic_clock.advance(0.25)
+        for trace in traces:
+            await trace.send_request_exception("POST", url, CIMultiDict(), error)
+        messages: Final = _pool_diagnostic_messages(caplog)
+        assert len(messages) == 1, messages
+        message: Final = messages[0]
+        assert "host=pool.test" in message
+        assert "port=8443" in message
+        assert "0.25" in message
+        assert "acquired_total=0" in message
+        assert f"limit={connector.limit}" in message
+        assert f"limit_per_host={connector.limit_per_host}" in message
+        assert "private" not in message
+        assert all(timer.cancelled() for timer in pool_diagnostic_clock.timers)
+        await pool_diagnostic_clock.advance(2.0)
+        assert _pool_diagnostic_messages(caplog) == messages
+
+
+@pytest.mark.parametrize("queued", [False, True])
+async def test_aiohttp_pool_diagnostics_do_not_label_slow_upstream_as_pool_saturation(
+    queued: bool, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool_diagnostic_clock: Final = _pool_diagnostic_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    url: Final = URL("https://healthy.test/completions")
+    async with _pool_diagnostic_session("sdk") as session:
+        traces: Final = await _pool_diagnostic_request(session, url)
+        if queued:
+            for trace in traces:
+                await trace.send_connection_queued_start()
+            await pool_diagnostic_clock.advance(0.25)
+            for trace in traces:
+                await trace.send_connection_queued_end()
+        await pool_diagnostic_clock.advance(2.0)
+        for trace in traces:
+            await trace.send_request_exception("POST", url, CIMultiDict(), TimeoutError("slow upstream"))
+        assert _pool_diagnostic_messages(caplog) == ()
+        assert all(timer.cancelled() for timer in pool_diagnostic_clock.timers)
+
+
+async def test_aiohttp_pool_warns_while_queued_once_per_request_with_isolated_concurrent_waits(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    pool_diagnostic_clock: Final = _pool_diagnostic_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    slow_url: Final = URL("https://blocked.test/completions")
+    fast_url: Final = URL("https://available.test/completions")
+    async with _pool_diagnostic_session("sdk") as session:
+        blocked: Final = await _pool_diagnostic_request(session, slow_url)
+        available: Final = await _pool_diagnostic_request(session, fast_url)
+        for trace in blocked + available:
+            await trace.send_connection_queued_start()
+        await pool_diagnostic_clock.advance(0.25)
+        for trace in available:
+            await trace.send_connection_queued_end()
+        for trace in blocked:
+            await trace.send_connection_queued_end()
+            await trace.send_connection_queued_start()
+        await pool_diagnostic_clock.advance(0.8)
+        messages: Final = _pool_diagnostic_messages(caplog)
+        assert len(messages) == 1, messages
+        assert "host=blocked.test" in messages[0]
+        assert "1.05" in messages[0]
+        assert "available.test" not in messages[0]
+        for trace in blocked:
+            await trace.send_connection_queued_end()
+            await trace.send_connection_queued_start()
+        await pool_diagnostic_clock.advance(2.0)
+        for trace in blocked:
+            await trace.send_request_exception("POST", slow_url, CIMultiDict(), TimeoutError())
+        for trace in available:
+            await trace.send_request_exception("POST", fast_url, CIMultiDict(), TimeoutError())
+        await pool_diagnostic_clock.advance(2.0)
+        assert _pool_diagnostic_messages(caplog) == messages
+        assert all(timer.cancelled() for timer in pool_diagnostic_clock.timers)
+
+
+@pytest.mark.parametrize(("header", "location", "host", "port"), [
+    ("Location", "https://redirected.test:9443/private-path?token=private-query", "redirected.test", 9443),
+    ("Location", "/private-path?token=private-query", "initial.test", 8443),
+    ("URI", "https://redirected.test/private-path", "redirected.test", 443),
+    ("Location", "http://[invalid", None, None),
+])
+async def test_aiohttp_pool_warning_tracks_redirect_destination_without_masking_invalid_redirects(
+    header: str, location: str, host: str | None, port: int | None,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    from aiohttp.client_proto import ResponseHandler
+    from aiohttp.helpers import TimerNoop
+    from aiohttp.http_writer import StreamWriter
+
+    clock: Final = _pool_diagnostic_clock(monkeypatch)
+    caplog.set_level(logging.WARNING, logger="LiteLLM")
+    url: Final = URL("https://initial.test:8443/completions")
+    async with _pool_diagnostic_session("sdk") as session:
+        traces: Final = await _pool_diagnostic_request(session, url)
+        loop: Final = asyncio.get_running_loop()
+        response: Final = ClientResponse(
+            "POST", url, writer=None, continue100=None, timer=TimerNoop(),
+            request_info=RequestInfo(url, "POST", CIMultiDictProxy(CIMultiDict()), url),
+            traces=[], loop=loop, session=session,
+            stream_writer=StreamWriter(ResponseHandler(loop), loop),
+        )
+        response._headers = CIMultiDictProxy(CIMultiDict({header: location}))
+        try:
+            for trace in traces:
+                await trace.send_request_redirect("POST", url, CIMultiDict(), response)
+            if host is None:
+                for trace in traces:
+                    await trace.send_request_exception("POST", url, CIMultiDict(), ValueError("invalid redirect"))
+                assert _pool_diagnostic_messages(caplog) == ()
+                return
+            for trace in traces:
+                await trace.send_connection_queued_start()
+            await clock.advance(0.25)
+            for trace in traces:
+                await trace.send_request_exception("POST", url, CIMultiDict(), TimeoutError())
+            messages: Final = _pool_diagnostic_messages(caplog)
+            assert len(messages) == 1, messages
+            assert f"host={host}" in messages[0]
+            assert f"port={port}" in messages[0]
+            assert "private" not in messages[0]
+        finally:
+            response.close()

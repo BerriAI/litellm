@@ -163,17 +163,17 @@ class TenantTracerCache:
         config: OpenTelemetryV2Config,
         callback_name: str | None,
         tracer_name: str,
+        console_default: bool = False,
     ) -> None:
         self._config = config
         self._callback_name = callback_name
         self._tracer_name = tracer_name
+        self._console_default = console_default
         # Guards the three mutable structures below: ``pre_call`` can run on
         # thread-pool workers concurrently with the event loop, so cache
         # updates, span counts, and retirement must be atomic.
         self._lock: Final = threading.Lock()
-        self._providers: OrderedDict[_RouteKey, TracerProvider] = (
-            OrderedDict()  # mutable-ok: bounded LRU; eviction needs in-place ordered mutation
-        )
+        self._providers: OrderedDict[_RouteKey, TracerProvider] = OrderedDict()
         self._open_span_counts: dict[TracerProvider, int] = {}  # mutable-ok: live refcount state
         # Oldest-first so an overflow of draining providers sheds the stalest.
         self._retired: OrderedDict[TracerProvider, None] = OrderedDict()  # mutable-ok: draining evicted providers
@@ -284,7 +284,9 @@ class TenantTracerCache:
             self._providers.move_to_end(cache_key)
             return cached
         built: Final = build_tracer_provider(
-            self._routed_config(credential_headers, project_headers, endpoint, service_name)
+            self._routed_config(credential_headers, project_headers, endpoint, service_name),
+            strip_message_content=not self._config.capture_span_content,
+            console_default=self._console_default,
         )
         self._providers[cache_key] = built
         return built
@@ -393,7 +395,7 @@ class TenantTracerCache:
             if project_headers and kind not in _GRPC_KINDS
             else base
         )
-        update: Final = {  # mutable-ok: model_copy(update=...) requires a plain dict
+        update: Final = {
             field: value
             for field, value in (("headers", routed), ("endpoint", endpoint))
             if (field == "headers" and routed != spec.headers)

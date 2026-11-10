@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 import respx
@@ -64,6 +66,31 @@ def test_azure_ai_embedding_calls_foundry_models_route():
         api_key="fake-key",
     )
 
-    assert route.called
-    assert response.data is not None
-    assert len(response.data) == 1
+    assert route.call_count == 1
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2]]
+
+
+@respx.mock
+def test_azure_ai_cohere_image_embedding_calls_image_route():
+    route = respx.post("https://my-foundry.services.ai.azure.com/models/images/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+                "model": "Cohere-embed-v3-multilingual",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+    )
+
+    response = embedding(
+        model="azure_ai/Cohere-embed-v3-multilingual",
+        input=["data:image/png;base64,aGVsbG8="],
+        api_base="https://my-foundry.services.ai.azure.com",
+        api_key="fake-key",
+    )
+
+    assert json.loads(route.calls.last.request.read()) == {"input": [{"image": "data:image/png;base64,aGVsbG8="}]}
+    assert set(dict(response).keys()) == {"object", "data", "model", "usage"}
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert (response.usage.prompt_tokens, response.usage.total_tokens) == (2, 2)

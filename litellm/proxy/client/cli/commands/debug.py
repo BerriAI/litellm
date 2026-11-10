@@ -15,10 +15,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import quote
 
 import click
 import requests
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from ...http_client import HTTPClient
 from ._cli_context import cli_context_values
@@ -44,7 +47,7 @@ class DebugFailure:
     message: str
 
 
-class ErrorInformation(BaseModel):
+class ErrorInformation(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     error_code: str | None = None
@@ -53,14 +56,14 @@ class ErrorInformation(BaseModel):
     llm_provider: str | None = None
 
 
-class SpendLogMetadata(BaseModel):
+class SpendLogMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     status: str | None = None
     error_information: ErrorInformation | None = None
 
 
-class SpendLogRow(BaseModel):
+class SpendLogRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
 
     request_id: str
@@ -96,7 +99,7 @@ class SpendLogRow(BaseModel):
         return self.metadata.error_information
 
 
-class SessionLogsPage(BaseModel):
+class SessionLogsPage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     data: tuple[SpendLogRow, ...]
@@ -104,7 +107,7 @@ class SessionLogsPage(BaseModel):
     total_pages: int
 
 
-class RequestResponsePayload(BaseModel):
+class RequestResponsePayload(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     proxy_server_request: JsonValue = None
@@ -115,6 +118,7 @@ class RequestResponsePayload(BaseModel):
 _SESSION_PAGE: Final = TypeAdapter(SessionLogsPage)
 _PAYLOAD: Final[TypeAdapter[RequestResponsePayload | None]] = TypeAdapter(RequestResponsePayload | None)
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_BACKTICK_RUNS: Final = TypeAdapter(tuple[str, ...])
 
 _SESSION_PAGE_SIZE: Final = 100
 _TRANSPORT_BODY_CHARS: Final = 500
@@ -174,7 +178,7 @@ class SpendLogsFetcher:
             return DebugFailure(f"Unexpected {uri} response: {e}")
 
     def payload(self, request_id: str) -> RequestResponsePayload | None | DebugFailure:
-        uri: Final = f"/spend/logs/ui/{request_id}"
+        uri: Final = f"/spend/logs/ui/{quote(request_id, safe='')}"
         raw: Final = self._get(uri)
         if isinstance(raw, DebugFailure):
             return raw
@@ -192,7 +196,7 @@ def _fmt_json(value: JsonValue, max_chars: int) -> str:
 
 
 def _fenced(text: str, info: str = "") -> tuple[str, str, str]:
-    longest_run: Final = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    longest_run: Final = max((len(run) for run in _BACKTICK_RUNS.validate_python(re.findall(r"`+", text))), default=0)
     fence: Final = "`" * max(3, longest_run + 1)
     return (f"{fence}{info}", text, fence)
 

@@ -18,6 +18,13 @@ from litellm.llms.fireworks_ai.common_utils import resolve_fireworks_resource_na
         ("fireworks_ai/firerouter", "accounts/fireworks/routers/firerouter"),
         ("firerouter/kimi-k3/deepseek-v4", "accounts/fireworks/routers/firerouter/kimi-k3/deepseek-v4"),
         ("firerouter-v2", "accounts/fireworks/models/firerouter-v2"),
+        ("auto", "accounts/fireworks/routers/auto"),
+        ("fireworks_ai/auto", "accounts/fireworks/routers/auto"),
+        ("auto-instant", "accounts/fireworks/routers/auto-instant"),
+        ("fireworks_ai/auto-instant", "accounts/fireworks/routers/auto-instant"),
+        ("firerouter/auto", "accounts/fireworks/routers/firerouter/auto"),
+        ("autoglm-9b", "accounts/fireworks/models/autoglm-9b"),
+        ("auto-v2", "accounts/fireworks/models/auto-v2"),
         (
             "accounts/fireworks/routers/glm-latest",
             "accounts/fireworks/routers/glm-latest",

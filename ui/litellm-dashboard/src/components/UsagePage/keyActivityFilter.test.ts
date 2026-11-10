@@ -16,7 +16,6 @@ function activity(label: string, key_metadata?: KeyMetadata): ModelActivityData 
     prompt_tokens: 5,
     completion_tokens: 5,
     total_spend: 0.01,
-    top_api_keys: [],
     top_models: [],
     daily_data: [],
   };
