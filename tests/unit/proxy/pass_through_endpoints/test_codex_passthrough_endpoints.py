@@ -11,6 +11,7 @@ import jwt
 import pytest
 import respx
 from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi import Request
 from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
 
@@ -731,10 +732,23 @@ def _key_with_alias_to_budgeted_target(monkeypatch: pytest.MonkeyPatch, target_b
     return key
 
 
+@pytest.mark.parametrize("custom_auth", (False, True), ids=("virtual-key", "custom-auth"))
 def test_native_route_refuses_a_saved_alias_when_its_target_is_over_budget(
-    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, custom_auth: bool
 ) -> None:
     key: Final = _key_with_alias_to_budgeted_target(monkeypatch, target_budget=0.0)
+    if custom_auth:
+        monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+        identity: Final = proxy_server.user_api_key_cache.get_cache(key=hash_token(key), model_type=UserAPIKeyAuth)
+        assert identity is not None
+
+        async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+            return identity
+
+        monkeypatch.setattr(proxy_server, "user_custom_auth", authenticate)
+        monkeypatch.setattr(
+            proxy_server, "general_settings", {**proxy_server.general_settings, "custom_auth_run_common_checks": True}
+        )
     _account_catalog(respx_mock)
     provider: Final = _open_weights_provider(respx_mock)
     response: Final = client.post(

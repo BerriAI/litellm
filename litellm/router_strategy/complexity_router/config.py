@@ -414,9 +414,14 @@ PLAN_MODE_SYSTEM_SENTINELS: Final[tuple[str, ...]] = ('You are currently running
 # never a paraphrase: a sentinel that matches nothing costs a substring scan per request and reads
 # as coverage the router does not have. These are client-owned strings that drift with client
 # releases, so operators extend coverage via housekeeping_patterns rather than editing these.
+# The agent progress summary and the next-prompt suggestion were captured from Claude Code 2.1.316
+# on 2026-11-09 (#50444). Both ride the conversation they describe, so only the sentinel tells them
+# apart when the client does not send the x-claude-code-request-class hint.
 HOUSEKEEPING_ASK_SENTINELS: Final[tuple[str, ...]] = (
     "Write the title in the predominant language of the session",
     "You are coming up with a succinct title for a coding session",
+    "Describe your most recent action in 3-5 words using present tense",
+    "[SUGGESTION MODE: Suggest what the user might naturally type next into Claude Code.]",
 )
 PLAN_MODE_TOOL_NAME: Final[str] = "exit_plan_mode"
 
@@ -1496,8 +1501,9 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
         default=None,
         description=(
             "Additional case-sensitive literal sentinels that mark a request as client "
-            "housekeeping, on top of the built-in conversation-title ones. For clients whose "
-            "wording the built-ins don't cover, or after a client release changes its strings."
+            "housekeeping, on top of the built-in conversation-title, agent-summary and "
+            "prompt-suggestion ones. For clients whose wording the built-ins don't cover, or "
+            "after a client release changes its strings."
         ),
     )
 

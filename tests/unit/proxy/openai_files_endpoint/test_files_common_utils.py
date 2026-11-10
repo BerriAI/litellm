@@ -18,6 +18,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
     get_credentials_for_model,
     get_team_provider_credentials,
+    get_team_provider_deployment,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
 )
@@ -768,6 +769,61 @@ def test_a_team_keeps_its_older_openai_deployment_when_a_newer_one_has_a_lower_i
 
     assert credentials is not None
     assert credentials["api_key"] == "older-key"
+
+
+@pytest.mark.parametrize("newer_first", [True, False])
+def test_the_team_provider_deployment_is_the_one_whose_credentials_the_team_resolves(newer_first: bool):
+    older: Final = _team_openai_deployment("deployment-z", "older-key", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    newer: Final = _team_openai_deployment("deployment-a", "newer-key", datetime(2026, 6, 1, tzinfo=timezone.utc))
+    router: Final = Router(model_list=[newer, older] if newer_first else [older, newer])
+    team_member: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a")
+
+    deployment: Final = get_team_provider_deployment(
+        llm_router=router, user_api_key_dict=team_member, custom_llm_provider="openai"
+    )
+
+    assert deployment is not None
+    assert (deployment.deployment_id, deployment.public_model_name) == ("deployment-z", "team-gpt-deployment-z")
+    assert dict(deployment.credentials) == get_team_provider_credentials(
+        llm_router=router,
+        user_api_key_dict=team_member,
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+    assert deployment.credentials["api_key"] == "older-key"
+
+
+def test_the_team_provider_deployment_carries_the_team_public_model_name():
+    deployment: Final = get_team_provider_deployment(
+        llm_router=_team_openai_router("openai/*", "openai/*"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-a"),
+        custom_llm_provider="openai",
+    )
+
+    assert deployment is not None
+    assert (deployment.deployment_id, deployment.public_model_name) == ("team-a-openai", "openai/*")
+
+
+def test_a_key_with_only_an_accessible_non_team_deployment_has_no_team_provider_deployment():
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "openai-deployment-key"},
+            }
+        ]
+    )
+    caller: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", models=["openai/*"])
+
+    accessible_credentials: Final = get_team_provider_credentials(
+        llm_router=router, user_api_key_dict=caller, custom_llm_provider="openai", include_accessible_deployments=True
+    )
+
+    assert accessible_credentials is not None
+    assert accessible_credentials["api_key"] == "openai-deployment-key"
+    assert (
+        get_team_provider_deployment(llm_router=router, user_api_key_dict=caller, custom_llm_provider="openai") is None
+    )
 
 
 def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_db_ones():

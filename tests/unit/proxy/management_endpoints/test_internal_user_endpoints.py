@@ -2460,6 +2460,54 @@ async def test_user_status_update_refreshes_cached_user(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_fields", "role_default_duration", "stored_reset_at", "moves_reset"),
+    [
+        ({"budget_duration": "30d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+        ({"budget_duration": "30d"}, None, datetime(2099, 1, 1, tzinfo=timezone.utc), True),
+        ({"budget_duration": "7d"}, None, datetime(2020, 1, 1, tzinfo=timezone.utc), True),
+        ({"user_role": LitellmUserRoles.INTERNAL_USER}, "30d", datetime(2020, 1, 1, tzinfo=timezone.utc), False),
+    ],
+)
+async def test_user_update_keeps_a_due_budget_reset_when_the_duration_is_resent(
+    mocker: MockerFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    request_fields: dict[str, object],
+    role_default_duration: str | None,
+    stored_reset_at: datetime,
+    moves_reset: bool,
+) -> None:
+    import litellm
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    monkeypatch.setattr(litellm, "internal_user_budget_duration", role_default_duration)
+    saved_user: Final = LiteLLM_UserTable(
+        user_id="user-spruce",
+        budget_duration="30d",
+        budget_reset_at=stored_reset_at,
+    )
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
+    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(user_id=saved_user.user_id, **request_fields),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    written: Final = prisma_client.update_data.call_args.kwargs["data"]
+    reset_at: Final = written.get("budget_reset_at")
+    assert (isinstance(reset_at, datetime) and reset_at > datetime.now(timezone.utc)) is moves_reset
+    assert ("budget_reset_at" in written) is moves_reset
+
+
+@pytest.mark.asyncio
 async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocker: MockerFixture) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache

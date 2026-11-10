@@ -3691,12 +3691,19 @@ class TestResponsesWSFirstFrameModelAuth:
             "standard_logging_guardrail_information": [{"guardrail_cost": 0.2}, {"guardrail_cost": 0.4}],
         }
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "relay_outcome",
         ["still_relaying", "already_returned", "returns_despite_the_cancel", "crashes_despite_the_cancel"],
     )
-    async def test_session_limit_frees_the_slot_at_once_and_never_cuts_the_failure_row(self, relay_outcome: str):
+    def test_session_limit_frees_the_slot_at_once_and_never_cuts_the_failure_row(self, relay_outcome: str) -> None:
+        loop: Final = AutojumpClockLoop()
+        try:
+            loop.run_until_complete(self._assert_session_limit_releases_slot_before_failure_row(relay_outcome))
+        finally:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            loop.close()
+
+    async def _assert_session_limit_releases_slot_before_failure_row(self, relay_outcome: str) -> None:
         from litellm.exceptions import RateLimitError
         from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
 
