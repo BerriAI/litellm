@@ -759,7 +759,7 @@ def test_translate_openai_reasoning_items_are_not_duplicated_when_thinking_block
 
 def _replayed_reasoning_request(tools: list[dict[str, object]]) -> AnthropicMessagesRequest:
     return AnthropicMessagesRequest(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         max_tokens=64,
         messages=[
             AnthropicMessagesUserMessageParam(role="user", content="Which city is colder?"),
@@ -5820,7 +5820,7 @@ _RETRY_REPLY: Final = {
     "object": "response",
     "created_at": 1700000000,
     "status": "completed",
-    "model": "gpt-5.4-nano",
+    "model": "gpt-5.6",
     "output": [
         {
             "type": "message",
@@ -5868,7 +5868,7 @@ async def test_async_messages_retry_once_without_reasoning_the_backend_cannot_de
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         response: Final = await litellm.anthropic.messages.acreate(
-            model="azure/gpt-5.4-nano",
+            model="azure/gpt-5.6",
             api_base=_RETRY_API_BASE,
             api_key="fake-key",
             api_version="2025-04-01-preview",
@@ -5890,7 +5890,7 @@ async def test_async_messages_retry_once_without_reasoning_the_backend_cannot_de
     assert retry_warnings == (
         "Backend rejected replayed encrypted reasoning, retrying once without it. "
         "Enable the encrypted_content_affinity pre-call check to drop such blocks before the call. "
-        "provider=azure model=azure/gpt-5.4-nano status=400 code=invalid_encrypted_content",
+        "provider=azure model=azure/gpt-5.6 status=400 code=invalid_encrypted_content",
     )
     assert all(
         "gAAA_foreign" not in message and "litellm_encrypted_reasoning:" not in message for message in warnings
@@ -5906,7 +5906,7 @@ def test_sync_messages_retry_once_without_reasoning_the_backend_cannot_decrypt(
     )
 
     response: Final = litellm.anthropic.messages.create(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -5930,7 +5930,7 @@ async def test_async_messages_with_num_retries_send_the_rejected_reasoning_only_
     )
 
     await litellm.anthropic.messages.acreate(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -5953,7 +5953,7 @@ def test_sync_messages_with_global_num_retries_send_the_rejected_reasoning_once_
     )
 
     litellm.anthropic.messages.create(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -5981,7 +5981,7 @@ async def test_async_messages_retry_a_server_error_with_the_reasoning_and_drop_i
     )
 
     response: Final = await litellm.anthropic.messages.acreate(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -6004,7 +6004,7 @@ def test_sync_messages_retry_a_server_error_with_the_reasoning_and_drop_it_only_
     )
 
     response: Final = litellm.anthropic.messages.create(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
@@ -6063,7 +6063,7 @@ async def test_async_messages_log_only_the_outcome_of_the_turn_sent_again(
 
     with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
         await litellm.anthropic.messages.acreate(
-            model="azure/gpt-5.4-nano",
+            model="azure/gpt-5.6",
             api_base=_RETRY_API_BASE,
             api_key="fake-key",
             api_version="2025-04-01-preview",
@@ -6089,7 +6089,7 @@ def test_sync_messages_log_only_the_outcome_of_the_turn_sent_again(
 
     with pytest.raises(litellm.BadRequestError) if logged_rejections else nullcontext():
         litellm.anthropic.messages.create(
-            model="azure/gpt-5.4-nano",
+            model="azure/gpt-5.6",
             api_base=_RETRY_API_BASE,
             api_key="fake-key",
             api_version="2025-04-01-preview",
@@ -6124,7 +6124,7 @@ async def test_messages_do_not_retry_other_rejections(
 
     with pytest.raises(litellm.BadRequestError):
         await litellm.anthropic.messages.acreate(
-            model="azure/gpt-5.4-nano",
+            model="azure/gpt-5.6",
             api_base=_RETRY_API_BASE,
             api_key="fake-key",
             api_version="2025-04-01-preview",
@@ -6277,7 +6277,7 @@ async def test_streamed_reasoning_summaries_stay_with_their_own_encrypted_item(
     )
 
     stream: Final = await litellm.anthropic.messages.acreate(
-        model="azure/gpt-5.4-nano",
+        model="azure/gpt-5.6",
         api_base=_RETRY_API_BASE,
         api_key="fake-key",
         api_version="2025-04-01-preview",
