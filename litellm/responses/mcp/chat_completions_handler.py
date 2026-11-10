@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final, cast
 from typing_extensions import TypedDict, Unpack
 
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_kept_on_follow_up,
     allowed_tools_tool_choice_with_gateway_tools_as_functions,
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
@@ -478,11 +479,13 @@ async def acompletion_with_mcp(
                 )
 
                 # Make follow-up call with streaming
-                follow_up_call_args: Final = dict(self.base_call_args)
-                follow_up_call_args["messages"] = follow_up_messages
-                follow_up_call_args["stream"] = True
-                # Ensure follow-up call doesn't trigger MCP handler again
-                follow_up_call_args["_skip_mcp_handler"] = True
+                follow_up_call_args: Final[dict[str, object]] = {
+                    **self.base_call_args,
+                    **allowed_tools_tool_choice_kept_on_follow_up(self.base_call_args.get("tool_choice")),
+                    "messages": follow_up_messages,
+                    "stream": True,
+                    "_skip_mcp_handler": True,
+                }
 
                 # Import litellm here to ensure we get the patched version
                 # This ensures the patch works correctly in tests
@@ -656,9 +659,12 @@ async def acompletion_with_mcp(
     )
 
     # Make follow-up call with original stream setting
-    follow_up_call_args: Final = dict(base_call_args)
-    follow_up_call_args["messages"] = follow_up_messages
-    follow_up_call_args["stream"] = stream
+    follow_up_call_args: Final = {
+        **base_call_args,
+        **allowed_tools_tool_choice_kept_on_follow_up(base_call_args.get("tool_choice")),
+        "messages": follow_up_messages,
+        "stream": stream,
+    }
 
     response = await litellm_acompletion(**follow_up_call_args)
     if isinstance(response, (ModelResponse, CustomStreamWrapper)):

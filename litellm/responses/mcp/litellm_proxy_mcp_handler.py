@@ -169,13 +169,9 @@ class _LabelScope:
         )
 
     def _allows(self, server: MCPServer | None, tool_name: str, listed_name: str) -> bool:
-        if self.allowed_tools is None:
+        if self.allowed_tools is None or listed_name in self.allowed_tools:
             return True
-        if server is None:
-            return listed_name in self.allowed_tools
-        if not self.allowed_tools.isdisjoint((tool_name, listed_name, strip_known_server_prefix(listed_name, server))):
-            return True
-        return match_known_tool_name(tool_name, server, self.allowed_tools) is not None
+        return server is not None and match_known_tool_name(tool_name, server, self.allowed_tools) is not None
 
 
 _OBJECT_LIST: Final = TypeAdapter(list[object])
