@@ -992,12 +992,14 @@ class _FakeLedger:
         ),
     ),
 )
-def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(pooled, direct, expected):
+def test_v2_migrations_use_the_direct_connection_with_the_runtime_schema(
+    pooled: str, direct: str | None, expected: str
+) -> None:
     from litellm_proxy_extras.migration_lock import migration_environment
 
-    environment = {"DATABASE_URL": pooled, "PRISMA_OFFLINE_MODE": "true"}
-    configured = {**environment, **({"DIRECT_URL": direct} if direct else {})}
-    migrated = migration_environment(configured)
+    environment: Final = {"DATABASE_URL": pooled, "PRISMA_OFFLINE_MODE": "true"}
+    configured: Final = {**environment, **({"DIRECT_URL": direct} if direct else {})}
+    migrated: Final = migration_environment(configured)
 
     assert migrated["DATABASE_URL"] == expected
     assert migrated["PRISMA_OFFLINE_MODE"] == "true"
@@ -1084,7 +1086,7 @@ class _MigrateDeployHarness:
             continue
         return True
 
-    def _fake_recovery(self, name):
+    def _fake_recovery(self, name: str) -> bool:
         if name not in self.confirmed_migrations:
             return False
         self.confirmed_migrations.remove(name)
@@ -1204,16 +1206,20 @@ class TestMigrateDeployAttemptAccounting:
             harness.run()
         assert len(harness.deploy_calls) == _ATTEMPT_BUDGET
 
-    def test_an_unverified_baseline_stops_without_replaying_migrations(self, monkeypatch, tmp_path):
-        harness = _MigrateDeployHarness(monkeypatch, tmp_path, [_P3005_STDERR], repeat_last=True)
+    def test_an_unverified_baseline_stops_without_replaying_migrations(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(monkeypatch, tmp_path, [_P3005_STDERR], repeat_last=True)
         harness.baseline_succeeds = False
 
         with pytest.raises(RuntimeError):
             harness.run()
         assert len(harness.deploy_calls) == 1
 
-    def test_lock_contention_does_not_spend_the_failure_budget(self, monkeypatch, tmp_path):
-        harness = _MigrateDeployHarness(
+    def test_lock_contention_does_not_spend_the_failure_budget(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
             ["Error: P1002\nTimed out waiting for the advisory lock"] * 6 + ["ok"],
@@ -1221,16 +1227,20 @@ class TestMigrateDeployAttemptAccounting:
         assert harness.run() is True
         assert len(harness.deploy_calls) == 7
 
-    def test_duplicate_object_error_without_completion_proof_is_fatal(self, monkeypatch, tmp_path):
-        harness = _MigrateDeployHarness(monkeypatch, tmp_path, [_p3018_stderr("20260101000000_x")])
+    def test_duplicate_object_error_without_completion_proof_is_fatal(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(monkeypatch, tmp_path, [_p3018_stderr("20260101000000_x")])
         with pytest.raises(RuntimeError, match="cannot be auto-recovered"):
             harness.run()
         assert harness.resolved == []
         assert len(harness.deploy_calls) == 1
 
     @pytest.mark.parametrize("name", ("20260101000000_x", "20260101000000_migration with spaces"))
-    def test_an_interrupted_migration_with_confirmed_sql_can_finish(self, monkeypatch, tmp_path, name):
-        harness = _MigrateDeployHarness(
+    def test_an_interrupted_migration_with_confirmed_sql_can_finish(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+    ) -> None:
+        harness: Final = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
             [f"Error: P3009\nThe `{name}` migration failed", "ok"],
@@ -1239,18 +1249,20 @@ class TestMigrateDeployAttemptAccounting:
         assert harness.run() is True
         assert harness.resolved == [name]
 
-    def test_an_interrupted_migration_without_confirmation_stops(self, monkeypatch, tmp_path):
-        name = "20260101000000_x"
-        started = "2026-09-12 20:15:06.694553 UTC"
-        report = f"Error: P3009\nThe `{name}` migration started at {started} failed"
-        harness = _MigrateDeployHarness(
+    def test_an_interrupted_migration_without_confirmation_stops(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        name: Final = "20260101000000_x"
+        started: Final = "2026-09-12 20:15:06.694553 UTC"
+        report: Final = f"Error: P3009\nThe `{name}` migration started at {started} failed"
+        harness: Final = _MigrateDeployHarness(
             monkeypatch,
             tmp_path,
             [report],
         )
         with pytest.raises(RuntimeError, match="Migration completion could not be verified") as failure:
             harness.run()
-        message = str(failure.value)
+        message: Final = str(failure.value)
         assert name in message
         assert started in message
         assert "start record but no successful completion record" in message
@@ -1294,12 +1306,14 @@ class TestMigrateDeployAttemptAccounting:
         (2, "", b"CREATE TABLE item (id int);", False),
     ),
 )
-def test_migration_completion_requires_a_matching_successful_script(steps, logs, script, expected):
+def test_migration_completion_requires_a_matching_successful_script(
+    steps: int, logs: str, script: bytes, expected: bool
+) -> None:
     import hashlib
 
     from litellm_proxy_extras.migration_recovery import MigrationProgress
 
-    progress = MigrationProgress(hashlib.sha256(b"CREATE TABLE item (id int);").hexdigest(), steps, logs)
+    progress: Final = MigrationProgress(hashlib.sha256(b"CREATE TABLE item (id int);").hexdigest(), steps, logs)
     assert progress.confirms_completion(script) is expected
 
 
