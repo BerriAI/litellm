@@ -196,8 +196,6 @@ class HostedModelList(list[Entry]):
     ) -> None:
         super().__init__()
         self._handle: Final = handle
-        # The registry's lock: a read never sees the list between a router-core write and the
-        # read of it that follows, nor two reads of it at once.
         self._lock: Final[AbstractContextManager[object]] = threading.RLock() if lock is None else lock
         self._apply: Final = apply
         # A deployment's litellm_params values its record carries as text, by id (``live_params``).

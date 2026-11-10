@@ -635,9 +635,6 @@ class HostRegistry(HostModelInfo):
         self._on_change: Final = on_change
         self.ignore_invalid_deployments: bool = ignore_invalid_deployments
         self._registry_version: int = 0
-        # Held across every router-core write and the mirror read that follows it, and across
-        # every lookup and the mirror reads at the positions it returns: a reader on another
-        # thread never pairs one registry version's positions with another's list.
         self._deployment_index_lock: Final = threading.RLock()
         self._core_model_group_alias: dict[str, str | RouterModelGroupAliasItem] = model_group_alias  # mutable-ok: the live alias map  # fmt: skip
         # The live model_list: router-core's deployments read back, every write a changeset.
@@ -1915,13 +1912,6 @@ class HostRegistry(HostModelInfo):
         ):
             return provider_prefixed
         return None
-
-    def _get_deployment_by_litellm_model(self, model: object) -> list[UntypedEntry]:  # mutable-ok: a fresh list
-        with self._deployment_index_lock:
-            handle: Final = self._live_handle()
-            if handle is None or not isinstance(model, str):
-                return []
-            return list(self._at(handle.litellm_model_positions(model)))
 
     # -- credentials ------------------------------------------------------------------------------
 
