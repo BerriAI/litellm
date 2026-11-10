@@ -743,8 +743,24 @@ def test_cohere_v2_reasoning_effort_becomes_thinking(
             {"type": "json_object", "json_schema": CITY_SCHEMA},
         ),
         ({"type": "json_schema", "json_schema": {"name": "city"}}, {"type": "json_object"}),
+        (
+            {"type": "json_schema", "json_schema": {"type": "json_schema", "schema": CITY_SCHEMA}},
+            {"type": "json_object", "json_schema": CITY_SCHEMA},
+        ),
         ({"type": "json_object"}, {"type": "json_object"}),
+        ({"type": "json_object", "json_schema": CITY_SCHEMA}, {"type": "json_object", "json_schema": CITY_SCHEMA}),
+        ({"type": "json_object", "schema": CITY_SCHEMA}, {"type": "json_object", "schema": CITY_SCHEMA}),
+        ({"type": "json_object_with_backticks"}, {"type": "json_object_with_backticks"}),
+        ({"type": "json_schema", "json_schema": CITY_SCHEMA}, {"type": "json_schema", "json_schema": CITY_SCHEMA}),
+        ({"type": "json_schema", "schema": CITY_SCHEMA}, {"type": "json_schema", "schema": CITY_SCHEMA}),
+        ({"type": "json_schema", "json_schema": {"name": "city"}, "schema": CITY_SCHEMA}, {"type": "json_object"}),
+        ({"type": "json_schema", "json_schema": {"type": "json_schema", "name": "city"}}, {"type": "json_object"}),
+        ({"type": "json_schema", "json_schema": {"anyOf": [CITY_SCHEMA]}}, {"type": "json_object"}),
+        ({"type": "json_schema", "json_schema": {"properties": CITY_SCHEMA["properties"]}}, {"type": "json_object"}),
+        ({"type": "json_schema", "schema": {"anyOf": [CITY_SCHEMA]}}, {"type": "json_object"}),
+        ({"type": "json_schema", "json_schema": {}, "schema": CITY_SCHEMA}, {"type": "json_object"}),
         ({"type": "text"}, {"type": "text"}),
+        ({"type": "text", "json_schema": CITY_SCHEMA}, {"type": "text"}),
     ],
 )
 def test_cohere_v2_response_format_reaches_cohere(
@@ -787,6 +803,21 @@ def test_cohere_v2_tool_choice_reaches_cohere(
 @pytest.mark.usefixtures("_cohere_httpx_transport")
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.parametrize(
+    "response_format", [{}, {"strict": True}, {"json_schema": None}, {"json_schema": {}}, {"schema": None}]
+)
+def test_cohere_v2_response_format_without_type_keeps_cohere_default(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, response_format: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    body: Final = _cohere_v2_request_body(respx_mock, NON_REASONING_MODEL, {"response_format": response_format})
+
+    assert "response_format" not in body
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
     "companion",
     [{"tools": [WEATHER_TOOL]}, {"documents": [{"data": {"text": "Paris is in France"}}]}],
     ids=["tools", "documents"],
@@ -816,6 +847,14 @@ UNSUPPORTED_COHERE_V2_PARAMS: Final = [
     pytest.param(NON_REASONING_MODEL, {"reasoning_effort": "low"}, id="non-reasoning-model"),
     pytest.param(REASONING_MODEL, {"reasoning_effort": "extreme"}, id="unknown-effort"),
     pytest.param(REASONING_MODEL, {"response_format": {"type": "grammar"}}, id="unknown-response-format"),
+    pytest.param(
+        REASONING_MODEL,
+        {"response_format": {"type": "grammar", "json_schema": CITY_SCHEMA}},
+        id="unknown-response-format-with-schema",
+    ),
+    pytest.param(REASONING_MODEL, {"response_format": {"json_schema": CITY_SCHEMA}}, id="json-schema-without-type"),
+    pytest.param(REASONING_MODEL, {"response_format": {"schema": CITY_SCHEMA}}, id="schema-without-type"),
+    pytest.param(REASONING_MODEL, {"response_format": {"schema": {}}}, id="empty-schema-without-type"),
 ]
 
 
