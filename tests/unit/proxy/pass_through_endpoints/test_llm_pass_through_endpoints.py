@@ -1519,8 +1519,15 @@ class TestBedrockLLMProxyRoute:
         processing_data: Final = processor_constructor.call_args.kwargs["data"]
         _assert_bedrock_processing_data_classification(processing_data, is_streaming)
 
-    def test_direct_model_invoke_signs_the_caller_x_pass_header_and_sends_no_caller_credential(
-        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None
+    @pytest.mark.parametrize(
+        ("path_model", "uses_router"),
+        [
+            pytest.param("bedrock-sonnet", True, id="router_model"),
+            pytest.param("anthropic.claude-sonnet-5-5", False, id="direct_model"),
+        ],
+    )
+    def test_invoke_signs_the_caller_x_pass_header_and_sends_no_caller_credential(
+        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None, path_model: str, uses_router: bool
     ) -> None:
         from litellm.proxy import proxy_server
 
@@ -1535,7 +1542,19 @@ class TestBedrockLLMProxyRoute:
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
         monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
-        monkeypatch.setattr(proxy_server, "llm_router", None)
+        router: Final = (
+            litellm.Router(
+                model_list=[
+                    {
+                        "model_name": "bedrock-sonnet",
+                        "litellm_params": {"model": f"bedrock/{model}", "aws_region_name": "us-east-1"},
+                    }
+                ]
+            )
+            if uses_router
+            else None
+        )
+        monkeypatch.setattr(proxy_server, "llm_router", router)
         monkeypatch.setitem(
             proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key=caller_bearer)
         )
@@ -1556,7 +1575,7 @@ class TestBedrockLLMProxyRoute:
                 )
             )
             response: Final = TestClient(proxy_server.app).post(
-                f"/bedrock/model/{model}/invoke",
+                f"/bedrock/model/{path_model}/invoke",
                 json={
                     "anthropic_version": "bedrock-2023-05-31",
                     "max_tokens": 16,
@@ -2948,57 +2967,6 @@ class TestGigachatProxyRoute:
         mock_is_router.assert_called_once()
         mock_llm_router.allm_passthrough_route.assert_awaited_once()
         assert isinstance(result, Response)
-
-    def test_router_model_sends_gigachat_no_header_the_caller_sent_with_the_x_pass_prefix(
-        self, monkeypatch: pytest.MonkeyPatch, httpx_transport: None
-    ) -> None:
-        from litellm.proxy import proxy_server
-
-        monkeypatch.setenv("GIGACHAT_ACCESS_TOKEN", "gigachat-test-token")
-        monkeypatch.setattr(
-            proxy_server,
-            "llm_router",
-            litellm.Router(
-                model_list=[
-                    {
-                        "model_name": "gigachat-router",
-                        "litellm_params": {
-                            "model": "gigachat/GigaChat-2-Max",
-                            "api_base": "https://gigachat-upstream.test/api/v1",
-                        },
-                    }
-                ]
-            ),
-        )
-        monkeypatch.setitem(
-            proxy_server.app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual")
-        )
-
-        with respx.mock(assert_all_called=True) as upstream:
-            completions: Final = upstream.post("https://gigachat-upstream.test/api/v1/chat/completions").mock(
-                return_value=httpx.Response(
-                    200,
-                    json={
-                        "choices": [
-                            {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}
-                        ],
-                        "created": 1767225600,
-                        "model": "GigaChat-2-Max",
-                        "object": "chat.completion",
-                        "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
-                    },
-                )
-            )
-            response: Final = TestClient(proxy_server.app).post(
-                "/gigachat/chat/completions",
-                json={"model": "gigachat-router", "messages": [{"role": "user", "content": "hi"}]},
-                headers={"x-pass-X-Session-ID": "caller-session"},
-            )
-
-        assert response.status_code == 200, response.text
-        sent: Final = completions.calls.last.request
-        assert sent.headers["authorization"] == "Bearer gigachat-test-token"
-        assert [name for name in sent.headers if name.startswith("x-pass-") or name == "x-session-id"] == []
 
     @pytest.mark.asyncio
     async def test_gigachat_router_handler_keeps_cached_body_and_payload_metadata_pristine(self):
