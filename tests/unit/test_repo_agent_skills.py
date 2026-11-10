@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
-_SKILLS_DIR: Final = _REPO_ROOT / "skills"
+_SKILLS_DIR: Final = _REPO_ROOT / ".agents" / "skills"
 _SKILL_DIRECTORIES: Final = tuple(sorted(skill_file.parent for skill_file in _SKILLS_DIR.glob("*/SKILL.md")))
 _FULL_DEPTH_MAX_DEPTH: Final = 5
 _FULL_DEPTH_SKIPPED_NAMES: Final = frozenset(("node_modules", ".git", "dist", "build", "__pycache__"))
