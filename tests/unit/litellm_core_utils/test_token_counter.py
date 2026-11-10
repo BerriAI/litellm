@@ -3962,3 +3962,74 @@ def test_openai_model_check_holds_while_openai_models_are_registered_concurrentl
 )
 def test_has_only_text_content_accepts_only_plain_text_chat_messages(messages: list[object], text_only: bool) -> None:
     assert has_only_text_content(messages) is text_only
+
+
+_PREVIOUS_TURN_THINKING = "Long private reasoning that the provider strips before the next request. " * 40
+_LAST_TURN_THINKING = "Reasoning that is still in flight while the tool loop continues."
+
+
+def _tool_loop_messages() -> list:
+    return [
+        {"role": "user", "content": "list the files"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": _PREVIOUS_TURN_THINKING, "signature": "sig-1"},
+                {"type": "tool_use", "id": "toolu_1", "name": "ls", "input": {"path": "."}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.py"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": _LAST_TURN_THINKING, "signature": "sig-2"},
+                {"type": "tool_use", "id": "toolu_2", "name": "cat", "input": {"path": "a.py"}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_2", "content": "print(1)"}]},
+    ]
+
+
+def test_token_counter_skips_thinking_blocks_of_earlier_assistant_turns():
+    """Only the latest assistant turn's reasoning is still in the prompt."""
+    with_thinking = token_counter(model="gpt-4o", messages=_tool_loop_messages())
+
+    without_previous = _tool_loop_messages()
+    without_previous[1]["content"] = [without_previous[1]["content"][1]]
+    assert with_thinking == token_counter(model="gpt-4o", messages=without_previous)
+
+    without_any = _tool_loop_messages()
+    without_any[1]["content"] = [without_any[1]["content"][1]]
+    without_any[3]["content"] = [without_any[3]["content"][1]]
+    assert with_thinking > token_counter(model="gpt-4o", messages=without_any)
+
+
+def test_token_counter_skips_reasoning_content_of_earlier_assistant_turns():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello", "reasoning_content": _PREVIOUS_TURN_THINKING},
+        {"role": "user", "content": "again"},
+        {"role": "assistant", "content": "hello again", "reasoning_content": _LAST_TURN_THINKING},
+    ]
+    stripped = [dict(m) for m in messages]
+    del stripped[1]["reasoning_content"]
+
+    assert token_counter(model="gpt-4o", messages=messages) == token_counter(model="gpt-4o", messages=stripped)
+    assert token_counter(model="gpt-4o", messages=messages) > token_counter(
+        model="gpt-4o", messages=[dict(m, reasoning_content=None) if "reasoning_content" in m else m for m in messages]
+    )
+
+
+def test_token_counter_keeps_thinking_when_the_only_assistant_turn_is_last():
+    single = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": _PREVIOUS_TURN_THINKING, "signature": "s"},
+                {"type": "text", "text": "hello"},
+            ],
+        },
+    ]
+    stripped = [single[0], {"role": "assistant", "content": [single[1]["content"][1]]}]
+    assert token_counter(model="gpt-4o", messages=single) > token_counter(model="gpt-4o", messages=stripped)
