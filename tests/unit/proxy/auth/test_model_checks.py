@@ -2482,7 +2482,7 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_to_catalog_mo
     router: Final = Router(model_list=[{"model_name": model_name, "litellm_params": {"model": "*"}}])
 
     def routed_model(listed_id: str) -> object:
-        routed: Final = router.wildcard_route_deployments(listed_id, None)
+        routed: Final = router.registry().deployments(listed_id, source="wildcard")
         return routed[0]["litellm_params"]["model"] if routed else None
 
     with _registered_chat_models({_ROUTE_OPENAI_ID: "openai"}):
@@ -2498,7 +2498,7 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_to_catalog_mo
         model_info_names: Final = [
             str(row["model_name"])
             for row in expand_wildcard_deployments_for_model_info(
-                [dict(deployment) for deployment in router.get_model_list() or []], router
+                [dict(deployment) for deployment in router.registry().deployments() or []], router
             )
             if row["model_name"] != model_name
         ]
