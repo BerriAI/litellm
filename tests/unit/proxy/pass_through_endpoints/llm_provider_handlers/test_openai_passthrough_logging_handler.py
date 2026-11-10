@@ -2489,18 +2489,6 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         )
         return await asyncio.wait_for(recorder.call, timeout=5)
 
-    async def _failed_stream_cost(
-        self,
-        sub_route: str,
-        raw_bytes: list[bytes],
-        litellm_call_id: str,
-        passthrough_logging: PassThroughEndpointLogging,
-    ) -> object:
-        logging_obj: Final = self._failed_stream_logging_obj(litellm_call_id)
-        await self._failed_stream(logging_obj, sub_route, raw_bytes, passthrough_logging)
-        await GLOBAL_LOGGING_WORKER.flush()
-        return logging_obj.model_call_details.get("response_cost")
-
     def _failed_stream_logging_obj(self, litellm_call_id: str) -> LiteLLMLoggingObj:
         logging_obj: Final = self._recorded_logging_obj(_SpendRowRecorder(), litellm_call_id, stream=True)
         logging_obj.model_call_details["custom_llm_provider"] = "openai"
@@ -2740,65 +2728,20 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
         assert resumed_stream.spend_row["request_id"] != retrieve.spend_row["request_id"]
 
     @pytest.mark.asyncio
-    async def test_a_resumed_stream_that_fails_after_a_billed_retrieve_does_not_bill_again(self, local_model_cost_map):
-        passthrough_logging: Final = _settling_passthrough_logging(_SettlementTable())
-        finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
-
-        retrieve: Final = await self._logged_call(
-            "GET",
-            f"/{STORED_RESPONSE_ID}",
-            {},
-            finished,
-            "2f8c6a41-7d3e-4b59-9e1a-c4d7b2e5f803",
-            passthrough_logging=passthrough_logging,
-        )
-        failed_stream_cost: Final = await self._failed_stream_cost(
-            f"/{STORED_RESPONSE_ID}?stream=true",
-            _completed_stream_bytes(finished),
-            "8b4e1d97-3a6c-4f20-b5d8-e9a2c7f1b364",
-            passthrough_logging,
-        )
-
-        assert retrieve.spend_row["spend"] > 0
-        assert not failed_stream_cost
-
-    @pytest.mark.asyncio
-    async def test_a_resumed_stream_that_fails_and_is_cancelled_while_it_settles_still_bills(self, local_model_cost_map):
-        settled: Final = asyncio.Event()
-        passthrough_logging: Final = _settling_passthrough_logging(
-            _SlowAckSettlementTable(_SettlementTable(), settled), timeout_seconds=2
-        )
-        logging_obj: Final = self._failed_stream_logging_obj("0e5b9d27-8c4a-4f13-a6e2-7d1f3b9c5a48")
-        cancelled_stream: Final = asyncio.create_task(
-            self._failed_stream(
-                logging_obj,
-                f"/{STORED_RESPONSE_ID}?stream=true",
-                _completed_stream_bytes(_stored_response("completed", True, RESPONSES_USAGE)),
-                passthrough_logging,
-            )
-        )
-        await settled.wait()
-        cancelled_stream.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await cancelled_stream
-        await GLOBAL_LOGGING_WORKER.flush()
-
-        assert logging_obj.model_call_details.get("response_cost", 0) > 0
-
-    @pytest.mark.asyncio
-    async def test_a_resumed_stream_that_fails_after_it_finished_bills_once_and_its_later_retrieve_does_not(
+    async def test_a_resumed_stream_that_fails_after_it_finished_leaves_the_charge_to_its_next_retrieve(
         self, local_model_cost_map
     ):
         passthrough_logging: Final = _settling_passthrough_logging(_SettlementTable())
         finished: Final = _stored_response("completed", True, RESPONSES_USAGE)
 
-        failed_stream_cost: Final = await self._failed_stream_cost(
+        await self._failed_stream(
+            self._failed_stream_logging_obj("5d9a3f72-1e8b-4c46-a7d0-b3f6e2c9a581"),
             f"/{STORED_RESPONSE_ID}?stream=true",
             _completed_stream_bytes(finished),
-            "5d9a3f72-1e8b-4c46-a7d0-b3f6e2c9a581",
             passthrough_logging,
         )
-        retrieve: Final = await self._logged_call(
+        await GLOBAL_LOGGING_WORKER.flush()
+        first_retrieve: Final = await self._logged_call(
             "GET",
             f"/{STORED_RESPONSE_ID}",
             {},
@@ -2806,10 +2749,17 @@ class TestOpenAIPassthroughResponsesSubRouteBilling:
             "c1e7b4a9-6f2d-4835-9b0e-a8d5f3c2e176",
             passthrough_logging=passthrough_logging,
         )
+        later_retrieve: Final = await self._logged_call(
+            "GET",
+            f"/{STORED_RESPONSE_ID}",
+            {},
+            finished,
+            "7a3e9c15-4b8d-4f62-a0e7-d5c2b9f1e384",
+            passthrough_logging=passthrough_logging,
+        )
 
-        assert isinstance(failed_stream_cost, float)
-        assert failed_stream_cost > 0
-        assert not retrieve.spend_row["spend"]
+        assert first_retrieve.spend_row["spend"] > 0
+        assert not later_retrieve.spend_row["spend"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

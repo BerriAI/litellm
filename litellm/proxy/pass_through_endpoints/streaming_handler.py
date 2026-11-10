@@ -41,7 +41,7 @@ from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
-from .success_handler import PassThroughEndpointLogging, complete_despite_cancellation
+from .success_handler import PassThroughEndpointLogging
 
 _REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
 
@@ -86,35 +86,19 @@ class PassThroughStreamingHandler:
         # the tinyfish poller writes the one authoritative row; a failure row here would collide on its request_id
         if endpoint_type == EndpointType.TINYFISH and sse_poller_spawned(litellm_logging_obj):
             return
-        failure_traceback: Final = traceback.format_exc()
-
-        async def record_and_enqueue() -> None:
-            background_response_settled_before: Final = (
-                stream_context is not None
-                and endpoint_type == EndpointType.OPENAI
-                and await PassThroughStreamingHandler._stream_background_response_settled_before(
-                    passthrough_success_handler_obj=stream_context.passthrough_success_handler_obj,
-                    url_route=stream_context.url_route,
-                    request_body=request_body,
-                    raw_bytes=raw_bytes,
-                )
+        await asyncify(PassThroughStreamingHandler._record_partial_usage_for_failure)(
+            litellm_logging_obj=litellm_logging_obj,
+            endpoint_type=endpoint_type,
+            request_body=request_body,
+            raw_bytes=raw_bytes,
+            stream_context=stream_context,
+        )
+        try:
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=litellm_logging_obj.dispatch_attempt_failure_handlers(exception, traceback.format_exc())
             )
-            await asyncify(PassThroughStreamingHandler._record_partial_usage_for_failure)(
-                litellm_logging_obj=litellm_logging_obj,
-                endpoint_type=endpoint_type,
-                request_body=request_body,
-                raw_bytes=raw_bytes,
-                stream_context=stream_context,
-                background_response_settled_before=background_response_settled_before,
-            )
-            try:
-                GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                    async_coroutine=litellm_logging_obj.dispatch_attempt_failure_handlers(exception, failure_traceback)
-                )
-            except Exception as e:
-                verbose_proxy_logger.error("Error scheduling stream failure logging: %s", e)
-
-        await complete_despite_cancellation(record_and_enqueue())
+        except Exception as e:
+            verbose_proxy_logger.error("Error scheduling stream failure logging: %s", e)
 
     @staticmethod
     async def _schedule_stream_end_logging(
@@ -144,7 +128,6 @@ class PassThroughStreamingHandler:
         request_body: dict[str, object],
         raw_bytes: Sequence[bytes],
         stream_context: PassThroughStreamContext | None,
-        background_response_settled_before: bool,
     ) -> None:
         if endpoint_type == EndpointType.ANTHROPIC:
             AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
@@ -164,7 +147,6 @@ class PassThroughStreamingHandler:
                 raw_bytes=raw_bytes,
                 end_time=datetime.now(timezone.utc),
                 model=None,
-                background_response_settled_before=background_response_settled_before,
             )
         except Exception as e:
             verbose_proxy_logger.warning(
