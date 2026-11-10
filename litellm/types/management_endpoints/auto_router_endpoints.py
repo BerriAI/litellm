@@ -176,6 +176,13 @@ class AutoRouterSessionResponse(LiteLLMBaseModel):
     turns: int = Field(description="Auto-routed turns the rollup has recorded for this session so far")
     last_model: str = Field(description="The deployment model the most recent turn was routed to")
     spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
+    total_spend: float | None = Field(
+        default=None,
+        description="Spend billed to this key under the session id, routed or not, from a shared Redis counter "
+        "whose one-hour expiry every billed request resets. None without a shared Redis or once the counter "
+        "expired. A best-effort figure, not a lifetime total: a session idle past the expiry restarts from zero, "
+        "and a failed Redis write, eviction or flush drops spend without notice",
+    )
     savings_estimated_turns: int = Field(description="Requests whose savings estimate recorded its baseline cost")
     savings_estimated_actual_spend: float = Field(
         description="Actual spend, including classifier cost, for requests whose estimate recorded its baseline cost"

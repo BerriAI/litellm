@@ -27948,6 +27948,11 @@ export interface components {
              */
             spend: number;
             /**
+             * Total Spend
+             * @description Spend billed to this key under the session id, routed or not, from a shared Redis counter whose one-hour expiry every billed request resets. None without a shared Redis or once the counter expired. A best-effort figure, not a lifetime total: a session idle past the expiry restarts from zero, and a failed Redis write, eviction or flush drops spend without notice
+             */
+            total_spend?: number | null;
+            /**
              * Turns
              * @description Auto-routed turns the rollup has recorded for this session so far
              */
