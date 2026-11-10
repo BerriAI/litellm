@@ -1425,7 +1425,7 @@ def _parse_session_affinity_pin(value: object, active_tiers: tuple[str, ...]) ->
     return _SessionAffinityPin(model=model, tier=_built_in_tier_or_none(tier_value) or tier_value)
 
 
-def _session_affinity_cache_value(model: str | None, tier: ComplexityTier | str | None) -> Mapping[str, str | None]:
+def _session_affinity_cache_value(model: str, tier: ComplexityTier | str | None) -> Mapping[str, str | None]:
     tier_value: Final = _tier_name(tier) if tier is not None else None
     return {"model": model, "tier": tier_value}
 
@@ -4569,8 +4569,11 @@ class ComplexityRouter(CustomLogger):
         # In 'user_turn' mode a held pin is replayed only on continuation turns; a new human
         # ask falls through and re-classifies. session_affinity restores pin-first for asks too.
         codex_compaction: Final = self._is_codex_compaction_lifecycle(request_kwargs, resolved_messages, marker_pairs)
-        new_ask: Final = _newest_turn_is_human_ask(resolved_messages, marker_pairs) and not codex_compaction
-        pin_replay_allowed: Final = bool(self.config.session_affinity) or not new_ask
+        pin_replay_allowed: Final = (
+            bool(self.config.session_affinity)
+            or not _newest_turn_is_human_ask(resolved_messages, marker_pairs)
+            or codex_compaction
+        )
 
         if cache_key is not None and pin_replay_allowed:
             pinned_value: Final = await read_affinity_pin(
@@ -4769,36 +4772,26 @@ class ComplexityRouter(CustomLogger):
         # classified at or above the floor keeps its ordinary cause, yet on an adaptive router
         # the hard floor constrained its pick, so pinning it would carry a plan-mode-shaped
         # choice past plan mode's exit. No sentinel turn writes the pin, whatever its cause.
+        holds_fallback_for_this_ask: Final = (
+            not self.config.session_affinity
+            and response is not None
+            and response.routing_decision is not None
+            and response.routing_decision.get("cause") == "default_model_fallback"
+        )
         pinnable: Final = (
             cache_key is not None
             and response is not None
-            and _decision_is_pinnable(response.routing_decision)
+            and (_decision_is_pinnable(response.routing_decision) or holds_fallback_for_this_ask)
             and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
         )
-        # A new user_turn ask owns the pin: when it cannot be pinned it clears the previous ask's pin. Read
-        # housekeeping before the gates, which rewrite the cause of a failed-over title call.
-        clears_previous_ask_pin: Final = (
-            new_ask
-            and not self.config.session_affinity
-            and routed_response is not None
-            and (
-                routed_response.routing_decision is None
-                or routed_response.routing_decision.get("cause") != "housekeeping"
-            )
-        )
-        pin_write: Final = (
-            _session_affinity_cache_value(
-                response.model,
-                response.routing_decision.get("tier") if response.routing_decision is not None else None,
-            )
-            if pinnable and response is not None
-            else _session_affinity_cache_value(None, None)
-            if clears_previous_ask_pin
-            else None
-        )
-        if cache_key is not None and pin_write is not None:
+        if pinnable and cache_key is not None and response is not None:
             await self.ctx.health().store.async_set_cache(
-                key=cache_key, value=pin_write, ttl=self.config.session_affinity_ttl_seconds
+                key=cache_key,
+                value=_session_affinity_cache_value(
+                    response.model,
+                    response.routing_decision.get("tier") if response.routing_decision is not None else None,
+                ),
+                ttl=self.config.session_affinity_ttl_seconds,
             )
         return self._with_session_deployment_affinity(response)
 
