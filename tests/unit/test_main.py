@@ -4467,6 +4467,68 @@ async def test_aspeech_gemini_bridge_keeps_proxy_metadata_for_spend_tracking(
     assert speech_event.logged_response_cost == pytest.approx(expected_cost)
 
 
+@dataclass(frozen=True, slots=True)
+class _RecordedLoggedCall:
+    hook: str
+    response: object
+    logged_id: object
+    litellm_call_id: object
+
+
+def _record_logged_call(hook: str, kwargs: dict[str, object], response_obj: object) -> _RecordedLoggedCall:
+    logging_payload: Final = kwargs.get("standard_logging_object")
+    return _RecordedLoggedCall(
+        hook=hook,
+        response=response_obj,
+        logged_id=logging_payload.get("id") if isinstance(logging_payload, dict) else None,
+        litellm_call_id=kwargs.get("litellm_call_id"),
+    )
+
+
+class _LoggedCallRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[_RecordedLoggedCall] = []  # mutable-ok: test recorder of success-callback events
+
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_logged_call("sync", kwargs, response_obj))
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self.events.append(_record_logged_call("async", kwargs, response_obj))
+
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_logs_only_the_speech_call_under_its_call_id(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    recorder: Final = _LoggedCallRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json={**_gemini_tts_generate_content_response(), "responseId": "gemini-id"}))
+
+    await litellm.aspeech(
+        model="gemini/gemini-2.5-flash-preview-tts", input="logged once", voice="Kore", api_key="fake-gemini-key"
+    )
+
+    for _ in range(100):
+        if any(event.hook == "async" for event in recorder.events):
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.2)
+    assert [(event.hook, type(event.response)) for event in recorder.events] == [
+        ("async", HttpxBinaryResponseContent)
+    ]
+    assert recorder.events[0].logged_id == recorder.events[0].litellm_call_id
+
+
 def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | None = None) -> ModelResponseStream:
     return ModelResponseStream(
         id="chatcmpl-cost",
