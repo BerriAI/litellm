@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
 )
@@ -792,7 +793,10 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
 @pytest.mark.parametrize(
     ("route_fills", "expected"),
     (
-        (True, [("user", "What is 2+2?"), ("assistant", "Four."), ("user", ""), ("assistant", "Eight.")]),
+        (
+            True,
+            [("user", "What is 2+2?"), ("assistant", "Four."), ("user", EMPTY_TEXT_PLACEHOLDER), ("assistant", "Eight.")],
+        ),
         (False, [("user", "What is 2+2?"), ("assistant", "Four."), ("assistant", "Eight.")]),
     ),
     ids=("route_fills_empty_user_turns", "route_drops_them"),

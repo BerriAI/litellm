@@ -7,6 +7,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
+from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -165,6 +166,7 @@ class ResponsesSessionHandler:
                         chat_completion_message_history,
                         item_cache_control,
                         route_fills_empty_user_turns,
+                        text=EMPTY_TEXT_PLACEHOLDER,
                     )
                 )
 

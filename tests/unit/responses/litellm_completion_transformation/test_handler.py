@@ -267,3 +267,65 @@ async def test_bridged_follow_up_with_a_lone_user_item_without_content_ends_on_a
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert [message["role"] for message in provider.request_body["messages"]] == ["user", "assistant", "user"]
+
+
+_CONVERSE_REPLY: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "Eight."}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 12, "outputTokens": 1, "totalTokens": 13},
+}
+
+
+def _stored_converse_turn(request_id: str, input_items: object, reply: str) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "converse-session",
+        "proxy_server_request": {"input": input_items, "model": "bedrock/us.anthropic.claude-opus-5-5"},
+        "response": {
+            "id": request_id,
+            "object": "chat.completion",
+            "created": 1748575031,
+            "model": "claude-opus-5-5",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
+        },
+    }
+
+
+async def _sent_converse_messages(
+    stored: tuple[Mapping[str, object], ...], input_items: object, previous_response_id: str
+) -> object:
+    provider: Final = _RecordingAnthropicHandler(_CONVERSE_REPLY)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredSession(stored))):
+        await litellm.aresponses(
+            model="bedrock/us.anthropic.claude-opus-5-5",
+            aws_access_key_id="fake-access-key",
+            aws_secret_access_key="fake-secret-key",
+            aws_region_name="us-east-1",
+            input=input_items,
+            previous_response_id=previous_response_id,
+            client=client,
+        )
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    return provider.request_body["messages"]
+
+
+@pytest.mark.asyncio
+async def test_converse_turn_after_a_lone_null_user_item_resends_the_messages_that_follow_up_sent():
+    null_user_item: Final = [{"role": "user", "content": None}]
+    first_turn: Final = _stored_converse_turn("chatcmpl-turn-one", "What is 2+2?", "Four.")
+
+    follow_up_messages: Final = await _sent_converse_messages((first_turn,), null_user_item, "chatcmpl-turn-one")
+    next_turn_messages: Final = await _sent_converse_messages(
+        (first_turn, _stored_converse_turn("chatcmpl-turn-two", null_user_item, "Eight.")),
+        [{"role": "user", "content": "Double it."}],
+        "chatcmpl-turn-two",
+    )
+
+    assert isinstance(follow_up_messages, list) and isinstance(next_turn_messages, list)
+    assert [message["role"] for message in next_turn_messages] == ["user", "assistant", "user", "assistant", "user"]
+    assert next_turn_messages[: len(follow_up_messages)] == follow_up_messages

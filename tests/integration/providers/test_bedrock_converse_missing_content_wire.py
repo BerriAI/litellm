@@ -31,7 +31,7 @@ from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
-from litellm.litellm_core_utils.prompt_templates.factory import _EMPTY_TEXT_PLACEHOLDER
+from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 from pydantic import JsonValue, TypeAdapter
 
@@ -97,7 +97,7 @@ _TOOLS: Final[tuple[dict[str, JsonValue], ...]] = (
 _CONVERSE_QUESTION: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"text": _QUESTION}]}
 _CONVERSE_ANSWERED: Final[dict[str, JsonValue]] = {"role": "assistant", "content": [{"text": _ANSWERED}]}
 _CONVERSE_FOLLOW_UP: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"text": _FOLLOW_UP}]}
-_CONVERSE_PLACEHOLDER: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"text": _EMPTY_TEXT_PLACEHOLDER}]}
+_CONVERSE_PLACEHOLDER: Final[dict[str, JsonValue]] = {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
 _CONVERSE_TOOL_USE: Final[dict[str, JsonValue]] = {
     "role": "assistant",
     "content": [{"toolUse": {"toolUseId": "call_1", "name": "get_weather", "input": {"city": "Boston"}}}],

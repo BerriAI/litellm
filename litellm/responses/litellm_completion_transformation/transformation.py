@@ -338,11 +338,11 @@ def without_item_cache_control(input: str | ResponseInputParam) -> str | Respons
     )
 
 
-def _empty_user_turn(last_input_item: object) -> GenericChatCompletionMessage:
+def _empty_user_turn(last_input_item: object, text: str) -> GenericChatCompletionMessage:
     cache_control: Final = _input_item_cache_control(as_str_mapping(last_input_item) or {})
     if cache_control is None:
-        return GenericChatCompletionMessage(role="user", content="")
-    return GenericChatCompletionMessage(role="user", content="", cache_control=cache_control)
+        return GenericChatCompletionMessage(role="user", content=text)
+    return GenericChatCompletionMessage(role="user", content=text, cache_control=cache_control)
 
 
 def restored_empty_user_turn(
@@ -350,12 +350,13 @@ def restored_empty_user_turn(
     messages: Sequence[object],
     keeps_cache_mark: bool,
     route_fills_empty_user_turns: Callable[[], bool],
+    text: str = "",
 ) -> tuple[GenericChatCompletionMessage, ...]:
     if isinstance(input_items, str) or not input_items or message_field(input_items[-1], "role") != "user":
         return ()
     if not messages or message_field(messages[-1], "role") != "assistant" or not route_fills_empty_user_turns():
         return ()
-    return (_empty_user_turn(input_items[-1] if keeps_cache_mark else None),)
+    return (_empty_user_turn(input_items[-1] if keeps_cache_mark else None, text),)
 
 
 def _target_fills_empty_user_turns(model: str, custom_llm_provider: str | None, base_model: object) -> bool:
