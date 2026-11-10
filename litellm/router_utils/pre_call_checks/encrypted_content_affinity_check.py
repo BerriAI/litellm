@@ -681,4 +681,4 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
         ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(request_input)
         strip_encrypted_reasoning_from_messages(anthropic_messages)
-        return candidates
+        return untried_candidates if excluded_ids or retry_skipped_ids else candidates

@@ -62,6 +62,7 @@ FAKES = {
         custom_llm_provider=provider,
     ),
     'pre_call': lambda logger, input, api_key, additional_args: logger.pre_call(input, api_key, additional_args),
+    'messages_input': lambda body, kwargs: [{'role': 'user', 'content': json.dumps(body)}],
     'post_call': lambda logger, original_response, api_key, additional_args: logger.post_call(
         original_response, api_key, additional_args
     ),
@@ -97,7 +98,7 @@ FAKES = {
     'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
     'stream_opened': lambda logger, head: logger.record('stream_opened', head),
     'stamp_stream_head': lambda head, logger, kwargs, start, end: logger.record('stamp_stream_head', head),
-    'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk: logger.record(
+    'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk, stream_teardown: logger.record(
         'stream_success', list(chunks)
     ),
     'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
@@ -134,6 +135,7 @@ class StubCoroutine:
 class StubLogger:
     def __init__(self):
         self.calls = []
+        self.model_call_details = {}
         self.hooks = {}
         self.on_enqueue = lambda coroutine: None
 

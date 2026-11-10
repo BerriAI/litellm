@@ -359,6 +359,8 @@ async def new_end_user(
     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
     - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
+    - model_tpm_limit: Optional[dict] - Max tokens per minute per model for this customer, shared across every key the customer is sent on. Stored on the customer's budget. Example: {"gpt-4o": 400000}
+    - model_rpm_limit: Optional[dict] - Max requests per minute per model for this customer. Stored on the customer's budget. Example: {"gpt-4o": 200}
     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
     - spend: Optional[float] - Specify initial spend for a given customer.
@@ -455,7 +457,7 @@ async def new_end_user(
             try:
                 budget_record: Final = await _typed_table(BudgetRepository(prisma_client)).create(
                     data={
-                        **_new_budget.model_dump(exclude_unset=True),
+                        **prisma_client.jsonify_object(_new_budget.model_dump(exclude_unset=True)),
                         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     }
@@ -956,6 +958,7 @@ async def get_customer_daily_activity(
     page: int = 1,
     page_size: int = 10,
     exclude_end_user_ids: str | None = None,
+    team_ids: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -999,4 +1002,5 @@ async def get_customer_daily_activity(
         api_key=api_key,
         page=page,
         page_size=page_size,
+        team_ids=tuple(team_ids.split(",")) if team_ids else None,
     )

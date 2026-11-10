@@ -15,10 +15,10 @@ from functools import cache
 from types import NoneType
 from typing import Annotated, Final, Literal, TypeAlias
 
-from packaging.version import Version
 from pydantic import ConfigDict, Field, StringConstraints, field_serializer
 
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
+from litellm.proxy.common_utils.codex_version import codex_version_at_least
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 TierId: TypeAlias = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -27,7 +27,7 @@ CodexInputModality: TypeAlias = Literal["text", "image"]
 _TEXT_ONLY: Final[tuple[CodexInputModality, ...]] = ("text",)
 _TEXT_AND_IMAGE: Final[tuple[CodexInputModality, ...]] = ("text", "image")
 TOKEN_PRICE_KEY: Final = "input_cost_per_token"
-_FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = Version("0.138.0")
+_FIRST_CODEX_WITH_CUSTOM_EFFORTS: Final = "0.138.0"
 _EFFORTS_EVERY_CODEX_PARSES: Final = frozenset({"none", "minimal", "low", "medium", "high", "xhigh"})
 _PREFERRED_DEFAULT_EFFORT: Final = "medium"
 _CODEX_UNSET_EFFORT: Final = "none"
@@ -95,7 +95,7 @@ class CodexFallbackModel(LiteLLMBaseModel):
     apply_patch_tool_type: Literal["freeform"] | None = None
     truncation_policy: CodexTruncationPolicy = CodexTruncationPolicy()
     experimental_supported_tools: tuple[()] = ()
-    input_modalities: tuple[CodexInputModality, ...] = _TEXT_AND_IMAGE
+    input_modalities: tuple[CodexInputModality, ...] = _TEXT_ONLY
     context_window: int | None
     base_instructions: str
     supports_search_tool: bool = False
@@ -148,8 +148,8 @@ def no_priced_deployment_lacks_tier(tier_id: str, deployments: Sequence[CodexDep
 @dataclass(frozen=True, slots=True)
 class CodexCapabilities:
     """What a request to a listed name can count on whichever deployment serves it: a capability is False
-    when one deployment lacks it, True when one has it and none lacks it, None when none says, and the
-    context window is the smallest one any deployment declares."""
+    when one deployment lacks it, True only when none lacks it, None otherwise, and the context window is
+    the smallest one any deployment declares."""
 
     context_window: int | None = None
     supports_vision: bool | None = None
@@ -161,6 +161,13 @@ class CodexCapabilities:
 def _combined(flags: Iterable[bool | None]) -> bool | None:
     said: Final = frozenset(flag for flag in flags if flag is not None)
     return None if not said else False not in said
+
+
+def _declared_by_every_deployment(flags: Iterable[bool | None]) -> bool | None:
+    said: Final = frozenset(flags)
+    if False in said:
+        return False
+    return None if not said or None in said else True
 
 
 def combined_capabilities(
@@ -175,20 +182,13 @@ def combined_capabilities(
     )
     return CodexCapabilities(
         context_window=min(windows) if windows else listed_context_window,
-        supports_vision=_combined(deployment.supports_vision for deployment in deployments),
+        supports_vision=_declared_by_every_deployment(deployment.supports_vision for deployment in deployments),
         supports_function_calling=_combined(deployment.supports_function_calling for deployment in deployments),
         supports_parallel_function_calling=_combined(
             deployment.supports_parallel_function_calling for deployment in deployments
         ),
         supports_reasoning=_combined(deployment.supports_reasoning for deployment in deployments),
     )
-
-
-def _parses_custom_efforts(client_version: str | None) -> bool:
-    try:
-        return client_version is not None and Version(client_version) >= _FIRST_CODEX_WITH_CUSTOM_EFFORTS
-    except ValueError:
-        return False
 
 
 def codex_reasoning_levels(
@@ -202,7 +202,7 @@ def codex_reasoning_levels(
     group accepts it, so a user who picks no level sends what Codex sent before, else medium, else the
     nearest weaker declared level, so picking no level never costs more reasoning than Codex's usual medium,
     else the weakest declared level, else the first one."""
-    parses_any: Final = _parses_custom_efforts(client_version)
+    parses_any: Final = codex_version_at_least(client_version, _FIRST_CODEX_WITH_CUSTOM_EFFORTS)
     offered: Final = tuple(effort for effort in efforts if parses_any or effort in _EFFORTS_EVERY_CODEX_PARSES)
     if not offered:
         return (), None
@@ -230,10 +230,10 @@ def codex_fallback_entry(
 ) -> CodexFallbackModel:
     """Codex's entry for a model it does not know, from the capabilities its deployments share.
 
-    A capability no deployment declares keeps Codex's own default for an unknown model, except the freeform
-    `apply_patch` tool, which goes out only to a model that calls tools: `supports_reasoning_summary_parameter`
-    is left out, which Codex reads as true, and the fields only Codex before 0.150.0 reads keep the false
-    it requires.
+    A capability no deployment declares keeps Codex's own default for an unknown model, except image input
+    and the freeform `apply_patch` tool, which go out only to a model known to read images or call tools:
+    `supports_reasoning_summary_parameter` is left out, which Codex reads as true, and the fields only Codex
+    before 0.150.0 reads keep the false it requires.
     """
     levels, default_level = codex_reasoning_levels(reasoning_efforts, client_version)
     return CodexFallbackModel(
@@ -247,7 +247,7 @@ def codex_fallback_entry(
         supports_reasoning_summaries=capabilities.supports_reasoning is True,
         supports_parallel_tool_calls=capabilities.supports_parallel_function_calling is True,
         apply_patch_tool_type="freeform" if capabilities.supports_function_calling is True else None,
-        input_modalities=_TEXT_ONLY if capabilities.supports_vision is False else _TEXT_AND_IMAGE,
+        input_modalities=_TEXT_AND_IMAGE if capabilities.supports_vision is True else _TEXT_ONLY,
         context_window=capabilities.context_window,
         base_instructions=instructions,
         supports_search_tool=supports_search_tool,

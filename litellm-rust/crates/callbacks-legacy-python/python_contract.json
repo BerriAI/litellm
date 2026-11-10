@@ -27,6 +27,10 @@
     "api_key",
     "additional_args"
   ],
+  "messages_input": [
+    "body",
+    "kwargs"
+  ],
   "post_call": [
     "logger",
     "original_response",
@@ -126,7 +130,8 @@
     "chunks",
     "start",
     "end",
-    "first_chunk"
+    "first_chunk",
+    "stream_teardown"
   ],
   "stream_failure": [
     "logger",

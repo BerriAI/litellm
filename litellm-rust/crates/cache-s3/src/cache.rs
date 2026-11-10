@@ -5,19 +5,17 @@ use std::{
 };
 
 use aws_sdk_s3::{
-    config::{BehaviorVersion, Region, RequestChecksumCalculation, ResponseChecksumValidation},
+    config::{RequestChecksumCalculation, ResponseChecksumValidation},
     error::SdkError,
     primitives::ByteStream,
 };
 use aws_smithy_types::{DateTime, date_time::Format};
 use futures_util::future::try_join_all;
-use litellm_auth_aws::AwsAuthConfig;
+use litellm_auth_aws::AwsCredentialsProvider;
 use litellm_cache::{
     BaseCache, BatchCache, CacheCodec, DisconnectCache, Error, ExactCacheContext, FlushCache,
 };
 use tokio::runtime::Handle;
-
-use crate::{auth::S3Credentials, transport::ReqwestHttpClient};
 
 pub struct S3Endpoint {
     pub url: String,
@@ -28,7 +26,7 @@ pub struct S3CacheConfig {
     pub key_prefix: String,
     pub region: String,
     pub endpoint: Option<S3Endpoint>,
-    pub auth: AwsAuthConfig,
+    pub credentials: AwsCredentialsProvider,
 }
 
 pub struct S3Cache<C: CacheCodec> {
@@ -49,17 +47,14 @@ impl<C: CacheCodec> S3Cache<C> {
         runtime: Handle,
     ) -> Self {
         let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
-        let base = aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .region(Region::new(config.region.clone()))
-            .http_client(ReqwestHttpClient(http))
-            .credentials_provider(S3Credentials::new(config.auth))
-            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-            .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
-        let builder = match &endpoint_url {
-            Some(url) => base.endpoint_url(url).force_path_style(true),
-            None => base,
-        };
+        let builder = litellm_s3::config(
+            config.region.clone(),
+            endpoint_url.as_deref(),
+            http,
+            config.credentials,
+        )
+        .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
+        .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
         Self {
             client: aws_sdk_s3::Client::from_conf(builder.build()),
             codec,

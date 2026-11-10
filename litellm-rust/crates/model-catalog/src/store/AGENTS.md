@@ -24,7 +24,7 @@
 | Source | Stamp | Blind spot |
 |---|---|---|
 | `Catalog`'s `CatalogRows` | `()`, every change goes through `Store::edit`, which drops the index | none |
-| python-bridge's bound `litellm.model_cost` | the dict object and its `len` | a delete plus an add between two reads, or a `litellm_provider` rewrite on an existing key |
+| python-bridge's bound `litellm.model_cost` | the dict object, its `len` and its last key | deletes plus adds between two reads that put the old last key back last, or a `litellm_provider` rewrite on an existing key |
 
 A source with a blind spot calls `Store::invalidate` when it knows keys changed. Until then a key added in the blind spot is not found, and a key moved to another provider stays listed under the old one. Removed keys are still never returned
 

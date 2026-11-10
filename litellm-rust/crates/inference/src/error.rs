@@ -164,6 +164,14 @@ impl Error {
         }
     }
 
+    pub fn body_cut(&self) -> Option<litellm_http::BodyCut> {
+        match self {
+            Self::Llm(error) => error.body_cut(),
+            Self::Http(error) => error.body_cut(),
+            _ => None,
+        }
+    }
+
     /// `Some(connect)` when the call timed out, where `connect` says the connection was never
     /// established; `None` for every other error.
     pub fn timeout(&self) -> Option<bool> {
