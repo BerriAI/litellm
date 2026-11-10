@@ -10876,6 +10876,64 @@ class TestMCPServerResolutionCharacterization:
         health_check.assert_awaited_once_with(server_id)
 
     @pytest.mark.asyncio
+    async def test_fetch_mcp_server_by_alias_health_checks_canonical_id(self) -> None:
+        effects: Final = _ResolutionEffects()
+        canonical_id: Final = "lit3974_server_uuid"
+        alias: Final = "ms"
+        server: Final = generate_mock_mcp_server_db_record(
+            server_id=canonical_id,
+            alias=alias,
+        )
+        prisma: Final = _mock_mcp_resolution_prisma_client(
+            server,
+            LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_perm", mcp_servers=[]),
+            LiteLLM_TeamTable(team_id="lit3974_team"),
+        )
+        manager: Final = MCPServerManager()
+        await self._load_registry_config(
+            manager,
+            {
+                "microsoft_learn": {
+                    "server_id": canonical_id,
+                    "alias": alias,
+                    "url": "https://learn.microsoft.com/api/mcp",
+                    "transport": "http",
+                }
+            },
+        )
+        healthy_table: Final = LiteLLM_MCPServerTable(
+            server_id=canonical_id,
+            server_name="microsoft_learn",
+            alias=alias,
+            transport=MCPTransport.http,
+            status="healthy",
+            health_check_error=None,
+        )
+        health_check: Final = AsyncMock(return_value=healthy_table)
+        auth: Final = UserAPIKeyAuth(
+            api_key="lit3974_admin",
+            user_id="lit3974_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            effects.patch(manager),
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch.object(manager, "health_check_server", health_check),
+        ):
+            result: Final = await mgmt_endpoints.fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id=alias,
+                user_api_key_dict=auth,
+            )
+
+        assert result.server_id == canonical_id
+        assert result.alias == alias
+        assert result.status == "healthy"
+        health_check.assert_awaited_once_with(canonical_id)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "source,caller,expected_status",
         [
