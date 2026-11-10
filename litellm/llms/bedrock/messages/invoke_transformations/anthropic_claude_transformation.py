@@ -552,7 +552,10 @@ class AmazonAnthropicClaudeMessagesConfig(
         }
 
     @staticmethod
-    def _add_compaction_beta_for_bedrock_invoke(anthropic_messages_request: dict, beta_set: set) -> None:
+    def _add_compaction_beta_for_bedrock_invoke(
+        anthropic_messages_request: Mapping[str, object],
+        beta_set: set[str],  # mutable-ok: the caller's beta set is grown in place, like the sibling helpers
+    ) -> None:
         """
         A top-level ``compaction`` request needs the ``compact-2026-09-04``
         anthropic-beta; without it Bedrock answers 400 "compaction: Extra inputs

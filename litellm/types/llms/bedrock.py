@@ -1262,7 +1262,7 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # signed compaction block. Bedrock rejects it together with
     # `context_management`. Ref:
     # https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
-    compaction: dict
+    compaction: ReadOnly[Mapping[str, object]]
 
 
 class BedrockBatchRecordKind(Enum):
