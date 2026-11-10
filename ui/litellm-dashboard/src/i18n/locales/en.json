@@ -13229,7 +13229,8 @@
         "noTools": "No tools found for this server.",
         "selectMatching": "Select matching tools on {{serverName}}",
         "selectAll": "Select all tools on {{serverName}}",
-        "selectedCount": "{{count}} selected"
+        "selectedCount": "{{count}} selected",
+        "providerPermissionOnly": "provider · permission only"
       },
       "modal": {
         "editTitle": "Edit Toolset",
@@ -13265,7 +13266,7 @@
       },
       "usageGuide": {
         "title": "How toolsets work",
-        "body": "Create a toolset, assign it to a key via <menu>API Keys → Edit Key → MCP Servers</menu>, then point your MCP client at the toolset URL. The client only sees the tools you picked.",
+        "body": "Create a toolset, assign it to a key via <menu>API Keys → Edit Key → MCP Servers</menu>, then point your MCP client at the toolset URL. The client only sees the tools you picked. Tools from provider-native registrations are permission grants for provider-native requests only and are not served at the toolset URL.",
         "configLabel": "Claude Code / Cursor config",
         "copy": "copy"
       },
