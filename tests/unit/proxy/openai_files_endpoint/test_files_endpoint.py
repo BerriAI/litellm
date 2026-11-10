@@ -1,3 +1,4 @@
+import gzip
 import itertools
 import json
 from typing import Final, List, Optional
@@ -2326,6 +2327,58 @@ def test_get_file_content_forwards_upstream_download_headers(monkeypatch, llm_ro
     assert int(response.headers["content-length"]) == len(response.content)
     assert upstream_filename in response.headers["content-disposition"]
     assert response.headers["x-request-id"] == upstream_request_id
+
+
+@pytest.mark.parametrize("compressed", (False, True))
+@pytest.mark.parametrize("chunked", (False, True))
+@respx.mock
+def test_get_file_content_returns_decoded_body_with_matching_headers(
+    monkeypatch: pytest.MonkeyPatch, llm_router: Router, compressed: bool, chunked: bool
+):
+    import litellm.proxy.proxy_server as ps
+
+    setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(ps, "master_key", None)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+    body: Final = b"<html><body>downloaded report</body></html>"
+    upstream_body: Final = gzip.compress(body, mtime=0) if compressed else body
+    upstream_headers: Final = {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Disposition": 'attachment; filename="report.html"',
+        "Request-Id": "req-download",
+        "Connection": "keep-alive",
+        "Keep-Alive": "timeout=5",
+        "Server": "upstream",
+        "Date": "Mon, 02 Nov 2026 00:00:00 GMT",
+        **({"Content-Encoding": "gzip"} if compressed else {}),
+        **({"Transfer-Encoding": "chunked"} if chunked else {"Content-Length": str(len(upstream_body))}),
+    }
+    respx.get("https://api.anthropic.com/v1/files/file-report/content").respond(
+        200, content=upstream_body, headers=upstream_headers
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
+    )
+    try:
+        response: Final = client.get("/anthropic/v1/files/file-report/content")
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert response.content == body
+    assert int(response.headers["content-length"]) == len(body)
+    assert "content-encoding" not in response.headers
+    assert "transfer-encoding" not in response.headers
+    assert "connection" not in response.headers
+    assert "keep-alive" not in response.headers
+    assert "server" not in response.headers
+    assert "date" not in response.headers
+    assert response.headers["content-type"] == upstream_headers["Content-Type"]
+    assert response.headers["content-disposition"] == upstream_headers["Content-Disposition"]
+    assert response.headers["request-id"] == upstream_headers["Request-Id"]
 
 
 def test_get_file_content_routed_provider_skips_streaming_when_resolved_provider_is_not_supported(

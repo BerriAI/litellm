@@ -983,6 +983,9 @@ async def get_file_content(
 
     ```
     """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        HttpPassThroughEndpointHelpers,
+    )
     from litellm.proxy.proxy_server import (
         general_settings,
         general_settings_view,
@@ -1226,7 +1229,7 @@ async def get_file_content(
         return Response(
             content=httpx_response.content,
             status_code=httpx_response.status_code,
-            headers=httpx_response.headers,
+            headers=HttpPassThroughEndpointHelpers.get_response_headers(httpx_response.headers),
         )
 
     except Exception as e:

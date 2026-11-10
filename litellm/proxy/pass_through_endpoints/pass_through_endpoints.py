@@ -441,7 +441,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         headers: httpx.Headers,
         litellm_call_id: str | None = None,
         custom_headers: Mapping[str, str] | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         # Exclude headers that uvicorn writes itself (server, date) and
         # encoding/length headers that don't survive re-serialization.
         # If we forward the upstream's Server header, uvicorn adds its
