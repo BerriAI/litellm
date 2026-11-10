@@ -11,6 +11,7 @@ request as before."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -651,6 +652,24 @@ def _spend_statuses(call_id: str, at_least: int) -> list[JsonValue]:
     return [row["status"] for row in rows]
 
 
+def _logged_spend(call_id: str) -> float:
+    rows: Final = read_rows(
+        'SELECT spend FROM "LiteLLM_SpendLogs" WHERE litellm_call_id=%s OR request_id=%s '
+        "OR metadata->>'litellm_call_id'=%s",
+        (call_id, call_id, call_id),
+    )
+    assert len(rows) == 1 and isinstance(rows[0]["spend"], float), rows
+    return rows[0]["spend"]
+
+
+def _key_spend(key: str) -> float:
+    rows: Final = read_rows(
+        'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (hashlib.sha256(key.encode()).hexdigest(),)
+    )
+    assert len(rows) == 1 and isinstance(rows[0]["spend"], float), rows
+    return rows[0]["spend"]
+
+
 def _exception(frames: Sequence[Frame]) -> tuple[str, str] | None:
     last: Final = frames[-1] if frames else None
     if last is None or last.message_type != "exception":
@@ -1001,6 +1020,7 @@ def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: 
         with ThreadPoolExecutor(max_workers=count) as pool:
             return list(zip(markers, pool.map(partial(_stream_with_call_id, rig, OUTAGE), markers)))
 
+    spend_before: Final = _key_spend(rig.keys[OUTAGE])
     rig.outage.set()
     try:
         during: Final = burst(8)
@@ -1013,5 +1033,16 @@ def test_guardrail_vendor_outage_during_a_burst_fails_closed_then_recovers(rig: 
     for marker, (status, _, body, _) in after:
         assert status == 200 and _exception(decode(body)) is None, (marker, body)
         assert body == b"".join(rig.scripts[marker].chunks or ()), (marker, decode(body))
-    for marker, (_, _, _, call_id) in (*during, *after):
-        assert _spend_statuses(call_id, 1).count("success") == 1, marker
+    for marker, (_, _, _, call_id) in after:
+        assert _spend_statuses(call_id, 1) == ["success"], marker
+    for marker, (_, _, _, call_id) in during:
+        assert len(_spend_statuses(call_id, 1)) == 1, marker
+    costs: Final = [_logged_spend(call_id) for _, (_, _, _, call_id) in after]
+    assert min(costs) > 0 and max(costs) == pytest.approx(min(costs)), costs
+    charged: Final = eventually(
+        lambda: _key_spend(rig.keys[OUTAGE]) - spend_before,
+        lambda spend: spend == pytest.approx(len((*during, *after)) * costs[0]),
+        seconds=70,
+        return_last_on_timeout=True,
+    )
+    assert charged == pytest.approx(len((*during, *after)) * costs[0]), (charged, costs)
