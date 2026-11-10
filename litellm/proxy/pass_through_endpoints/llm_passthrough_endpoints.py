@@ -602,6 +602,14 @@ async def tripo_proxy_route(
     credentials: Final = credentials_router.get_credentials_with_api_base("tripo", region)
     if credentials is None or credentials.api_base is None:
         raise HTTPException(503, f"No Tripo use_in_pass_through deployment configured for {region}")
+    if not credentials.model_name:
+        raise HTTPException(503, "Tripo deployment must have a model_name for access checks")
+    await can_key_call_resolved_model(
+        model=credentials.model_name,
+        llm_model_list=_proxy_model_list(),
+        valid_token=user_api_key_dict,
+        llm_router=credentials_router.llm_router_getter(),
+    )
     base: Final = httpx.URL(credentials.api_base)
     if base.path.rstrip("/") != "/v3" or base.query or base.fragment:
         raise HTTPException(503, "Tripo deployment api_base must end in /v3 without a query or fragment")

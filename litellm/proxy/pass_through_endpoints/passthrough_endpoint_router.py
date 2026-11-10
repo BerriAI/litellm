@@ -1,7 +1,7 @@
 import json
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 class _PassThroughCredentials:
     api_key: str
     api_base: str | None
+    model_name: str | None = None
 
 
 def _get_proxy_llm_router() -> "Router | None":
@@ -125,11 +126,7 @@ class PassthroughEndpointRouter:
         )
         if deployment_credentials is not None:
             api_key: Final = _resolve_oidc_reference(deployment_credentials.api_key)
-            return (
-                _PassThroughCredentials(api_key=api_key, api_base=deployment_credentials.api_base)
-                if api_key
-                else None
-            )
+            return replace(deployment_credentials, api_key=api_key) if api_key else None
         return None
 
     def get_proxy_wide_credentials(self, custom_llm_provider: str) -> _PassThroughCredentials | None:
@@ -190,7 +187,7 @@ class PassthroughEndpointRouter:
         deployments: Final = llm_router.registry().deployments() or ()
         return next(
             (
-                credentials
+                replace(credentials, model_name=deployment.get("model_name"))
                 for deployment in deployments
                 if (include_team_deployments or not _is_team_deployment(deployment))
                 and (
