@@ -24,7 +24,7 @@ from opentelemetry.sdk._logs.export import (
 )
 from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import Event, ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace import Event, ReadableSpan, SpanLimits, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace import Span as SDKSpan
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
@@ -471,9 +471,13 @@ def without_message_content(span: ReadableSpan) -> ReadableSpan:
 class _CountedSpanView(_SpanView):
     """A ``_SpanView`` of ``inner`` with other attributes that reports the dropped counts ``inner`` reports."""
 
-    def __init__(self, inner: ReadableSpan, attributes: Attributes) -> None:
+    def __init__(self, inner: ReadableSpan, attributes: Attributes, dropped_attributes: int = 0) -> None:
         super().__init__(inner, inner.resource, attributes, inner.events, inner.status, parent=inner.parent)
-        self._dropped_counts: Final = (inner.dropped_attributes, inner.dropped_events, inner.dropped_links)
+        self._dropped_counts: Final = (
+            inner.dropped_attributes + dropped_attributes,
+            inner.dropped_events,
+            inner.dropped_links,
+        )
 
     @property
     def dropped_attributes(self) -> int:
@@ -489,23 +493,32 @@ class _CountedSpanView(_SpanView):
 
 
 def with_destination_metadata(
-    span: ReadableSpan, metadata_keys: tuple[str, ...], metadata: Mapping[str, str]
+    span: ReadableSpan, metadata_keys: tuple[str, ...], metadata: Mapping[str, str], limits: SpanLimits
 ) -> ReadableSpan:
     """``span`` plus the ``litellm.metadata.*`` values a destination's own ``metadata_keys`` select.
 
     Bound when the span ends, so a tree held for sampling keeps its own request's values. An
     attribute the span already carries wins, so a destination key never replaces a value the
-    global allowlist or the proxy's identity wrote.
+    global allowlist or the proxy's identity wrote. The additions obey the span limits the SDK
+    applies to ``set_attribute``: values are cut to the length limit, and keys past the count
+    limit are dropped and counted, never evicting an attribute the span already carries.
     """
     if not metadata_keys:
         return span
     attributes: Final = span.attributes or _NO_ATTRIBUTES
-    extra: Final = {
-        key: value for key, value in promoted_metadata(metadata, metadata_keys).items() if key not in attributes
-    }
+    extra: Final = tuple(
+        (key, value) for key, value in promoted_metadata(metadata, metadata_keys).items() if key not in attributes
+    )
     if not extra:
         return span
-    return _CountedSpanView(span, MappingProxyType({**attributes, **extra}))
+    room: Final = (
+        len(extra) if limits.max_span_attributes is None else max(0, limits.max_span_attributes - len(attributes))
+    )
+    max_length: Final = limits.max_span_attribute_length
+    kept: Final = {key: value if max_length is None else value[:max_length] for key, value in extra[:room]}
+    if not kept:
+        return _CountedSpanView(span, attributes, dropped_attributes=len(extra))
+    return _CountedSpanView(span, MappingProxyType({**attributes, **kept}), dropped_attributes=len(extra) - len(kept))
 
 
 def _is_litellm_span(span: ReadableSpan) -> bool:
@@ -783,6 +796,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         self._span_roots: weakref.WeakKeyDictionary[SDKSpan, int] = weakref.WeakKeyDictionary()
         self._verdicts: OrderedDict[_VerdictKey, bool] = OrderedDict()  # mutable-ok: bounded LRU
         self._drain: Final = drain_pool if drain_pool is not None else _DrainPool(capacity=pending_drains)
+        self._span_limits: Final = SpanLimits()
 
     def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
         context: Final = span.context
@@ -805,8 +819,10 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                 self._roots.pop(span.context.span_id, None)
         failed: Final = span.status.status_code is StatusCode.ERROR
         metadata: Final = request_metadata()
-        for destination in request_destinations():
-            if (
+        deliveries: Final = tuple(
+            (destination, with_destination_metadata(span, destination.metadata_keys, metadata, self._span_limits))
+            for destination in request_destinations()
+            if not (
                 self._operator_already_writes(span, destination, suppressed)
                 or not _in_scope(span, destination.span_scope)
                 or _is_excluded_database_span(
@@ -815,9 +831,9 @@ class TenantFanOutSpanProcessor(SpanProcessor):
                     if destination.excluded_db_systems is None
                     else destination.excluded_db_systems,
                 )
-            ):
-                continue
-            view = with_destination_metadata(span, destination.metadata_keys, metadata)
+            )
+        )
+        for destination, view in deliveries:
             if not _is_sampled(destination):
                 self._forward(view, destination)
                 continue
