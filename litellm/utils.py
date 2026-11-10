@@ -6184,11 +6184,20 @@ def add_provider_specific_params_to_optional_params(
         "bigmodel",
         *litellm.openai_compatible_providers,
     ] or JSONProviderRegistry.exists(custom_llm_provider)
+    kept_for_custom_handler: Final = (
+        VECTOR_STORE_HOOK_PARAMS
+        if ProviderConfigManager.get_custom_llm_handler(custom_llm_provider) is not None
+        else frozenset[str]()
+    )
     if calls_through_openai_sdk:
         # for openai, azure we should pass the extra/passed params within `extra_body` https://github.com/openai/openai-python/blob/ac33853ba10d13ac149b1fa3ca6dba7d613065c9/src/openai/resources/models.py#L46
         if _should_drop_param(k="extra_body", additional_drop_params=additional_drop_params) is False:
             extra_body: Final = dict(passed_params.pop("extra_body", None) or {})
-            withheld_params: Final = frozenset[str]() if custom_llm_provider == "litellm_proxy" else LITELLM_ONLY_PARAMS
+            withheld_params: Final = (
+                frozenset[str]()
+                if custom_llm_provider == "litellm_proxy"
+                else LITELLM_ONLY_PARAMS - kept_for_custom_handler
+            )
             for k in passed_params:
                 if k not in openai_params and k not in withheld_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
@@ -6209,10 +6218,7 @@ def add_provider_specific_params_to_optional_params(
                 extra_body={k: v for k, v in initial_extra_body.items() if k not in dropped_keys}
             )
     else:
-        calls_custom_handler: Final = any(
-            item["provider"] == custom_llm_provider for item in litellm.custom_provider_map
-        )
-        withheld_hook_params: Final = frozenset[str]() if calls_custom_handler else VECTOR_STORE_HOOK_PARAMS
+        withheld_hook_params: Final = VECTOR_STORE_HOOK_PARAMS - kept_for_custom_handler
         for k in passed_params:
             if k not in openai_params and k not in withheld_hook_params and passed_params[k] is not None:
                 if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
