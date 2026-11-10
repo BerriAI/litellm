@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import ParseResult, parse_qsl, urlencode, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
-from mcp.shared.auth import OAuthMetadata
+from pydantic import TypeAdapter
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
@@ -146,11 +146,14 @@ def grant_covers_scopes(
     return parts <= known and all(scope in granted or scope in parts for scope in requested)
 
 
+_PUBLISHED_SCOPES: Final = TypeAdapter(tuple[str, ...] | None)
+
+
 def server_scope_names(server: "MCPServer | None") -> frozenset[str]:
     if server is None:
         return frozenset()
     published: Final = (
-        OAuthMetadata.model_validate(server.authorization_server_metadata).scopes_supported
+        _PUBLISHED_SCOPES.validate_python(server.authorization_server_metadata.get("scopes_supported"))
         if server.authorization_server_metadata is not None
         else None
     )
