@@ -107,6 +107,16 @@ impl RequestRedis {
         lock(&self.0.follow_ups).push(follow_up);
     }
 
+    /// Runs `task` on the request's runtime without `flush_post` waiting for it, for work that
+    /// settles with the pre-call batch whoever awaits it.
+    pub(crate) fn detach(&self, task: impl Future<Output = ()> + std::marker::Send + 'static) {
+        drop(
+            self.0
+                .runtime
+                .spawn(self.logged(within(current_tag(), task))),
+        );
+    }
+
     fn logged<F: Future>(&self, task: F) -> impl Future<Output = F::Output> + use<F> {
         task.in_current_span().with_subscriber(self.0.logs.clone())
     }
@@ -193,6 +203,14 @@ impl Send<'_> {
             Self::Now => RedisBatch::alone(client.clone()),
             Self::PreCall(request) => request.pre(client),
             Self::PostCall(request) => request.post(client),
+        }
+    }
+
+    /// The request the op rides, `None` for one on its own.
+    pub(crate) fn request(&self) -> Option<&RequestRedis> {
+        match self {
+            Self::Now => None,
+            Self::PreCall(request) | Self::PostCall(request) => Some(request),
         }
     }
 

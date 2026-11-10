@@ -31,7 +31,7 @@ use pyo3::{
 };
 use serde_json::Value;
 
-use litellm_redis_store::router_usage::{Counter, Kind};
+use litellm_redis_store::router_usage::{Counter, Kind, Scope};
 
 use self::host::{
     CacheCall, CacheOp, CacheOutcome, DriveError, Driver, Finish, HostCall, HostCallResponse,
@@ -392,9 +392,10 @@ impl RouterCoreHandle {
             .parse()
             .map_err(|_| PyValueError::new_err(format!("`{metric}` is not a usage metric")))?;
         Ok(Counter {
+            scope: Scope::GlobalRouter,
             deployment_id: id.to_owned(),
             model: Some(model.to_owned()),
-            minute: minute.to_owned(),
+            window: minute.to_owned(),
             kind,
         }
         .key())
@@ -1341,9 +1342,10 @@ fn cache_outcome(op: CacheOp, outcome: Option<Bound<'_, PyAny>>) -> PyResult<Cac
 /// The tokens counter of `window`, as the usage store keys it.
 fn tokens_key(window: UsageWindow) -> String {
     Counter {
+        scope: Scope::GlobalRouter,
         deployment_id: window.deployment_id,
         model: Some(window.model),
-        minute: window.minute,
+        window: window.minute,
         kind: Kind::Tpm,
     }
     .key()

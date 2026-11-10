@@ -494,7 +494,9 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         if model_group is None or deployment_id is None:
             return
         model: Final = None if deployment_name is None else str(deployment_name)
-        counter: Final = UsageCounter(str(deployment_id), model, get_utc_datetime().strftime("%H-%M"), "rpm")
+        counter: Final = UsageCounter(
+            "global_router", str(deployment_id), model, get_utc_datetime().strftime("%H-%M"), "rpm"
+        )
         await self._usage.increment(counter=counter, value=1, ttl=_USAGE_TTL)
 
     # -- the plugin context ------------------------------------------------------------------------

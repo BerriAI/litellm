@@ -1,10 +1,14 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_redis_store::router_usage::{Counter, Kind, RouterUsage};
+use litellm_redis_store::router_usage::{Counter, Increment, Kind, RouterUsage, Scope};
 use pyo3::{prelude::*, types::PyDict};
 
 use super::{
-    PyNumber, Spelled, kind_error, policy::router_tier_policies, redis_async, redis_sync, remote,
+    NativePending, PyNumber, Spelled, kind_error, pending,
+    policy::router_tier_policies,
+    redis_async, redis_sync, remote,
+    request::{NativeRequestRedis, NativeSend},
+    ttl,
 };
 use crate::redis::client::NativeRedisClient;
 
@@ -12,11 +16,13 @@ use crate::redis::client::NativeRedisClient;
 #[derive(FromPyObject)]
 struct PyCounter {
     #[pyo3(attribute)]
+    scope: Spelled<Scope>,
+    #[pyo3(attribute)]
     deployment_id: String,
     #[pyo3(attribute)]
     model: Option<String>,
     #[pyo3(attribute)]
-    minute: String,
+    window: String,
     #[pyo3(attribute)]
     kind: Spelled<Kind>,
 }
@@ -24,9 +30,10 @@ struct PyCounter {
 impl From<PyCounter> for Counter {
     fn from(counter: PyCounter) -> Self {
         Self {
+            scope: counter.scope.0,
             deployment_id: counter.deployment_id,
             model: counter.model,
-            minute: counter.minute,
+            window: counter.window,
             kind: counter.kind.0,
         }
     }
@@ -34,6 +41,41 @@ impl From<PyCounter> for Counter {
 
 fn counters(counters: Vec<PyCounter>) -> Vec<Counter> {
     counters.into_iter().map(Counter::from).collect()
+}
+
+/// `litellm.redis.stores.router_usage.CounterIncrement`.
+#[derive(FromPyObject)]
+struct PyIncrement {
+    #[pyo3(attribute)]
+    counter: PyCounter,
+    #[pyo3(attribute)]
+    amount: PyNumber,
+    #[pyo3(attribute)]
+    ttl: Option<f64>,
+}
+
+impl TryFrom<PyIncrement> for Increment {
+    type Error = PyErr;
+
+    fn try_from(increment: PyIncrement) -> PyResult<Self> {
+        Ok(Self {
+            counter: increment.counter.into(),
+            amount: increment.amount.0,
+            ttl: ttl(increment.ttl)?,
+        })
+    }
+}
+
+fn increments(increments: Vec<PyIncrement>) -> PyResult<Vec<Increment>> {
+    increments.into_iter().map(Increment::try_from).collect()
+}
+
+fn numbers(read: Vec<Option<litellm_redis_store::Number>>) -> Vec<Option<PyNumber>> {
+    read.into_iter().map(|count| count.map(PyNumber)).collect()
+}
+
+fn totals(totals: Option<Vec<litellm_redis_store::Number>>) -> Option<Vec<PyNumber>> {
+    totals.map(|totals| totals.into_iter().map(PyNumber).collect())
 }
 
 /// One router's global TPM/RPM counters. The `_sync` methods block with the GIL released, for the
@@ -167,6 +209,108 @@ impl NativeRouterUsage {
         redis_sync(py, "batch_get_cache", kind_error, async move {
             let read = store.get_many(&counters).await?;
             Ok(read.into_iter().map(|count| count.map(PyNumber)).collect())
+        })
+    }
+
+    /// `get_many` declared on the batch `send` picks.
+    fn usage(&self, counters: Vec<PyCounter>, send: &NativeSend) -> PyResult<NativePending> {
+        let declared = self
+            .0
+            .declare_get_many(send.send(), &self::counters(counters))
+            .map_err(kind_error)?;
+        Ok(pending(
+            "async_batch_get_cache",
+            kind_error,
+            declared,
+            numbers,
+        ))
+    }
+
+    fn increment_pipeline<'py>(
+        &self,
+        py: Python<'py>,
+        increments: Vec<PyIncrement>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        let increments = self::increments(increments)?;
+        redis_async(py, "async_increment_pipeline", kind_error, async move {
+            Ok(totals(store.increment_pipeline(&increments).await))
+        })
+    }
+
+    /// Counts in memory now and declares the increments on the request's post-call batch.
+    fn increment_post_call(
+        &self,
+        request: &NativeRequestRedis,
+        increments: Vec<PyIncrement>,
+    ) -> PyResult<()> {
+        self.0
+            .increment_post_call(&request.0, &self::increments(increments)?);
+        Ok(())
+    }
+
+    fn increment_remote<'py>(
+        &self,
+        py: Python<'py>,
+        increments: Vec<PyIncrement>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        let increments = self::increments(increments)?;
+        redis_async(py, "async_increment_pipeline", kind_error, async move {
+            store.increment_remote(&increments).await.map(totals)
+        })
+    }
+
+    fn increment_local(&self, increment: PyIncrement) -> PyResult<PyNumber> {
+        self.0
+            .increment_local(&increment.try_into()?)
+            .map(PyNumber)
+            .map_err(kind_error)
+    }
+
+    fn get_local(&self, counter: PyCounter) -> PyResult<Option<PyNumber>> {
+        self.0
+            .get_local(&counter.into())
+            .map(|count| count.map(PyNumber))
+            .map_err(kind_error)
+    }
+
+    fn get_local_many(&self, counters: Vec<PyCounter>) -> PyResult<Vec<Option<PyNumber>>> {
+        self.0
+            .get_local_many(&self::counters(counters))
+            .map(numbers)
+            .map_err(kind_error)
+    }
+
+    fn set_local(&self, counter: PyCounter, value: PyNumber) -> PyResult<()> {
+        self.0
+            .set_local(&counter.into(), value.0)
+            .map_err(kind_error)
+    }
+
+    fn current<'py>(
+        &self,
+        py: Python<'py>,
+        counter: PyCounter,
+        limit: PyNumber,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        let counter = Counter::from(counter);
+        redis_async(py, "async_get_cache", kind_error, async move {
+            Ok(store.current(&counter, limit.0).await?.map(PyNumber))
+        })
+    }
+
+    fn current_sync(
+        &self,
+        py: Python<'_>,
+        counter: PyCounter,
+        limit: PyNumber,
+    ) -> PyResult<Option<PyNumber>> {
+        let store = self.0.clone();
+        let counter = Counter::from(counter);
+        redis_sync(py, "get_cache", kind_error, async move {
+            Ok(store.current(&counter, limit.0).await?.map(PyNumber))
         })
     }
 

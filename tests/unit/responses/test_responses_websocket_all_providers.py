@@ -1775,6 +1775,14 @@ def _turn_completed_reading_cache(cached_tokens: int) -> str:
     )
 
 
+def _rate_limit_check(dual_cache: "DualCache") -> "ModelRateLimitingCheck":
+    from litellm.redis.stores.connection import connect
+    from litellm.redis.stores.router_usage import RouterUsageStore
+    from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+    return ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
+
+
 def _connection_logged_through(rate_limits: "ModelRateLimitingCheck", opened_with: Mapping[str, object]) -> "Logging":
     import time
 
@@ -2021,7 +2029,7 @@ class TestWebSocketTurnAdmission:
             websocket=_ClientSocket(second, third),
             backend_ws=backend_ws,
             request_data={},
-            logging_obj=_connection_logged_through(ModelRateLimitingCheck(dual_cache), opened_with),
+            logging_obj=_connection_logged_through(_rate_limit_check(dual_cache), opened_with),
             first_message=first,
             turn_admission=_later_turns_admitted_through(dual_cache),
         )
@@ -2065,7 +2073,7 @@ class TestWebSocketTurnAdmission:
             websocket=_ClientSocket(),
             backend_ws=backend_ws,
             request_data={},
-            logging_obj=_connection_logged_through(ModelRateLimitingCheck(dual_cache), opened_with),
+            logging_obj=_connection_logged_through(_rate_limit_check(dual_cache), opened_with),
             first_message=first,
         )
 
@@ -2096,7 +2104,7 @@ class TestWebSocketTurnAdmission:
         await _run_managed_relay(
             monkeypatch,
             _TwoOutputTokenTurns(failing_turns),
-            ModelRateLimitingCheck(dual_cache),
+            _rate_limit_check(dual_cache),
             _turn_frames(),
             _later_turns_admitted_through(dual_cache),
             opened_with,
@@ -2126,7 +2134,7 @@ class TestWebSocketTurnAdmission:
         await _relay_turns_to(
             monkeypatch,
             "openai/gpt-5-mini",
-            ModelRateLimitingCheck(dual_cache),
+            _rate_limit_check(dual_cache),
             tuple(
                 json.dumps({"type": "response.create", "input": word, "metadata": client_metadata})
                 for word in ("one", "two")

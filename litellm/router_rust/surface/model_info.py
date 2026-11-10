@@ -770,7 +770,10 @@ class HostModelInfo:
         )
         deployments: Final = tuple(pair for pair in named if pair[0] is not None and pair[1] is not None)
         return tuple(
-            tuple(UsageCounter(id, litellm_model, current_minute, kind) for id, litellm_model in deployments)
+            tuple(
+                UsageCounter("global_router", id, litellm_model, current_minute, kind)
+                for id, litellm_model in deployments
+            )
             for kind in ("tpm", "rpm")
         )
 

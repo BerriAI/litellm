@@ -5,10 +5,10 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_router_logger
+from litellm.redis.stores.router_usage import UsageCounter
 from litellm.router_deprecated import renamed_router_param
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
 from litellm.router_utils import routing_prefetch
-from litellm.router_utils.routing_prefetch import TierRead, selector_read
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -18,13 +18,9 @@ if TYPE_CHECKING:
 __all__ = ("RoutingPrefetch", "RoutingReadBatch")
 
 
-def _selector_keys(selector: LowestTPMLoggingHandler_v2, deployments: Sequence[object]) -> list[str]:
-    tpm_keys, rpm_keys = selector.usage_counter_keys(list(deployments))
-    return tpm_keys + rpm_keys
-
-
-def _selector_read(selector: LowestTPMLoggingHandler_v2 | None, deployments: Sequence[object]) -> TierRead | None:
-    return None if selector is None else selector_read(selector.router_cache, _selector_keys(selector, deployments))
+def _selector_counters(selector: LowestTPMLoggingHandler_v2, deployments: Sequence[object]) -> tuple[UsageCounter, ...]:
+    tpm_counters, rpm_counters = selector.usage_counters(deployments)
+    return tpm_counters + rpm_counters
 
 
 class RoutingPrefetch:
@@ -34,9 +30,8 @@ class RoutingPrefetch:
         ctx: "RoutingContext", usage_selector: LowestTPMLoggingHandler_v2 | None, deployments: Sequence[object]
     ) -> None:
         RoutingPrefetch.arm_cooldowns(ctx)
-        read: Final = _selector_read(usage_selector, deployments)
-        if read is not None:
-            routing_prefetch.arm(read)
+        if usage_selector is not None:
+            routing_prefetch.arm(usage_selector.usage, _selector_counters(usage_selector, deployments))
 
     @staticmethod
     def arm_cooldowns(ctx: "RoutingContext") -> None:
@@ -92,11 +87,9 @@ class RoutingReadBatch:
 
     async def read_usage(self, deployments: Sequence[object], parent_otel_span: "Span | None") -> None:
         """The selector's tpm/rpm counters for ``deployments``, kept as ``prefetched_usage``."""
-        usage_read: Final = _selector_read(self.usage_selector, deployments)
-        if usage_read is None:
+        selector: Final = self.usage_selector
+        if selector is None:
             return
-        values: Final = await routing_prefetch.read(usage_read, parent_otel_span)
-        self.prefetched_usage = PrefetchedUsage(
-            keys=frozenset(usage_read.keys),
-            values=None if values is None else dict(zip(usage_read.keys, values)),
-        )
+        counters: Final = _selector_counters(selector, deployments)
+        values: Final = await routing_prefetch.read(selector.usage, counters, parent_otel_span)
+        self.prefetched_usage = PrefetchedUsage(counters=frozenset(counters), values=dict(zip(counters, values)))

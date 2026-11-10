@@ -10,7 +10,7 @@ from litellm._internal_context import current_service_target
 from litellm.caching.redis_batch import drain_post_call_redis_batches, request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
 from litellm.redis.stores.connection import connect
-from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
+from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
 from litellm.rust_bridge._native import NativeRedisClient
 from litellm.types.utils import ModelResponse
 from tests.unit.caching.test_redis_batch import FakeNatives, fake_send
@@ -52,8 +52,8 @@ class FakeUsage:
         requests: int,
     ) -> None:
         self.calls.append(("deployment", (deployment_id, model, minute, tokens, requests), current_service_target()))
-        tpm: Final = UsageCounter(deployment_id, model, minute, "tpm")
-        rpm: Final = UsageCounter(deployment_id, model, minute, "rpm")
+        tpm: Final = UsageCounter("global_router", deployment_id, model, minute, "tpm")
+        rpm: Final = UsageCounter("global_router", deployment_id, model, minute, "rpm")
         self.counts[tpm] = self.counts.get(tpm, 0) + tokens
         self.counts[rpm] = self.counts.get(rpm, 0) + requests
 
@@ -84,8 +84,8 @@ class FakeUsage:
 @pytest.mark.asyncio
 async def test_counters_cross_the_bridge_as_domain_tuples_under_the_router_usage_target() -> None:
     handle: Final = FakeUsage()
-    store: Final = RouterUsageStore(handle)
-    counter: Final = UsageCounter("dep", None, "12-34", "rpm")
+    store: Final = RouterUsageStore(handle)  # pyright: ignore[reportArgumentType]  # implements what the test calls
+    counter: Final = UsageCounter("global_router", "dep", None, "12-34", "rpm")
 
     await store.increment(counter, 1, 60)
     await store.increment_deployment("dep", "model", "12-34", 7.5, 1)
@@ -94,13 +94,35 @@ async def test_counters_cross_the_bridge_as_domain_tuples_under_the_router_usage
         ("increment", (counter, 1, 60), "router_usage"),
         ("deployment", ("dep", "model", "12-34", 7.5, 1), "router_usage"),
     ]
-    assert await store.get_many((counter, UsageCounter("dep", "model", "12-34", "tpm"))) == [1, 7.5]
+    assert await store.get_many((counter, UsageCounter("global_router", "dep", "model", "12-34", "tpm"))) == [1, 7.5]
+
+
+@pytest.mark.parametrize(
+    ("counter", "key"),
+    [
+        (UsageCounter("global_router", "dep", None, "09-05", "rpm"), "global_router:dep:None:rpm:09-05"),
+        (
+            UsageCounter.for_deployment("dep", "openai/gpt-5.4-nano", "rpm", "12-34"),
+            "dep:openai/gpt-5.4-nano:rpm:12-34",
+        ),
+        (UsageCounter.for_deployment(f"{7}", f"{None}", "tpd", "2026-11-10"), "7:None:tpd:2026-11-10"),
+    ],
+)
+def test_counters_count_under_mains_keys(counter: UsageCounter, key: str) -> None:
+    store: Final = RouterUsageStore(connect(None).router_usage())
+
+    store.increment_local(CounterIncrement(counter, 3, 60))
+
+    assert store.snapshot() == {key: 3}
 
 
 @pytest.mark.asyncio
 async def test_late_attach_keeps_the_counts_this_router_already_holds() -> None:
     store: Final = RouterUsageStore(connect(None).router_usage())
-    counters: Final = (UsageCounter("dep", "model", "12-34", "tpm"), UsageCounter("dep", "model", "12-34", "rpm"))
+    counters: Final = (
+        UsageCounter("global_router", "dep", "model", "12-34", "tpm"),
+        UsageCounter("global_router", "dep", "model", "12-34", "rpm"),
+    )
     await store.increment_deployment("dep", "model", "12-34", 7.5, 1)
     store.attach_redis(connect(RedisCache(host="redis.internal")))
     assert await store.get_many(counters) == [7.5, 1]
@@ -132,7 +154,7 @@ async def test_router_reset_clears_usage_and_failure_counters(operation: str) ->
 @pytest.mark.asyncio
 async def test_inside_a_request_deployment_increments_go_out_on_their_own_trip_like_main():
     handle: Final = FakeUsage()
-    store: Final = RouterUsageStore(handle)
+    store: Final = RouterUsageStore(handle)  # pyright: ignore[reportArgumentType]  # implements what the test calls
     natives: Final = FakeNatives()
 
     await store.increment_deployment("dep", "model", "12-34", 7.5, 1)

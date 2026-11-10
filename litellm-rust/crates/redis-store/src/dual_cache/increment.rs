@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use futures_util::future::join_all;
-use litellm_redis_client::{Declared, Expiry, RedisBatch, commands};
+use litellm_redis_client::{Declared, Error as RedisError, Expiry, RedisBatch, commands};
 
 use super::DualCache;
 use crate::{Error, Number, RequestRedis, Send, failure_log::redis_failure, memory::Counter};
@@ -63,10 +63,23 @@ impl<V: Counter, R> DualCache<V, R> {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| redis_failure!(&Error::from(error), PIPELINE_FAILED))
             .ok()?;
-        let Some(client) = self.redis.client() else {
-            return Some(local);
-        };
-        let pipeline = RedisBatch::pipelined(client.clone());
+        match self.increment_pipeline_remote(increments).await {
+            None => Some(local),
+            Some(Ok(totals)) => Some(totals),
+            Some(Err(error)) => {
+                redis_failure!(&error, PIPELINE_FAILED);
+                Some(local)
+            }
+        }
+    }
+
+    /// `RedisCache.async_increment_pipeline`, Redis alone: one pipeline of `INCRBYFLOAT` with
+    /// `EXPIRE` per increment. `None` without Redis.
+    pub(crate) async fn increment_pipeline_remote(
+        &self,
+        increments: &[PipelineIncrement],
+    ) -> Option<Result<Vec<Number>, RedisError>> {
+        let pipeline = RedisBatch::pipelined(self.redis.client()?.clone());
         let totals = increments
             .iter()
             .map(|increment| {
@@ -77,17 +90,13 @@ impl<V: Counter, R> DualCache<V, R> {
                 ))
             })
             .collect::<Vec<_>>();
-        match Declared::all(totals)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-        {
-            Ok(totals) => Some(totals.into_iter().map(Number::Float).collect()),
-            Err(error) => {
-                redis_failure!(&error, PIPELINE_FAILED);
-                Some(local)
-            }
-        }
+        Some(
+            Declared::all(totals)
+                .await
+                .into_iter()
+                .map(|total| total.map(Number::Float))
+                .collect(),
+        )
     }
 
     /// `DualCache.async_increment_cache_pipeline_post_call`: memory now, stopping at the first

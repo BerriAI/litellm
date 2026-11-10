@@ -20,6 +20,8 @@ from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_usage import CounterIncrement, RouterUsageStore, UsageCounter
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_CACHE_KEY,
     ITPM_RESERVED_KEY,
@@ -106,7 +108,7 @@ class TestModelRateLimitingCheckIOTokens:
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         deployment = {
             "litellm_params": {
                 "model": "bedrock_mantle/anthropic.claude-opus-4-7",
@@ -158,7 +160,7 @@ class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     async def test_itpm_limit_raises_429(self):
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         deployment = {
             "litellm_params": {
                 "model": "bedrock_mantle/anthropic.claude-opus-4-7",
@@ -194,7 +196,7 @@ class TestModelRateLimitingCheckIOTokens:
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         otpm_limit = 10
         max_tokens = 4
         deployment = {
@@ -248,7 +250,7 @@ class TestModelRateLimitingCheckIOTokens:
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         itpm_limit = 5
         deployment = {
             "litellm_params": {
@@ -293,7 +295,7 @@ class TestModelRateLimitingCheckIOTokens:
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         minute = get_utc_datetime().strftime("%H-%M")
         itpm_key = f"global_router:io-lp-id:bedrock_mantle/test:itpm:{minute}"
         await dual_cache.async_increment_cache(key=itpm_key, value=20, ttl=60)
@@ -319,7 +321,7 @@ class TestModelRateLimitingCheckIOTokens:
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         deployment = {
             "litellm_params": {
                 "model": "bedrock_mantle/anthropic.claude-opus-4-7",
@@ -363,7 +365,7 @@ class TestModelRateLimitingCheckIOTokens:
         concurrently instead of the first one claiming the entire bucket.
         """
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         deployment = {
             "litellm_params": {
                 "model": "bedrock_mantle/anthropic.claude-opus-4-7",
@@ -388,7 +390,7 @@ class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     async def test_explicit_zero_max_tokens_does_not_reserve_otpm(self):
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         deployment = {
             "litellm_params": {
                 "model": "bedrock_mantle/anthropic.claude-opus-4-7",
@@ -435,7 +437,9 @@ class TestModelRateLimitingCheckIOTokens:
         self, model: str, otpm_limit: int, use_sync_check: bool
     ):
         dual_cache: Final = DualCache()
-        check: Final = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache
+        )
         deployment: Final = {
             "litellm_params": {"model": model, "otpm": otpm_limit},
             "model_info": {"id": f"io-no-max-tokens-{otpm_limit}"},
@@ -463,7 +467,9 @@ class TestModelRateLimitingCheckIOTokens:
         self, model: str, otpm_limit: int
     ):
         dual_cache: Final = DualCache()
-        check: Final = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache
+        )
         deployment: Final = {
             "litellm_params": {"model": model, "otpm": otpm_limit},
             "model_info": {"id": "io-no-max-tokens-race-id"},
@@ -496,7 +502,9 @@ class TestModelRateLimitingCheckIOTokens:
         self, model: str, model_max_output: int
     ):
         dual_cache: Final = DualCache()
-        check: Final = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache
+        )
         deployment: Final = {
             "litellm_params": {"model": model, "otpm": model_max_output * 10},
             "model_info": {"id": "io-no-max-tokens-roomy-id"},
@@ -515,7 +523,9 @@ class TestModelRateLimitingCheckIOTokens:
         catalog_max_output: Final = litellm.get_model_info(model=backend_model)["max_output_tokens"]
         assert isinstance(catalog_max_output, int)
         otpm_limit: Final = int(max(catalog_max_output, 987) / NO_MAX_TOKENS_TPM_RESERVATION_FRACTION) + 1
-        check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=DualCache()
+        )
 
         async def _reserved(deployment_id: str, model_info: dict[str, object]) -> int:
             metadata: Final[dict[str, object]] = {}
@@ -542,7 +552,9 @@ class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("use_sync_check", [False, True])
     async def test_base_model_does_not_change_the_default_otpm_reservation(self, use_sync_check: bool):
-        check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=DualCache()
+        )
         otpm_limit: Final = AZURE_BASE_MODEL_MAX_OUTPUT * 10
 
         async def _reserved(model_info: dict[str, str]) -> int:
@@ -568,7 +580,9 @@ class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.parametrize("use_sync_check", [False, True])
     async def test_unparseable_max_tokens_leaves_itpm_uncharged(self, use_sync_check: bool):
         dual_cache: Final = DualCache()
-        check: Final = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache
+        )
         deployment: Final = {
             "litellm_params": {"model": MANTLE_OPUS, "itpm": 2000, "otpm": 2000},
             "model_info": {"id": "io-bad-max-tokens-id"},
@@ -596,7 +610,9 @@ class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     async def test_explicit_max_tokens_above_default_share_is_reserved_in_full(self):
         dual_cache: Final = DualCache()
-        check: Final = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache
+        )
         deployment: Final = {
             "litellm_params": {"model": MANTLE_OPUS, "otpm": 100},
             "model_info": {"id": "io-explicit-max-tokens-id"},
@@ -617,7 +633,9 @@ class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("use_sync_check", [False, True])
     async def test_deployment_max_tokens_sets_the_reservation_unless_the_request_sets_one(self, use_sync_check: bool):
-        check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=DualCache()
+        )
         deployment: Final = {
             "litellm_params": {"model": MANTLE_OPUS, "otpm": 4000, "max_tokens": 100},
             "model_info": {"id": "io-deployment-max-tokens-id"},
@@ -638,7 +656,9 @@ class TestModelRateLimitingCheckIOTokens:
 
     @pytest.mark.asyncio
     async def test_deployment_cap_sets_the_reservation_only_through_the_param_its_api_sends(self):
-        check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=DualCache()
+        )
         chat: Final = {"messages": [{"role": "user", "content": "hello"}]}
         responses: Final = {"input": "hello"}
 
@@ -668,7 +688,9 @@ class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("use_sync_check", [False, True])
     async def test_deployment_cap_above_the_default_reserves_the_default(self, use_sync_check: bool):
-        check: Final = ModelRateLimitingCheck(dual_cache=DualCache())
+        check: Final = ModelRateLimitingCheck(
+            usage=RouterUsageStore(connect(None).router_usage()), dual_cache=DualCache()
+        )
         otpm_limit: Final = UNMAPPED_MODEL_DEFAULT_MAX_OUTPUT * 5
 
         async def reserved(deployment_cap: Mapping[str, int]) -> int:
@@ -694,7 +716,7 @@ class TestModelRateLimitingCheckIOTokens:
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         deployment = {
             "litellm_params": {
                 "model": "bedrock_mantle/anthropic.claude-opus-4-7",
@@ -735,7 +757,7 @@ class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     async def test_reconcile_runs_via_success_event_without_model_id(self):
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         itpm_key = "global_router:io-noid:bedrock_mantle/test:itpm:12-34"
         await dual_cache.async_increment_cache(key=itpm_key, value=10, ttl=60)
 
@@ -761,7 +783,8 @@ class TestModelRateLimitingCheckIOTokens:
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        usage = RouterUsageStore(connect(None).router_usage())
+        check = ModelRateLimitingCheck(usage=usage, dual_cache=dual_cache)
         minute = get_utc_datetime().strftime("%H-%M")
         itpm_key = f"global_router:io-first:bedrock_mantle/test:itpm:{minute}"
         await dual_cache.async_increment_cache(key=itpm_key, value=8, ttl=60)
@@ -801,8 +824,8 @@ class TestModelRateLimitingCheckIOTokens:
         # The first deployment's ITPM counter is not driven negative...
         assert await dual_cache.async_get_cache(key=itpm_key) == 0
         # ...and the non-IO deployment's TPM usage is tracked normally.
-        tpm_key = f"non-io-second:openai/gpt-4o-mini:tpm:{minute}"
-        assert await dual_cache.async_get_cache(key=tpm_key) == 12
+        tpm = UsageCounter.for_deployment("non-io-second", "openai/gpt-4o-mini", "tpm", minute)
+        assert usage.get_local(tpm) == 12
 
     @pytest.mark.asyncio
     async def test_stale_reservation_refunded_before_retry_overwrites_it(self):
@@ -872,7 +895,7 @@ class TestModelRateLimitingCheckIOTokens:
     @pytest.mark.asyncio
     async def test_forged_reservation_cannot_decrement_counter(self):
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         victim_key = "global_router:victim:model:itpm:00-00"
         await dual_cache.async_increment_cache(key=victim_key, value=100, ttl=60)
 
@@ -962,7 +985,7 @@ class TestModelRateLimitingCheckIOTokens:
     async def test_io_conflict_warning_not_collapsed_for_missing_model_id(self, caplog):
         import logging
 
-        check = ModelRateLimitingCheck(dual_cache=DualCache())
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=DualCache())
         deployment = {
             "litellm_params": {"model": "openai/gpt-4o-mini", "itpm": 100, "tpm": 1000},
             "model_info": {},
@@ -1167,7 +1190,8 @@ class TestModelRateLimitingCheckIOTokens:
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        usage = RouterUsageStore(connect(None).router_usage())
+        check = ModelRateLimitingCheck(usage=usage, dual_cache=dual_cache)
         model_id = "io-mixed-id"
         deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
         deployment = {
@@ -1181,9 +1205,9 @@ class TestModelRateLimitingCheckIOTokens:
         }
 
         minute = get_utc_datetime().strftime("%H-%M")
-        rpm_key = f"{model_id}:{deployment_name}:rpm:{minute}"
+        rpm = UsageCounter.for_deployment(model_id, deployment_name, "rpm", minute)
         itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:{minute}"
-        await dual_cache.async_increment_cache(key=rpm_key, value=5, ttl=60)
+        usage.increment_local(CounterIncrement(rpm, 5, 60))
 
         request_kwargs = {
             "messages": [{"role": "user", "content": "hi"}],
@@ -1196,7 +1220,7 @@ class TestModelRateLimitingCheckIOTokens:
             with pytest.raises(litellm.RateLimitError):
                 await check.async_pre_call_check(deployment)
 
-        assert await dual_cache.async_get_cache(key=rpm_key) == 5, "the rejected request hands its rpm count back"
+        assert usage.get_local(rpm) == 5, "the rejected request hands its rpm count back"
         assert (await dual_cache.async_get_cache(key=itpm_key) or 0) == 0
         assert ITPM_RESERVED_KEY not in request_kwargs["metadata"]
         assert any("both limit types are enforced" in record.message for record in caplog.records)
@@ -1211,12 +1235,13 @@ class TestModelRateLimitingCheckIOTokens:
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        usage = RouterUsageStore(connect(None).router_usage())
+        check = ModelRateLimitingCheck(usage=usage, dual_cache=dual_cache)
         model_id = "io-tpm-mixed-id"
         deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
         minute = get_utc_datetime().strftime("%H-%M")
         itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:{minute}"
-        tpm_key = f"{model_id}:{deployment_name}:tpm:{minute}"
+        tpm = UsageCounter.for_deployment(model_id, deployment_name, "tpm", minute)
         await dual_cache.async_increment_cache(key=itpm_key, value=5, ttl=60)
 
         kwargs = {
@@ -1237,18 +1262,19 @@ class TestModelRateLimitingCheckIOTokens:
         # ITPM reconciled down from the 5-token reservation to actual usage (3).
         assert await dual_cache.async_get_cache(key=itpm_key) == 3
         # TPM tracking must still run so the tpm/rpm pre-call path can enforce it.
-        assert await dual_cache.async_get_cache(key=tpm_key) == 7
+        assert usage.get_local(tpm) == 7
 
     def test_io_success_still_tracks_tpm_for_mixed_deployment_sync(self):
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        usage = RouterUsageStore(connect(None).router_usage())
+        check = ModelRateLimitingCheck(usage=usage, dual_cache=dual_cache)
         model_id = "io-tpm-mixed-sync-id"
         deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
         minute = get_utc_datetime().strftime("%H-%M")
         itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:{minute}"
-        tpm_key = f"{model_id}:{deployment_name}:tpm:{minute}"
+        tpm = UsageCounter.for_deployment(model_id, deployment_name, "tpm", minute)
         dual_cache.set_cache(key=itpm_key, value=5, ttl=60)
 
         kwargs = {
@@ -1267,14 +1293,14 @@ class TestModelRateLimitingCheckIOTokens:
         check.log_success_event(kwargs, response, None, None)
 
         assert dual_cache.get_cache(key=itpm_key) == 3
-        assert dual_cache.get_cache(key=tpm_key) == 7
+        assert usage.get_local(tpm) == 7
 
     @pytest.mark.asyncio
     async def test_failure_refunds_itpm_reservation(self):
         from litellm.utils import get_utc_datetime
 
         dual_cache = DualCache()
-        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        check = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
         minute = get_utc_datetime().strftime("%H-%M")
         itpm_key = f"global_router:io-refund-id:bedrock_mantle/test:itpm:{minute}"
         await dual_cache.async_increment_cache(key=itpm_key, value=20, ttl=60)
@@ -1619,7 +1645,7 @@ async def test_success_settles_a_reservation_held_only_in_litellm_params_metadat
     deliveries: tuple[str, ...],
 ) -> None:
     dual_cache: Final = DualCache()
-    check: Final = ModelRateLimitingCheck(dual_cache=dual_cache)
+    check: Final = ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache)
     itpm_key: Final = "global_router:proxy-shape:openai/gpt-5-mini:itpm:12-34"
     otpm_key: Final = "global_router:proxy-shape:openai/gpt-5-mini:otpm:12-34"
     await dual_cache.async_increment_cache(key=itpm_key, value=40, ttl=60)
@@ -1760,7 +1786,7 @@ async def test_a_turn_finishing_in_the_next_minute_counts_its_actual_tokens_on_t
     reservation: Final = await async_admit_io_token_turn(dual_cache, _turn_deployment(kind), _TURN_AT)
 
     await _deliver_success(
-        ModelRateLimitingCheck(dual_cache=dual_cache),
+        ModelRateLimitingCheck(usage=RouterUsageStore(connect(None).router_usage()), dual_cache=dual_cache),
         delivery,
         _proxy_success_kwargs(reservation),
         _reply_using(_ACTUAL_TOKENS["itpm"], _ACTUAL_TOKENS["otpm"]),

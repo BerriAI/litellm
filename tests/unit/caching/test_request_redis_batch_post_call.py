@@ -36,10 +36,12 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.spend_tracking.spend_counter_batch import PendingSpendIncrement
 from litellm.proxy.utils import InternalUsageCache
 from litellm.redis.stores.rate_limits import CounterIncrement, RateLimitScope
+from litellm.redis.stores.router_usage import CounterIncrement as UsageIncrement
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import ModelResponse
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits
+from tests.unit.redis.stores.router_usage_double import FakeUsageHandle, usage_store
 
 from .test_redis_batch import FakeClient, FakeNatives, FakeRedisCache, fake_send
 
@@ -132,10 +134,10 @@ def _response_cache(redis_cache: FakeRedisCache) -> Cache:
     return cache
 
 
-def _tpm_router(redis_cache: FakeRedisCache) -> tuple[LowestTPMLoggingHandler_v2, DualCache]:
-    router_cache = DualCache()
-    router_cache.attach_redis_cache(redis_cache)
-    return LowestTPMLoggingHandler_v2(router_cache=router_cache, routing_args={"ttl": 60}), router_cache
+def _tpm_selector(handle: FakeUsageHandle) -> LowestTPMLoggingHandler_v2:
+    selector: Final = LowestTPMLoggingHandler_v2(usage=usage_store(handle), routing_args={"ttl": 60})
+    selector.cancel_sync_task()
+    return selector
 
 
 def _tpm_kwargs() -> Mapping[str, object]:
@@ -151,19 +153,19 @@ def _tpm_kwargs() -> Mapping[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_post_call_owners_wait_for_the_callbacks_and_the_limiter_declares_on_the_native_post_call_batch():
+async def test_post_call_owners_declare_on_the_native_post_call_batch_until_the_callbacks_finish():
     client = FakeClient(_ok_replies)
     redis_cache = PostCallFakeRedisCache(client)
     calls: list[tuple[str, list[str], list[object]]] = []  # mutable-ok: filled by the fake scripts
     fakes = FakeRateLimits(token_increment_script=_scripts(calls, [10.0]), parallel_release_script=_scripts(calls, [0]))
     limiter = _limiter(fakes)
-    tpm, router_cache = _tpm_router(redis_cache)
+    usage = FakeUsageHandle(redis={})
+    tpm = _tpm_selector(usage)
 
     with request_redis_batch_scope():
         await tpm.async_log_success_event(_tpm_kwargs(), None, None, None)
         await limiter.async_increment_tokens_with_ttl_preservation(_token_ops(_K1))
         await limiter._release_stashed_parallel_slot(_slot_stash("slot-1", _K1), None, in_logging_callback=True)
-        assert client.pipelines == []  # nothing goes out while the callbacks are still declaring
         await flush_post_call_redis_batches()
 
     assert fakes.post_call == ["token_increment", "parallel_release"]
@@ -171,15 +173,22 @@ async def test_post_call_owners_wait_for_the_callbacks_and_the_limiter_declares_
         ("script", ["{api_key:k1}:tokens"], [10, 60]),
         ("script", ["{api_key:k1}:max_parallel_requests"], ["slot-1"]),
     ]
-    assert len(client.pipelines) == 1
-    assert _names(client) == ["INCRBYFLOAT", "EXPIRE"]
+    tpm_counter = next(iter(usage.local))
+    assert usage.calls == [("post_call", (UsageIncrement(tpm_counter, 42, 60),))]
+    assert (tpm_counter.deployment_id, tpm_counter.model, tpm_counter.kind) == ("dep-a", "openai/gpt-4o-mini", "tpm")
+    assert usage.local == {tpm_counter: 42}
+    assert client.pipelines == []
     assert redis_cache.alone == []
-    assert (
-        await router_cache.in_memory_cache.async_get_cache(
-            next(k for k in router_cache.in_memory_cache.cache_dict if ":tpm:" in k)
-        )
-        == 42
-    )
+
+
+@pytest.mark.asyncio
+async def test_outside_a_request_the_tpm_increment_goes_out_on_its_own_pipeline():
+    usage = FakeUsageHandle(redis={})
+
+    await _tpm_selector(usage).async_log_success_event(_tpm_kwargs(), None, None, None)
+
+    assert [name for name, _ in usage.calls] == ["pipeline"]
+    assert usage.local == usage.redis == {next(iter(usage.local)): 42}
 
 
 @pytest.mark.asyncio
