@@ -468,6 +468,7 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
+                    replay_tool_search=True,
                 )
             )
 
@@ -484,6 +485,7 @@ class ResponsesSessionHandler:
                     item_cache_control=item_cache_control,
                     tool_call_provider_fields=tool_call_provider_fields,
                     only_since_compaction=True,
+                    replay_tool_search=True,
                 )
             )
         elif isinstance(_response_output, dict) and _response_output and _response_output != {}:
@@ -647,12 +649,21 @@ class ResponsesSessionHandler:
                 SELECT 1
                 FROM matching_session
                 WHERE matching_session.session_id = logs.session_id
-                  AND matching_session."user" IS NOT DISTINCT FROM logs."user"
-                  AND matching_session.team_id IS NOT DISTINCT FROM logs.team_id
+                  AND (
+                      matching_session."user" = logs."user"
+                      OR (matching_session."user" IS NULL AND logs."user" IS NULL)
+                  )
+                  AND (
+                      matching_session.team_id = logs.team_id
+                      OR (matching_session.team_id IS NULL AND logs.team_id IS NULL)
+                  )
                   AND (
                       COALESCE(matching_session."user", '') <> ''
                       OR COALESCE(matching_session.team_id, '') <> ''
-                      OR matching_session.api_key = logs.api_key
+                      OR (
+                          COALESCE(matching_session.api_key, '') <> ''
+                          AND matching_session.api_key = logs.api_key
+                      )
                   )
             )
             ORDER BY "endTime" ASC;

@@ -188,6 +188,7 @@ from litellm.litellm_core_utils.served_output_texts import (
     served_stream_output_texts,
 )
 from litellm.litellm_core_utils.token_counter import offload_token_count, usage_tokenizer_model
+from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -1737,8 +1738,17 @@ def _client_disconnected(exception: Exception) -> bool:
     return isinstance(exception, HTTPException) and exception.status_code == LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED
 
 
+def _ran_out_of_total_timeout(exception: Exception) -> bool:
+    """The request's ``total_timeout`` ran out while the provider was working on it, like a disconnect."""
+    return any(isinstance(cause, TotalTimeoutExpired) for cause in _exception_chain(exception))
+
+
 def _provider_billed_the_failure(exception: Exception) -> bool:
-    return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
+    return (
+        _timed_out_reading_from_provider(exception)
+        or _client_disconnected(exception)
+        or _ran_out_of_total_timeout(exception)
+    )
 
 
 def _as_str_mapping(value: object) -> Mapping[str, object]:
@@ -5357,16 +5367,19 @@ async def query_raw_within_statement_timeout(
     sql: str,
     *params: object,
     what: str = "Spend logs",
+    hint: str = "Pick a shorter date range",
     timeout: timedelta = _SPEND_LOG_READ_STATEMENT_TIMEOUT,
 ) -> Sequence[Mapping[str, object]]:
     """One raw read on the read target that Postgres cancels at ``timeout``.
 
     Prisma's HTTP client gives up on a statement after 30s anyway, so without
     this the Admin UI's error is the same but Postgres keeps running the scan.
-    A cancelled read surfaces as a 503 asking for a narrower date range.
+    A cancelled read surfaces as a 503 carrying ``hint``.
     """
     try:
-        async with prisma_client.read_db.tx(timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE) as transaction:
+        async with prisma_client.read_db.tx(
+            max_wait=timeout, timeout=timeout + _STATEMENT_TIMEOUT_TRANSACTION_GRACE
+        ) as transaction:
             await transaction.execute_raw(f"SET LOCAL statement_timeout = {int(timeout / timedelta(milliseconds=1))}")
             return await transaction.query_raw(sql, *params)
     except Exception as e:
@@ -5374,7 +5387,7 @@ async def query_raw_within_statement_timeout(
             raise
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": f"{what} took longer than {int(timeout.total_seconds())}s. Pick a shorter date range"},
+            detail={"error": f"{what} took longer than {int(timeout.total_seconds())}s. {hint}"},
         ) from e
 
 
@@ -9253,13 +9266,14 @@ async def monitor_spend_logs_queue(
         proxy_logging_obj: Proxy logging object
     """
     from litellm.constants import (
+        SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS,
         SPEND_LOG_QUEUE_POLL_INTERVAL,
         SPEND_LOG_QUEUE_SIZE_THRESHOLD,
     )
 
     threshold: Final = SPEND_LOG_QUEUE_SIZE_THRESHOLD
     base_interval: Final = SPEND_LOG_QUEUE_POLL_INTERVAL
-    max_backoff: Final = 30.0  # Maximum backoff interval in seconds
+    max_backoff: Final = SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS
     backoff_multiplier: Final = 1.5  # Exponential backoff multiplier
     current_interval = base_interval
     flush_requested: Final = asyncio.Event()

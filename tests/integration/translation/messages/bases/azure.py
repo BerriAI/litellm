@@ -323,6 +323,24 @@ GPT_6_LUNA_CONTENT_FILTERS: Final[JsonValue] = [
     },
 ]
 
+GPT_6_LUNA_ENCRYPTED_CONTENT: Final = (
+    "gAAAAABq0CO7N77UmN8oIxFPRrP2rvE9LuqnrGGHsFzckseHLpNB24KIlg0OKnfemaCgYarrVksxeJBKgoiQ79xkF1NR9RI8-82w"
+    "4OGNB0ViGNYNA7nf5kOqOTrMh1_gHecIN0Evxn8I0meiqOds7h1biKfkiZlm19b-9r_Y2K--KXONVKFEbe8kP54_ka9KCxQ3_5Xn"
+    "L4IRfRS7lsLfoMjORKnapkVSnMjueRVVOprw_897JJypeT61mzzBYM_18T6k68OE70JndMsr4GNRq4c_Lf_rSRoHg7_iFrdHsBdv"
+    "MfN79dfp_PeLu5MZVRgcag-qM9aKUAvzhTD2-EutMw1C1ZNabU2S5Qa4RXq2OiU_iZljJI6JhpnJ9jT9g_M3W_0mklmFU2HBhQ6O"
+    "csIFmPePVcSaQlmofKgvq2ZThSHyFpLsT15ftBL2ZMZ3OWeodDnkfRr2fY5NDM7v7U1TLcAx7xCnP88W03kyb3SuJGSsbPnYTGbN"
+    "ZN7ye3SBJRkCMpRgUfguSYdC46mmMjPdvdkLnTWHZ23GOoDG5A2lffUJZ4WXNgPrMdG2FNThtHT0otHeDC75ahpa6i5xtqIsCGiF"
+    "RVH_iSxhItArxFXoc7e6oBU9YxsgkUkyXW_zz6h5h5E6DoJz4QckOAdL8E3SwL1nu6ovpS3_QgeiHa5RewKs6WclFCxeiwiyXO6b"
+    "fjhl_VtOA8KyWqkO-rt4T0RneV_bZHav6KoVanyCX-ZsAYj1WIhn4xEOXh6RdBjZJJB-yDw5cq6zdXkmN1hxs_nmA7hUemHkPclb"
+    "2lGF41N28IwMpcXq1rx2jrw2XleLnqFVKwgCLysinS9erU2vRN1CmmDQrGl7C5lIOrfSVCpB2W_p3BZWNDKwAfF4i8uXCxy1_5-E"
+    "jJ08CJXXYVchceOreHYNYxAXhVTHhJArQqVWQgTwJl9e_HhyA0OFZHojB54BjlkMr7QJMm9VE9LIkOJgRgIrtUM2ULIy1tZ-Ezuz"
+    "Ey9HYx5NuUKe_12ExKuUVrQmaJ2HRHvj_pPcmSk6lOVrN5VvVBMj_KHd3MfkbUWVeVfzIsgWc149TexK6FPtvHGPxf_VQBdyA4Jl"
+    "77dPp671wxH7puzy184LV1IMdxq5eY1JG4QdCOluIDkkqbw_qYEiKGNXImGnp9LsXCcYa6JivYmSAw_vgZ5YhO98L49aLEI6nT3H"
+    "WRWuzY3H39aCkFdA8Y0DttzwXYvhz8UuenFgoGvIk0W7WSOLBxi6pSefdczpRizWLMm10zlrYVFvdMzUPEx7OyDUhSXag61gYcsm"
+    "6L5mcXGb2cojThdHEXcFZg36bQYjQVJzu_ASlvN-Z9AFNajIIyw8qKx3Q8pRVg3HCpQcSyRiDhicvT_Gp8d0X7VhoAhG_-LPg4AO"
+    "z7U985JqP0wB2dB4sYhRgMZpQ29x7wgvgjNtsyqbCA=="
+)
+
 GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",
@@ -347,27 +365,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
                 "id": "rs_0534b0c3898d6d1b006ad023bb09b8819590793fe299bffdcf",
                 "type": "reasoning",
                 "content": [],
-                "encrypted_content": (
-                    "gAAAAABq0CO7N77UmN8oIxFPRrP2rvE9LuqnrGGHsFzckseHLpNB24KIlg0OKnfemaCgYarrVksxeJBK"
-                    "goiQ79xkF1NR9RI8-82w4OGNB0ViGNYNA7nf5kOqOTrMh1_gHecIN0Evxn8I0meiqOds7h1biKfkiZlm"
-                    "19b-9r_Y2K--KXONVKFEbe8kP54_ka9KCxQ3_5XnL4IRfRS7lsLfoMjORKnapkVSnMjueRVVOprw_897"
-                    "JJypeT61mzzBYM_18T6k68OE70JndMsr4GNRq4c_Lf_rSRoHg7_iFrdHsBdvMfN79dfp_PeLu5MZVRgc"
-                    "ag-qM9aKUAvzhTD2-EutMw1C1ZNabU2S5Qa4RXq2OiU_iZljJI6JhpnJ9jT9g_M3W_0mklmFU2HBhQ6O"
-                    "csIFmPePVcSaQlmofKgvq2ZThSHyFpLsT15ftBL2ZMZ3OWeodDnkfRr2fY5NDM7v7U1TLcAx7xCnP88W"
-                    "03kyb3SuJGSsbPnYTGbNZN7ye3SBJRkCMpRgUfguSYdC46mmMjPdvdkLnTWHZ23GOoDG5A2lffUJZ4WX"
-                    "NgPrMdG2FNThtHT0otHeDC75ahpa6i5xtqIsCGiFRVH_iSxhItArxFXoc7e6oBU9YxsgkUkyXW_zz6h5"
-                    "h5E6DoJz4QckOAdL8E3SwL1nu6ovpS3_QgeiHa5RewKs6WclFCxeiwiyXO6bfjhl_VtOA8KyWqkO-rt4"
-                    "T0RneV_bZHav6KoVanyCX-ZsAYj1WIhn4xEOXh6RdBjZJJB-yDw5cq6zdXkmN1hxs_nmA7hUemHkPclb"
-                    "2lGF41N28IwMpcXq1rx2jrw2XleLnqFVKwgCLysinS9erU2vRN1CmmDQrGl7C5lIOrfSVCpB2W_p3BZW"
-                    "NDKwAfF4i8uXCxy1_5-EjJ08CJXXYVchceOreHYNYxAXhVTHhJArQqVWQgTwJl9e_HhyA0OFZHojB54B"
-                    "jlkMr7QJMm9VE9LIkOJgRgIrtUM2ULIy1tZ-EzuzEy9HYx5NuUKe_12ExKuUVrQmaJ2HRHvj_pPcmSk6"
-                    "lOVrN5VvVBMj_KHd3MfkbUWVeVfzIsgWc149TexK6FPtvHGPxf_VQBdyA4Jl77dPp671wxH7puzy184L"
-                    "V1IMdxq5eY1JG4QdCOluIDkkqbw_qYEiKGNXImGnp9LsXCcYa6JivYmSAw_vgZ5YhO98L49aLEI6nT3H"
-                    "WRWuzY3H39aCkFdA8Y0DttzwXYvhz8UuenFgoGvIk0W7WSOLBxi6pSefdczpRizWLMm10zlrYVFvdMzU"
-                    "PEx7OyDUhSXag61gYcsm6L5mcXGb2cojThdHEXcFZg36bQYjQVJzu_ASlvN-Z9AFNajIIyw8qKx3Q8pR"
-                    "Vg3HCpQcSyRiDhicvT_Gp8d0X7VhoAhG_-LPg4AOz7U985JqP0wB2dB4sYhRgMZpQ29x7wgvgjNtsyqb"
-                    "CA=="
-                ),
+                "encrypted_content": GPT_6_LUNA_ENCRYPTED_CONTENT,
                 "summary": [],
             },
             {
@@ -411,6 +409,10 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         "model": "azure/gpt-6-luna",
         "usage": {"input_tokens": 309, "output_tokens": 114},
         "content": [
+            {
+                "type": "redacted_thinking",
+                "data": "litellm_encrypted_reasoning:" + GPT_6_LUNA_ENCRYPTED_CONTENT,
+            },
             {
                 "type": "text",
                 "text": (
@@ -457,6 +459,25 @@ GPT_6_1_SOL_CONTENT_FILTERS: Final[JsonValue] = [
     },
 ]
 
+GPT_6_1_SOL_ENCRYPTED_CONTENT: Final = (
+    "gAAAAABq0CO0QoINZ4oOVkvDvinFAJAMUBmzqqpXLoppdlyP4fFQsNqPOh-L08mQt8yf4OUtOwzk3E6Q7CLHieco0s_tfuYHRlTU"
+    "0Blr62KF_C77RScOjKYa6p4E2fjdwO44Y2HIiGfIo_GnUpkfwW1EiVZmj6L8PO0biPqihvK3KJ-GNKB_R4-lLyKXrrvVN-985glS"
+    "dHg-_fRrmyVGBvVxPFyERlD-WPm8fPujqMmXnUcAv3N-wUoIEccd7PfJGqBs52UzllpH27mNCI71C_qbc2nZ97jZgSabTvAZKF8Q"
+    "9zSJzWA_Gs72iQqd0X55F5vD0-xrMuVdXFTYLV-y-S_1rN8tY1bEbdJWr7Dl84NvNWCYqA5byZgsMxAVyjADWXcVaagrZhNtQ1ol"
+    "II2oePJL2WyrKrOs4d7ZuGFW5BcFCDS5zxk6MwckKbLkSi3HM34z-AhIOjr6SNc5qcR8yur4Phm9pSJQqFscqQwtmEgbAzXqC9U5"
+    "rwQ_c11N7o6Xc2bnoRXxeXQvKyGCPZWOqQr8AffHBCCOmeKjbPMV0ITek7HyRiOWg_Pjq-_xlVCoUGM7gIq5nq3HG1SqH7Yr6qev"
+    "5Arq24UALiBbr0NAtmq3p-YGRgia3oDnSrnygIX8AbqhnGrHz1kjBbwGr6fXF2XruSKuL96bQghfWGx6nhsbIDH4FI3akERb6Rh1"
+    "B9XIWsWw4Zzo6-tg6DnjzfaJteZqIY4qS5mHSD9stXEVqu_CfnGh7EdOlZlnkG6kIQ3m6oAo2ZG9E58m32X-KEqZDjD4yUgWss9y"
+    "7cnFbYeEzntQneytoBpaTNXtSEsM1fUoz73Ol7FzqPI0CKIsp3UGje2K7LqAwkV54JrhqCfxkD5HmPJnyEOnP0dODvyqD3CK-cbk"
+    "oPoszI2Ba0dk11re5kF985he-Fjm7dXDNhQX93__nj4awDCtnX8_Ke5ld7O3sA1ou7WHhgfGo-Jr4ZcGL5JWflPbI9oPpGOOvLsS"
+    "-e8CUjTcTRb_eA2jApeGU2nAdW42U-CnXeScaR5eJE1RoXTFXIP6MMSpxqpTRWYBfhIDyPEzwTveki-WOWgJtyNJ5W3GJxaEZla2"
+    "uJ5_cdiD4-HgRy1UwxIJODUh0F2hKC6niDVIZqoZ6Z4nb4OUvJP00_nGBA5-IL31Ij8I8U740RAZvnOsMOIsKelsJioM8Ii4MdPi"
+    "O2FYSdKjijEJmXLDdbYkQEXeqwfKGC7trXBOyRwO5AF6mLR9Yf8Bu_eiKbuf5DT9sw88P4JtfPi5LLIso2Ki44UnxePraO7vinqg"
+    "7H7oOi-1gw7BbDaKH7tJs3vUOaxl6mA0BNTg5cDt6TtFZMpFgKNRyanWzSwGWQGYlYbfUGVUnM_tjtgoBNFJAQz1s8fd-qOl1NQD"
+    "ggjlryl6TJk3RSiNYKyJ3fmpE10LM3LUtN3AoFMDFbEEBstDuVg0zzvwe64zaKosn7PIh_Ym-y7QlMdcvUbsqO-T6pfsq8iqEz2a"
+    "nv3yujHkAXIaa3292lbAdFIq80ycQSJbWNd2MtkYQHdWtWmQQoqMX1PdyJGp6N3GG45A4A=="
+)
+
 GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",
@@ -480,28 +501,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
                 "id": "rs_0a4a896afe94ce65006ad023b19f8481938d51de793f83feed",
                 "type": "reasoning",
                 "content": [],
-                "encrypted_content": (
-                    "gAAAAABq0CO0QoINZ4oOVkvDvinFAJAMUBmzqqpXLoppdlyP4fFQsNqPOh-L08mQt8yf4OUtOwzk3E6Q"
-                    "7CLHieco0s_tfuYHRlTU0Blr62KF_C77RScOjKYa6p4E2fjdwO44Y2HIiGfIo_GnUpkfwW1EiVZmj6L8"
-                    "PO0biPqihvK3KJ-GNKB_R4-lLyKXrrvVN-985glSdHg-_fRrmyVGBvVxPFyERlD-WPm8fPujqMmXnUcA"
-                    "v3N-wUoIEccd7PfJGqBs52UzllpH27mNCI71C_qbc2nZ97jZgSabTvAZKF8Q9zSJzWA_Gs72iQqd0X55"
-                    "F5vD0-xrMuVdXFTYLV-y-S_1rN8tY1bEbdJWr7Dl84NvNWCYqA5byZgsMxAVyjADWXcVaagrZhNtQ1ol"
-                    "II2oePJL2WyrKrOs4d7ZuGFW5BcFCDS5zxk6MwckKbLkSi3HM34z-AhIOjr6SNc5qcR8yur4Phm9pSJQ"
-                    "qFscqQwtmEgbAzXqC9U5rwQ_c11N7o6Xc2bnoRXxeXQvKyGCPZWOqQr8AffHBCCOmeKjbPMV0ITek7Hy"
-                    "RiOWg_Pjq-_xlVCoUGM7gIq5nq3HG1SqH7Yr6qev5Arq24UALiBbr0NAtmq3p-YGRgia3oDnSrnygIX8"
-                    "AbqhnGrHz1kjBbwGr6fXF2XruSKuL96bQghfWGx6nhsbIDH4FI3akERb6Rh1B9XIWsWw4Zzo6-tg6Dnj"
-                    "zfaJteZqIY4qS5mHSD9stXEVqu_CfnGh7EdOlZlnkG6kIQ3m6oAo2ZG9E58m32X-KEqZDjD4yUgWss9y"
-                    "7cnFbYeEzntQneytoBpaTNXtSEsM1fUoz73Ol7FzqPI0CKIsp3UGje2K7LqAwkV54JrhqCfxkD5HmPJn"
-                    "yEOnP0dODvyqD3CK-cbkoPoszI2Ba0dk11re5kF985he-Fjm7dXDNhQX93__nj4awDCtnX8_Ke5ld7O3"
-                    "sA1ou7WHhgfGo-Jr4ZcGL5JWflPbI9oPpGOOvLsS-e8CUjTcTRb_eA2jApeGU2nAdW42U-CnXeScaR5e"
-                    "JE1RoXTFXIP6MMSpxqpTRWYBfhIDyPEzwTveki-WOWgJtyNJ5W3GJxaEZla2uJ5_cdiD4-HgRy1UwxIJ"
-                    "ODUh0F2hKC6niDVIZqoZ6Z4nb4OUvJP00_nGBA5-IL31Ij8I8U740RAZvnOsMOIsKelsJioM8Ii4MdPi"
-                    "O2FYSdKjijEJmXLDdbYkQEXeqwfKGC7trXBOyRwO5AF6mLR9Yf8Bu_eiKbuf5DT9sw88P4JtfPi5LLIs"
-                    "o2Ki44UnxePraO7vinqg7H7oOi-1gw7BbDaKH7tJs3vUOaxl6mA0BNTg5cDt6TtFZMpFgKNRyanWzSwG"
-                    "WQGYlYbfUGVUnM_tjtgoBNFJAQz1s8fd-qOl1NQDggjlryl6TJk3RSiNYKyJ3fmpE10LM3LUtN3AoFMD"
-                    "FbEEBstDuVg0zzvwe64zaKosn7PIh_Ym-y7QlMdcvUbsqO-T6pfsq8iqEz2anv3yujHkAXIaa3292lbA"
-                    "dFIq80ycQSJbWNd2MtkYQHdWtWmQQoqMX1PdyJGp6N3GG45A4A=="
-                ),
+                "encrypted_content": GPT_6_1_SOL_ENCRYPTED_CONTENT,
                 "summary": [],
             },
             {
@@ -545,6 +545,10 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         "model": "azure/gpt-6.1-sol",
         "usage": {"input_tokens": 309, "output_tokens": 137},
         "content": [
+            {
+                "type": "redacted_thinking",
+                "data": "litellm_encrypted_reasoning:" + GPT_6_1_SOL_ENCRYPTED_CONTENT,
+            },
             {
                 "type": "text",
                 "text": (
@@ -592,6 +596,25 @@ GPT_6_ASTRA_CONTENT_FILTERS: Final[JsonValue] = [
     },
 ]
 
+GPT_6_ASTRA_ENCRYPTED_CONTENT: Final = (
+    "gAAAAABq0CPHdct5jJ3BolLC7QmXutcBsSZ0YzHiI8z2uK07jqwLifVhEROdF12ygdCVRtcrLrHPyHShpVbh41ULxn2L3SyVYLHb"
+    "bkFMcwbzfky_kqZdUe_1D-PLxsVyI1KFMPLg0Fb9K-N9u_ElvkFcXXsmAhRQCcB4SE9TMe_5tKBHiZbqvOI112wig7cc57rDbvM0"
+    "mEoKyFn3WgprP_ewHeCeP6DSEvVGDEMjUd_TIXAHH7y2Ae3y0WRW7WUag_wAiO7xzAH13mh4S6eKeBTKh62krmYeUH3wETO8BF1W"
+    "nkuZ_86lS0zWLBzeLJJnJiXKXVquKatJ6HvO3m6FkPF0tBXhdc8YYtTF1B_WBMECARKcw4n3mPL3R6J2jpHe05Eo7W7uZkcY5E-q"
+    "mE_cqUK8YQXTXx-mR339iuAvqSe0N2Rgl9Ey1l7z0MBATIV0c6J4wRav6Di5aAxEEXkgDVk1jF9LZSHomcGjh2B2UWFiAZEELRDD"
+    "7ovpP3c7B05h0QvwazXlZnskJf-xYZEHAl2CNZk0iqagFs6EtNrFguM5W2AH6dsuaGjNGmdWM_kt4JqIUeScZLNgMty8qTOHFzd7"
+    "tiBpuLkQgcnHzOigWb2vY_8ahy_zfzM2lVL-JQxP9SB7Gq1m49Ln-byC1O_kPyqEFXELhhQ8peXQY5do2R2T-3I0WLOhDhP5rruL"
+    "sL66vNHAAMjka6WmjI2goiy-JF_nVCplJd791Wqa3yf7Q7ksfasnSKtjR7-cgTtMcXX7n_5joMnqf4_LsqSq6gHdeKw4VTeT8wGB"
+    "Uo3MHLkgi8PnAIphdb3PKgifSjstE_oH4_ZbmlyCsHaFYq2aoy-S85ndlrR_PAHBtU8II-Ud_42EPzS-Etdt5d1Qjjri3KTyPjPO"
+    "7fAm8aPFr1k3GbjwASPMQ7cUs7yLhPmI-TCm5U-zgK1pIALviiU2o4IM7kdH0-Dg1eyyZN8hsFGSHaUB7G_tGB0fj0H0GSztH8lt"
+    "NjTK_276IOh8Jv5csxjjmlcMOHVBmDCkkE_DlVjvNQtWQS9QBt9jd1gFSzaOhXVkKZJK3vTIaq8JxTvYtgLc8WM5pRHbnQr71TfW"
+    "B-eLEYgN-aX5PueKkXGrGauDpKkzVJyNZ6mZ_dVXwl1p5IiNNJ1xzhmZK2GVDFWt0nfOBYyxmCDfIxvQL8YAhXXAi1Hrjal82c68"
+    "lw7UBauyMojDOcbH7EDG9KNbVV-kmkhCW3aH0QCIALzHqO_cukXDqnYX-iVNuxWpW5KUAJdg9cfgwX35O246HxDoSpoIYQ1GooqI"
+    "WSImYrlNQajPHpJcpxnWeSgKOSYIAYCAr70MouYhUg-lsId7n2pr4gspPf1ZUrBhAG3h4n9qSguKTlpnAYlln_2MzgVVN1cH5sop"
+    "vgJJLr20HKS1cfu9lB-CHDF5h74z7q3ydZJljn8dQLBqL3csr0ovOZkTjP21rOjPhdsedg4CLKnylgk5nTewbQz99lKxKPhfYK0-"
+    "XxiDdE6aKvobQUoRupGNHv-gMLqJjehMUynaC6XzBwJ63pPNhH3AlCj3zSte0Mj1FkPQQIY2PjhMB49CmXBV8Z9YJv0="
+)
+
 GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",
@@ -616,28 +639,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
                 "id": "rs_019af305501e4822006ad023c49ce4819590da413b9879e06b",
                 "type": "reasoning",
                 "content": [],
-                "encrypted_content": (
-                    "gAAAAABq0CPHdct5jJ3BolLC7QmXutcBsSZ0YzHiI8z2uK07jqwLifVhEROdF12ygdCVRtcrLrHPyHSh"
-                    "pVbh41ULxn2L3SyVYLHbbkFMcwbzfky_kqZdUe_1D-PLxsVyI1KFMPLg0Fb9K-N9u_ElvkFcXXsmAhRQ"
-                    "CcB4SE9TMe_5tKBHiZbqvOI112wig7cc57rDbvM0mEoKyFn3WgprP_ewHeCeP6DSEvVGDEMjUd_TIXAH"
-                    "H7y2Ae3y0WRW7WUag_wAiO7xzAH13mh4S6eKeBTKh62krmYeUH3wETO8BF1WnkuZ_86lS0zWLBzeLJJn"
-                    "JiXKXVquKatJ6HvO3m6FkPF0tBXhdc8YYtTF1B_WBMECARKcw4n3mPL3R6J2jpHe05Eo7W7uZkcY5E-q"
-                    "mE_cqUK8YQXTXx-mR339iuAvqSe0N2Rgl9Ey1l7z0MBATIV0c6J4wRav6Di5aAxEEXkgDVk1jF9LZSHo"
-                    "mcGjh2B2UWFiAZEELRDD7ovpP3c7B05h0QvwazXlZnskJf-xYZEHAl2CNZk0iqagFs6EtNrFguM5W2AH"
-                    "6dsuaGjNGmdWM_kt4JqIUeScZLNgMty8qTOHFzd7tiBpuLkQgcnHzOigWb2vY_8ahy_zfzM2lVL-JQxP"
-                    "9SB7Gq1m49Ln-byC1O_kPyqEFXELhhQ8peXQY5do2R2T-3I0WLOhDhP5rruLsL66vNHAAMjka6WmjI2g"
-                    "oiy-JF_nVCplJd791Wqa3yf7Q7ksfasnSKtjR7-cgTtMcXX7n_5joMnqf4_LsqSq6gHdeKw4VTeT8wGB"
-                    "Uo3MHLkgi8PnAIphdb3PKgifSjstE_oH4_ZbmlyCsHaFYq2aoy-S85ndlrR_PAHBtU8II-Ud_42EPzS-"
-                    "Etdt5d1Qjjri3KTyPjPO7fAm8aPFr1k3GbjwASPMQ7cUs7yLhPmI-TCm5U-zgK1pIALviiU2o4IM7kdH"
-                    "0-Dg1eyyZN8hsFGSHaUB7G_tGB0fj0H0GSztH8ltNjTK_276IOh8Jv5csxjjmlcMOHVBmDCkkE_DlVjv"
-                    "NQtWQS9QBt9jd1gFSzaOhXVkKZJK3vTIaq8JxTvYtgLc8WM5pRHbnQr71TfWB-eLEYgN-aX5PueKkXGr"
-                    "GauDpKkzVJyNZ6mZ_dVXwl1p5IiNNJ1xzhmZK2GVDFWt0nfOBYyxmCDfIxvQL8YAhXXAi1Hrjal82c68"
-                    "lw7UBauyMojDOcbH7EDG9KNbVV-kmkhCW3aH0QCIALzHqO_cukXDqnYX-iVNuxWpW5KUAJdg9cfgwX35"
-                    "O246HxDoSpoIYQ1GooqIWSImYrlNQajPHpJcpxnWeSgKOSYIAYCAr70MouYhUg-lsId7n2pr4gspPf1Z"
-                    "UrBhAG3h4n9qSguKTlpnAYlln_2MzgVVN1cH5sopvgJJLr20HKS1cfu9lB-CHDF5h74z7q3ydZJljn8d"
-                    "QLBqL3csr0ovOZkTjP21rOjPhdsedg4CLKnylgk5nTewbQz99lKxKPhfYK0-XxiDdE6aKvobQUoRupGN"
-                    "Hv-gMLqJjehMUynaC6XzBwJ63pPNhH3AlCj3zSte0Mj1FkPQQIY2PjhMB49CmXBV8Z9YJv0="
-                ),
+                "encrypted_content": GPT_6_ASTRA_ENCRYPTED_CONTENT,
                 "summary": [],
             },
             {
@@ -681,6 +683,10 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
         "model": "azure/gpt-6-astra",
         "usage": {"input_tokens": 309, "output_tokens": 138},
         "content": [
+            {
+                "type": "redacted_thinking",
+                "data": "litellm_encrypted_reasoning:" + GPT_6_ASTRA_ENCRYPTED_CONTENT,
+            },
             {
                 "type": "text",
                 "text": (
@@ -728,6 +734,22 @@ GPT_5_6_TERRA_CONTENT_FILTERS: Final[JsonValue] = [
     },
 ]
 
+GPT_5_6_TERRA_ENCRYPTED_CONTENT: Final = (
+    "gAAAAABq0CPQDJzIdOV-2rO0aGYCUhKcJifPRv4ZkBaIrKZEARo0rk8CqAe8IV0c2kyBwOFe4M70GMM-HrR1L3hIUxan9dcDB5_S"
+    "7e45yDaxFMiKpbr20izrXNktdwBQfvYOKoMMd07fslVRR-GHOEtz8JvU98v581sxXgVTxNAWGSl_Kb22g2Fds02t1-1g2hT304vs"
+    "i1sBxbA6P2b-NFNQ8N3NEfX6FoWi7UF0nH69-Dg3sCMb4dpZ0gGZaZSHwvzXXHESEuiMv1nJSX18tfrFIt29gmw3Mq3sUxZ3eALk"
+    "PZ54yDUlfYXl6sm2MHXT2xn3l5x6jlG4X8hEqgdfHI76otxmfsXvgtbXCADCes87f00bkWatqWgq27oluRYsY02xDMhtrT4h4C4s"
+    "PIpV7PA9tdhS6Lo3znsQiOEQvMqnSS3dH1NKnZsAiyjNwVZVZa0opIzI5fpNCGjBmMv_4hB3jBRgenG-Ku75OcwPp6HXMej9Mcvp"
+    "LIKtXb8FMKS5wqiZzYBLp-F25hzOHI0QVl0pGFL5ya9mWU4hkQYeu6HuH6ZjSujzyy-8ZmlBjnRZSQp8mN4t34u2ofk4RtyuZKJk"
+    "gjJfN2m5MxBTT3AccMalmbiEa7lJv7GV9kLcqR0GT2Rzd6UMX6qPG92VdfjIgCj1Rzh1IWrJvMloKkMj5qB3nN2dABqfCtjBleSt"
+    "NoTjO2VDensXf11ceG9-KKWeCjfrG0ONgTVXPjTTUPHR0BxtoixnRxIYBZFb8sKdYAPI_QINjby2SVhhQH7UtookBf7N7OqmIJKb"
+    "zR4CLshKnvthH4fJQAZdsfoEPR9I943uBpZi4HnF8mQPF61Aiw9B3bh3USBc9_Oh2rJL044B6qYVD3QKKGydzcplRxQWA31m-4Zn"
+    "9eVxn-xOtx4Tvpdh6BhlFPKX9p2W0mSnb7kjpzX51Ec0J2AsTNUOonaaMFt82MJDELTGcAb3tsAkPzzNK0M_zjQ43CCH5Cu1yV2W"
+    "hbUzxCu4UM0spAIuzpAZv6JGmW1wF4RtAgLfJjc2LxoxcS9MJbLOUPAYdRlwBTj_IL9PIDeNlGVRgVQYL-9xnNKiWD8Iyu2vj8Ao"
+    "slM41wVTEXvOAYyEs25Eyo9ia2km8909d42DjFi2_ngA5ofZI89KQHtCzGwfCf_VTLbpMmrOB4NDFVTUYQlAMBvuSsXLXJJp0QPl"
+    "n2UBHhZ3erIcQ1D990SFRdx1uY47-E2FnCCPljyhJrWHnFxTlGbuEY4i5vPOweqYzj-uBbLVeDbcfjCLjSLFgM4Fa5Zg"
+)
+
 GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",
@@ -752,25 +774,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
                 "id": "rs_0d178c5d2401a624006ad023cfe304819486bdf040ec55eab7",
                 "type": "reasoning",
                 "content": [],
-                "encrypted_content": (
-                    "gAAAAABq0CPQDJzIdOV-2rO0aGYCUhKcJifPRv4ZkBaIrKZEARo0rk8CqAe8IV0c2kyBwOFe4M70GMM-"
-                    "HrR1L3hIUxan9dcDB5_S7e45yDaxFMiKpbr20izrXNktdwBQfvYOKoMMd07fslVRR-GHOEtz8JvU98v5"
-                    "81sxXgVTxNAWGSl_Kb22g2Fds02t1-1g2hT304vsi1sBxbA6P2b-NFNQ8N3NEfX6FoWi7UF0nH69-Dg3"
-                    "sCMb4dpZ0gGZaZSHwvzXXHESEuiMv1nJSX18tfrFIt29gmw3Mq3sUxZ3eALkPZ54yDUlfYXl6sm2MHXT"
-                    "2xn3l5x6jlG4X8hEqgdfHI76otxmfsXvgtbXCADCes87f00bkWatqWgq27oluRYsY02xDMhtrT4h4C4s"
-                    "PIpV7PA9tdhS6Lo3znsQiOEQvMqnSS3dH1NKnZsAiyjNwVZVZa0opIzI5fpNCGjBmMv_4hB3jBRgenG-"
-                    "Ku75OcwPp6HXMej9McvpLIKtXb8FMKS5wqiZzYBLp-F25hzOHI0QVl0pGFL5ya9mWU4hkQYeu6HuH6Zj"
-                    "Sujzyy-8ZmlBjnRZSQp8mN4t34u2ofk4RtyuZKJkgjJfN2m5MxBTT3AccMalmbiEa7lJv7GV9kLcqR0G"
-                    "T2Rzd6UMX6qPG92VdfjIgCj1Rzh1IWrJvMloKkMj5qB3nN2dABqfCtjBleStNoTjO2VDensXf11ceG9-"
-                    "KKWeCjfrG0ONgTVXPjTTUPHR0BxtoixnRxIYBZFb8sKdYAPI_QINjby2SVhhQH7UtookBf7N7OqmIJKb"
-                    "zR4CLshKnvthH4fJQAZdsfoEPR9I943uBpZi4HnF8mQPF61Aiw9B3bh3USBc9_Oh2rJL044B6qYVD3QK"
-                    "KGydzcplRxQWA31m-4Zn9eVxn-xOtx4Tvpdh6BhlFPKX9p2W0mSnb7kjpzX51Ec0J2AsTNUOonaaMFt8"
-                    "2MJDELTGcAb3tsAkPzzNK0M_zjQ43CCH5Cu1yV2WhbUzxCu4UM0spAIuzpAZv6JGmW1wF4RtAgLfJjc2"
-                    "LxoxcS9MJbLOUPAYdRlwBTj_IL9PIDeNlGVRgVQYL-9xnNKiWD8Iyu2vj8AoslM41wVTEXvOAYyEs25E"
-                    "yo9ia2km8909d42DjFi2_ngA5ofZI89KQHtCzGwfCf_VTLbpMmrOB4NDFVTUYQlAMBvuSsXLXJJp0QPl"
-                    "n2UBHhZ3erIcQ1D990SFRdx1uY47-E2FnCCPljyhJrWHnFxTlGbuEY4i5vPOweqYzj-uBbLVeDbcfjCL"
-                    "jSLFgM4Fa5Zg"
-                ),
+                "encrypted_content": GPT_5_6_TERRA_ENCRYPTED_CONTENT,
                 "summary": [],
             },
             {
@@ -814,6 +818,10 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
         "model": "azure/gpt-5.6-terra",
         "usage": {"input_tokens": 309, "output_tokens": 92},
         "content": [
+            {
+                "type": "redacted_thinking",
+                "data": "litellm_encrypted_reasoning:" + GPT_5_6_TERRA_ENCRYPTED_CONTENT,
+            },
             {
                 "type": "text",
                 "text": (

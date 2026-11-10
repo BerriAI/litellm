@@ -2,12 +2,12 @@ use std::{collections::HashMap, sync::Arc};
 
 use litellm_redis_store::{
     Number,
-    spend_counters::{LostSeed, Reading, SpendCounter, SpendCounters},
+    spend_counters::{LostSeed, PostCallSettlement, Reading, SpendCounter, SpendCounters},
 };
 use pyo3::prelude::*;
 
 use super::{
-    NativePending, PyData, PyNumber, kind_error, pending, redis_async, remote,
+    NativePending, PyData, PyNumber, duration, kind_error, pending, redis_async, remote,
     request::{NativeRequestRedis, NativeSend},
     ttl, unwrap_all,
 };
@@ -26,6 +26,18 @@ impl PySpendRead {
     #[new]
     fn new(value: Option<PyNumber>, from_redis: bool) -> Self {
         Self { value, from_redis }
+    }
+}
+
+/// Whether every increment one `increment_many_post_call` declared has its reply.
+#[pyclass(frozen, name = "PostCallSettlement")]
+pub(crate) struct PyPostCallSettlement(PostCallSettlement);
+
+#[pymethods]
+impl PyPostCallSettlement {
+    #[getter]
+    fn settled(&self) -> bool {
+        self.0.is_settled()
     }
 }
 
@@ -71,6 +83,12 @@ impl NativeSpendCounters {
     #[getter]
     fn redis_ttl_seconds(&self) -> Option<f64> {
         self.0.redis_ttl().map(|ttl| ttl.as_secs_f64())
+    }
+
+    /// The least TTL a Redis write gives a committed spend twin.
+    fn set_committed_ttl(&self, ttl_seconds: f64) -> PyResult<()> {
+        self.0.set_committed_ttl(duration(ttl_seconds)?);
+        Ok(())
     }
 
     /// `("redis" | "memory", value)`: where the answer came from, a Redis miss included.
@@ -125,14 +143,15 @@ impl NativeSpendCounters {
         })
     }
 
-    /// Declares the increments on the request's post-call batch; `False` when there is no Redis.
+    /// Declares the increments on the request's post-call batch; `None` when there is no Redis.
     fn increment_many_post_call(
         &self,
         request: &NativeRequestRedis,
         increments: Vec<(PyData<SpendCounter>, PyNumber)>,
-    ) -> bool {
+    ) -> Option<PyPostCallSettlement> {
         self.0
             .increment_many_post_call(&request.0, &self::increments(increments))
+            .map(PyPostCallSettlement)
     }
 
     fn set_max<'py>(

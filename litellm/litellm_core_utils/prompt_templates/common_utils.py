@@ -2,10 +2,14 @@
 Common utility functions used for translating messages across providers
 """
 
+import importlib
 import json
+import sys
+import warnings
 from collections.abc import Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import chain, groupby
+from types import MappingProxyType, ModuleType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 
 from pydantic import TypeAdapter
@@ -221,6 +225,108 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE: Final = ChatCompletionAssistantMessage(conte
 _extract_reasoning_content: Final = extract_reasoning_content
 _get_image_mime_type_from_url: Final = get_image_mime_type_from_url
 _parse_content_for_reasoning: Final = parse_content_for_reasoning
+
+_MOVED_PRIVATE_NAME_MODULES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        **dict.fromkeys(
+            ("_decode_vector_store_ids_in_tools",),
+            "file_id_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_EMPTY_SCHEMA",
+                "_LOCAL_SCHEMA_REF_PREFIXES",
+                "_MAX_SCHEMA_FLATTEN_DEPTH",
+                "_MAX_SCHEMA_NESTING",
+                "_OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS",
+                "_REGEX_LOOKAROUND_RE",
+                "_SCHEMA_LIST",
+                "_SUBSCHEMA_KEYWORDS",
+                "_SUBSCHEMA_LIST_KEYWORDS",
+                "_SUBSCHEMA_MAP_KEYWORDS",
+                "_TOP_LEVEL_SCHEMA_COMBINATORS",
+                "_any_of",
+                "_combinator_required_names",
+                "_dropped_pattern_properties",
+                "_flatten_schema_against_root",
+                "_grammar_branches",
+                "_is_not_python_regex",
+                "_is_object_schema",
+                "_is_open_object",
+                "_is_union",
+                "_keyword_value_rebuilt",
+                "_list_at",
+                "_may_be_string",
+                "_mergeable_branch",
+                "_named_schemas",
+                "_node_without_rejected_regex",
+                "_optional_property_names",
+                "_property_schemas",
+                "_refs_in",
+                "_resolve_local_schema_ref",
+                "_root_definitions",
+                "_schema_at",
+                "_schema_branches",
+                "_schema_levels",
+                "_schema_nodes",
+                "_schema_properties",
+                "_schema_required_names",
+                "_schema_without_rejected_regex",
+                "_subschemas",
+                "_uses_regex_lookaround",
+            ),
+            "json_schema_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_BREAKPOINT_BLOCKS",
+                "_BREAKPOINT_BLOCK_LIST_KEYS",
+                "_BREAKPOINT_FIELDS",
+                "_MarkedT",
+                "_PROMPT_CACHE_BREAKPOINT",
+                "_breakpoints_stripped_from",
+                "_without_prompt_cache_breakpoint",
+            ),
+            "prompt_cache_breakpoint_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_carries_encrypted_reasoning",
+                "_converse_wrapped_payload",
+                "_encrypted_reasoning_field",
+                "_provider_text_or_none",
+                "_readable_thinking_text",
+                "_reasoning_item_from_block_group",
+                "_reasoning_replay_group_key",
+                "_strip_encrypted_reasoning_from_blocks",
+            ),
+            "reasoning_utils",
+        ),
+        **dict.fromkeys(
+            (
+                "_DECODED_JSON",
+                "_attempt_json_repair",
+            ),
+            "tool_call_json_repair",
+        ),
+        **dict.fromkeys(
+            (
+                "_TPMMediaProjection",
+                "_tpm_blank_fields",
+                "_tpm_code_output_media",
+                "_tpm_document_media",
+                "_tpm_file_media",
+                "_tpm_image_part",
+                "_tpm_input_media",
+                "_tpm_media_leaf",
+                "_tpm_media_list",
+                "_tpm_replace_field",
+                "_tpm_tool_result_media",
+            ),
+            "tpm_media_utils",
+        ),
+    }
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LoggingClass
@@ -1578,3 +1684,72 @@ def invalid_type_message(field_path: str, value: object) -> str:
 
 def is_unhashable_value_behind(error: TypeError, value: object) -> bool:
     return not isinstance(value, Hashable) and f"unhashable type: '{type(value).__name__}'" in str(error)
+
+
+_UNBOUND: Final = object()
+
+
+def _module(module_name: str) -> ModuleType:
+    return importlib.import_module(f"litellm.litellm_core_utils.prompt_templates.{module_name}")
+
+
+def _namespace(module: ModuleType) -> Mapping[str, object]:
+    return vars(module)
+
+
+def _moved_name_home(name: str) -> ModuleType:
+    module_name: Final = _MOVED_PRIVATE_NAME_MODULES.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return _module(module_name)
+
+
+def _split_modules_sharing(name: str, value: object) -> tuple[ModuleType, ...]:
+    if value is _UNBOUND:
+        return ()
+    split_modules: Final = (_module(module_name) for module_name in frozenset(_MOVED_PRIVATE_NAME_MODULES.values()))
+    return tuple(module for module in split_modules if _namespace(module).get(name, _UNBOUND) is value)
+
+
+def _warn_old_path(name: str, home: ModuleType) -> None:
+    warnings.warn(
+        f"{__name__}.{name} moved to {home.__name__}, import or patch it there. "
+        "The old path will be removed in a future release",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+_RELEASED_MOVED_VALUES: Final = MappingProxyType(
+    {name: _namespace(_moved_name_home(name))[name] for name in _MOVED_PRIVATE_NAME_MODULES}
+)
+
+
+class _CommonUtilsModule(ModuleType):
+    def __getattr__(self, name: str) -> object:
+        home: Final = _moved_name_home(name)
+        value: Final = _namespace(home).get(name, _UNBOUND)
+        if value is _UNBOUND:
+            raise AttributeError(f"module {home.__name__!r} has no attribute {name!r}")
+        _warn_old_path(name, home)
+        return value
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name in _MOVED_PRIVATE_NAME_MODULES:
+            home: Final = _moved_name_home(name)
+            _warn_old_path(name, home)
+            setattr(home, name, value)
+            return
+        for module in _split_modules_sharing(name, _namespace(self).get(name, _UNBOUND)):
+            setattr(module, name, value)
+        super().__setattr__(name, value)
+
+    def __delattr__(self, name: str) -> None:
+        released: Final = _RELEASED_MOVED_VALUES.get(name, _UNBOUND)
+        if released is _UNBOUND:
+            super().__delattr__(name)
+            return
+        setattr(_moved_name_home(name), name, released)
+
+
+sys.modules[__name__].__class__ = _CommonUtilsModule

@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
+from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired, total_deadline
 from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -66,6 +67,7 @@ from litellm.redis.stores.rate_limits import (
     RateLimitStore,
 )
 from litellm.responses.streaming_iterator import _record_usage_for_failure
+from tests._support.clock_loops import AutojumpClockLoop
 from tests.unit.redis.stores.fake_rate_limits import FakeRateLimits, scope_key
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.extraction import ExtractionResponse
@@ -7951,6 +7953,34 @@ async def _admit(handler, auth, data=None):
     )
 
 
+def test_a_total_timeout_never_interrupts_a_token_reservation_so_the_failure_path_can_refund_it() -> None:
+    async def reserve_outlasting_the_budget(keys: list[str], args: list[object]) -> list[object]:
+        await asyncio.sleep(120)
+        return [0, *[value for index in range(0, len(args), 4) for value in (0, args[index + 1])]]
+
+    async def admit_under_a_total_timeout() -> tuple[bool, int]:
+        redis: Final = FakeRateLimits(check_and_increment_by_n_script=reserve_outlasting_the_budget)
+        handler: Final = _handler_with_redis(redis)
+        auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-total-timeout-reservation"), tpm_limit=1000)
+        stash: Final = get_or_create_request_stash()
+        try:
+            async with total_deadline(60, from_body=True):
+                await _admit(handler, auth)
+                await asyncio.sleep(3600)
+        except TotalTimeoutExpired:
+            return True, stash.reserved_tokens
+        return False, stash.reserved_tokens
+
+    loop: Final = AutojumpClockLoop()
+    try:
+        expired, reserved = loop.run_until_complete(admit_under_a_total_timeout())
+    finally:
+        loop.close()
+
+    assert expired
+    assert reserved > 0
+
+
 async def _read_only_check(handler, auth):
     descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=auth,
@@ -8216,6 +8246,11 @@ async def test_batch_increment_refunds_pipelined_groups_declared_after_the_one_t
             {"org_id": "o", "organization_metadata": {"model_rpm_limit": {"test-model": 1}}},
             {},
             "model_per_organization",
+        ),
+        (
+            {"end_user_id": "customer", "end_user_model_rpm_limit": {"test-model": 1}},
+            {},
+            "model_per_end_user",
         ),
     ],
 )
@@ -8665,8 +8700,9 @@ async def test_model_group_alias_shares_deployment_default_rpm_bucket_with_its_t
         ),
         ({"org_id": "o", "organization_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_organization"),
         ({"project_id": "p", "project_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_project"),
+        ({"end_user_id": "customer", "end_user_model_rpm_limit": {"target": 1}}, "model_per_end_user"),
     ],
-    ids=["key_metadata", "team_metadata", "organization_metadata", "project_metadata"],
+    ids=["key_metadata", "team_metadata", "organization_metadata", "project_metadata", "end_user_budget"],
 )
 async def test_model_group_alias_shares_metadata_model_rpm_bucket_with_its_target(
     limits: dict[str, object], counter_scope: str, first_name: str, second_name: str
@@ -9881,3 +9917,27 @@ def test_media_models_resolve_to_each_deployment_base_model():
     assert _resolve_media_models(None, "whisper", None) == ("whisper",)
     assert _resolve_media_models(router, "whisper", None) == ("azure/whisper-1",)
     assert _resolve_media_models(router, "unknown", None) == ("unknown",)
+
+
+@pytest.mark.asyncio
+async def test_end_user_model_rpm_limit_is_shared_across_keys_and_isolated_per_customer() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    acme_via_key_one: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-acme-1"), end_user_id="acme", end_user_model_rpm_limit={"target": 1}
+    )
+    acme_via_key_two: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-acme-2"), end_user_id="acme", end_user_model_rpm_limit={"target": 1}
+    )
+    globex: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-globex"), end_user_id="globex", end_user_model_rpm_limit={"target": 1}
+    )
+
+    await _rpm_request(handler, cache, acme_via_key_one, "target")
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, acme_via_key_two, "target")
+    assert exc.value.status_code == 429
+    assert "model_per_end_user: acme:target" in str(exc.value.detail), exc.value.detail
+
+    await _rpm_request(handler, cache, globex, "target")
+    await _rpm_request(handler, cache, acme_via_key_one, "other-model")

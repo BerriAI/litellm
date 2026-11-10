@@ -16,6 +16,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { pluginSchema, type PluginFormValues } from "./schema";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 const INLINE_CODE_CLASS = "rounded-sm bg-muted px-1 py-0.5 font-mono text-xs";
 
@@ -209,7 +210,7 @@ export default function PluginSettings() {
                 name="display_name"
                 label={t("adminPanel.pluginSettings.modal.fields.displayName.label")}
               >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="Agent Control Plane" />}
+                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder={productNames.agentControlPlane} />}
               </FormField>
               <FormField
                 control={form.control}

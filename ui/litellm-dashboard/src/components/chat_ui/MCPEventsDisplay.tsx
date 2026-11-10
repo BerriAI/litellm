@@ -5,6 +5,8 @@ import type { MCPEvent } from "@/components/mcp_tools/types";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/cva.config";
 
+const mcpCallPanelKey = (index: number) => `mcp-call-${index}`;
+
 interface MCPEventsDisplayProps {
   events: MCPEvent[];
   className?: string;
@@ -92,7 +94,7 @@ function MCPEventsPanels({ toolsEvent, mcpCallEvents }: MCPEventsPanelsProps) {
         )}
 
         {mcpCallEvents.map((callEvent, index) => {
-          const key = `mcp-call-${index}`;
+          const key = mcpCallPanelKey(index);
           return (
             <MCPEventPanel
               key={key}

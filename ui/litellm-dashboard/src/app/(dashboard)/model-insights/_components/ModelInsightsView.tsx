@@ -29,6 +29,7 @@ import {
 
 const SCALES = ["linear", "log"] as const;
 const GRANULARITIES = ["day", "week"] as const;
+const METRICS = ["requests", "spend", "tokens"] as const;
 const GRANULARITY_LABELS: Record<Granularity, ParseKeys> = {
   day: "modelInsights.modelInsightsView.granularity.day",
   week: "modelInsights.modelInsightsView.granularity.week",
@@ -171,7 +172,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
           <div className="flex items-center gap-3">
             <Tabs value={metric} onValueChange={(value) => setMetric(value as Metric)}>
               <TabsList>
-                {(["requests", "spend", "tokens"] as const).map((value) => (
+                {METRICS.map((value) => (
                   <TabsTrigger key={value} value={value} className="capitalize">
                     {t(METRIC_LABELS[value])}
                   </TabsTrigger>

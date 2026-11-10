@@ -7,6 +7,7 @@ import openaiLogo from "../../../public/assets/logos/openai_small.svg";
 import { getProxyBaseUrl } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/lib/toast";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 interface CreatedKeyDisplayProps {
   apiKey: string;
@@ -95,8 +96,18 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <p className="text-sm font-medium">{t("shared.createdKeyDisplay.agentInstructions")}</p>
-            <img src={anthropicLogo.src} alt="Claude Code" title="Claude Code" className="size-5 object-contain" />
-            <img src={openaiLogo.src} alt="Codex" title="Codex" className="size-5 object-contain" />
+            <img
+              src={anthropicLogo.src}
+              alt={productNames.claudeCode}
+              title={productNames.claudeCode}
+              className="size-5 object-contain"
+            />
+            <img
+              src={openaiLogo.src}
+              alt={productNames.codex}
+              title={productNames.codex}
+              className="size-5 object-contain"
+            />
           </div>
           <div className="flex items-center gap-2">
             <CopyToClipboard text={instructions} onCopy={handleCopyInstructions}>

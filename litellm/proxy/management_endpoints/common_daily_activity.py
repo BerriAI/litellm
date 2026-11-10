@@ -47,6 +47,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendMetrics,
 )
 from litellm.types.repositories.daily_activity import (
+    CustomerTeamRollupRow,
     DailyActivityScope,
     DailyActivityTable,
     EntityRollupRow,
@@ -163,6 +164,9 @@ class DailySpendRecord(Protocol):
     def autorouter_savings_spend(self) -> float: ...
 
     @property
+    def guardrail_spend(self) -> float: ...
+
+    @property
     def api_requests(self) -> int: ...
 
     @property
@@ -249,6 +253,7 @@ def update_metrics(existing_metrics: SpendMetrics, record: DailySpendRecord) -> 
     existing_metrics.prompt_caching_savings_spend += record.prompt_caching_savings_spend or 0
     existing_metrics.gateway_injected_caching_savings_spend += record.gateway_injected_caching_savings_spend or 0
     existing_metrics.autorouter_savings_spend += record.autorouter_savings_spend or 0
+    existing_metrics.guardrail_spend += record.guardrail_spend or 0  # rebind-ok: callers rely on in-place accumulation
     existing_metrics.api_requests += record.api_requests or 0
     existing_metrics.successful_requests += record.successful_requests or 0
     existing_metrics.failed_requests += record.failed_requests or 0
@@ -735,6 +740,7 @@ def sum_spend_metrics(metrics: Sequence[SpendMetrics]) -> SpendMetrics:
         prompt_caching_savings_spend=sum(metric.prompt_caching_savings_spend for metric in metrics),
         gateway_injected_caching_savings_spend=sum(metric.gateway_injected_caching_savings_spend for metric in metrics),
         autorouter_savings_spend=sum(metric.autorouter_savings_spend for metric in metrics),
+        guardrail_spend=sum(metric.guardrail_spend for metric in metrics),
         total_tokens=sum(metric.total_tokens for metric in metrics),
         successful_requests=sum(metric.successful_requests for metric in metrics),
         failed_requests=sum(metric.failed_requests for metric in metrics),
@@ -765,6 +771,7 @@ def _record_to_spend_metrics(record: RollupMetricsRow) -> SpendMetrics:
         prompt_caching_savings_spend=record.prompt_caching_savings_spend or 0,
         gateway_injected_caching_savings_spend=record.gateway_injected_caching_savings_spend or 0,
         autorouter_savings_spend=record.autorouter_savings_spend or 0,
+        guardrail_spend=record.guardrail_spend or 0,
         api_requests=record.api_requests or 0,
         successful_requests=record.successful_requests or 0,
         failed_requests=record.failed_requests or 0,
@@ -967,6 +974,7 @@ async def get_daily_activity(
     include_current_utc_day: bool = False,
     resolve_entity_metadata: Callable[[Sequence[DailySpendRecord]], Awaitable[dict[str, dict[str, object]]]]
     | None = None,
+    team_ids: tuple[str, ...] | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
@@ -981,7 +989,7 @@ async def get_daily_activity(
         )
 
     try:
-        scope: Final = daily_activity_scope(
+        base_scope: Final = daily_activity_scope(
             table_name,
             entity_id_field,
             entity_id,
@@ -993,6 +1001,7 @@ async def get_daily_activity(
             timezone_offset_minutes,
             include_current_utc_day,
         )
+        scope: Final = replace(base_scope, team_ids=team_ids)
         repository: Final = daily_activity_repository(prisma_client)
         page_data: Final = await repository.daily_rows(scope, page=page, page_size=page_size)
         daily_spend_data: Final = page_data.rows
@@ -1014,11 +1023,23 @@ async def get_daily_activity(
             entity_id_field=entity_id_field,
             entity_metadata_field=resolved_entity_metadata,
         )
+        customer_results: Final = (
+            _with_customer_teams(
+                aggregated["results"],
+                await unless_database_fails(
+                    repository.customer_team_spend(scope, row_ids=tuple(row.id for row in daily_spend_data)),
+                    (),
+                    "its customer team breakdown",
+                ),
+            )
+            if scope.table is DailyActivityTable.CUSTOMER
+            else aggregated["results"]
+        )
         metadata_metrics = aggregated["totals"]
         if metadata_metrics_func:
             metadata_metrics = metadata_metrics_func(daily_spend_data)
         return SpendAnalyticsPaginatedResponse(
-            results=aggregated["results"],
+            results=list(customer_results),
             metadata=DailySpendMetadata(
                 total_spend=metadata_metrics.spend,
                 total_flat_cost=metadata_metrics.flat_cost,
@@ -1143,6 +1164,30 @@ async def _user_entity_metadata(
     )
 
 
+def _with_customer_teams(
+    results: Sequence[DailySpendData], rows: Sequence[CustomerTeamRollupRow]
+) -> tuple[DailySpendData, ...]:
+    return tuple(
+        day.model_copy(
+            update={
+                "breakdown": day.breakdown.model_copy(
+                    update={
+                        "teams": {
+                            row.team_id: MetricWithMetadata(
+                                metrics=_record_to_spend_metrics(row),
+                                metadata={"team_alias": row.team_alias},
+                            )
+                            for row in rows
+                            if row.date == day.date.isoformat()
+                        }
+                    }
+                )
+            }
+        )
+        for day in results
+    )
+
+
 async def get_daily_activity_aggregated(
     repository: DailyActivityRepository,
     scope: DailyActivityScope,
@@ -1190,13 +1235,21 @@ async def get_daily_activity_aggregated(
                 api_key_metadata=entity_key_metadata,
                 entity_metadata_field=MappingProxyType({**user_entity_metadata, **(entity_metadata_field or {})}),
             )
-        results: Final = (
+        base_results: Final = (
             list(await asyncio.to_thread(_with_guardrail_breakdown, aggregated["results"], guardrail_rows))
             if guardrail_rows
             else aggregated["results"]
         )
+        results: Final = (
+            _with_customer_teams(
+                base_results,
+                await unless_database_fails(repository.customer_team_spend(scope), (), "its customer team breakdown"),
+            )
+            if scope.table is DailyActivityTable.CUSTOMER
+            else base_results
+        )
         return SpendAnalyticsPaginatedResponse(
-            results=results,
+            results=list(results),
             metadata=DailySpendMetadata(
                 total_spend=aggregated["totals"].spend,
                 total_flat_cost=aggregated["totals"].flat_cost,

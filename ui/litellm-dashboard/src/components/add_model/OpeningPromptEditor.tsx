@@ -13,6 +13,7 @@ import {
   ClassificationRubric,
   ComplexityTierLabels,
 } from "./ComplexityRouterConfig";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 export type OpeningPromptTierSource =
   | { kind: "custom"; tierRows: readonly TierRow[] }
@@ -252,7 +253,7 @@ const OpeningPromptEditor: React.FC<OpeningPromptEditorProps> = ({
                 value={exampleDraft}
                 onChange={(e) => setExampleDraft(e.target.value)}
                 rows={6}
-                placeholder={'- "what is the capital of France?" -> SIMPLE'}
+                placeholder={codeSamples.models.openingPromptExample}
                 aria-label={t("addModel.openingPromptEditor.examples.label")}
                 className="mt-2 font-mono text-xs"
               />

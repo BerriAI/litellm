@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 import math
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -64,14 +65,14 @@ from litellm.litellm_core_utils.bug_report import (
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
-    attribute_or_none,
     finite_cost,
     get_or_create_metadata_bucket,
     has_attributes,
     independent_snapshot,
     is_expected_client_error,
+    proxy_request_headers,
     redact_nested_match_and_regex_keys,
-    require_attributes,
+    stream_cost_injection_requested,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -172,6 +173,7 @@ _LateResponseT = TypeVar("_LateResponseT", bound=Response)
 _LlmCallT = TypeVar("_LlmCallT")
 _ResponseT: Final = TypeVar("_ResponseT")
 _ChunkT: Final = TypeVar("_ChunkT")
+_ProcessedT: Final = TypeVar("_ProcessedT")
 
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
@@ -286,6 +288,18 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
+from litellm.litellm_core_utils.total_deadline import (
+    TOTAL_TIMEOUT_FIELD,
+    TOTAL_TIMEOUT_HEADER,
+    InvalidTotalTimeout,
+    TotalTimeout,
+    TotalTimeoutExpired,
+    TotalTimeoutNotApplicable,
+    bounded_by_total_timeout,
+    current_total_deadline,
+    total_deadline,
+    total_timeout_from_request,
+)
 from litellm.proxy.anthropic_endpoints.answered_status import with_answered_status
 from litellm.proxy.anthropic_endpoints.streaming_model_restamp import (
     AnthropicStreamModelRestamper,
@@ -367,7 +381,7 @@ def resolve_litellm_call_id(client_call_id: str | None) -> str:
     return str(uuid.uuid4())
 
 
-def should_return_raw_model_name(request_data: dict[str, object]) -> bool:
+def should_return_raw_model_name(request_data: Mapping[str, object]) -> bool:
     return any(
         isinstance(metadata, dict) and metadata.get(RETURN_RAW_MODEL_NAME_METADATA_KEY) is True
         for metadata in (request_data.get("metadata"), request_data.get("litellm_metadata"))
@@ -581,6 +595,31 @@ async def _dispatch_disconnect_billing_event(logging_obj: LiteLLMLoggingObj, par
     return True
 
 
+_TOTAL_TIMEOUT_ROUTE_TYPES: Final = frozenset({"acompletion", "aresponses", "anthropic_messages"})
+
+
+def _total_timeout_refused(message: str) -> ProxyException:
+    return ProxyException(message=message, type="invalid_request_error", param=TOTAL_TIMEOUT_FIELD, code=400)
+
+
+def _total_timeout_expired() -> bool:
+    deadline: Final = current_total_deadline()
+    return deadline is not None and deadline.expired()
+
+
+async def _cost_a_call_answered_past_its_total_timeout(
+    llm_call: "asyncio.Task[object]", logging_obj: LiteLLMLoggingObj
+) -> None:
+    """The provider answered but the request ran out of time after it (a slower moderation check): the
+    failure it is logged as still carries what the provider charged."""
+    if not llm_call.done() or llm_call.cancelled() or llm_call.exception() is not None:
+        return
+    response: Final = llm_call.result()
+    prepare_response_cost(logging_obj, response, datetime.now(timezone.utc))
+    with anyio.CancelScope(shield=True):
+        await finalize_proxy_response_cost(logging_obj, response)
+
+
 async def _cancel_pending_gather_tasks(tasks: Sequence["asyncio.Task[object]"]) -> None:
     pending_tasks: Final = [task for task in tasks if not task.done()]
     for task in pending_tasks:
@@ -682,10 +721,6 @@ _UPSTREAM_RESPONSE: Final = TypeAdapter(
 
 class _ReadsHeaderValues(Protocol):
     def get(self, key: str, default: str = "") -> str: ...
-
-
-class _NativeLoggingRelease(Protocol):
-    def release(self, success: bool, /) -> object: ...
 
 
 def _as_header_reader(headers: _ReadsHeaderValues) -> _ReadsHeaderValues:
@@ -3126,32 +3161,87 @@ class ProxyBaseLLMRequestProcessing:
             )
 
         return await open_sse_before_first_byte(
-            self._process_llm_request(
+            self._within_total_timeout(
                 request=request,
-                fastapi_response=fastapi_response,
-                user_api_key_dict=user_api_key_dict,
                 route_type=route_type,
-                proxy_logging_obj=proxy_logging_obj,
-                general_settings=general_settings,
-                proxy_config=proxy_config,
-                select_data_generator=select_data_generator,
-                llm_router=llm_router,
-                model=model,
-                user_model=user_model,
-                user_temperature=user_temperature,
-                user_request_timeout=user_request_timeout,
-                user_max_tokens=user_max_tokens,
-                user_api_base=user_api_base,
-                version=version,
                 is_streaming_request=is_streaming_request,
-                contents=contents,
-                skip_pre_call_logic=skip_pre_call_logic,
-                first_chunk_framing=sse_framing.first_chunk,
+                processing=self._process_llm_request(
+                    request=request,
+                    fastapi_response=fastapi_response,
+                    user_api_key_dict=user_api_key_dict,
+                    route_type=route_type,
+                    proxy_logging_obj=proxy_logging_obj,
+                    general_settings=general_settings,
+                    proxy_config=proxy_config,
+                    select_data_generator=select_data_generator,
+                    llm_router=llm_router,
+                    model=model,
+                    user_model=user_model,
+                    user_temperature=user_temperature,
+                    user_request_timeout=user_request_timeout,
+                    user_max_tokens=user_max_tokens,
+                    user_api_base=user_api_base,
+                    version=version,
+                    is_streaming_request=is_streaming_request,
+                    contents=contents,
+                    skip_pre_call_logic=skip_pre_call_logic,
+                    first_chunk_framing=sse_framing.first_chunk,
+                ),
             ),
             ping_interval_seconds=ttft_keepalive_interval(self.data, llm_router),
             on_late_failure=_audit_late_failure,
             late_framing=ANTHROPIC_LATE_SSE_FRAMING if answers_as_anthropic else sse_framing.late,
         )
+
+    def total_timeout_for(
+        self, request: Request, route_type: ProxyRouteType, is_streaming_request: bool | None
+    ) -> TotalTimeout | None:
+        """The request's ``total_timeout`` when it bounds this request: a body one on a request it cannot
+        bound is refused, a header one is ignored."""
+        body: Final = _REQUEST_FIELDS.validate_python(self.data)  # pyright: ignore[reportUnknownMemberType]  # self.data is the untyped request dict
+        header: Final = request.headers.get(TOTAL_TIMEOUT_HEADER)
+        self.data.pop(TOTAL_TIMEOUT_FIELD, None)  # pyright: ignore[reportUnknownMemberType]  # self.data is the untyped request dict
+        bounded: Final = (
+            route_type in _TOTAL_TIMEOUT_ROUTE_TYPES
+            and is_streaming_request is not True
+            and bounded_by_total_timeout(body)
+        )
+        if header is not None and not bounded:
+            verbose_proxy_logger.debug("%s ignored for this %s request", TOTAL_TIMEOUT_HEADER, route_type)
+            return None
+        parsed: Final = total_timeout_from_request(header, body)
+        if parsed is None:
+            return None
+        if isinstance(parsed, InvalidTotalTimeout):
+            raise _total_timeout_refused(parsed.message)
+        if not bounded:
+            raise _total_timeout_refused(
+                f"{TOTAL_TIMEOUT_FIELD} applies only to non-streaming, non-background "
+                "/v1/chat/completions, /v1/messages and /v1/responses requests"
+            )
+        return parsed
+
+    async def _within_total_timeout(
+        self,
+        request: Request,
+        route_type: ProxyRouteType,
+        is_streaming_request: bool | None,
+        processing: Coroutine[object, object, _ProcessedT],
+    ) -> _ProcessedT:
+        try:
+            total_timeout: Final = self.total_timeout_for(request, route_type, is_streaming_request)
+        except ProxyException:
+            processing.close()
+            raise
+        if total_timeout is None:
+            return await processing
+        try:
+            async with total_deadline(total_timeout.seconds, from_body=total_timeout.from_body):
+                return await processing
+        except TotalTimeoutExpired as expired:
+            raise ProxyException(message=str(expired), type="timeout", param=TOTAL_TIMEOUT_FIELD, code=408) from expired
+        except TotalTimeoutNotApplicable as refused:
+            raise _total_timeout_refused(str(refused)) from refused
 
     async def _process_llm_request(
         self,
@@ -3236,25 +3326,32 @@ class ProxyBaseLLMRequestProcessing:
         if contents:
             self.data["contents"] = contents
 
-        ### ROUTE THE REQUEST ###
-        # Do not change this - it should be a constant time fetch - ALWAYS
-        llm_call: Final = await route_request(
-            data=self.data,
-            route_type=route_type,
-            llm_router=llm_router,
-            user_model=user_model,
-            user_api_key_dict=user_api_key_dict,
-        )
-        llm_call_task: Final = asyncio.create_task(with_proxy_compaction_executor(llm_call, request))
-        tasks.append(llm_call_task)
-
-        llm_responses: Final = asyncio.gather(*tasks)  # run the moderation check in parallel to the actual llm api call
-
         try:
-            if general_settings.get("cancel_on_disconnect", False):
-                responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
-            else:
-                responses = await llm_responses
+            ### ROUTE THE REQUEST ###
+            # Do not change this - it should be a constant time fetch - ALWAYS
+            llm_call: Final = await route_request(
+                data=self.data,
+                route_type=route_type,
+                llm_router=llm_router,
+                user_model=user_model,
+                user_api_key_dict=user_api_key_dict,
+            )
+            llm_call_task: Final = asyncio.create_task(with_proxy_compaction_executor(llm_call, request))
+            tasks.append(llm_call_task)
+
+            llm_responses: Final = asyncio.gather(
+                *tasks
+            )  # run the moderation check in parallel to the actual llm api call
+
+            try:
+                if general_settings.get("cancel_on_disconnect", False):
+                    responses = await _await_llm_call_cancelling_on_disconnect(request, llm_responses)
+                else:
+                    responses = await llm_responses
+            except asyncio.CancelledError:
+                if _total_timeout_expired():
+                    await _cost_a_call_answered_past_its_total_timeout(llm_call_task, logging_obj)
+                raise
         finally:
             await _cancel_pending_gather_tasks(tasks)
 
@@ -3524,7 +3621,7 @@ class ProxyBaseLLMRequestProcessing:
                             _guardrail_entries_for_headers(get_or_create_metadata_bucket(self.data)[1], logging_obj)
                         ),
                     )
-                    if isinstance(exc, asyncio.CancelledError):
+                    if isinstance(exc, asyncio.CancelledError) and not _total_timeout_expired():
                         await proxy_logging_obj.post_call_failure_hook(
                             user_api_key_dict=user_api_key_dict,
                             original_exception=HTTPException(status_code=499, detail=_CLIENT_DISCONNECT_DETAIL),
@@ -4282,11 +4379,6 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can exercise the production
         gating logic directly rather than reimplementing the finally block.
         """
-        if getattr(logging_obj, "call_type", None) in ("ocr", "aocr"):
-            pending: Final = attribute_or_none(logging_obj, "_native_pending_logging")
-            if pending is not None:
-                logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
-                require_attributes(pending, _NativeLoggingRelease, "release").release(not exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
@@ -4775,6 +4867,15 @@ class ProxyBaseLLMRequestProcessing:
     _finalize_streaming_generator_cleanup = finalize_streaming_generator_cleanup
 
     @staticmethod
+    def record_first_chunk_overhead(
+        logging_obj: LiteLLMLoggingObj | None, chunk_received_at: float, is_provider_output: bool = True
+    ) -> None:
+        """The proxy's own work on a chunk; the logging object keeps the first one for the stamped overhead.
+        A keepalive ping carries no provider output, so it is never that first chunk."""
+        if logging_obj is not None and is_provider_output:
+            logging_obj.set_first_chunk_overhead(time.perf_counter() - chunk_received_at)
+
+    @staticmethod
     async def async_streaming_data_generator(
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
@@ -4815,7 +4916,10 @@ class ProxyBaseLLMRequestProcessing:
         # await, response-string materialization, and cost-injection call are
         # pure overhead on the streaming hot path (the default config).
         caps: Final = ProxyLogging.callback_capabilities()
-        cost_injection_enabled: Final = bool(getattr(litellm, "include_cost_in_streaming_usage", False))
+        request_headers: Final = proxy_request_headers(
+            request_data  # pyright: ignore[reportUnknownArgumentType]  # request_data is the untyped proxy request dict
+        )
+        cost_injection_enabled: Final = stream_cost_injection_requested(request_headers)
         fast_path = not caps.has_streaming_chunk_override and not caps.has_guardrail and not cost_injection_enabled
         debug_enabled: Final = verbose_proxy_logger.isEnabledFor(logging.DEBUG)
         stream_completed = False
@@ -4828,12 +4932,12 @@ class ProxyBaseLLMRequestProcessing:
             response=response,
             request_data=request_data,
         )
-        release_stream_failure: Final = _ClientStreamFailureReport.hold_while_streaming(
-            stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
-        )
+        timing_sink: Final = stream_logging_obj if isinstance(stream_logging_obj, LiteLLMLoggingObj) else None
+        release_stream_failure: Final = _ClientStreamFailureReport.hold_while_streaming(timing_sink)
         try:
             str_so_far = ""
             async for chunk in guarded_stream:
+                chunk_received_at = time.perf_counter()
                 # ``.format(chunk)`` was previously evaluated for every chunk
                 # regardless of log level; gate it behind the level check.
                 if debug_enabled:
@@ -4862,7 +4966,7 @@ class ProxyBaseLLMRequestProcessing:
 
                     model_name = request_data.get("model", "")
                     chunk = ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
-                        chunk, model_name, request_data.get("litellm_logging_obj")
+                        chunk, model_name, request_data.get("litellm_logging_obj"), request_headers=request_headers
                     )
 
                 # Set before the yield: an async generator suspends at the yield,
@@ -4874,6 +4978,9 @@ class ProxyBaseLLMRequestProcessing:
                 delivered_chunk = delivered_chunk or chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
                 serialized = serialize_chunk(chunk)
                 recent_tail = advance_sse_tail(recent_tail, serialized)
+                ProxyBaseLLMRequestProcessing.record_first_chunk_overhead(
+                    timing_sink, chunk_received_at, is_provider_output=chunk != STREAM_SSE_KEEPALIVE_PING_BYTES
+                )
                 yield serialized
             held_tail: Final = flush_tail() if flush_tail is not None else b""
             if held_tail:
@@ -4991,18 +5098,30 @@ class ProxyBaseLLMRequestProcessing:
     @overload
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: bytes, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: bytes,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        request_headers: Mapping[str, object] | None = None,
     ) -> bytes: ...
 
     @overload
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: object,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        request_headers: Mapping[str, object] | None = None,
     ) -> object: ...
 
     @staticmethod
     def process_chunk_with_cost_injection(
-        chunk: object, model_name: str, litellm_logging_obj: LiteLLMLoggingObj | None = None
+        chunk: object,
+        model_name: str,
+        litellm_logging_obj: LiteLLMLoggingObj | None = None,
+        *,
+        request_headers: Mapping[str, object] | None = None,
     ) -> object:
         """
         Process a streaming chunk and inject cost information if enabled.
@@ -5011,11 +5130,12 @@ class ProxyBaseLLMRequestProcessing:
             chunk: The streaming chunk (dict, str, bytes, or bytearray)
             model_name: Model name for cost calculation
             litellm_logging_obj: The call's logging object, used for pricing
+            request_headers: The proxy request headers, read for the per-request opt-in header
 
         Returns:
             The processed chunk with cost information injected if applicable
         """
-        if not getattr(litellm, "include_cost_in_streaming_usage", False):
+        if not stream_cost_injection_requested(request_headers):
             return chunk
 
         try:

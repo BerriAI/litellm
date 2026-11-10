@@ -1,7 +1,11 @@
 import json
+import logging
+from typing import Final
 
 import pytest
 
+import litellm
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
     parse_tool_call_arguments,
     salvage_concatenated_tool_arguments,
@@ -115,3 +119,53 @@ def _distinct_json_objects(count: int) -> str:
 )
 def test_salvage_concatenated_tool_arguments(raw: str, expected: tuple[dict[str, object], ...]) -> None:
     assert salvage_concatenated_tool_arguments(raw) == expected
+
+
+def test_parse_tool_call_arguments_repair_warning_previews_the_first_200_characters(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    arguments: Final = '{"patient": "Jane Doe", "note": "' + "x" * 300 + '"'
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = parse_tool_call_arguments(arguments, tool_name="lookup", context="test")
+
+    assert result == {"patient": "Jane Doe", "note": "x" * 300}
+    assert (
+        f"Repaired truncated tool call arguments for tool 'lookup' (test). Original ({len(arguments)} chars): "
+        f"{arguments[:200]}..." in caplog.text
+    )
+    assert arguments not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    (
+        ('{"patient": "Jane Doe"', {"patient": "Jane Doe"}),
+        ('{"note": "' + "x" * 189 + '"', {"note": "x" * 189}),
+    ),
+)
+def test_parse_tool_call_arguments_repair_warning_logs_arguments_up_to_200_characters_whole(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: str,
+    expected: dict[str, str],
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = parse_tool_call_arguments(arguments, tool_name="lookup", context="test")
+
+    assert result == expected
+    assert f"Original ({len(arguments)} chars): {arguments}\n" in caplog.text
+
+
+def test_parse_tool_call_arguments_repair_warning_redacts_arguments_when_message_logging_is_off(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    arguments: Final = '{"patient": "Jane Doe"'
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        result: Final = parse_tool_call_arguments(arguments, tool_name="lookup", context="test")
+
+    assert result == {"patient": "Jane Doe"}
+    assert f"Original ({len(arguments)} chars): {REDACTED_BY_LITELLM}" in caplog.text
+    assert "Jane Doe" not in caplog.text

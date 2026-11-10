@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.rust_bridge.host.model_cost import ModelCostVersion, model_cost_version
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -36,7 +37,6 @@ from litellm.types.utils import (
     ProviderSpecificModelInfo,
 )
 from litellm.utils import (
-    get_model_cost_mutation_generation,
     supports_function_calling,
     supports_reasoning,
     supports_tool_choice,
@@ -542,21 +542,15 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             for message in messages
         ]
 
-    # Cached index of fireworks_ai/* entries from litellm.model_cost. Building
-    # this index requires a full scan of model_cost (tens of thousands of
-    # entries), so we memoize it. The cache key is (id(model_cost),
-    # mutation_generation): the generation counter is bumped on every
-    # register_model / reload path, so add+remove or in-place value
-    # replacement (which can leave id and len unchanged) still invalidates.
-    _fireworks_index_cache: tuple[int, int, list[tuple[str, dict]]] | None = None
+    _fireworks_index_cache: tuple[ModelCostVersion, list[tuple[str, dict]]] | None = None
 
     @classmethod
     def _get_fireworks_index(cls) -> list[tuple[str, dict]]:
         model_cost: Final = litellm.model_cost
-        signature: Final = (id(model_cost), get_model_cost_mutation_generation())
+        version: Final = model_cost_version()
         cached: Final = cls._fireworks_index_cache
-        if cached is not None and cached[0] == signature[0] and cached[1] == signature[1]:
-            return cached[2]
+        if cached is not None and cached[0] == version:
+            return cached[1]
 
         index: Final[list[tuple[str, dict]]] = []
         for key, model_info in (*model_cost.items(),):
@@ -570,7 +564,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 continue
             index.append((key_short, model_info))
 
-        cls._fireworks_index_cache = (signature[0], signature[1], index)
+        cls._fireworks_index_cache = (version, index)
         return index
 
     @staticmethod
