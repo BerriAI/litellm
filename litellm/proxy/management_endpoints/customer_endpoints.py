@@ -43,7 +43,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     set_object_permission,
 )
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
-from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
@@ -457,7 +457,7 @@ async def new_end_user(
             try:
                 budget_record: Final = await _typed_table(BudgetRepository(prisma_client)).create(
                     data={
-                        **jsonify_object(_new_budget.model_dump(exclude_unset=True)),
+                        **prisma_client.jsonify_object(_new_budget.model_dump(exclude_unset=True)),
                         "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                         "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     }

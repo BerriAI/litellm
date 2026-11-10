@@ -1450,9 +1450,9 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
         valid_token.end_user_model_max_budget = end_user_params["end_user_model_max_budget"]
-    if end_user_params.get("end_user_model_tpm_limit") is not None:
+    if "end_user_model_tpm_limit" in end_user_params:
         valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]  # rebind-ok: in-place
-    if end_user_params.get("end_user_model_rpm_limit") is not None:
+    if "end_user_model_rpm_limit" in end_user_params:
         valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]  # rebind-ok: in-place
     return valid_token
 
@@ -2995,8 +2995,10 @@ async def user_api_key_auth_builder(
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.end_user_tpd_limit = end_user_params.get("end_user_tpd_limit")
-            valid_token.end_user_model_tpm_limit = end_user_params.get("end_user_model_tpm_limit")
-            valid_token.end_user_model_rpm_limit = end_user_params.get("end_user_model_rpm_limit")
+            if "end_user_model_tpm_limit" in end_user_params:
+                valid_token.end_user_model_tpm_limit = end_user_params["end_user_model_tpm_limit"]
+            if "end_user_model_rpm_limit" in end_user_params:
+                valid_token.end_user_model_rpm_limit = end_user_params["end_user_model_rpm_limit"]
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
 
         return await validate_resolved_virtual_key(
