@@ -824,7 +824,6 @@ async def test_handle_existing_user_by_email_existing_user_updated(mocker):
         "data": {
             "user_email": "test@example.com",
             "user_alias": "New Name",
-            "teams": ["new-team"],
             "metadata": '{"new": "data"}',
         },
     }
@@ -943,7 +942,6 @@ async def test_handle_existing_user_by_email_syncs_roster_and_dedups_teams(mocke
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
     assert update_calls[0].kwargs["where"] == {"user_id": "same-id"}
-    assert update_calls[0].kwargs["data"]["teams"] == ["team-a", "team-b"]
 
 
 class _EmailMatchedUserRow:
@@ -994,7 +992,7 @@ async def test_handle_existing_user_by_email_keeps_record_team_order(mocker: Moc
         ),
     )
 
-    assert user_rows.user.teams == ["team-zeta", "team-kappa", "team-mu", "team-beta"]
+    assert user_rows.user.teams == ["team-zeta", "team-alpha", "team-kappa"]
 
 
 @pytest.mark.asyncio
@@ -1055,7 +1053,6 @@ async def test_handle_existing_user_by_email_without_teams_preserves_memberships
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
     assert update_calls[0].kwargs["where"] == {"user_id": "adopted-id"}
-    assert update_calls[0].kwargs["data"]["teams"] == ["team-a", "team-b"]
 
 
 @pytest.mark.asyncio
@@ -1153,7 +1150,6 @@ async def test_handle_existing_user_by_email_roster_add_already_member_is_noop(m
     mock_team_member_add.assert_awaited_once()
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
-    assert update_calls[0].kwargs["data"]["teams"] == ["team-x"]
 
 
 @pytest.mark.asyncio
@@ -1249,7 +1245,6 @@ async def test_handle_existing_user_by_email_roster_remove_already_absent_is_noo
     mock_team_member_delete.assert_awaited_once()
     update_calls = mock_prisma_client.db.litellm_usertable.update.call_args_list
     assert len(update_calls) == 1
-    assert update_calls[0].kwargs["data"]["teams"] == ["replacement-team"]
 
 
 @pytest.mark.asyncio
@@ -1458,7 +1453,6 @@ async def test_update_user_success(mocker):
     call_args = mock_prisma_client.db.litellm_usertable.update.call_args
     assert call_args[1]["where"] == {"user_id": "test-user"}
     assert call_args[1]["data"]["user_email"] == "updated@example.com"
-    assert call_args[1]["data"]["teams"] == ["new-team"]
 
 
 @pytest.mark.asyncio
@@ -1587,7 +1581,7 @@ async def test_update_user_without_groups_preserves_memberships_and_role(mocker,
     assert result == response_scim_user
     patch_membership.assert_not_awaited()
     update_data = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
-    assert update_data["teams"] == ["litellm-admins", "engineering"]
+    assert "teams" not in update_data
     assert "user_role" not in update_data
 
 
@@ -1639,7 +1633,7 @@ async def test_update_user_put_keeps_the_record_order_of_teams_the_user_already_
     await update_user(user_id="order-user", user=scim_user)
 
     update_data: Final = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
-    assert update_data["teams"] == ["team-zeta", "team-kappa", "team-mu", "team-beta"]
+    assert "teams" not in update_data
 
 
 @pytest.mark.asyncio

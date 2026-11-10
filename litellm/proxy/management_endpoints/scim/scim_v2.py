@@ -254,7 +254,6 @@ class UserProvisionerHelpers:
             data={
                 "user_email": new_user_request.user_email,
                 "user_alias": new_user_request.user_alias,
-                "teams": new_teams,
                 "metadata": safe_dumps(new_user_request.metadata),
                 **({"user_role": new_user_request.user_role} if admin_group is not None else {}),
             },
@@ -1967,7 +1966,6 @@ async def update_user(
             "user_email": user_data["user_email"],
             "user_alias": user_data["user_alias"],
             "sso_user_id": user_data["sso_user_id"],
-            "teams": target_teams,
             "metadata": safe_dumps(metadata),
         }
 
@@ -2791,8 +2789,6 @@ async def patch_user(
             existing_teams=existing_user.teams or [],
             new_teams=list(final_teams),
         )
-
-        update_data["teams"] = list(final_teams)
 
         admin_group: Final = await _get_scim_admin_group()
         if admin_group is not None:
