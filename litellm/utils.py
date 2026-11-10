@@ -81,6 +81,7 @@ from litellm.constants import (
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    HOSTED_TOOL_CHOICE_TYPES,
     chat_allowed_tools_tool_choice,
     is_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice_or_refuse,
@@ -8853,7 +8854,10 @@ def validate_chat_completion_tool_choice(
             return None if allowed_tools is None else dict(chat_allowed_tools_tool_choice(allowed_tools))
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
-        if tool_choice_type is None or tool_choice.get("function") is None:
+        forces_hosted_tool: Final[bool] = (
+            isinstance(tool_choice_type, str) and tool_choice_type in HOSTED_TOOL_CHOICE_TYPES
+        )
+        if not forces_hosted_tool and (tool_choice_type is None or tool_choice.get("function") is None):
             raise BadRequestError(
                 message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
                 model=model,
