@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import json
 import uuid
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -19,6 +21,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_batch import (
     MIXED_PIPELINE_TARGET,
     RedisBatch,
+    RequestRedisBatches,
     active_request_redis_batch,
     request_redis_batch_scope,
 )
@@ -416,6 +419,17 @@ def test_request_scope_hands_out_one_batch_per_backend_and_nests() -> None:
         assert active_request_redis_batch(cache_a) is first
         assert len(batches.batches) == 2
     assert active_request_redis_batch(cache_a) is None
+
+
+def test_a_request_scope_that_built_its_native_batches_is_freed_once_it_closes() -> None:
+    def serve_request() -> weakref.ref[RequestRedisBatches]:
+        with request_redis_batch_scope() as batches:
+            batches.native()
+            return weakref.ref(batches)
+
+    closed: Final = serve_request()
+    gc.collect()
+    assert closed() is None
 
 
 @pytest.mark.asyncio
