@@ -4862,13 +4862,17 @@ def is_empty_user_message(message: object) -> bool:
     return message_field(message, "role") == "user" and _has_no_content(message)
 
 
+def continues_empty_user_turns(user_continue_message: object) -> bool:
+    return user_continue_message is not None or bool(litellm.modify_params)
+
+
 def _ends_on_empty_user_turn(
     messages: Sequence[object],
     start: int,
     contents: Sequence[BedrockMessageBlock],
     user_continue_message: ChatCompletionUserMessage | None,
 ) -> bool:
-    if user_continue_message is not None or litellm.modify_params:
+    if continues_empty_user_turns(user_continue_message):
         return False
     if not contents or contents[-1]["role"] != "assistant":
         return False

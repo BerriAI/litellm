@@ -71,7 +71,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_present_non_string,
     is_unhashable_value_behind,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import is_empty_user_message
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    EMPTY_TEXT_PLACEHOLDER,
+    continues_empty_user_turns,
+    is_empty_user_message,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     is_anthropic_tool_search_use,
     message_field,
@@ -889,6 +893,10 @@ def restored_empty_user_turn(
     return (_empty_user_turn(last_input_item if keeps_cache_mark else None, text),)
 
 
+def empty_user_turn_replay_text(user_continue_message: object) -> str:
+    return "" if continues_empty_user_turns(user_continue_message) else EMPTY_TEXT_PLACEHOLDER
+
+
 def without_blank_user_tail(messages: Sequence[SessionMessage]) -> Sequence[SessionMessage]:
     blank_tail: Final = sum(1 for _ in takewhile(is_empty_user_message, reversed(messages)))
     return messages[: len(messages) - blank_tail]
@@ -1652,7 +1660,11 @@ class LiteLLMCompletionResponsesConfig:
             client_response_ids=previous_response_client_ids,
             tool_call_provider_fields=not embeds_thought_signature_in_tool_call_id(request_kwargs),
             stored_turns=stored_turns,
-            replays_empty_user_turns=request_input is not None,
+            empty_user_turn_text=(
+                None
+                if request_input is None
+                else empty_user_turn_replay_text(request_kwargs.get("user_continue_message"))
+            ),
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)

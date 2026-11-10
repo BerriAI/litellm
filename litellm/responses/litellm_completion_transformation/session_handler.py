@@ -12,7 +12,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
-from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -323,7 +322,7 @@ class ResponsesSessionHandler:
         client_response_ids: tuple[str, ...] = (),
         tool_call_provider_fields: bool = False,
         stored_turns: StoredTurns | None = None,
-        replays_empty_user_turns: bool = False,
+        empty_user_turn_text: str | None = None,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -365,14 +364,14 @@ class ResponsesSessionHandler:
             ],
             item_cache_control,
             tool_call_provider_fields,
-            replays_empty_user_turns,
+            empty_user_turn_text,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
             all_spend_logs[: start.index],
             proxy_server_requests[: start.index],
             item_cache_control,
             tool_call_provider_fields,
-            replays_empty_user_turns,
+            empty_user_turn_text,
         )
         chat_completion_message_history: Final = (
             list(with_stored_calls_the_input_answers(replayed_history, history_before_replay))
@@ -433,7 +432,7 @@ class ResponsesSessionHandler:
         proxy_server_requests: Sequence[Mapping[str, object] | None],
         item_cache_control: bool,
         tool_call_provider_fields: bool,
-        replays_empty_user_turns: bool = False,
+        empty_user_turn_text: str | None = None,
     ) -> list["SessionMessage"]:
         return reduce(
             lambda history, turn: ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
@@ -442,7 +441,7 @@ class ResponsesSessionHandler:
                 chat_completion_message_history=history,
                 item_cache_control=item_cache_control,
                 tool_call_provider_fields=tool_call_provider_fields,
-                replays_empty_user_turns=replays_empty_user_turns,
+                empty_user_turn_text=empty_user_turn_text,
             ),
             zip(spend_logs, proxy_server_requests, strict=True),
             [],
@@ -461,7 +460,7 @@ class ResponsesSessionHandler:
         ],
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
-        replays_empty_user_turns: bool = False,
+        empty_user_turn_text: str | None = None,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -509,9 +508,9 @@ class ResponsesSessionHandler:
                     (*chat_completion_message_history, *input_before_blank_tail),
                     item_cache_control,
                     partial(_stored_turn_fills_empty_user_turns, spend_log),
-                    text=EMPTY_TEXT_PLACEHOLDER,
+                    text=empty_user_turn_text,
                 )
-                if replays_empty_user_turns and output_messages
+                if empty_user_turn_text is not None and output_messages
                 else ()
             )
             chat_completion_message_history.extend(input_before_blank_tail if restored_turn else stored_input)
