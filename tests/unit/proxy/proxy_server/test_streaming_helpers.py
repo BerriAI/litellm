@@ -952,8 +952,10 @@ async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_framed_
     )
     assert payloads[1] == {
         "type": "litellm.fallback_metadata",
+        "model": "fallback-model",
         "litellm_fallback": {"fallback_model": "fallback-model", "errors": fallback_errors},
     }
+    assert {payload.get("model") for payload in payloads} == {"fallback-model"}
     assert len({frame.startswith("event: ") for frame in event_frames}) == 1
 
 

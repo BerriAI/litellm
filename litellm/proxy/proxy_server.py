@@ -9918,7 +9918,11 @@ def _format_fallback_metadata_sse_event(
 ) -> str | bytes:
     litellm_fallback: Final = {"fallback_model": fallback_model, "errors": fallback_errors}
     if error_state is not None:
-        event: Final = {"type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE, "litellm_fallback": litellm_fallback}
+        event: Final = {
+            "type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE,
+            "model": fallback_model or "",
+            "litellm_fallback": litellm_fallback,
+        }
         error_state.observe_chunk(event)
         return error_state.mark_emitted(f"data: {json.dumps(event)}\n\n")
     payload: Final = {
