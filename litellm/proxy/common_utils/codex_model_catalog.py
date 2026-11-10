@@ -180,9 +180,10 @@ def bundled_codex_models() -> Mapping[str, CodexStockModel]:
 
 def _with_minimal_client_version(model: CodexStockModel, built_from: str | tuple[int, ...] | None) -> CodexStockModel:
     source_minimum: Final = built_from if not isinstance(built_from, tuple) else ".".join(map(str, built_from))
-    minimum: Final = max(
-        (version for version in (CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION, source_minimum) if version is not None),
-        key=Version,
+    minimum: Final = (
+        source_minimum
+        if codex_version_at_least(source_minimum, CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION)
+        else CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION
     )
     return model.model_copy(update={"minimal_client_version": minimum})
 
