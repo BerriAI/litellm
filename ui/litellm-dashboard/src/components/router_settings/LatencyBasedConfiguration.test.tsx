@@ -31,16 +31,12 @@ describe("LatencyBasedConfiguration", () => {
 
   it("should display the TTL parameter explanation", () => {
     render(<LatencyBasedConfiguration routingStrategyArgs={null as any} />);
-    expect(
-      screen.getByText(/sliding window to look back over/i)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/sliding window to look back over/i)).toBeInTheDocument();
   });
 
   it("should display the lowest_latency_buffer parameter explanation", () => {
     render(<LatencyBasedConfiguration routingStrategyArgs={null as any} />);
-    expect(
-      screen.getByText(/shuffle between deployments within this %/i)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/shuffle between deployments within this %/i)).toBeInTheDocument();
   });
 
   it("should render object values stringified into the input", () => {
@@ -49,6 +45,6 @@ describe("LatencyBasedConfiguration", () => {
     // HTML input type=text strips newlines, so check that the key/value appears
     const input = screen.getByRole("textbox", { name: /ttl/i }) as HTMLInputElement;
     expect(input.value).toContain('"nested"');
-    expect(input.value).toContain('true');
+    expect(input.value).toContain("true");
   });
 });

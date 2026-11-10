@@ -1,5 +1,6 @@
 import types
-from typing import Optional
+from collections.abc import Mapping
+from typing import Final
 
 import litellm
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -16,18 +17,19 @@ class VertexAIAi21Config(OpenAIGPTConfig):
 
     def __init__(
         self,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -49,9 +51,7 @@ class VertexAIAi21Config(OpenAIGPTConfig):
         drop_params: bool,
     ):
         if "max_completion_tokens" in non_default_params:
-            non_default_params["max_tokens"] = non_default_params.pop(
-                "max_completion_tokens"
-            )
+            non_default_params["max_tokens"] = non_default_params.pop("max_completion_tokens")
         return litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,

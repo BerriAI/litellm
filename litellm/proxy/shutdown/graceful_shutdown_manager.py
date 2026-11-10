@@ -1,0 +1,214 @@
+"""
+Application-level graceful shutdown coordination for the LiteLLM proxy.
+
+Kubernetes terminates a pod by sending ``SIGTERM`` and, after
+``terminationGracePeriodSeconds``, ``SIGKILL``. On ``SIGTERM`` uvicorn stops
+accepting connections and waits up to ``GRACEFUL_SHUTDOWN_TIMEOUT`` for open
+ones, cancelling whatever is still running, before the lifespan teardown that
+runs this drain. The lifespan registers a SIGTERM wrapper before serving
+requests so callback draining can subtract the preceding connection drain.
+
+A fixed ``preStop`` sleep can not solve this: it has to be sized for the
+*worst-case* request, so it either wastes time on every routine shutdown or is
+too short for a long-running request. This manager instead drains based on the
+*actual* in-flight request counter (already tracked by
+``InFlightRequestsMiddleware``), so a pod terminates as soon as its real
+in-flight work is done — and never waits longer than ``GRACEFUL_SHUTDOWN_TIMEOUT``.
+
+The state is process-scoped (class-level), matching the per-uvicorn-worker
+granularity of ``InFlightRequestsMiddleware``.
+"""
+
+import asyncio
+import os
+import signal
+import threading
+import time
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from types import FrameType
+from typing import Final
+
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy.middleware.in_flight_requests_middleware import (
+    get_in_flight_requests,
+)
+
+# Keep below terminationGracePeriodSeconds so the process exits before SIGKILL.
+DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Final = 30.0
+_DRAIN_POLL_INTERVAL: Final = 0.1
+_DRAIN_LOG_INTERVAL: Final = 5.0
+
+
+class GracefulShutdownManager:
+    """
+    Process-scoped singleton that tracks whether the worker is draining and
+    blocks until in-flight requests reach zero (or a timeout elapses).
+    """
+
+    _is_shutting_down: bool = False
+    _shutdown_started_at: float | None = None
+    _drain_performed: bool = False
+    _sigterm_handler: Callable[[int, FrameType | None], None] | None = None
+
+    @classmethod
+    def is_shutting_down(cls) -> bool:
+        """Whether this worker has begun graceful shutdown."""
+        return cls._is_shutting_down
+
+    @classmethod
+    def get_timeout(cls) -> float:
+        """
+        Read GRACEFUL_SHUTDOWN_TIMEOUT (seconds) from the environment on each
+        call so deployments can tune it without code changes. Falls back to the
+        default on an unset or malformed value.
+        """
+        raw: Final = os.getenv("GRACEFUL_SHUTDOWN_TIMEOUT")
+        if raw is None:
+            return DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            verbose_proxy_logger.warning(
+                "GRACEFUL_SHUTDOWN_TIMEOUT=%r is not a number; using default %ss",
+                raw,
+                DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
+            )
+            return DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
+
+    @classmethod
+    def start_shutdown(cls, clock: Callable[[], float] = time.monotonic) -> None:
+        """
+        Mark the worker as draining. Idempotent — repeated calls (e.g. SIGTERM
+        followed by a preStop hit on /health/drain) do not reset the clock.
+        """
+        if cls._is_shutting_down:
+            return
+        cls._is_shutting_down = True
+        cls._shutdown_started_at = clock()
+        verbose_proxy_logger.info(
+            "graceful_shutdown_started in_flight_requests=%s",
+            get_in_flight_requests(),
+        )
+
+    @classmethod
+    def remaining(cls, cap: float | None = None, *, clock: Callable[[], float] = time.monotonic) -> float:
+        elapsed: Final = 0.0 if cls._shutdown_started_at is None else clock() - cls._shutdown_started_at
+        remaining: Final = max(0.0, cls.get_timeout() - elapsed)
+        return remaining if cap is None else min(max(0.0, cap), remaining)
+
+    @classmethod
+    @contextmanager
+    def capture_sigterm(cls, clock: Callable[[], float] = time.monotonic) -> Generator[None, None, None]:
+        if threading.current_thread() is not threading.main_thread():
+            yield
+            return
+        previous: Final = signal.getsignal(signal.SIGTERM)
+        if not callable(previous) or previous is cls._sigterm_handler:
+            yield
+            return
+
+        def handle_sigterm(signum: int, frame: FrameType | None) -> None:
+            cls.start_shutdown(clock)
+            previous(signum, frame)
+
+        cls._sigterm_handler = handle_sigterm
+        signal.signal(signal.SIGTERM, handle_sigterm)
+        try:
+            yield
+        finally:
+            if signal.getsignal(signal.SIGTERM) is handle_sigterm:
+                signal.signal(signal.SIGTERM, previous)
+            cls._sigterm_handler = None
+
+    @classmethod
+    async def wait_for_drain(
+        cls,
+        timeout: float | None = None,
+        exclude_self: bool = False,
+        count_fn: Callable[[], int] | None = None,
+        poll_interval: float = _DRAIN_POLL_INTERVAL,
+        log_interval: float = _DRAIN_LOG_INTERVAL,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> int:
+        """
+        Poll the in-flight request counter until it reaches the drain target or
+        ``timeout`` seconds elapse.
+
+        Args:
+            timeout: Max seconds to wait. Defaults to the remaining shutdown budget.
+            exclude_self: When the caller is itself an in-flight HTTP request
+                (the /health/drain endpoint), set this so the caller's own
+                request is not counted as outstanding work.
+            count_fn: Source of the current in-flight count. Defaults to the
+                live ``InFlightRequestsMiddleware`` counter; injectable for tests.
+            poll_interval: Seconds between counter polls.
+            log_interval: Minimum seconds between ``drain_waiting`` log lines.
+            clock: Monotonic clock shared with the shutdown timestamp.
+
+        Returns:
+            Number of requests that drained while waiting (>= 0).
+        """
+        # A preStop /health/drain hook and the lifespan SIGTERM handler both
+        # drain; once one has run, the other must not wait again, otherwise the
+        # effective window is 2x the timeout and terminationGracePeriodSeconds
+        # has to be doubled to avoid a mid-drain SIGKILL.
+        if cls._drain_performed:
+            return 0
+        cls._drain_performed = True
+
+        if timeout is None:
+            timeout = cls.remaining(clock=clock)
+        if count_fn is None:
+            count_fn = get_in_flight_requests
+
+        # The /health/drain HTTP request flows through InFlightRequestsMiddleware
+        # and so counts itself; treat <=1 as "drained" in that case.
+        target: Final = 1 if exclude_self else 0
+
+        start: Final = clock()
+        initial: Final = count_fn()
+        last_log = start
+
+        if timeout <= 0:
+            return max(0, initial - target)
+
+        while True:
+            current = count_fn()
+            if current <= target:
+                drained = max(0, initial - current)
+                verbose_proxy_logger.info(
+                    "graceful_shutdown_complete drained_requests=%s elapsed_s=%.2f",
+                    drained,
+                    clock() - start,
+                )
+                return drained
+
+            elapsed = clock() - start
+            if elapsed >= timeout:
+                verbose_proxy_logger.warning(
+                    "graceful_shutdown_timeout in_flight_requests=%s elapsed_s=%.2f "
+                    "timeout_s=%s — proceeding with teardown",
+                    current,
+                    elapsed,
+                    timeout,
+                )
+                return max(0, initial - current)
+
+            now = clock()
+            if now - last_log >= log_interval:
+                verbose_proxy_logger.info(
+                    "drain_waiting in_flight_requests=%s elapsed_s=%.2f",
+                    current,
+                    elapsed,
+                )
+                last_log = now
+
+            await asyncio.sleep(poll_interval)
+
+    @classmethod
+    def reset(cls) -> None:
+        """Reset state. Intended for use in tests."""
+        cls._is_shutting_down = False
+        cls._shutdown_started_at = None
+        cls._drain_performed = False

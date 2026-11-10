@@ -72,8 +72,12 @@ vi.mock("@/components/networking", () => {
   return {
     // Called on mount; we don't care about its contents, only that it resolves
     getUiConfig: vi.fn().mockResolvedValue({}),
+    // Fetched by useUISettings(); resolve with empty settings so nudges stay default-on
+    getUiSettings: vi.fn().mockResolvedValue({ values: {}, field_schema: {} }),
     // Used to build the redirect URL
     proxyBaseUrl: "https://example.com",
+    getRuntimeBackendBaseUrl: vi.fn(() => null),
+    getUiPageUrl: (url: string) => url,
     // Called when decoding a valid token
     setGlobalLitellmHeaderName: vi.fn(),
     Organization: {},
@@ -103,36 +107,35 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
 
 // Super-light stubs for all heavy components so rendering doesn't explode
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
-vi.mock("@/components/user_dashboard", () => ({ default: stub("user-dashboard") }));
+vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({ default: stub("home-page") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
-vi.mock("@/components/view_users", () => ({ default: stub("view-users") }));
 vi.mock("@/components/teams", () => ({ default: stub("teams") }));
-vi.mock("@/components/organizations", () => ({
+vi.mock("@/app/(dashboard)/organizations/_components/organizations", () => ({
   default: stub("organizations"),
   fetchOrganizations: vi.fn(), // consumed in effects
 }));
 vi.mock("@/components/admins", () => ({ default: stub("admin-panel") }));
 vi.mock("@/components/settings", () => ({ default: stub("settings") }));
-vi.mock("@/components/general_settings", () => ({ default: stub("general-settings") }));
+vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => ({
+  default: stub("general-settings"),
+}));
 vi.mock("@/components/pass_through_settings", () => ({ default: stub("pass-through-settings") }));
 vi.mock("@/components/budgets/budget_panel", () => ({ default: stub("budget-panel") }));
-vi.mock("@/components/view_logs", () => ({ default: stub("spend-logs") }));
+vi.mock("@/components/logs", () => ({ default: stub("spend-logs") }));
 vi.mock("@/components/model_hub_table", () => ({ default: stub("model-hub-table") }));
 vi.mock("@/components/new_usage", () => ({ default: stub("new-usage") }));
 vi.mock("@/components/api_ref", () => ({ default: stub("api-ref") }));
 vi.mock("@/components/chat_ui/ChatUI", () => ({ default: stub("chat-ui") }));
 vi.mock("@/components/leftnav", () => ({ default: stub("sidebar") }));
-vi.mock("@/components/usage", () => ({ default: stub("usage") }));
 vi.mock("@/components/cache_dashboard", () => ({ default: stub("cache-dashboard") }));
-vi.mock("@/components/guardrails", () => ({ default: stub("guardrails") }));
+vi.mock("@/app/(dashboard)/guardrails/_components", () => ({ default: stub("guardrails") }));
 vi.mock("@/components/prompts", () => ({ default: stub("prompts") }));
 vi.mock("@/components/transform_request", () => ({ default: stub("transform-request") }));
-vi.mock("@/components/mcp_tools", () => ({ MCPServers: stub("mcp-servers") }));
-vi.mock("@/components/tag_management", () => ({ default: stub("tag-management") }));
-vi.mock("@/components/vector_store_management", () => ({ default: stub("vector-stores") }));
+vi.mock("@/app/(dashboard)/mcp-servers/_components", () => ({ MCPServers: stub("mcp-servers") }));
+vi.mock("@/app/(dashboard)/tag-management/_components", () => ({ default: stub("tag-management") }));
+vi.mock("@/app/(dashboard)/vector-stores/_components", () => ({ default: stub("vector-stores") }));
 vi.mock("@/components/ui_theme_settings", () => ({ default: stub("ui-theme-settings") }));
 vi.mock("@/components/organisms/create_key_button", () => ({ fetchUserModels: vi.fn() }));
-vi.mock("@/components/common_components/fetch_teams", () => ({ fetchTeams: vi.fn() }));
 vi.mock("@/components/ui/ui-loading-spinner", () => ({
   UiLoadingSpinner: stub("spinner"),
 }));
@@ -146,7 +149,24 @@ vi.mock("@/lib/cva.config", () => ({
   cx: (...args: string[]) => args.join(" "),
 }));
 
-import CreateKeyPage from "@/app/page";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import CreateKeyPage from "@/app/(dashboard)/page";
+import { AuthProvider } from "@/contexts/AuthContext";
+
+// The page consumes auth state via useAuth(). Wrap it so the hook resolves
+// against a real provider — the provider's effects (cookie read, JWT decode,
+// redirect-on-expired) are what these tests exercise. The QueryClientProvider
+// mirrors what layout.tsx supplies in production for hooks like useUISettings.
+function PageUnderTest() {
+  const [queryClient] = React.useState(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <CreateKeyPage />
+      </AuthProvider>
+    </QueryClientProvider>
+  );
+}
 
 /** ----------------------------
  * Helpers
@@ -207,12 +227,12 @@ describe("CreateKeyPage auth behavior", () => {
     const cookieSetSpy = vi.spyOn(document, "cookie", "set");
 
     // Act
-    render(<CreateKeyPage />);
+    render(<PageUnderTest />);
 
     // Assert: we eventually redirect to SSO login with return URL (single replace, not assign/href)
     await waitFor(() => {
       expect(window.location.replace).toHaveBeenCalledWith(
-        expect.stringContaining("https://example.com/ui/login?redirect_to=")
+        expect.stringContaining("https://example.com/ui/login/?redirect_to="),
       );
     });
 
@@ -223,7 +243,7 @@ describe("CreateKeyPage auth behavior", () => {
     expect(wroteDeletion).toBe(true);
   });
 
-  it("does NOT redirect when token is valid and renders the app chrome", async () => {
+  it("does NOT redirect when token is valid and renders the page content", async () => {
     // Arrange: valid token in cookie
     setCookie("token=validtoken");
 
@@ -243,16 +263,16 @@ describe("CreateKeyPage auth behavior", () => {
     });
 
     // Act
-    render(<CreateKeyPage />);
+    render(<PageUnderTest />);
 
     // Assert: no redirect
     await waitFor(() => {
       expect(window.location.replace).not.toHaveBeenCalled();
     });
 
-    // And some top-level UI appears (Navbar stub)
+    // And the default page content appears (ApiKeysDashboard stub; chrome now lives in the layout)
     await waitFor(() => {
-      expect(screen.getByTestId("navbar")).toBeInTheDocument();
+      expect(screen.getByTestId("home-page")).toBeInTheDocument();
     });
   });
 
@@ -286,7 +306,7 @@ describe("CreateKeyPage auth behavior", () => {
     // Return URL has the same params in a different order
     consumeReturnUrlMock.mockReturnValue("http://localhost/ui?a=1&b=2");
 
-    render(<CreateKeyPage />);
+    render(<PageUnderTest />);
 
     await waitFor(() => {
       expect(window.location.replace).not.toHaveBeenCalled();

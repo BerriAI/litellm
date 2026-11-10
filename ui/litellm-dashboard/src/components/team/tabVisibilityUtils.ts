@@ -1,3 +1,5 @@
+import type { ParseKeys } from "i18next";
+
 /**
  * Team info tab configuration and permission logic.
  * Extracted for testability - permission rules can be unit tested in isolation.
@@ -12,13 +14,13 @@ export const TEAM_INFO_TAB_KEYS = {
   SETTINGS: "settings",
 } as const;
 
-export const TEAM_INFO_TAB_LABELS: Record<string, string> = {
-  [TEAM_INFO_TAB_KEYS.OVERVIEW]: "Overview",
-  [TEAM_INFO_TAB_KEYS.MY_USER]: "My User",
-  [TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]: "Virtual Keys",
-  [TEAM_INFO_TAB_KEYS.MEMBERS]: "Members",
-  [TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS]: "Member Permissions",
-  [TEAM_INFO_TAB_KEYS.SETTINGS]: "Settings",
+export const TEAM_INFO_TAB_LABELS: Record<string, ParseKeys> = {
+  [TEAM_INFO_TAB_KEYS.OVERVIEW]: "teams.teamInfo.tabs.overview",
+  [TEAM_INFO_TAB_KEYS.MY_USER]: "teams.teamInfo.tabs.myUser",
+  [TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]: "teams.teamInfo.tabs.virtualKeys",
+  [TEAM_INFO_TAB_KEYS.MEMBERS]: "teams.teamInfo.tabs.members",
+  [TEAM_INFO_TAB_KEYS.MEMBER_PERMISSIONS]: "teams.teamInfo.tabs.memberPermissions",
+  [TEAM_INFO_TAB_KEYS.SETTINGS]: "teams.teamInfo.tabs.settings",
 };
 
 /**
@@ -27,11 +29,7 @@ export const TEAM_INFO_TAB_LABELS: Record<string, string> = {
  * - Members, Member Permissions, Settings: only when canEditTeam is true
  */
 export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] {
-  const baseTabs = [
-    TEAM_INFO_TAB_KEYS.OVERVIEW,
-    TEAM_INFO_TAB_KEYS.MY_USER,
-    TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
-  ];
+  const baseTabs = [TEAM_INFO_TAB_KEYS.OVERVIEW, TEAM_INFO_TAB_KEYS.MY_USER, TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS];
   if (canEditTeam) {
     return [
       ...baseTabs,
@@ -58,10 +56,7 @@ export function getTeamInfoDefaultTab(editTeam: boolean, canEditTeam: boolean): 
 /**
  * Checks if a specific tab should be visible based on permissions.
  */
-export function isTeamInfoTabVisible(
-  tabKey: string,
-  canEditTeam: boolean
-): boolean {
+export function isTeamInfoTabVisible(tabKey: string, canEditTeam: boolean): boolean {
   const visibleTabs = getTeamInfoVisibleTabs(canEditTeam);
   return visibleTabs.includes(tabKey);
 }

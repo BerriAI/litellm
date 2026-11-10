@@ -1,0 +1,84 @@
+@keyframes moyai-spin {
+  to {
+    --moyai-angle: 360deg;
+  }
+}
+
+@keyframes moyai-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes moyai-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@property --moyai-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.rise {
+  animation: moyai-rise 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.orbit {
+  visibility: hidden;
+}
+
+.orbit[data-placed="true"] {
+  visibility: visible;
+  animation: moyai-fade 1.2s ease-out both;
+}
+
+.cta {
+  background:
+    linear-gradient(#ffffff, #ffffff) padding-box,
+    conic-gradient(from var(--moyai-angle), #8b9bff, #cfe3ff, #ffb98a, #e9d8ff, #8b9bff) border-box;
+  border: 2px solid transparent;
+  box-shadow:
+    0 0 32px rgba(139, 155, 255, 0.55),
+    0 0 90px rgba(120, 170, 255, 0.35);
+  animation: moyai-spin 4s linear infinite;
+}
+
+.cta:hover {
+  box-shadow:
+    0 0 44px rgba(139, 155, 255, 0.8),
+    0 0 120px rgba(120, 170, 255, 0.5);
+}
+
+.connect {
+  background:
+    linear-gradient(#0b1020, #0b1020) padding-box,
+    conic-gradient(from var(--moyai-angle), #8b9bff, #cfe3ff, #ffb98a, #e9d8ff, #8b9bff) border-box;
+  border: 1.5px solid transparent;
+  box-shadow: 0 0 22px rgba(139, 155, 255, 0.45);
+  animation: moyai-spin 4s linear infinite;
+}
+
+.connect:hover {
+  box-shadow: 0 0 34px rgba(139, 155, 255, 0.75);
+}
+
+.mark {
+  filter: drop-shadow(0 0 0.18em rgba(140, 180, 255, 0.45)) drop-shadow(0 0.04em 0.08em rgba(0, 0, 0, 0.6));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .cta,
+  .connect,
+  .orbit[data-placed="true"] {
+    animation: none;
+  }
+}

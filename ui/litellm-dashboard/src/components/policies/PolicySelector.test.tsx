@@ -7,6 +7,11 @@ import { Policy } from "./types";
 
 vi.mock("../networking");
 
+const can = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
+  default: (...args: unknown[]) => can(...args),
+}));
+
 const makePolicy = (overrides: Partial<Policy>): Policy => ({
   policy_id: "uuid-1",
   policy_name: "test-policy",
@@ -76,13 +81,12 @@ describe("PolicySelector", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    can.mockReturnValue(true);
   });
 
   it("should render", () => {
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
-    renderWithProviders(
-      <PolicySelector accessToken="tok" onChange={mockOnChange} />
-    );
+    renderWithProviders(<PolicySelector accessToken="tok" onChange={mockOnChange} />);
     expect(screen.getByRole("combobox")).toBeInTheDocument();
   });
 
@@ -99,7 +103,7 @@ describe("PolicySelector", () => {
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies });
     const onPoliciesLoaded = vi.fn();
     renderWithProviders(
-      <PolicySelector accessToken="tok" onChange={mockOnChange} onPoliciesLoaded={onPoliciesLoaded} />
+      <PolicySelector accessToken="tok" onChange={mockOnChange} onPoliciesLoaded={onPoliciesLoaded} />,
     );
     await waitFor(() => {
       expect(onPoliciesLoaded).toHaveBeenCalledWith(policies);
@@ -108,14 +112,26 @@ describe("PolicySelector", () => {
 
   it("should show a disabled placeholder when disabled prop is true", () => {
     vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
-    renderWithProviders(
-      <PolicySelector accessToken="tok" onChange={mockOnChange} disabled />
-    );
+    renderWithProviders(<PolicySelector accessToken="tok" onChange={mockOnChange} disabled />);
     expect(screen.getByRole("combobox")).toBeDisabled();
   });
 
   it("should not fetch policies when accessToken is empty", () => {
     renderWithProviders(<PolicySelector accessToken="" onChange={mockOnChange} />);
     expect(networking.getPoliciesList).not.toHaveBeenCalled();
+  });
+
+  it("should render nothing and skip the admin-only fetch without the viewPolicies capability", async () => {
+    can.mockReturnValue(false);
+    vi.mocked(networking.getPoliciesList).mockResolvedValue({ policies: [] });
+
+    const { container } = renderWithProviders(<PolicySelector accessToken="tok" onChange={mockOnChange} />);
+
+    await waitFor(() => {
+      expect(can).toHaveBeenCalledWith("viewPolicies");
+    });
+    expect(networking.getPoliciesList).not.toHaveBeenCalled();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(container).toBeEmptyDOMElement();
   });
 });

@@ -1,14 +1,22 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
+)
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.llms.anthropic.common_utils import (
+    message_dict_with_server_tool_calls,
+    message_dict_with_server_tool_calls_split_out,
+    validated_object_mapping,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -29,22 +37,29 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _choice_with_message(choice: object, rewrite: Callable[[object], object]) -> object:
+    mapping: Final = validated_object_mapping(choice)
+    if mapping is None or "message" not in mapping:
+        return choice
+    return {**mapping, "message": rewrite(mapping["message"])}
+
 
 class PangeaGuardrailMissingSecrets(Exception):
     """Custom exception for missing Pangea secrets."""
 
-    pass
-
 
 class _TextCompletionRequest:
-    def __init__(self, body):
+    def __init__(self, body: dict[str, object]) -> None:
         self.body = body
 
     def get_messages(self) -> list[dict]:
         return [{"role": "user", "content": self.body["prompt"]}]
 
     # This mutates the original dict, but we'll still return it anyways
-    def update_original_body(self, prompt_messages: list[dict]) -> Any:
+    def update_original_body(self, prompt_messages: list[dict]) -> dict[str, object]:
         assert len(prompt_messages) == 1
         self.body["prompt"] = prompt_messages[0]["content"]
         return self.body
@@ -61,10 +76,10 @@ class PangeaHandler(CustomGuardrail):
     def __init__(
         self,
         guardrail_name: str,
-        pangea_input_recipe: Optional[str] = None,
-        pangea_output_recipe: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        pangea_input_recipe: str | None = None,
+        pangea_output_recipe: str | None = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
     ):
         """
@@ -77,9 +92,7 @@ class PangeaHandler(CustomGuardrail):
             api_base (Optional[str]): The Pangea API base URL. Reads from PANGEA_API_BASE env var or uses default if None.
             **kwargs: Additional arguments passed to the CustomGuardrail base class.
         """
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key or os.environ.get("PANGEA_API_KEY")
         if not self.api_key:
             raise PangeaGuardrailMissingSecrets(
@@ -87,32 +100,24 @@ class PangeaHandler(CustomGuardrail):
             )
 
         # Default Pangea base URL if not provided
-        self.api_base = (
-            api_base
-            or os.environ.get("PANGEA_API_BASE")
-            or "https://ai-guard.aws.us.pangea.cloud"
-        )
+        self.api_base = api_base or os.environ.get("PANGEA_API_BASE") or "https://ai-guard.aws.us.pangea.cloud"
         self.pangea_input_recipe = pangea_input_recipe
         self.pangea_output_recipe = pangea_output_recipe
-
-        supported_event_hooks = [
-            GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.post_call,
-        ]
 
         # Pass relevant kwargs to the parent class
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
+            supported_event_hooks=list(self.get_supported_event_hooks()),
             **kwargs,
         )
         verbose_proxy_logger.debug(
-            f"Initialized Pangea Guardrail: name={guardrail_name}, recipe={pangea_input_recipe}, api_base={self.api_base}"
+            "Initialized Pangea Guardrail: name=%s, recipe=%s, api_base=%s",
+            guardrail_name,
+            pangea_input_recipe,
+            self.api_base,
         )
 
-    async def _call_pangea_ai_guard(
-        self, api: str, payload: dict, hook_name: str
-    ) -> dict:
+    async def _call_pangea_ai_guard(self, api: str, payload: dict, hook_name: str) -> dict:
         """
         Makes the API call to the Pangea AI Guard endpoint.
         The function itself will raise an error in the case that a response
@@ -132,27 +137,29 @@ class PangeaHandler(CustomGuardrail):
         Returns:
             list[dict]: The original response body
         """
-        endpoint = f"{self.api_base}/{api}"
+        endpoint: Final = f"{self.api_base}/{api}"
 
-        headers = {
+        headers: Final = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
 
         verbose_proxy_logger.debug(
-            f"Pangea Guardrail ({hook_name}): Calling endpoint {endpoint} with payload: {payload}"
+            "Pangea Guardrail (%s): Calling endpoint %s with payload: %s", hook_name, endpoint, payload
         )
 
-        response = await self.async_handler.post(
-            url=endpoint, json=payload, headers=headers
+        response: Final = await self.async_handler.post(
+            url=endpoint, json=payload, headers=headers, timeout=self.timeout
         )
         response.raise_for_status()
 
-        result = response.json()
+        result: Final = response.json()
+        decoded_result: Final = decoded_json_object(_DECODED_JSON.validate_python(result))
+        verdict: Final = decoded_json_object(decoded_result.get("result", {}))
 
-        if result.get("result", {}).get("blocked"):
+        if verdict.get("blocked"):
             verbose_proxy_logger.warning(
-                f"Pangea Guardrail ({hook_name}): Request blocked. Response: {result}"
+                "Pangea Guardrail (%s): Request blocked. Response: %s", hook_name, decoded_result
             )
             raise HTTPException(
                 status_code=400,  # Bad Request, indicating violation
@@ -162,7 +169,7 @@ class PangeaHandler(CustomGuardrail):
                 },
             )
         verbose_proxy_logger.debug(
-            f"Pangea Guardrail ({hook_name}): Request passed. Response: {result.get('result', {}).get('detectors')}"
+            "Pangea Guardrail (%s): Request passed. Response: %s", hook_name, verdict.get("detectors")
         )
 
         return result
@@ -175,34 +182,30 @@ class PangeaHandler(CustomGuardrail):
         call_type: str,
     ):
         transformer = None
-        messages: Any = None
+        messages: object = None
         if call_type == "text_completion" or call_type == "atext_completion":
             transformer = _TextCompletionRequest(data)
             messages = transformer.get_messages()
         else:
             messages = data.get("messages")
 
-        ai_guard_payload = {
+        ai_guard_payload: Final = {
             "debug": False,
-            "input": {"messages": messages, "tools": data.get("tools")},  # type: ignore
+            "input": {"messages": messages, "tools": data.get("tools")},
             "event_type": "input",
         }
         if self.pangea_input_recipe:
             ai_guard_payload["recipe"] = self.pangea_input_recipe
 
-        ai_guard_response = await self._call_pangea_ai_guard(
-            "v1beta/guard", ai_guard_payload, "async_pre_call_hook"
-        )
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        ai_guard_response = await self._call_pangea_ai_guard("v1beta/guard", ai_guard_payload, "async_pre_call_hook")
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         if not ai_guard_response.get("result", {}).get("transformed"):
             return
 
-        output = ai_guard_response.get("result", {}).get("output", {})
+        output: Final = ai_guard_response.get("result", {}).get("output", {})
         if call_type == "text_completion" or call_type == "atext_completion":
-            data = transformer.update_original_body(output["messages"])  # type: ignore
+            data = transformer.update_original_body(output["messages"])
         else:
             data["messages"] = output["messages"]
         return data
@@ -215,17 +218,15 @@ class PangeaHandler(CustomGuardrail):
         data: dict,
         call_type: str,
     ):
-        event_type = GuardrailEventHooks.pre_call
+        event_type: Final = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             verbose_proxy_logger.debug(
-                f"Pangea Guardrail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
+                "Pangea Guardrail (async_pre_call_hook): Guardrail is disabled %s.", self.guardrail_name
             )
             return data
 
         try:
-            return await self._async_pre_call_hook(
-                user_api_key_dict, cache, data, call_type
-            )
+            return await self._async_pre_call_hook(user_api_key_dict, cache, data, call_type)
         except HTTPException:
             raise
         except Exception as e:
@@ -249,27 +250,31 @@ class PangeaHandler(CustomGuardrail):
             # Assume the earlier call type as well
             input_messages = _TextCompletionRequest(data).get_messages()
         elif isinstance(response, ModelResponse):
-            messages = data.get("messages")
+            messages: Final = data.get("messages")
             if messages is None:
                 return  # No messages to check
-            input_messages = cast(List[Dict[Any, Any]], messages)
+            input_messages = messages
         else:
             return
 
         if choices := response.get("choices"):
             if isinstance(choices, list):
-                serialized_choices = []
+                serialized_choices: Final = []
                 for c in choices:
                     if isinstance(c, Choices):
                         try:
-                            serialized_choices.append(c.model_dump())
+                            serialized_choices.append(
+                                _choice_with_message(c.model_dump(), message_dict_with_server_tool_calls)
+                            )
                         except Exception:
-                            serialized_choices.append(c.dict())
+                            serialized_choices.append(
+                                _choice_with_message(c.dict(), message_dict_with_server_tool_calls)
+                            )
                     else:
                         serialized_choices.append(c)
                 choices = serialized_choices
 
-        ai_guard_payload = {
+        ai_guard_payload: Final = {
             "debug": False,
             "input": {
                 "messages": input_messages,
@@ -282,18 +287,16 @@ class PangeaHandler(CustomGuardrail):
         if self.pangea_output_recipe:
             ai_guard_payload["recipe"] = self.pangea_output_recipe
 
-        ai_guard_response = await self._call_pangea_ai_guard(
-            "v1beta/guard", ai_guard_payload, "async_pre_call_hook"
-        )
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        ai_guard_response = await self._call_pangea_ai_guard("v1beta/guard", ai_guard_payload, "async_pre_call_hook")
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         if not ai_guard_response.get("result", {}).get("transformed"):
             return
 
-        output = ai_guard_response.get("result", {}).get("output", {})
-        response.choices = output["choices"]
+        output: Final = ai_guard_response.get("result", {}).get("output", {})
+        response.choices = [  # pyright: ignore[reportAttributeAccessIssue]  # Pangea returns untyped choice dicts
+            _choice_with_message(choice, message_dict_with_server_tool_calls_split_out) for choice in output["choices"]
+        ]
         return response
 
     @log_guardrail_information
@@ -312,16 +315,14 @@ class PangeaHandler(CustomGuardrail):
             user_api_key_dict (UserAPIKeyAuth): User API key details.
             response (LLMResponseTypes): The response object from the LLM call.
         """
-        event_type = GuardrailEventHooks.post_call
+        event_type: Final = GuardrailEventHooks.post_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             verbose_proxy_logger.debug(
-                f"Pangea Guardrail (async_pre_call_hook): Guardrail is disabled {self.guardrail_name}."
+                "Pangea Guardrail (async_pre_call_hook): Guardrail is disabled %s.", self.guardrail_name
             )
             return data
         try:
-            return await self._async_post_call_success_hook(
-                data, user_api_key_dict, response
-            )
+            return await self._async_post_call_success_hook(data, user_api_key_dict, response)
         except HTTPException:
             raise
         except Exception as e:
@@ -335,9 +336,16 @@ class PangeaHandler(CustomGuardrail):
             ) from e
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.pangea import (
             PangeaGuardrailConfigModel,
         )
 
         return PangeaGuardrailConfigModel
+
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]

@@ -1,6 +1,6 @@
 import { useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { useStoreModelInDB } from "@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -10,19 +10,13 @@ import ModelSettingsModal from "./ModelSettingsModal";
 
 vi.mock("@/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB");
 vi.mock("@/app/(dashboard)/hooks/proxyConfig/useProxyConfig");
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
 vi.mock("@/components/shared/errorUtils", () => ({
   parseErrorMessage: vi.fn(),
 }));
 
 const mockUseStoreModelInDB = vi.mocked(useStoreModelInDB);
 const mockUseProxyConfig = vi.mocked(useProxyConfig);
-const mockNotificationsManager = vi.mocked(NotificationsManager);
+const mockToast = vi.mocked(toast);
 const mockParseErrorMessage = vi.mocked(parseErrorMessage);
 
 describe("ModelSettingsModal", () => {
@@ -119,10 +113,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockMutateAsync).toHaveBeenCalledWith(
-        { store_model_in_db: true },
-        expect.any(Object)
-      );
+      expect(mockMutateAsync).toHaveBeenCalledWith({ store_model_in_db: true }, expect.any(Object));
     });
   });
 
@@ -140,10 +131,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockMutateAsync).toHaveBeenCalledWith(
-        { store_model_in_db: false },
-        expect.any(Object)
-      );
+      expect(mockMutateAsync).toHaveBeenCalledWith({ store_model_in_db: false }, expect.any(Object));
     });
   });
 
@@ -161,7 +149,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.success).toHaveBeenCalledWith("Model storage settings updated successfully");
+      expect(mockToast.success).toHaveBeenCalledWith("Model storage settings updated successfully");
       expect(mockRefetch).toHaveBeenCalled();
       expect(mockOnSuccess).toHaveBeenCalledTimes(1);
     });
@@ -179,7 +167,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to save model storage settings: Network error");
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to save model storage settings: Network error");
     });
   });
 
@@ -198,7 +186,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.fromBackend).toHaveBeenCalledWith("Failed to save model storage settings: Backend error");
+      expect(mockToast.fromError).toHaveBeenCalledWith("Failed to save model storage settings: Backend error");
     });
   });
 
@@ -237,7 +225,8 @@ describe("ModelSettingsModal", () => {
 
     const saveButton = screen.getByRole("button", { name: /Saving/i });
     expect(saveButton).toBeInTheDocument();
-    expect(saveButton.className).toContain("ant-btn-loading");
+    expect(saveButton).toHaveAttribute("aria-busy", "true");
+    expect(saveButton).toBeDisabled();
   });
 
   it("should not render modal when isVisible is false", () => {
@@ -282,8 +271,7 @@ describe("ModelSettingsModal", () => {
     renderWithProviders(<ModelSettingsModal {...defaultProps} />);
 
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-    const skeletons = document.querySelectorAll(".ant-skeleton");
-    expect(skeletons.length).toBeGreaterThan(0);
+    expect(screen.getByRole("status", { name: "Loading model settings" })).toBeInTheDocument();
   });
 
   it("should not call onSuccess when it is not provided", async () => {
@@ -300,7 +288,7 @@ describe("ModelSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
-      expect(mockNotificationsManager.success).toHaveBeenCalled();
+      expect(mockToast.success).toHaveBeenCalled();
     });
   });
 });

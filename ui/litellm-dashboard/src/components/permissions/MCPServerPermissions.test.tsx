@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MCPServerPermissions from "./MCPServerPermissions";
 import * as networking from "../networking";
+import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 vi.mock("../networking");
 
@@ -43,7 +44,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for servers to load and display
@@ -87,7 +88,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={mockToolPermissions}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for server to load
@@ -105,8 +106,7 @@ describe("MCPServerPermissions", () => {
     expect(screen.queryByText("ask_question")).not.toBeInTheDocument();
 
     // Click the server row to expand
-    const serverRow = screen.getByText(/DW_MCP/).closest("div");
-    await userEvent.click(serverRow!);
+    await userEvent.click(screen.getByText(/DW_MCP/));
 
     // Now tools should be visible
     await waitFor(() => {
@@ -116,7 +116,7 @@ describe("MCPServerPermissions", () => {
     });
 
     // Click the server row again to collapse
-    await userEvent.click(serverRow!);
+    await userEvent.click(screen.getByText(/DW_MCP/));
 
     // Tools should be hidden again
     await waitFor(() => {
@@ -145,7 +145,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for server to load
@@ -172,7 +172,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={mockAccessGroups}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for access groups to load
@@ -211,7 +211,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={mockAccessGroups}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for both to load
@@ -238,7 +238,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Verify empty state message
@@ -279,7 +279,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={mockToolPermissions}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Wait for servers to load
@@ -296,11 +296,8 @@ describe("MCPServerPermissions", () => {
     expect(toolLabels.length).toBeGreaterThan(0);
 
     // Expand both servers by clicking their rows
-    const server1Row = screen.getByText(/DW_MCP/).closest("div");
-    const server2Row = screen.getByText(/Test Server/).closest("div");
-    
-    await userEvent.click(server1Row!); // Expand server 1
-    await userEvent.click(server2Row!); // Expand server 2
+    await userEvent.click(screen.getByText(/DW_MCP/)); // Expand server 1
+    await userEvent.click(screen.getByText(/Test Server/)); // Expand server 2
 
     // Verify server 1 tools are now visible
     await waitFor(() => {
@@ -317,9 +314,7 @@ describe("MCPServerPermissions", () => {
      * Tests that the component doesn't crash when API calls fail
      * and falls back to showing server IDs instead of names.
      */
-    vi.mocked(networking.fetchMCPServers).mockRejectedValue(
-      new Error("Failed to fetch servers")
-    );
+    vi.mocked(networking.fetchMCPServers).mockRejectedValue(new Error("Failed to fetch servers"));
 
     render(
       <MCPServerPermissions
@@ -327,7 +322,7 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={mockAccessToken}
-      />
+      />,
     );
 
     // Should still render with server ID (fallback)
@@ -350,11 +345,175 @@ describe("MCPServerPermissions", () => {
         mcpAccessGroups={[]}
         mcpToolPermissions={{}}
         accessToken={null}
-      />
+      />,
     );
 
     // API should not be called without token
     expect(networking.fetchMCPServers).not.toHaveBeenCalled();
   });
-});
 
+  it("should name a server a grant references by server name rather than by id", async () => {
+    /**
+     * The backend accepts a server id, name or alias interchangeably, so a grant written by API
+     * or config can name the server. Falling through to the raw string hides which server it is.
+     */
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: mockServerId1,
+        server_name: "github_mcp",
+        alias: "GitHub",
+      },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={["github_mcp"]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText(/GitHub/)).toBeInTheDocument();
+    expect(screen.queryByText("github_mcp")).not.toBeInTheDocument();
+  });
+
+  it("should display tools for a name-keyed allowlist on an id-referenced server", async () => {
+    /**
+     * The allowlist key and the grant entry can name the same server differently; matching only on
+     * server_id renders the server as if it had no tool restrictions at all.
+     */
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: mockServerId1,
+        server_name: "github_mcp",
+        alias: "GitHub",
+      },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId1]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{ github_mcp: ["list_issues", "list_prs"] }}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/GitHub/)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("tools")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText(/GitHub/));
+
+    await waitFor(() => {
+      expect(screen.getByText("list_issues")).toBeInTheDocument();
+      expect(screen.getByText("list_prs")).toBeInTheDocument();
+    });
+  });
+
+  it("should display the All Proxy MCP Servers state instead of the raw sentinel string", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[ALL_PROXY_MCP_SERVERS_SENTINEL]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText("All Proxy MCP Servers")).toBeInTheDocument();
+    expect(screen.getByText("All")).toBeInTheDocument();
+    expect(screen.queryByText(ALL_PROXY_MCP_SERVERS_SENTINEL)).not.toBeInTheDocument();
+  });
+
+  it("should use the neutral badge variant unless MCP access is blocked", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    const { rerender } = render(
+      <MCPServerPermissions
+        mcpServers={[]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+    expect(screen.getByText("0")).toHaveAttribute("data-variant", "secondary");
+
+    rerender(
+      <MCPServerPermissions
+        mcpServers={[ALL_PROXY_MCP_SERVERS_SENTINEL]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("All")).toHaveAttribute("data-variant", "secondary"));
+
+    rerender(
+      <MCPServerPermissions
+        mcpServers={[NO_MCP_SERVERS_SENTINEL]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Blocked")).toHaveAttribute("data-variant", "destructive"));
+  });
+
+  it("lists servers inherited from access groups, counts them, and names the group on hover", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId1, server_name: mockServerName1, alias: mockServerName1 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        inheritedMcpServers={[{ id: mockServerId1, accessGroupNames: ["platform-tools"] }]}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    const row = await screen.findByText(/DW_MCP/);
+    expect(screen.getByText("1")).toBeInTheDocument();
+    expect(screen.queryByText("No MCP servers, access groups, or toolsets configured")).not.toBeInTheDocument();
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken);
+
+    await user.hover(row);
+    expect(
+      await screen.findByText(`Granted via access group platform-tools. Full ID: ${mockServerId1}`),
+    ).toBeInTheDocument();
+  });
+
+  it("does not double-list a server that is both granted directly and inherited", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId2, server_name: mockServerName2, alias: mockServerName2 },
+    ]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[mockServerId2]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        inheritedMcpServers={[{ id: mockServerId2, accessGroupNames: ["platform-tools"] }]}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    const row = await screen.findByText(/Test Server/);
+    expect(screen.getAllByText(/Test Server/)).toHaveLength(1);
+    expect(screen.getByText("1")).toBeInTheDocument();
+
+    await user.hover(row);
+    expect(await screen.findByText(`Full ID: ${mockServerId2}`)).toBeInTheDocument();
+  });
+});

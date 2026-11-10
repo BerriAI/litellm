@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { useTranslation } from "react-i18next";
+import { toast } from "@/lib/toast";
 import {
   buildMcpOAuthAuthorizeUrl,
   cacheTemporaryMcpServer,
@@ -16,16 +17,54 @@ import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
+export interface McpDcrCredentials {
+  client_id: string;
+  client_secret?: string | null;
+  dcr_issuer?: string | null;
+  dcr_server_url?: string | null;
+  token_endpoint_auth_method?: string | null;
+  redirect_uris?: string[];
+}
+
+const getRegisteredOAuthClient = (
+  registration: (Partial<McpDcrCredentials> & { dcr_redirect_uris?: string[] }) | undefined,
+): McpDcrCredentials | undefined =>
+  registration?.client_id
+    ? {
+        client_id: registration.client_id,
+        client_secret: registration.client_secret ?? null,
+        ...(registration.dcr_server_url && {
+          dcr_issuer: registration.dcr_issuer ?? null,
+          dcr_server_url: registration.dcr_server_url,
+          token_endpoint_auth_method:
+            registration.token_endpoint_auth_method === "client_secret_basic" ? "client_secret_basic" : null,
+          redirect_uris: registration.dcr_redirect_uris,
+        }),
+      }
+    : undefined;
+
+const oauthClientRequest = (client: McpDcrCredentials | undefined) => ({
+  clientId: client?.client_id,
+  clientSecret: client?.client_secret ?? undefined,
+});
+
 interface UseMcpOAuthFlowOptions {
   accessToken: string | null;
-  getCredentials: () => {
-    client_id?: string;
-    client_secret?: string;
-    scopes?: string[];
-  } | undefined;
+  getCredentials: () =>
+    | {
+        client_id?: string;
+        client_secret?: string | null;
+        scopes?: string[];
+      }
+    | undefined;
   getTemporaryPayload: () => Record<string, any> | null;
-  onTokenReceived: (tokenResponse: Record<string, any>) => void;
+  onTokenReceived: (tokenResponse: Record<string, any>, registeredClient?: McpDcrCredentials) => void;
   onBeforeRedirect?: () => void;
+  // Distinguishes which form started the flow (e.g. "create" vs "edit"). Both forms
+  // mount this hook with shared storage keys, so the return handler only processes a
+  // callback whose stored flowSource matches, preventing one form from grabbing the
+  // other's OAuth result.
+  flowSource: string;
 }
 
 interface UseMcpOAuthFlowResult {
@@ -33,6 +72,7 @@ interface UseMcpOAuthFlowResult {
   status: McpOAuthStatus;
   error: string | null;
   tokenResponse: Record<string, any> | null;
+  reset: () => void;
 }
 
 export const useMcpOAuthFlow = ({
@@ -41,11 +81,14 @@ export const useMcpOAuthFlow = ({
   getTemporaryPayload,
   onTokenReceived,
   onBeforeRedirect,
+  flowSource,
 }: UseMcpOAuthFlowOptions): UseMcpOAuthFlowResult => {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<McpOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [tokenResponse, setTokenResponse] = useState<Record<string, any> | null>(null);
   const processingRef = useRef(false);
+  const resetVersionRef = useRef(0);
 
   const FLOW_STATE_KEY = "litellm-mcp-oauth-flow-state";
   const RESULT_KEY = "litellm-mcp-oauth-result";
@@ -56,8 +99,11 @@ export const useMcpOAuthFlow = ({
     codeVerifier: string;
     clientId?: string;
     clientSecret?: string;
+    client?: McpDcrCredentials;
+    dcrCredentials?: McpDcrCredentials;
     serverId: string;
     redirectUri: string;
+    flowSource?: string;
   };
 
   const setStorageItem = (key: string, value: string) => {
@@ -111,16 +157,16 @@ export const useMcpOAuthFlow = ({
     const credentials = getCredentials() || {};
 
     if (!accessToken) {
-      setError("Missing admin token");
-      NotificationsManager.error("Access token missing. Please re-authenticate and try again.");
+      setError(t("mcpServers.useMcpOAuthFlow.errors.missingAdminToken"));
+      toast.error(t("mcpServers.useMcpOAuthFlow.errors.accessTokenMissing"));
       return;
     }
 
     const temporaryPayload = getTemporaryPayload();
     if (!temporaryPayload || !temporaryPayload.url || !temporaryPayload.transport) {
-      const message = "Please complete server URL and transport before starting OAuth.";
+      const message = t("mcpServers.useMcpOAuthFlow.errors.incompleteServer");
       setError(message);
-      NotificationsManager.error(message);
+      toast.error(message);
       return;
     }
     try {
@@ -133,8 +179,8 @@ export const useMcpOAuthFlow = ({
         throw new Error("Temporary MCP server identifier missing. Please retry.");
       }
 
-      let registeredClient: { clientId?: string; clientSecret?: string } = {};
-      const hasPreconfiguredCredentials = Boolean(temporaryPayload.credentials?.client_id && temporaryPayload.credentials?.client_secret);
+      let registeredClient: McpDcrCredentials | undefined;
+      const hasPreconfiguredCredentials = Boolean(temporaryPayload.credentials?.client_id);
 
       if (!hasPreconfiguredCredentials) {
         const registration = await registerMcpOAuthClient(accessToken, serverId, {
@@ -143,25 +189,27 @@ export const useMcpOAuthFlow = ({
           response_types: ["code"],
           token_endpoint_auth_method:
             temporaryPayload.credentials && temporaryPayload.credentials.client_secret ? "client_secret_post" : "none",
+          // dcr_bridge servers relay this registration upstream and bind the
+          // minted client to the browser's own callback; without it the relay
+          // rejects the registration and the admin authorize dead-ends.
+          redirect_uris: [callbackUrl()],
         });
-        registeredClient = {
-          clientId: registration?.client_id,
-          clientSecret: registration?.client_secret,
-        };
+        registeredClient = getRegisteredOAuthClient(registration);
       }
 
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
       const state = crypto.randomUUID();
 
-      const clientId = registeredClient.clientId || credentials.client_id;
+      const client = registeredClient ?? getRegisteredOAuthClient(credentials);
       const scopeString = Array.isArray(credentials.scopes)
         ? credentials.scopes.filter((s) => s && s.trim().length > 0).join(" ")
         : undefined;
 
+      const { clientId } = oauthClientRequest(client);
       const authorizeUrl = buildMcpOAuthAuthorizeUrl({
         serverId,
-        clientId: clientId,
+        clientId,
         redirectUri: callbackUrl(),
         state,
         codeChallenge: challenge,
@@ -171,10 +219,10 @@ export const useMcpOAuthFlow = ({
       const flowState: StoredFlowState = {
         state,
         codeVerifier: verifier,
-        clientId,
-        clientSecret: registeredClient.clientSecret || credentials.client_secret,
+        client,
         serverId,
         redirectUri: callbackUrl(),
+        flowSource,
       };
 
       if (typeof window === "undefined") {
@@ -202,9 +250,9 @@ export const useMcpOAuthFlow = ({
       setStatus("error");
       const message = extractErrorMessage(err);
       setError(message);
-      NotificationsManager.error(message);
+      toast.error(message);
     }
-  }, [accessToken, getCredentials, getTemporaryPayload, onBeforeRedirect]);
+  }, [accessToken, getCredentials, getTemporaryPayload, onBeforeRedirect, t]);
 
   const resumeOAuthFlow = useCallback(async () => {
     if (typeof window === "undefined") {
@@ -224,22 +272,41 @@ export const useMcpOAuthFlow = ({
       if (!storedPayload) {
         return;
       }
-      
+
+      // Guard: the callback page writes to the admin result key for *all* OAuth
+      // flows (including the tools re-auth flow).  Only proceed if this hook's
+      // own flow state exists, meaning startOAuthFlow() was actually called here.
+      // Without this guard, a tools re-auth redirect triggers a spurious
+      // "OAuth session state was lost" error from this hook.
+      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
+      if (!storedFlowState) {
+        return;
+      }
+
       // Mark as processing
       processingRef.current = true;
       payload = JSON.parse(storedPayload);
-      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
-      flowState = storedFlowState ? JSON.parse(storedFlowState) : null;
+      flowState = JSON.parse(storedFlowState);
     } catch (err) {
       clearStoredFlow();
       processingRef.current = false;
-      setError("Failed to resume OAuth flow. Please retry.");
+      setError(t("mcpServers.useMcpOAuthFlow.errors.resumeFailed"));
       setStatus("error");
-      NotificationsManager.error("Failed to resume OAuth flow. Please retry.");
+      toast.error(t("mcpServers.useMcpOAuthFlow.errors.resumeFailed"));
       return;
     }
 
     if (!payload) {
+      processingRef.current = false;
+      return;
+    }
+
+    // Only the form that started this redirect should consume the result. The create
+    // form and the edit form both mount this hook with shared storage keys, so without
+    // this another instance (e.g. the always-mounted create form) would grab and handle
+    // an edit-page authorization. Bail out without clearing RESULT_KEY so the matching
+    // instance can still process it.
+    if (flowState?.flowSource !== flowSource) {
       processingRef.current = false;
       return;
     }
@@ -254,11 +321,13 @@ export const useMcpOAuthFlow = ({
       }
     }
 
+    const resetVersion = resetVersionRef.current;
+
     try {
       if (!flowState || !flowState.state || !flowState.codeVerifier || !flowState.serverId) {
         throw new Error(
           "OAuth session state was lost. This can happen if you have strict browser privacy settings. " +
-          "Please try again and ensure cookies/storage is enabled."
+            "Please try again and ensure cookies/storage is enabled.",
         );
       }
       if (!payload.state || payload.state !== flowState.state) {
@@ -271,44 +340,65 @@ export const useMcpOAuthFlow = ({
         throw new Error("Authorization code missing in callback.");
       }
 
+      const client =
+        flowState.client ??
+        flowState.dcrCredentials ??
+        getRegisteredOAuthClient({ client_id: flowState.clientId, client_secret: flowState.clientSecret });
       setStatus("exchanging");
       const token = await exchangeMcpOAuthToken({
         serverId: flowState.serverId,
         code: payload.code,
-        clientId: flowState.clientId,
-        clientSecret: flowState.clientSecret,
+        ...oauthClientRequest(client),
         codeVerifier: flowState.codeVerifier,
         redirectUri: flowState.redirectUri,
         accessToken,
       });
 
-      onTokenReceived(token);
+      if (resetVersion !== resetVersionRef.current) {
+        return;
+      }
+
+      onTokenReceived(token, client);
       setTokenResponse(token);
       setStatus("success");
       setError(null);
-      NotificationsManager.success("OAuth token retrieved successfully");
+      toast.success(t("mcpServers.useMcpOAuthFlow.toasts.tokenRetrieved"));
     } catch (err) {
+      if (resetVersion !== resetVersionRef.current) {
+        return;
+      }
       const message = extractErrorMessage(err);
       setError(message);
       setStatus("error");
-      NotificationsManager.error(message);
+      toast.error(message);
     } finally {
-      clearStoredFlow();
-      // Reset processing flag after a delay to allow UI updates
-      setTimeout(() => {
-        processingRef.current = false;
-      }, 1000);
+      if (resetVersion === resetVersionRef.current) {
+        clearStoredFlow();
+        // Reset processing flag after a delay to allow UI updates
+        setTimeout(() => {
+          processingRef.current = false;
+        }, 1000);
+      }
     }
-  }, [onTokenReceived]);
+  }, [onTokenReceived, t]);
 
   useEffect(() => {
     resumeOAuthFlow();
   }, [resumeOAuthFlow]);
+
+  const reset = useCallback(() => {
+    resetVersionRef.current += 1;
+    setStatus("idle");
+    setError(null);
+    setTokenResponse(null);
+    processingRef.current = false;
+  }, []);
 
   return {
     startOAuthFlow,
     status,
     error,
     tokenResponse,
+    reset,
   };
 };

@@ -29,14 +29,14 @@ describe("CommunityEngagementButtons", () => {
     expect(joinSlackLink).toHaveAttribute("rel", "noopener noreferrer");
   });
 
-  it("should render Star us on GitHub button with correct link", () => {
+  it("should render GitHub link with correct href", () => {
     renderWithProviders(<CommunityEngagementButtons />);
 
-    const starOnGithubLink = screen.getByRole("link", { name: /star us on github/i });
-    expect(starOnGithubLink).toBeInTheDocument();
-    expect(starOnGithubLink).toHaveAttribute("href", "https://github.com/BerriAI/litellm");
-    expect(starOnGithubLink).toHaveAttribute("target", "_blank");
-    expect(starOnGithubLink).toHaveAttribute("rel", "noopener noreferrer");
+    const githubLink = screen.getByRole("link", { name: /litellm on github/i });
+    expect(githubLink).toBeInTheDocument();
+    expect(githubLink).toHaveAttribute("href", "https://github.com/BerriAI/litellm");
+    expect(githubLink).toHaveAttribute("target", "_blank");
+    expect(githubLink).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("should not render buttons when prompts are disabled", () => {
@@ -45,6 +45,6 @@ describe("CommunityEngagementButtons", () => {
     renderWithProviders(<CommunityEngagementButtons />);
 
     expect(screen.queryByRole("link", { name: /join slack/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /star us on github/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /litellm on github/i })).not.toBeInTheDocument();
   });
 });

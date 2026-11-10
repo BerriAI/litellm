@@ -1,0 +1,352 @@
+import math
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
+
+import httpx
+from pydantic import BeforeValidator, ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.image_generation.transformation import (
+    BaseImageGenerationConfig,
+)
+from litellm.llms.openai.common_utils import OpenAIError
+from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
+from litellm.types.utils import ImageResponse
+from litellm.utils import convert_to_model_response_object
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
+
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+_TOKEN_COUNT_ADAPTER: Final[TypeAdapter[int | float]] = TypeAdapter(int | float)
+
+
+def _token_count_or_none(value: object) -> int | float | None:
+    if value is None:
+        return None
+    try:
+        count: Final = _TOKEN_COUNT_ADAPTER.validate_python(value)
+    except ValidationError:
+        verbose_logger.warning("MAI image usage has a token count that is not a number, counting it as absent")
+        return None
+    if not math.isfinite(count):
+        verbose_logger.warning("MAI image usage has a token count that is not finite, counting it as absent")
+        return None
+    return count
+
+
+_TokenCount: TypeAlias = Annotated[int | float | None, BeforeValidator(_token_count_or_none)]
+
+
+@with_config(ConfigDict(extra="allow"))
+class _MAIImageUsageDetails(TypedDict, total=False):
+    text_tokens: ReadOnly[NotRequired[_TokenCount]]
+    image_tokens: ReadOnly[NotRequired[_TokenCount]]
+
+
+@with_config(ConfigDict(extra="allow"))
+class _MAIImageUsage(TypedDict, total=False):
+    input_tokens_details: ReadOnly[NotRequired[object]]
+    num_input_text_tokens: ReadOnly[NotRequired[_TokenCount]]
+    num_input_image_tokens: ReadOnly[NotRequired[_TokenCount]]
+    input_tokens: ReadOnly[NotRequired[_TokenCount]]
+    output_tokens: ReadOnly[NotRequired[_TokenCount]]
+    num_output_tokens: ReadOnly[NotRequired[_TokenCount]]
+    output_image_tokens: ReadOnly[NotRequired[_TokenCount]]
+    total_tokens: ReadOnly[NotRequired[_TokenCount]]
+
+
+@with_config(ConfigDict(extra="allow"))
+class _MAIImageResponse(TypedDict, total=False):
+    usage: ReadOnly[NotRequired[object]]
+
+
+_MAI_IMAGE_USAGE_DETAILS_ADAPTER: Final[TypeAdapter[_MAIImageUsageDetails]] = TypeAdapter(_MAIImageUsageDetails)
+_MAI_IMAGE_USAGE_ADAPTER: Final[TypeAdapter[_MAIImageUsage]] = TypeAdapter(_MAIImageUsage)
+_MAI_RAW_USAGE_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _raw_usage_or_none(usage: object) -> Mapping[str, object] | None:
+    if usage is None:
+        return None
+    try:
+        return _MAI_RAW_USAGE_ADAPTER.validate_python(usage)
+    except ValidationError:
+        verbose_logger.warning("MAI image usage is not an object, counting it as absent")
+        return None
+
+
+_MAI_IMAGE_RESPONSE_ADAPTER: Final[TypeAdapter[_MAIImageResponse]] = TypeAdapter(_MAIImageResponse)
+
+
+class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
+    """Azure AI Foundry MAI image generation (e.g. MAI-Image-2.5)."""
+
+    DEFAULT_WIDTH = 1024
+    DEFAULT_HEIGHT = 1024
+
+    MAX_IMAGES_PER_REQUEST: Final = 1
+    MIN_DIMENSION_PX: Final = 768
+    MAX_TOTAL_PX: Final = 1_056_768
+
+    @staticmethod
+    def get_mai_image_generation_url(
+        api_base: str | None,
+        api_version: str | None,
+    ) -> str:
+        if api_base is None:
+            raise ValueError("api_base is required for Azure AI MAI image generation")
+
+        api_version = api_version or "preview"
+        path, separator, query = api_base.partition("?")
+        path = path.rstrip("/")
+
+        if "/mai/" in path:
+            prefix, _, _ = path.partition("/images/")
+            path = join_api_base(prefix, "images/generations")
+        else:
+            path = join_api_base(path, "mai/v1/images/generations")
+
+        if separator:
+            return f"{path}?{query}"
+        return f"{path}?api-version={api_version}"
+
+    @staticmethod
+    def get_mai_image_edit_url(
+        api_base: str | None,
+        api_version: str | None,
+    ) -> str:
+        if api_base is None:
+            raise ValueError("api_base is required for Azure AI MAI image editing")
+
+        api_version = api_version or "preview"
+        path, separator, query = api_base.partition("?")
+        path = path.rstrip("/")
+
+        if "/mai/" in path:
+            prefix, _, _ = path.partition("/images/")
+            path = join_api_base(prefix, "images/edits")
+        else:
+            path = join_api_base(path, "mai/v1/images/edits")
+
+        if separator:
+            return f"{path}?{query}"
+        return f"{path}?api-version={api_version}"
+
+    @staticmethod
+    def is_mai_model(model: str) -> bool:
+        model_normalized: Final = model.lower().replace("-", "").replace("_", "")
+        return "maiimage" in model_normalized
+
+    @staticmethod
+    def normalize_mai_image_usage(usage: object) -> Mapping[str, object]:
+        """Map Azure MAI usage fields to OpenAI ImageUsage schema."""
+        raw_usage: Final = _raw_usage_or_none(usage)
+        if raw_usage is None:
+            return {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "total_tokens": 0,
+            }
+
+        normalized_usage: Final[_MAIImageUsage] = _MAI_IMAGE_USAGE_ADAPTER.validate_python(raw_usage)
+        input_tokens_details_value: Final = normalized_usage.get("input_tokens_details")
+        input_tokens_details: Final[_MAIImageUsageDetails] = (
+            _MAI_IMAGE_USAGE_DETAILS_ADAPTER.validate_python(input_tokens_details_value)
+            if isinstance(input_tokens_details_value, dict)
+            else {}
+        )
+
+        text_tokens = normalized_usage.get("num_input_text_tokens")
+        if text_tokens is None:
+            text_tokens = input_tokens_details.get("text_tokens")
+        if text_tokens is None:
+            text_tokens = normalized_usage.get("input_tokens", 0) or 0
+
+        image_tokens = normalized_usage.get("num_input_image_tokens")
+        if image_tokens is None:
+            image_tokens = input_tokens_details.get("image_tokens")
+        if image_tokens is None:
+            image_tokens = 0
+
+        output_tokens = normalized_usage.get("output_tokens")
+        if output_tokens is None:
+            output_tokens = normalized_usage.get("num_output_tokens")
+        if output_tokens is None:
+            output_tokens = normalized_usage.get("output_image_tokens")
+        if output_tokens is None:
+            output_tokens = 0
+
+        input_tokens = normalized_usage.get("input_tokens")
+        if input_tokens is None:
+            input_tokens = text_tokens + image_tokens
+
+        total_tokens = normalized_usage.get("total_tokens")
+        if total_tokens is None:
+            total_tokens = input_tokens + output_tokens
+
+        return {
+            **raw_usage,
+            "input_tokens": input_tokens,
+            "input_tokens_details": {
+                "image_tokens": image_tokens,
+                "text_tokens": text_tokens,
+            },
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
+        return ["n", "size"]
+
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        supported_params: Final = self.get_supported_openai_params(model)
+
+        for k, v in non_default_params.items():
+            if k in optional_params:
+                continue
+
+            if k in supported_params:
+                if k == "size" and v:
+                    self._map_size_param(v, optional_params, model)
+                elif k == "n" and v is not None and self._image_count(v, model) != self.MAX_IMAGES_PER_REQUEST:
+                    if not drop_params:
+                        raise self._unsupported(
+                            model,
+                            f"n={v} is not supported for model {model}. The Azure AI MAI image "
+                            f"endpoint returns exactly {self.MAX_IMAGES_PER_REQUEST} image per "
+                            "request and ignores any count, so a larger value would silently "
+                            "return fewer images than requested. Send one request per image, or "
+                            "set drop_params=True to drop n.",
+                        )
+                else:
+                    optional_params[k] = v
+            elif k in ("width", "height"):
+                optional_params[k] = v
+            elif not drop_params:
+                raise self._unsupported(
+                    model,
+                    f"Parameter {k} is not supported for model {model}. "
+                    f"Supported parameters are {supported_params} and width/height. "
+                    f"Set drop_params=True to drop unsupported parameters.",
+                )
+
+        if "width" not in optional_params:
+            optional_params["width"] = self.DEFAULT_WIDTH
+        if "height" not in optional_params:
+            optional_params["height"] = self.DEFAULT_HEIGHT
+
+        optional_params.pop("size", None)
+        return optional_params
+
+    @staticmethod
+    def _unsupported(model: str, message: str) -> UnsupportedParamsError:
+        return UnsupportedParamsError(message=message, llm_provider="azure_ai", model=model)
+
+    def _image_count(self, n: object, model: str) -> int:
+        if isinstance(n, int):
+            return n
+        try:
+            return int(str(n))
+        except ValueError:
+            raise self._unsupported(model, f"n={n!r} is not a whole number of images for model {model}.")
+
+    def _map_size_param(self, size: str, optional_params: dict, model: str) -> None:
+        size_mapping: Final = {
+            "1024x1024": (1024, 1024),
+            "1792x1024": (1792, 1024),
+            "1024x1792": (1024, 1792),
+            "512x512": (512, 512),
+            "256x256": (256, 256),
+        }
+
+        if size in size_mapping:
+            width, height = size_mapping[size]
+        elif "x" in size:
+            try:
+                width, height = map(int, size.lower().split("x"))
+            except ValueError:
+                raise self._unsupported(
+                    model, f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024')."
+                )
+        else:
+            raise self._unsupported(
+                model,
+                f"Unsupported size value: '{size}'. "
+                f"Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string.",
+            )
+
+        self._validate_dimensions(model=model, size=size, width=width, height=height)
+        optional_params["width"] = width
+        optional_params["height"] = height
+
+    def _validate_dimensions(self, model: str, size: str, width: int, height: int) -> None:
+        if width < self.MIN_DIMENSION_PX or height < self.MIN_DIMENSION_PX:
+            raise self._unsupported(
+                model,
+                f"Unsupported size value: '{size}'. Azure AI MAI image models require width and "
+                f"height of at least {self.MIN_DIMENSION_PX} pixels.",
+            )
+        if width * height > self.MAX_TOTAL_PX:
+            raise self._unsupported(
+                model,
+                f"Unsupported size value: '{size}'. Azure AI MAI image models accept at most "
+                f"{self.MAX_TOTAL_PX} total pixels ({width}x{height} is {width * height}).",
+            )
+
+    def transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ImageResponse:
+        try:
+            response_json: Final = _MAI_IMAGE_RESPONSE_ADAPTER.validate_python(raw_response.json())
+        except Exception:
+            raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
+
+        response: Final = (
+            {
+                **response_json,
+                "usage": self.normalize_mai_image_usage(response_json["usage"]),
+            }
+            if "usage" in response_json
+            else dict(response_json)
+        )
+
+        logging_obj.post_call(
+            input=request_data.get("prompt", ""),
+            api_key=api_key,
+            additional_args={"complete_input_dict": request_data},
+            original_response=response,
+        )
+
+        image_response: Final[ImageResponse] = convert_to_model_response_object(
+            response_object=response,
+            model_response_object=model_response,
+            response_type="image_generation",
+        )
+
+        width: Final = optional_params.get("width", self.DEFAULT_WIDTH)
+        height: Final = optional_params.get("height", self.DEFAULT_HEIGHT)
+        image_response.size = f"{width}x{height}"
+        return image_response

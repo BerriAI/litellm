@@ -1,0 +1,656 @@
+"""Client for budget e2e tests: the shared ProxyClient plus budget-bearing entity
+management (user / team / team-member / org / customer / tag / budget-table) and
+info reads.
+
+Over-budget surfaces as a ``budget_exceeded`` error; ``is_budget_block`` detects it
+on a chat outcome. Create methods return the new id and raise on failure; tests
+register the matching delete with ``resources.defer(...)`` for cleanup. The request
+and response models are co-located here because only this suite uses them.
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from datetime import datetime
+
+from pydantic import AliasPath, BaseModel, Field, RootModel
+
+from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
+from e2e_metadata import step
+from proxy_client import ProxyClient
+from models import (
+    AnthropicMessagesBody,
+    BudgetWindow,
+    BudgetWindowState,
+    ChatBody,
+    ChatMessage,
+    ChatMetadata,
+    KeyGenerateBody,
+    ModelBudgetEntry,
+)
+
+_TEAM_READY_ATTEMPTS = 15
+_TEAM_READY_SLEEP_SECONDS = 0.4
+
+
+class UserNewBody(BaseModel):
+    max_budget: float
+    budget_duration: str | None = None
+
+
+class UserNewResponse(BaseModel):
+    user_id: str
+
+
+class UserInfoParams(BaseModel):
+    user_id: str
+
+
+class UserInfoRow(BaseModel):
+    spend: float | None = None
+    max_budget: float | None = None
+
+
+class UserInfoResponse(BaseModel):
+    user_info: UserInfoRow | None = None
+
+
+class UserDeleteBody(BaseModel):
+    user_ids: list[str]
+
+
+class CustomerNewBody(BaseModel):
+    user_id: str
+    max_budget: float | None = None
+    budget_id: str | None = None
+
+
+class OrgNewBody(BaseModel):
+    organization_alias: str
+    max_budget: float
+    budget_duration: str | None = None
+
+
+class OrgNewResponse(BaseModel):
+    organization_id: str
+
+
+class OrgDeleteBody(BaseModel):
+    organization_ids: list[str]
+
+
+class OrgInfoParams(BaseModel):
+    organization_id: str
+
+
+class OrgInfoResponse(BaseModel):
+    budget_id: str | None = None
+
+
+class TeamMember(BaseModel):
+    role: str
+    user_id: str
+
+
+class TeamNewBody(BaseModel):
+    team_alias: str
+    max_budget: float | None = None
+    budget_duration: str | None = None
+    organization_id: str | None = None
+    budget_limits: list[BudgetWindow] | None = None
+
+
+class TeamNewResponse(BaseModel):
+    team_id: str
+
+
+class TeamDeleteBody(BaseModel):
+    team_ids: list[str]
+
+
+class TeamMemberAddBody(BaseModel):
+    team_id: str
+    member: TeamMember
+    max_budget_in_team: float | None = None
+
+
+class TeamMemberUpdateBody(BaseModel):
+    team_id: str
+    user_id: str
+    max_budget_in_team: float | None = None
+    budget_duration: str | None = None
+
+
+class TeamMembershipRow(BaseModel):
+    user_id: str | None = None
+    budget_reset_at: str | None = Field(
+        default=None,
+        validation_alias=AliasPath("litellm_budget_table", "budget_reset_at"),
+    )
+
+
+class TeamInfoParams(BaseModel):
+    team_id: str
+
+
+class TeamInfoRow(BaseModel):
+    budget_limits: list[BudgetWindowState] | None = None
+
+
+class TeamInfoResponse(BaseModel):
+    team_memberships: list[TeamMembershipRow] = []
+    team_info: TeamInfoRow | None = None
+
+
+class TagNewBody(BaseModel):
+    name: str
+    max_budget: float
+
+
+class TagDeleteBody(BaseModel):
+    name: str
+
+
+class AccessGroupBudgetBody(BaseModel):
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    budget_duration: str | None = None
+
+
+class AccessGroupBudgetView(BaseModel):
+    budget_id: str
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    budget_duration: str | None = None
+
+
+class AccessGroupBudgetResponse(BaseModel):
+    """GET/PUT /access_group/{name}/budget: the group's shared pool and the spend
+    every key that can reach the group has drawn against it."""
+
+    access_group: str
+    spend: float
+    budget: AccessGroupBudgetView | None = None
+
+
+class BudgetNewBody(BaseModel):
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    budget_duration: str | None = None
+    model_max_budget: dict[str, ModelBudgetEntry] | None = None
+
+
+class BudgetNewResponse(BaseModel):
+    budget_id: str
+
+
+class BudgetDeleteBody(BaseModel):
+    id: str
+
+
+class BudgetInfoBody(BaseModel):
+    budgets: list[str]
+
+
+class BudgetRow(BaseModel):
+    budget_id: str | None = None
+    max_budget: float | None = None
+    soft_budget: float | None = None
+    budget_duration: str | None = None
+    budget_reset_at: str | None = None
+
+
+class BudgetInfoResponse(RootModel[list[BudgetRow]]):
+    pass
+
+
+def window_reset_at(windows: list[BudgetWindowState], budget_duration: str) -> datetime | None:
+    return next((w.reset_at for w in windows if w.budget_duration == budget_duration), None)
+
+
+def is_budget_block(result: StreamingResponse) -> bool:
+    """True if the call was rejected for being over budget (vs a provider error)."""
+    return not result.ok and "budget_exceeded" in result.body
+
+
+def model_budget(model: str, limit: float, period: str = "30d") -> dict[str, ModelBudgetEntry]:
+    """A model_max_budget entry: per-model cap with a reset window."""
+    return {model: ModelBudgetEntry(budget_limit=limit, time_period=period)}
+
+
+@dataclass(frozen=True, slots=True)
+class BudgetClient:
+    proxy: ProxyClient
+
+    # ---- generic key ops (delegate to the shared ProxyClient) ---------------
+
+    def generate_key(
+        self,
+        *,
+        models: list[str] | None = None,
+        max_budget: float | None = None,
+        soft_budget: float | None = None,
+        budget_duration: str | None = None,
+        budget_id: str | None = None,
+        user_id: str | None = None,
+        team_id: str | None = None,
+        model_max_budget: dict[str, ModelBudgetEntry] | None = None,
+        budget_fallbacks: dict[str, list[str]] | None = None,
+        budget_limits: list[BudgetWindow] | None = None,
+    ) -> str:
+        return self.proxy.generate_key(
+            KeyGenerateBody(
+                models=models or [],
+                max_budget=max_budget,
+                soft_budget=soft_budget,
+                budget_duration=budget_duration,
+                budget_id=budget_id,
+                user_id=user_id,
+                team_id=team_id,
+                model_max_budget=model_max_budget,
+                budget_fallbacks=budget_fallbacks,
+                budget_limits=budget_limits,
+            )
+        )
+
+    @step("Delete the virtual key")
+    def delete_key(self, key: str) -> None:
+        self.proxy.delete_key(key)
+
+    @step("Read the key's budget windows from /key/info")
+    def key_budget_windows(self, key: str) -> list[BudgetWindowState]:
+        """A key's budget_limits windows as /key/info stores them. Each window's
+        reset_at is advanced by the reset job in the same pass that zeroes the
+        window's spend counter, so a strictly-later value proves the wipe ran."""
+        return self.proxy.key_info(key).budget_limits or []
+
+    @step("Read the team's budget windows from /team/info")
+    def team_budget_windows(self, team_id: str) -> list[BudgetWindowState]:
+        """Team analog of key_budget_windows, read from /team/info."""
+        match self._team_info(team_id):
+            case Success(data=data) if data.team_info is not None:
+                return data.team_info.budget_limits or []
+            case _:
+                return []
+
+    @step("Delete the end users {user_ids}")
+    def delete_customers(self, user_ids: list[str]) -> None:
+        self.proxy.delete_customers(user_ids)
+
+    # ---- chat (raw HTTP outcome: a budget block surfaces as a non-2xx) --
+
+    @step('Send a /chat/completions request to {model} with the prompt "{content}"')
+    def chat(
+        self,
+        key: str,
+        model: str,
+        content: str,
+        *,
+        max_tokens: int | None = None,
+        user: str | None = None,
+        tags: list[str] | None = None,
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/chat/completions",
+            headers=self.proxy.transport.bearer(key),
+            json=ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=content)],
+                max_tokens=max_tokens,
+                user=user,
+                metadata=ChatMetadata(tags=tags) if tags else None,
+            ),
+        )
+
+    @step('Send a /v1/messages request to {model} with the prompt "{content}"')
+    def messages(
+        self,
+        key: str,
+        model: str,
+        content: str,
+        *,
+        max_tokens: int = 16,
+    ) -> StreamingResponse:
+        return self.proxy.transport.send(
+            "/v1/messages",
+            headers=self.proxy.transport.bearer(key),
+            json=AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=content)],
+                max_tokens=max_tokens,
+            ),
+        )
+
+    # ---- internal user --------------------------------------------------
+
+    @step("Create an internal user with max budget: {max_budget}")
+    def create_user(self, *, max_budget: float, budget_duration: str | None = None) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/user/new",
+                headers=self.proxy.transport.master,
+                json=UserNewBody(max_budget=max_budget, budget_duration=budget_duration),
+                response_type=UserNewResponse,
+            )
+        ).user_id
+
+    @step("Delete the internal user")
+    def delete_user(self, user_id: str) -> None:
+        _ = self.proxy.transport.post(
+            "/user/delete",
+            headers=self.proxy.transport.master,
+            json=UserDeleteBody(user_ids=[user_id]),
+            response_type=NoBody,
+        )
+
+    @step("Read the internal user's spend and budget from /user/info")
+    def user_info(self, user_id: str) -> UserInfoRow | None:
+        result = self.proxy.transport.get(
+            "/user/info",
+            headers=self.proxy.transport.master,
+            params=UserInfoParams(user_id=user_id),
+            response_type=UserInfoResponse,
+        )
+        match result:
+            case Success(data=data):
+                return data.user_info
+            case _:
+                return None
+
+    # ---- customer / end-user -------------------------------------------
+
+    @step("Create the end user {customer_id}")
+    def create_customer(
+        self,
+        customer_id: str,
+        *,
+        max_budget: float | None = None,
+        budget_id: str | None = None,
+    ) -> str:
+        resp = self.proxy.transport.send(
+            "/customer/new",
+            headers=self.proxy.transport.master,
+            json=CustomerNewBody(
+                user_id=customer_id, max_budget=max_budget, budget_id=budget_id
+            ),
+        )
+        assert resp.ok, resp.body
+        return customer_id
+
+    # ---- organization ---------------------------------------------------
+
+    @step("Create the organization {alias} with max budget: {max_budget}")
+    def create_org(self, *, max_budget: float, alias: str, budget_duration: str | None = None) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/organization/new",
+                headers=self.proxy.transport.master,
+                json=OrgNewBody(
+                    organization_alias=alias,
+                    max_budget=max_budget,
+                    budget_duration=budget_duration,
+                ),
+                response_type=OrgNewResponse,
+            )
+        ).organization_id
+
+    @step("Read the organization's budget id from /organization/info")
+    def org_budget_id(self, org_id: str) -> str | None:
+        """The id of the budget row backing an org; its budget_reset_at is read via
+        budget_info (LIT-4570: /organization/new stores budget_duration without
+        scheduling budget_reset_at, so the reset job's first tick schedules it)."""
+        result = self.proxy.transport.get(
+            "/organization/info",
+            headers=self.proxy.transport.master,
+            params=OrgInfoParams(organization_id=org_id),
+            response_type=OrgInfoResponse,
+        )
+        match result:
+            case Success(data=data):
+                return data.budget_id
+            case _:
+                return None
+
+    @step("Delete the organization")
+    def delete_org(self, org_id: str) -> None:
+        _ = self.proxy.transport.delete(
+            "/organization/delete",
+            headers=self.proxy.transport.master,
+            json=OrgDeleteBody(organization_ids=[org_id]),
+            response_type=NoBody,
+        )
+
+    # ---- team -----------------------------------------------------------
+
+    @step("Create the team {alias} and wait until /team/info returns it")
+    def create_team(
+        self,
+        *,
+        alias: str,
+        max_budget: float | None = None,
+        budget_duration: str | None = None,
+        organization_id: str | None = None,
+        budget_limits: list[BudgetWindow] | None = None,
+    ) -> str:
+        team_id = unwrap(
+            self.proxy.transport.post(
+                "/team/new",
+                headers=self.proxy.transport.master,
+                json=TeamNewBody(
+                    team_alias=alias,
+                    max_budget=max_budget,
+                    budget_duration=budget_duration,
+                    organization_id=organization_id,
+                    budget_limits=budget_limits,
+                ),
+                response_type=TeamNewResponse,
+            )
+        ).team_id
+        self._wait_for_team(team_id)
+        return team_id
+
+    @step("Delete the team")
+    def delete_team(self, team_id: str) -> None:
+        _ = self.proxy.transport.post(
+            "/team/delete",
+            headers=self.proxy.transport.master,
+            json=TeamDeleteBody(team_ids=[team_id]),
+            response_type=NoBody,
+        )
+
+    def _team_info(self, team_id: str) -> Result[TeamInfoResponse]:
+        return self.proxy.transport.get(
+            "/team/info",
+            headers=self.proxy.transport.master,
+            params=TeamInfoParams(team_id=team_id),
+            response_type=TeamInfoResponse,
+        )
+
+    def _wait_for_team(self, team_id: str) -> None:
+        last: Result[TeamInfoResponse] | None = None
+        for _ in range(_TEAM_READY_ATTEMPTS):
+            last = self._team_info(team_id)
+            match last:
+                case Success():
+                    return
+                case _:
+                    time.sleep(_TEAM_READY_SLEEP_SECONDS)
+        assert last is not None
+        raise AssertionError(last)
+
+    @step("Add the internal user to the team")
+    def add_team_member(self, team_id: str, user_id: str, *, max_budget_in_team: float | None = None) -> None:
+        last_body = ""
+        for attempt in range(_TEAM_READY_ATTEMPTS):
+            resp = self.proxy.transport.send(
+                "/team/member_add",
+                headers=self.proxy.transport.master,
+                json=TeamMemberAddBody(
+                    team_id=team_id,
+                    member=TeamMember(role="user", user_id=user_id),
+                    max_budget_in_team=max_budget_in_team,
+                ),
+            )
+            if resp.ok:
+                return
+            last_body = resp.body
+            if "doesn't exist" in resp.body and attempt + 1 < _TEAM_READY_ATTEMPTS:
+                time.sleep(_TEAM_READY_SLEEP_SECONDS)
+                continue
+            break
+        raise AssertionError(last_body)
+
+    @step("Update the team member's budget with /team/member_update")
+    def update_team_member(
+        self,
+        team_id: str,
+        user_id: str,
+        *,
+        max_budget_in_team: float | None = None,
+        budget_duration: str | None = None,
+    ) -> None:
+        resp = self.proxy.transport.send(
+            "/team/member_update",
+            headers=self.proxy.transport.master,
+            json=TeamMemberUpdateBody(
+                team_id=team_id,
+                user_id=user_id,
+                max_budget_in_team=max_budget_in_team,
+                budget_duration=budget_duration,
+            ),
+        )
+        assert resp.ok, resp.body
+
+    @step("Read the team member's budget reset time from /team/info")
+    def member_budget_reset_at(self, team_id: str, user_id: str) -> str | None:
+        """The member's per-team budget_reset_at as /team/info reports it, or None if
+        no reset is scheduled. The reset job advances this each time the window
+        elapses; a job that skips the row leaves it pinned forever."""
+        match self._team_info(team_id):
+            case Success(data=data):
+                return next(
+                    (row.budget_reset_at for row in data.team_memberships if row.user_id == user_id),
+                    None,
+                )
+            case _:
+                return None
+
+    # ---- tag ------------------------------------------------------------
+
+    @step("Create the tag {name} with max budget: {max_budget}")
+    def create_tag(self, name: str, *, max_budget: float) -> str:
+        resp = self.proxy.transport.send(
+            "/tag/new",
+            headers=self.proxy.transport.master,
+            json=TagNewBody(name=name, max_budget=max_budget),
+        )
+        assert resp.ok, resp.body
+        return name
+
+    @step("Delete the tag {name}")
+    def delete_tag(self, name: str) -> None:
+        _ = self.proxy.transport.post(
+            "/tag/delete",
+            headers=self.proxy.transport.master,
+            json=TagDeleteBody(name=name),
+            response_type=NoBody,
+        )
+
+    # ---- model access group ---------------------------------------------
+
+    @step("Set a shared budget on the model access group {access_group}")
+    def set_access_group_budget(
+        self,
+        access_group: str,
+        *,
+        max_budget: float | None = None,
+        soft_budget: float | None = None,
+        budget_duration: str | None = None,
+    ) -> AccessGroupBudgetResponse:
+        """Give a model access group one shared budget. Every key that can reach a
+        deployment in the group draws from it."""
+        return unwrap(
+            self.proxy.transport.put(
+                f"/access_group/{access_group}/budget",
+                headers=self.proxy.transport.master,
+                json=AccessGroupBudgetBody(
+                    max_budget=max_budget,
+                    soft_budget=soft_budget,
+                    budget_duration=budget_duration,
+                ),
+                response_type=AccessGroupBudgetResponse,
+            )
+        )
+
+    @step("Read the budget and spend of the model access group {access_group}")
+    def access_group_budget(self, access_group: str) -> AccessGroupBudgetResponse:
+        return unwrap(
+            self.proxy.transport.get(
+                f"/access_group/{access_group}/budget",
+                headers=self.proxy.transport.master,
+                params=NoBody(),
+                response_type=AccessGroupBudgetResponse,
+            )
+        )
+
+    @step("Delete the budget on the model access group {access_group}")
+    def delete_access_group_budget(self, access_group: str) -> None:
+        _ = self.proxy.transport.delete(
+            f"/access_group/{access_group}/budget",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+
+    # ---- budget table ---------------------------------------------------
+
+    @step("Create a budget with /budget/new")
+    def create_budget(
+        self,
+        *,
+        max_budget: float | None = None,
+        soft_budget: float | None = None,
+        budget_duration: str | None = None,
+        model_max_budget: dict[str, ModelBudgetEntry] | None = None,
+    ) -> str:
+        return unwrap(
+            self.proxy.transport.post(
+                "/budget/new",
+                headers=self.proxy.transport.master,
+                json=BudgetNewBody(
+                    max_budget=max_budget,
+                    soft_budget=soft_budget,
+                    budget_duration=budget_duration,
+                    model_max_budget=model_max_budget,
+                ),
+                response_type=BudgetNewResponse,
+            )
+        ).budget_id
+
+    @step("Delete the budget")
+    def delete_budget(self, budget_id: str) -> None:
+        _ = self.proxy.transport.post(
+            "/budget/delete",
+            headers=self.proxy.transport.master,
+            json=BudgetDeleteBody(id=budget_id),
+            response_type=NoBody,
+        )
+
+    @step("Read the budget from /budget/info")
+    def budget_info(self, budget_id: str) -> tuple[BudgetRow, ...]:
+        result = self.proxy.transport.post(
+            "/budget/info",
+            headers=self.proxy.transport.master,
+            json=BudgetInfoBody(budgets=[budget_id]),
+            response_type=BudgetInfoResponse,
+        )
+        match result:
+            case Success(data=data):
+                return tuple(data.root)
+            case _:
+                return ()
+
+
+def build_client(proxy: ProxyClient) -> BudgetClient:
+    return BudgetClient(proxy=proxy)

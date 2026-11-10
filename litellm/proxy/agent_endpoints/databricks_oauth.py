@@ -1,0 +1,341 @@
+"""
+OAuth M2M (client_credentials) support for A2A agents that target Databricks
+App endpoints.
+
+Databricks Apps reject static bearer tokens; they require a short-lived OAuth
+access token minted from the workspace OIDC token endpoint. When an agent is
+registered with a ``databricks_oauth`` block in its ``litellm_params``, LiteLLM
+fetches that token via the client_credentials grant, caches it until shortly
+before expiry, and attaches it as the outbound ``Authorization`` header on every
+call the proxy makes to the agent.
+
+Config example::
+
+    agents:
+      - agent_name: my-databricks-app
+        agent_card_params:
+          url: https://my-app-1234.aws.databricksapps.com
+        litellm_params:
+          databricks_oauth:
+            client_id: os.environ/DATABRICKS_CLIENT_ID
+            client_secret: os.environ/DATABRICKS_CLIENT_SECRET
+            workspace_url: https://dbc-abc123.cloud.databricks.com
+"""
+
+import asyncio
+import base64
+import hashlib
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Final
+
+import httpx
+from pydantic import TypeAdapter, ValidationError
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.databricks.agent.transformation import is_databricks_app_url, workspace_url_from_api_base
+from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.custom_http import httpxSpecialProvider
+
+DATABRICKS_OAUTH_PARAM: Final = "databricks_oauth"
+DATABRICKS_AGENT_PROVIDER: Final = "databricks_agent"
+_FLAT_OAUTH_FIELDS: Final = ("client_id", "client_secret", "workspace_url", "scope")
+
+_DEFAULT_SCOPE: Final = "all-apis"
+_TOKEN_EXPIRY_BUFFER_SECONDS: Final = 60
+_DEFAULT_TTL_SECONDS: Final = 3600
+_OAUTH_BLOCK: Final = TypeAdapter(Mapping[str, object])
+_TOKEN_RESPONSE_BODY: Final = TypeAdapter(object)
+
+
+def _resolve_secret(value: object) -> str | None:
+    """Resolve a config value, expanding ``os.environ/`` references."""
+    if not isinstance(value, str):
+        return None
+    if value.startswith("os.environ/"):
+        return get_secret_str(value)
+    return value
+
+
+def _token_url_from_workspace(workspace_url: str) -> str:
+    """Build the workspace OIDC token endpoint from a workspace URL."""
+    base = workspace_url.strip().rstrip("/")
+    base = base.removesuffix("/serving-endpoints")
+    return f"{base}/oidc/v1/token"
+
+
+@dataclass(frozen=True)
+class DatabricksAppOAuthConfig:
+    client_id: str
+    client_secret: str
+    token_url: str
+    scope: str
+
+    @property
+    def cache_key(self) -> str:
+        # Include a digest of the secret so a rotated client_secret yields a new
+        # key and forces a fresh token instead of serving the stale one.
+        secret_digest: Final = hashlib.sha256(self.client_secret.encode()).hexdigest()[:16]
+        return f"{self.token_url}|{self.client_id}|{self.scope}|{secret_digest}"
+
+
+def _workspace_origin(url: object) -> str | None:
+    return workspace_url_from_api_base(url) if isinstance(url, str) else None
+
+
+@dataclass(frozen=True, slots=True)
+class DatabricksOAuthConfigError:
+    message: str
+
+
+def _config_error(message: str) -> litellm.BadRequestError:
+    return litellm.BadRequestError(message=message, model="a2a", llm_provider=DATABRICKS_AGENT_PROVIDER)
+
+
+def _is_databricks_agent(litellm_params: Mapping[str, object]) -> bool:
+    return litellm_params.get("custom_llm_provider") == DATABRICKS_AGENT_PROVIDER
+
+
+def _flat_databricks_agent_oauth(litellm_params: Mapping[str, object]) -> Mapping[str, object] | None:
+    """The Admin UI catalog cannot nest fields, so a ``databricks_agent`` spells its OAuth block as flat
+    ``client_id`` / ``client_secret`` / ``workspace_url`` / ``scope``. ``workspace_url`` falls back to the
+    ``api_base`` origin for Model Serving; a Databricks App host is never a token endpoint, so an App must set it."""
+    if not _is_databricks_agent(litellm_params):
+        return None
+    if not litellm_params.get("client_id") and not litellm_params.get("client_secret"):
+        return None
+    return {
+        "client_id": litellm_params.get("client_id"),
+        "client_secret": litellm_params.get("client_secret"),
+        "workspace_url": litellm_params.get("workspace_url")
+        or _workspace_origin(_resolve_secret(litellm_params.get("api_base"))),
+        "scope": litellm_params.get("scope"),
+    }
+
+
+def _raw_oauth_block(litellm_params: Mapping[str, object]) -> object | None:
+    nested: Final = litellm_params.get(DATABRICKS_OAUTH_PARAM)
+    if not _is_databricks_agent(litellm_params):
+        return nested or None
+    return nested if nested is not None else _flat_databricks_agent_oauth(litellm_params)
+
+
+def has_databricks_oauth(litellm_params: Mapping[str, object]) -> bool:
+    return _raw_oauth_block(litellm_params) is not None
+
+
+def without_databricks_oauth_params(
+    litellm_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: asend_message takes litellm_params as a dict
+    consumed: Final = (
+        frozenset({DATABRICKS_OAUTH_PARAM, *_FLAT_OAUTH_FIELDS})
+        if _is_databricks_agent(litellm_params)
+        else frozenset({DATABRICKS_OAUTH_PARAM})
+    )
+    return {key: value for key, value in litellm_params.items() if key not in consumed}
+
+
+def parse_databricks_oauth_config(
+    litellm_params: Mapping[str, object] | None,
+) -> DatabricksAppOAuthConfig | None:
+    """Build a Databricks App OAuth config from an agent's ``litellm_params``.
+
+    Returns ``None`` when the agent has no ``databricks_oauth`` block. A block that is present but incomplete
+    raises instead of sending an unauthenticated request: a 400 ``litellm.BadRequestError`` for a
+    ``databricks_agent``, and the ``ValueError`` URL agents raised before ``databricks_agent`` existed.
+    """
+    config: Final = databricks_oauth_config(litellm_params)
+    if not isinstance(config, DatabricksOAuthConfigError):
+        return config
+    if litellm_params and _is_databricks_agent(litellm_params):
+        raise _config_error(config.message)
+    raise ValueError(config.message)
+
+
+def databricks_oauth_config(
+    litellm_params: Mapping[str, object] | None,
+) -> DatabricksAppOAuthConfig | DatabricksOAuthConfigError | None:
+    if not litellm_params:
+        return None
+
+    raw: Final = _raw_oauth_block(litellm_params)
+    if raw is None:
+        return None
+    try:
+        block: Final = _OAUTH_BLOCK.validate_python(raw)
+    except ValidationError:
+        return DatabricksOAuthConfigError(
+            f"'{DATABRICKS_OAUTH_PARAM}' must be a mapping of OAuth settings, got {type(raw).__name__}"
+        )
+
+    client_id: Final = _resolve_secret(block.get("client_id"))
+    client_secret: Final = _resolve_secret(block.get("client_secret"))
+    workspace_url: Final = _resolve_secret(block.get("workspace_url"))
+
+    if not (client_id and client_secret and workspace_url):
+        missing: Final = tuple(
+            name
+            for name, value in (
+                ("client_id", client_id),
+                ("client_secret", client_secret),
+                ("workspace_url", workspace_url),
+            )
+            if not value
+        )
+        return DatabricksOAuthConfigError(
+            f"Databricks App OAuth config is missing required field(s): {', '.join(missing)}"
+        )
+    if is_databricks_app_url(workspace_url):
+        return DatabricksOAuthConfigError(
+            "workspace_url must be the Databricks workspace URL, not a Databricks App URL"
+        )
+
+    scope: Final = _resolve_secret(block.get("scope")) or _DEFAULT_SCOPE
+
+    return DatabricksAppOAuthConfig(
+        client_id=client_id,
+        client_secret=client_secret,
+        token_url=_token_url_from_workspace(workspace_url),
+        scope=scope,
+    )
+
+
+class DatabricksAppOAuthTokenCache(InMemoryCache):
+    """In-memory cache for Databricks App OAuth client_credentials tokens.
+
+    Keyed by token endpoint + client_id + scope so distinct agents and service
+    principals never share a token. A per-key ``asyncio.Lock`` collapses
+    concurrent fetches into a single token request.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(default_ttl=_DEFAULT_TTL_SECONDS)
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _get_lock(self, cache_key: str) -> asyncio.Lock:
+        return self._locks.setdefault(cache_key, asyncio.Lock())
+
+    def _remove_key(self, key: str) -> None:
+        # Drop the per-key lock alongside the cached token so ``_locks`` stays
+        # bounded by the live key set rather than growing for every key ever seen.
+        super()._remove_key(key)
+        self._locks.pop(key, None)
+
+    def flush_cache(self) -> None:
+        super().flush_cache()
+        self._locks.clear()
+
+    async def async_get_token(self, config: DatabricksAppOAuthConfig) -> str:
+        cache_key: Final = config.cache_key
+
+        cached = self.get_cache(cache_key)
+        if cached is not None:
+            return cached
+
+        async with self._get_lock(cache_key):
+            cached = self.get_cache(cache_key)
+            if cached is not None:
+                return cached
+
+            token, ttl = await self._fetch_token(config)
+            # ttl == 0 means the token's own lifetime is shorter than the
+            # refresh buffer; skip caching so we never hand out a stale token,
+            # and drop the lock we just created since no cached entry will ever
+            # trigger _remove_key to clean it up.
+            if ttl > 0:
+                self.set_cache(cache_key, token, ttl=ttl)
+            else:
+                self._locks.pop(cache_key, None)
+            return token
+
+    async def _fetch_token(self, config: DatabricksAppOAuthConfig) -> tuple[str, int]:
+        client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.A2A)
+
+        verbose_logger.debug("Fetching Databricks App OAuth token from %s", config.token_url)
+
+        basic_auth: Final = base64.b64encode(f"{config.client_id}:{config.client_secret}".encode()).decode()
+        try:
+            response: Final = await client.post(
+                config.token_url,
+                data={
+                    "grant_type": "client_credentials",
+                    "scope": config.scope,
+                },
+                headers={
+                    "Authorization": f"Basic {basic_auth}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(
+                f"Databricks App OAuth token request failed with status {exc.response.status_code}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ValueError(f"Databricks App OAuth token request failed: {exc}") from exc
+
+        body: Final = _TOKEN_RESPONSE_BODY.validate_python(response.json())
+        if not isinstance(body, dict):
+            raise ValueError(
+                f"Databricks App OAuth token response returned non-object JSON (got {type(body).__name__})"
+            )
+
+        access_token: Final = body.get("access_token")
+        if not access_token:
+            raise ValueError("Databricks App OAuth token response missing 'access_token'")
+
+        raw_expires_in: Final = body.get("expires_in")
+        try:
+            expires_in = int(raw_expires_in) if raw_expires_in is not None else _DEFAULT_TTL_SECONDS
+        except (TypeError, ValueError):
+            expires_in = _DEFAULT_TTL_SECONDS
+
+        ttl: Final = max(expires_in - _TOKEN_EXPIRY_BUFFER_SECONDS, 0)
+        return access_token, ttl
+
+
+databricks_app_oauth_token_cache: Final = DatabricksAppOAuthTokenCache()
+
+
+async def _resolve_token(litellm_params: Mapping[str, object] | None) -> str | None:
+    config: Final = parse_databricks_oauth_config(litellm_params)
+    if config is None:
+        return None
+    return await databricks_app_oauth_token_cache.async_get_token(config)
+
+
+async def resolve_databricks_app_auth_header(
+    litellm_params: Mapping[str, object] | None,
+) -> dict[str, str] | None:
+    """Return ``{"Authorization": "Bearer <token>"}`` for a Databricks App agent.
+
+    Returns ``None`` when the agent is not configured for Databricks App OAuth.
+    """
+    token: Final = await _resolve_token(litellm_params)
+    return None if token is None else {"Authorization": f"Bearer {token}"}
+
+
+@dataclass(frozen=True, slots=True)
+class AgentBackendAuth:
+    litellm_params: dict[str, object]  # mutable-ok: asend_message takes litellm_params as a dict
+    header: Mapping[str, str] | None
+
+
+async def resolve_databricks_backend_auth(litellm_params: Mapping[str, object]) -> AgentBackendAuth:
+    """A ``databricks_agent`` completes with the minted token as its ``api_key``, so the token outranks a personal
+    access token and a client ``Authorization`` header; any other agent sends it as the outbound header."""
+    return await _backend_auth(litellm_params, parse_databricks_oauth_config(litellm_params))
+
+
+async def _backend_auth(
+    litellm_params: Mapping[str, object], config: DatabricksAppOAuthConfig | None
+) -> AgentBackendAuth:
+    forwarded: Final = without_databricks_oauth_params(litellm_params)
+    token: Final = None if config is None else await databricks_app_oauth_token_cache.async_get_token(config)
+    if token is None:
+        return AgentBackendAuth(litellm_params=forwarded, header=None)
+    if _is_databricks_agent(litellm_params):
+        return AgentBackendAuth(litellm_params={**forwarded, "api_key": token}, header=None)
+    return AgentBackendAuth(litellm_params=forwarded, header={"Authorization": f"Bearer {token}"})

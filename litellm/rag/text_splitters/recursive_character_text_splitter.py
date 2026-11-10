@@ -4,7 +4,7 @@ RecursiveCharacterTextSplitter for RAG ingestion.
 A simple implementation that splits text recursively by different separators.
 """
 
-from typing import List, Optional
+from typing import Final
 
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
 
@@ -21,34 +21,29 @@ class RecursiveCharacterTextSplitter:
         self,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
-        separators: Optional[List[str]] = None,
+        separators: list[str] | None = None,
     ):
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.separators = separators or ["\n\n", "\n", " ", ""]
 
-    def split_text(self, text: str) -> List[str]:
+    def split_text(self, text: str) -> list[str]:
         """Split text into chunks."""
         return self._split_text(text, self.separators)
 
-    def _split_text(
-        self, text: str, separators: List[str], depth: int = 0
-    ) -> List[str]:
+    def _split_text(self, text: str, separators: list[str], depth: int = 0) -> list[str]:
         """Recursively split text using separators."""
         from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
         if depth > DEFAULT_MAX_RECURSE_DEPTH:
             # Max depth reached, return text as-is split into chunk_size pieces
-            return [
-                text[i : i + self.chunk_size]
-                for i in range(0, len(text), self.chunk_size)
-            ]
+            return [text[i : i + self.chunk_size] for i in range(0, len(text), self.chunk_size)]
 
-        final_chunks: List[str] = []
+        final_chunks: Final[list[str]] = []
 
         # Get the appropriate separator
         separator = separators[-1]
-        new_separators: List[str] = []
+        new_separators: list[str] = []
 
         for i, sep in enumerate(separators):
             if sep == "":
@@ -66,7 +61,7 @@ class RecursiveCharacterTextSplitter:
             splits = list(text)
 
         # Merge splits into chunks
-        good_splits: List[str] = []
+        good_splits: list[str] = []
         for split in splits:
             if len(split) < self.chunk_size:
                 good_splits.append(split)
@@ -92,10 +87,10 @@ class RecursiveCharacterTextSplitter:
 
         return final_chunks
 
-    def _merge_splits(self, splits: List[str], separator: str) -> List[str]:
+    def _merge_splits(self, splits: list[str], separator: str) -> list[str]:
         """Merge splits into chunks respecting chunk_size and chunk_overlap."""
-        chunks: List[str] = []
-        current_chunk: List[str] = []
+        chunks: Final[list[str]] = []
+        current_chunk: Final[list[str]] = []
         current_length = 0
 
         for split in splits:
@@ -109,9 +104,7 @@ class RecursiveCharacterTextSplitter:
                         chunks.append(chunk_text)
 
                     # Handle overlap
-                    while (
-                        current_length > self.chunk_overlap and len(current_chunk) > 1
-                    ):
+                    while current_length > self.chunk_overlap and len(current_chunk) > 1:
                         removed = current_chunk.pop(0)
                         current_length -= len(removed) + len(separator)
 
@@ -126,9 +119,9 @@ class RecursiveCharacterTextSplitter:
 
         return chunks
 
-    def _force_split(self, text: str) -> List[str]:
+    def _force_split(self, text: str) -> list[str]:
         """Force split text by chunk_size when no separator works."""
-        chunks: List[str] = []
+        chunks: Final[list[str]] = []
         start = 0
 
         while start < len(text):

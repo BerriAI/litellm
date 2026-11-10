@@ -13,18 +13,18 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   buildMcpOAuthAuthorizeUrl,
   exchangeMcpOAuthToken,
-  getProxyBaseUrl,
   registerMcpOAuthClient,
-  serverRootPath,
   storeMCPOAuthUserCredential,
 } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { buildCallbackUrl, clearStorage } from "./mcpOAuthUtils";
 
 export type UserMcpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
@@ -69,25 +69,8 @@ const getStorage = (key: string): string | null => {
   return getSecureItem(key);
 };
 
-const clearStorage = (...keys: string[]) => {
-  keys.forEach((k) => {
-    try {
-      window.sessionStorage.removeItem(k);
-    } catch (_) {}
-  });
-};
-
-const buildCallbackUrl = (): string => {
-  if (typeof window !== "undefined") {
-    const path = window.location.pathname || "";
-    const idx = path.indexOf("/ui");
-    const prefix = idx >= 0 ? path.slice(0, idx + 3).replace(/\/+$/, "") : "";
-    return `${window.location.origin}${prefix}/mcp/oauth/callback`;
-  }
-  const base = (getProxyBaseUrl() || "").replace(/\/+$/, "");
-  const root = serverRootPath && serverRootPath !== "/" ? serverRootPath : "";
-  return `${base}${root}/ui/mcp/oauth/callback`;
-};
+const grantedScopes = (scope: unknown, requested: string[] | undefined): string[] | undefined =>
+  typeof scope === "string" ? scope.split(" ").filter(Boolean) : requested;
 
 export const useUserMcpOAuthFlow = ({
   accessToken,
@@ -97,6 +80,7 @@ export const useUserMcpOAuthFlow = ({
   clientId: preClientId,
   onSuccess,
 }: UseUserMcpOAuthFlowOptions): UseUserMcpOAuthFlowResult => {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<UserMcpOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const processingRef = useRef(false);
@@ -161,7 +145,7 @@ export const useUserMcpOAuthFlow = ({
       const msg = extractErrorMessage(err);
       setError(msg);
       setStatus("error");
-      NotificationsManager.error(msg);
+      toast.error(msg);
     }
   }, [accessToken, serverId, serverAlias, scopes, preClientId]);
 
@@ -176,13 +160,17 @@ export const useUserMcpOAuthFlow = ({
     // mount and would compete for the same RESULT_KEY.  Peek at the stored
     // flow state first: only the hook instance whose serverId matches the one
     // that initiated the OAuth flow should consume the result.
+    // Guard: only proceed if this hook's flow state exists (startOAuthFlow was
+    // called from this hook).  Without the guard, a tools re-auth redirect writes
+    // to the user result key too, and every OAuth2ConnectButton instance would try
+    // to resume a flow that was never started here.
     const rawFlowState = getStorage(FLOW_STATE_KEY);
-    if (rawFlowState) {
-      try {
-        const peeked = JSON.parse(rawFlowState) as StoredFlowState;
-        if (peeked.serverId && peeked.serverId !== serverId) return;
-      } catch (_) {}
-    }
+    if (!rawFlowState) return;
+
+    try {
+      const peeked = JSON.parse(rawFlowState) as StoredFlowState;
+      if (peeked.serverId && peeked.serverId !== serverId) return;
+    } catch (_) {}
 
     processingRef.current = true;
     clearStorage(RESULT_KEY);
@@ -195,7 +183,7 @@ export const useUserMcpOAuthFlow = ({
       const raw = getStorage(FLOW_STATE_KEY);
       flowState = raw ? JSON.parse(raw) : null;
     } catch (_) {
-      setError("Failed to resume OAuth flow. Please retry.");
+      setError(t("mcpOAuthFlow.resumeFailed"));
       setStatus("error");
       processingRef.current = false;
       clearStorage(FLOW_STATE_KEY);
@@ -233,23 +221,25 @@ export const useUserMcpOAuthFlow = ({
         access_token: token.access_token,
         refresh_token: token.refresh_token,
         expires_in: token.expires_in,
-        scopes: flowState.scopes,
+        scopes: grantedScopes(token.scope, flowState.scopes),
       });
 
       setStatus("success");
       setError(null);
-      NotificationsManager.success("Connected successfully");
+      toast.success(t("mcpOAuthFlow.connected"));
       onSuccess();
     } catch (err) {
       const msg = extractErrorMessage(err);
       setError(msg);
       setStatus("error");
-      NotificationsManager.error(msg);
+      toast.error(msg);
     } finally {
       clearStorage(FLOW_STATE_KEY);
-      setTimeout(() => { processingRef.current = false; }, 1000);
+      setTimeout(() => {
+        processingRef.current = false;
+      }, 1000);
     }
-  }, [accessToken, serverId, onSuccess]);
+  }, [accessToken, serverId, onSuccess, t]);
 
   useEffect(() => {
     resumeOAuthFlow();

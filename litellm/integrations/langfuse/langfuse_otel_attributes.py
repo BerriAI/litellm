@@ -5,7 +5,9 @@ Relevant Issue: https://github.com/BerriAI/litellm/issues/13764
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from collections.abc import Mapping
+from datetime import datetime
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel
 from typing_extensions import override
@@ -14,6 +16,7 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     BaseLLMObsOTELAttributes,
     safe_set_attribute,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
@@ -28,21 +31,27 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
 
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def serialize_langfuse_datetime(value: datetime) -> str:
+    return json.dumps(value.astimezone().isoformat())
+
+
 def get_output_content_by_type(
-    response_obj: Union[
-        None,
-        dict,
-        EmbeddingResponse,
-        ModelResponse,
-        TextCompletionResponse,
-        ImageResponse,
-        TranscriptionResponse,
-        RerankResponse,
-        HttpxBinaryResponseContent,
-        ResponsesAPIResponse,
-        list,
-    ],
-    kwargs: Optional[Dict[str, Any]] = None,
+    response_obj: None
+    | dict
+    | EmbeddingResponse
+    | ModelResponse
+    | TextCompletionResponse
+    | ImageResponse
+    | TranscriptionResponse
+    | RerankResponse
+    | HttpxBinaryResponseContent
+    | ResponsesAPIResponse
+    | list,
+    kwargs: Mapping[str, object] | None = None,
 ) -> str:
     """
     Extract output content from response objects based on their type.
@@ -61,7 +70,7 @@ def get_output_content_by_type(
         return ""
 
     kwargs = kwargs or {}
-    call_type = kwargs.get("call_type", None)
+    call_type: Final = kwargs.get("call_type", None)
 
     # Embedding responses - no output content
     if call_type == "embedding" or isinstance(response_obj, EmbeddingResponse):
@@ -74,9 +83,7 @@ def get_output_content_by_type(
     if isinstance(response_obj, BaseModel):
         return response_obj.model_dump_json()
 
-    if response_obj and (
-        isinstance(response_obj, dict) or isinstance(response_obj, list)
-    ):
+    if response_obj and (isinstance(response_obj, dict) or isinstance(response_obj, list)):
         return json.dumps(response_obj)
     else:
         return ""
@@ -85,17 +92,17 @@ def get_output_content_by_type(
 class LangfuseLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
-    def set_messages(span: "Span", kwargs: Dict[str, Any]):
-        prompt = {"messages": kwargs.get("messages")}
-        optional_params = kwargs.get("optional_params", {})
-        functions = optional_params.get("functions")
-        tools = optional_params.get("tools")
+    def set_messages(span: "Span", kwargs: Mapping[str, object]):
+        prompt: Final = {"messages": kwargs.get("messages")}
+        optional_params: Final = kwargs.get("optional_params", {})
+        functions: Final = require_attributes(optional_params, _SupportsGet, "get").get("functions")
+        tools: Final = require_attributes(optional_params, _SupportsGet, "get").get("tools")
         if functions is not None:
             prompt["functions"] = functions
         if tools is not None:
             prompt["tools"] = tools
 
-        input = prompt
+        input: Final = prompt
         safe_set_attribute(span, "langfuse.observation.input", json.dumps(input))
 
     @staticmethod

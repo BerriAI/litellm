@@ -1,11 +1,16 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { useTranslation } from "react-i18next";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useQuery } from "@tanstack/react-query";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
 import { getRouterSettingsCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
 import { FallbackSelectionForm } from "../Settings/RouterSettings/Fallbacks/FallbackSelectionForm";
 import { FallbackGroup } from "../Settings/RouterSettings/Fallbacks/FallbackGroupConfig";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, fetchAvailableModelsForTeam, ModelGroup } from "@/components/llm_calls/fetch_models";
+import RouterWeightsSection from "./RouterWeightsSection";
+import { RouterWeights, routerWeightsFrom, savedRouterWeights } from "./routerWeights";
 
 export interface RouterSettingsAccordionValue {
   router_settings: {
@@ -21,6 +26,7 @@ export interface RouterSettingsAccordionValue {
     model_group_alias?: { [key: string]: any } | null;
     enable_tag_filtering?: boolean;
     routing_strategy_args?: { [key: string]: any } | null;
+    weights?: RouterWeights | null;
   };
 }
 
@@ -29,26 +35,47 @@ interface RouterSettingsAccordionProps {
   value?: RouterSettingsAccordionValue;
   onChange?: (value: RouterSettingsAccordionValue) => void;
   modelData?: any;
+  teamId?: string | null;
 }
 
 export interface RouterSettingsAccordionRef {
   getValue: () => RouterSettingsAccordionValue;
 }
 
+const PROPAGATE_WAIT_MS = 100;
+
+const EMPTY_RELIABILITY_SETTINGS = {
+  allowed_fails: null,
+  cooldown_time: null,
+  num_retries: null,
+  timeout: null,
+  retry_after: null,
+  model_group_alias: null,
+};
+
+const valueKeyOf = (settings: RouterSettingsAccordionValue["router_settings"]): string => {
+  const { routing_strategy, fallbacks, enable_tag_filtering, weights } = settings;
+  const identity = { routing_strategy, fallbacks, enable_tag_filtering, weights };
+  return JSON.stringify(identity);
+};
+
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
-  ({ accessToken, value, onChange, modelData }, ref) => {
+  ({ accessToken, value, onChange, modelData, teamId }, ref) => {
+    const { t } = useTranslation();
     const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
-      routerSettings: {},
+      routerSettings: EMPTY_RELIABILITY_SETTINGS,
       selectedStrategy: null,
       enableTagFiltering: false,
     });
     const [fallbacks, setFallbacks] = useState<Fallbacks>([]);
     const [fallbackGroups, setFallbackGroups] = useState<FallbackGroup[]>([]);
-    const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+    const [weights, setWeights] = useState<RouterWeights>({});
     const [availableRoutingStrategies, setAvailableRoutingStrategies] = useState<string[]>([]);
+    const [globalRoutingStrategy, setGlobalRoutingStrategy] = useState<string | null>(null);
     const [routerFieldsMetadata, setRouterFieldsMetadata] = useState<{ [key: string]: any }>({});
     const [routingStrategyDescriptions, setRoutingStrategyDescriptions] = useState<{ [key: string]: string }>({});
     const isInternalUpdateRef = useRef(false);
+    const weightsTeamIdRef = useRef(teamId);
     const lastInitializedValueRef = useRef<string | null>(null);
 
     // Convert fallbacks format to groups format
@@ -84,13 +111,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
     // Initialize from value prop if provided (only when value actually changes externally)
     useEffect(() => {
       // Create a stable key from the value to detect actual external changes
-      const valueKey = value?.router_settings
-        ? JSON.stringify({
-          routing_strategy: value.router_settings.routing_strategy,
-          fallbacks: value.router_settings.fallbacks,
-          enable_tag_filtering: value.router_settings.enable_tag_filtering,
-        })
-        : null;
+      const valueKey = value?.router_settings ? valueKeyOf(value.router_settings) : null;
 
       // Skip if this is an internal update (from our own onChange) and the value hasn't actually changed
       if (isInternalUpdateRef.current && valueKey === lastInitializedValueRef.current) {
@@ -112,7 +133,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
 
       if (value?.router_settings) {
         const rs = value.router_settings;
-        const { fallbacks: _, ...routerSettingsWithoutFallbacks } = rs;
+        const { fallbacks: _, weights: storedWeights, ...routerSettingsWithoutFallbacks } = rs;
         setFormValue({
           routerSettings: routerSettingsWithoutFallbacks as { [key: string]: any },
           selectedStrategy: rs.routing_strategy || null,
@@ -121,10 +142,11 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         const initialFallbacks = rs.fallbacks || [];
         setFallbacks(initialFallbacks);
         setFallbackGroups(fallbacksToGroups(initialFallbacks));
+        setWeights(routerWeightsFrom(storedWeights));
       } else {
         // Initialize with empty defaults if no value provided
         setFormValue({
-          routerSettings: {},
+          routerSettings: EMPTY_RELIABILITY_SETTINGS,
           selectedStrategy: null,
           enableTagFiltering: false,
         });
@@ -136,8 +158,15 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
             fallbackModels: [],
           },
         ]);
+        setWeights({});
       }
     }, [value]);
+
+    useEffect(() => {
+      if (weightsTeamIdRef.current === teamId) return;
+      weightsTeamIdRef.current = teamId;
+      setWeights({});
+    }, [teamId]);
 
     // Fetch router settings metadata
     useEffect(() => {
@@ -163,6 +192,7 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
           if (routingStrategyField?.options) {
             setAvailableRoutingStrategies(routingStrategyField.options);
           }
+          setGlobalRoutingStrategy(routingStrategyField?.field_value ?? null);
 
           // Store routing strategy descriptions
           if (data.routing_strategy_descriptions) {
@@ -172,21 +202,11 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       });
     }, [accessToken]);
 
-    // Fetch available models for fallbacks
-    useEffect(() => {
-      if (!accessToken) {
-        return;
-      }
-      const loadModels = async () => {
-        try {
-          const uniqueModels = await fetchAvailableModels(accessToken);
-          setModelInfo(uniqueModels);
-        } catch (error) {
-          console.error("Error fetching model info for fallbacks:", error);
-        }
-      };
-      loadModels();
-    }, [accessToken]);
+    const { data: modelInfo = [] } = useQuery<ModelGroup[]>({
+      queryKey: ["fallbackAvailableModels", accessToken, teamId ?? null],
+      queryFn: () => (teamId ? fetchAvailableModelsForTeam(accessToken, teamId) : fetchAvailableModels(accessToken)),
+      enabled: Boolean(accessToken),
+    });
 
     // Helper function to build router_settings from current state
     const buildRouterSettings = (): RouterSettingsAccordionValue["router_settings"] => {
@@ -269,7 +289,10 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
               if (ttlElement?.value) {
                 routingStrategyArgs["ttl"] = Number(ttlElement.value);
               }
-              return ["routing_strategy_args", Object.keys(routingStrategyArgs).length > 0 ? routingStrategyArgs : null];
+              return [
+                "routing_strategy_args",
+                Object.keys(routingStrategyArgs).length > 0 ? routingStrategyArgs : null,
+              ];
             }
             return [key, value];
           })
@@ -298,26 +321,33 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         model_group_alias: normalizeValue(updatedVariables.model_group_alias),
         enable_tag_filtering: formValue.enableTagFiltering,
         routing_strategy_args: normalizeValue(updatedVariables.routing_strategy_args),
+        weights: savedRouterWeights(weights),
       };
     };
+
+    const debouncedPropagate = useDebouncedCallback(
+      () => {
+        if (!onChange) {
+          return;
+        }
+        isInternalUpdateRef.current = true;
+        const finalRouterSettings = buildRouterSettings();
+        lastInitializedValueRef.current = valueKeyOf(finalRouterSettings);
+        onChange({
+          router_settings: finalRouterSettings,
+        });
+      },
+      { wait: PROPAGATE_WAIT_MS },
+    );
 
     // Update parent when form values change (with debounce to avoid infinite loops)
     useEffect(() => {
       if (!onChange) {
         return;
       }
-
-      const timeoutId = setTimeout(() => {
-        isInternalUpdateRef.current = true;
-        const finalRouterSettings = buildRouterSettings();
-        onChange({
-          router_settings: finalRouterSettings,
-        });
-      }, 100);
-
-      return () => clearTimeout(timeoutId);
+      debouncedPropagate();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [formValue, fallbacks]);
+    }, [formValue, fallbacks, weights]);
 
     const handleFallbackGroupsChange = (newGroups: FallbackGroup[]): void => {
       setFallbackGroups(newGroups);
@@ -342,13 +372,13 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
 
     return (
       <div className="w-full">
-        <TabGroup className="w-full">
-          <TabList variant="line" defaultValue="1" className="px-8 pt-4">
-            <Tab value="1">Loadbalancing</Tab>
-            <Tab value="2">Fallbacks</Tab>
-          </TabList>
-          <TabPanels className="px-8 py-6">
-            <TabPanel>
+        <Tabs defaultValue="1" className="w-full">
+          <TabsList variant="line" className="px-8 pt-4">
+            <TabsTrigger value="1">{t("routerSettingsAccordion.loadbalancing")}</TabsTrigger>
+            <TabsTrigger value="2">{t("routerSettingsAccordion.fallbacks")}</TabsTrigger>
+          </TabsList>
+          <div className="px-8 py-6">
+            <TabsContent value="1" keepMounted>
               <RouterSettingsForm
                 value={formValue}
                 onChange={setFormValue}
@@ -356,20 +386,31 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
                 availableRoutingStrategies={availableRoutingStrategies}
                 routingStrategyDescriptions={routingStrategyDescriptions}
               />
-            </TabPanel>
-            <TabPanel>
+              <div className="mt-8 border-t border-border pt-8">
+                <RouterWeightsSection
+                  accessToken={accessToken}
+                  teamId={teamId}
+                  availableModels={availableModels}
+                  selectedStrategy={formValue.selectedStrategy ?? globalRoutingStrategy}
+                  weights={weights}
+                  onChange={setWeights}
+                />
+              </div>
+            </TabsContent>
+            <TabsContent value="2" keepMounted>
               <FallbackSelectionForm
                 groups={fallbackGroups}
                 onGroupsChange={handleFallbackGroupsChange}
                 availableModels={availableModels}
                 maxGroups={5}
               />
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
+            </TabsContent>
+          </div>
+        </Tabs>
       </div>
     );
-  });
+  },
+);
 
 RouterSettingsAccordion.displayName = "RouterSettingsAccordion";
 

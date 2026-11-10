@@ -3,11 +3,16 @@
 ## Allows jina ai embedding calls - which don't allow 'encoding_format' in payload.
 
 import json
-from typing import Optional
+import re
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -16,6 +21,57 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
+
+_KEY_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_EXTRA_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_TRANSPORT_HEADER_NAMES: Final = frozenset(
+    {
+        "host",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "keep-alive",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "upgrade",
+        "expect",
+    }
+)
+_HEADER_NAME: Final = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+_HEADER_VALUE: Final = re.compile(r"[\t\x20-\x7e]*")
+
+
+def _header_text(name: str, value: object) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, str | int | float):
+        return None
+    if _HEADER_NAME.fullmatch(name) is None:
+        return None
+    return str(value).strip(" \t\r\n")
+
+
+def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, str]:
+    caller_set: Final = {
+        name: value for name, value in extra_headers.items() if name.lower() not in _TRANSPORT_HEADER_NAMES
+    }
+    texts: Final = MappingProxyType({name: _header_text(name, value) for name, value in caller_set.items()})
+    refused: Final = sorted(name for name, text in texts.items() if text is None)
+    if refused and not drop_params:
+        raise litellm.UnsupportedParamsError(
+            message=f"extra_headers {', '.join(map(repr, refused))} cannot be sent. A header needs a name made of "
+            "letters, digits or !#$%&'*+-.^_`|~ and a text or number value. "
+            "To drop them from the call, set `litellm.drop_params = True`.",
+            model=model,
+        )
+    named: Final = MappingProxyType({name: text for name, text in texts.items() if text is not None})
+    unsendable: Final = sorted(name for name, text in named.items() if _HEADER_VALUE.fullmatch(text) is None)
+    if unsendable:
+        verbose_logger.warning(
+            "extra_headers %s dropped for model %r, since a header value must be printable ASCII on one line",
+            unsendable,
+            model,
+        )
+    return MappingProxyType({name: text for name, text in named.items() if name not in unsendable})
 
 
 class OpenAILikeEmbeddingHandler(OpenAILikeBase):
@@ -48,20 +104,18 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                     api_base,
                     headers=headers,
                     data=json.dumps(data),
-                )  # type: ignore
+                )
 
                 response.raise_for_status()
 
-                response_json = response.json()
+                response_json: Final = response.json()
             except httpx.HTTPStatusError as e:
                 raise OpenAILikeError(
                     status_code=e.response.status_code,
                     message=e.response.text if e.response else str(e),
                 )
             except httpx.TimeoutException:
-                raise OpenAILikeError(
-                    status_code=408, message="Timeout error occurred."
-                )
+                raise OpenAILikeError(status_code=408, message="Timeout error occurred.")
             except Exception as e:
                 raise OpenAILikeError(status_code=500, message=str(e))
 
@@ -88,14 +142,15 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         input: list,
         timeout: float,
         logging_obj,
-        api_key: Optional[str],
-        api_base: Optional[str],
+        api_key: str | None,
+        api_base: str | None,
         optional_params: dict,
-        model_response: Optional[EmbeddingResponse] = None,
+        model_response: EmbeddingResponse | None = None,
         client=None,
         aembedding=None,
-        custom_endpoint: Optional[bool] = None,
-        headers: Optional[dict] = None,
+        custom_endpoint: bool | None = None,
+        headers: dict | None = None,
+        drop_params: bool = False,
     ) -> EmbeddingResponse:
         api_base, headers = self._validate_environment(
             api_base=api_base,
@@ -105,10 +160,20 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             custom_endpoint=custom_endpoint,
         )
         model = model
-        filtered_optional_params = {
-            k: v for k, v in optional_params.items() if v not in (None, "")
+        data: Final = {
+            "model": model,
+            "input": input,
+            **{k: v for k, v in optional_params.items() if k != "extra_headers" and v not in (None, "")},
         }
-        data = {"model": model, "input": input, **filtered_optional_params}
+        extra_headers: Final = _extra_headers_as_text(
+            _EXTRA_HEADERS_ADAPTER.validate_python(optional_params.get("extra_headers") or {}), model, drop_params
+        )
+        key_headers: Final = _KEY_HEADERS_ADAPTER.validate_python(headers)
+        extra_header_names: Final = frozenset(name.lower() for name in extra_headers)
+        request_headers: Final = {
+            **{name: value for name, value in key_headers.items() if name.lower() not in extra_header_names},
+            **extra_headers,
+        }
 
         ## LOGGING
         logging_obj.pre_call(
@@ -118,23 +183,33 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         )
 
         if aembedding is True:
-            return self.aembedding(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, headers=headers)  # type: ignore
+            return self.aembedding(
+                data=data,
+                input=input,
+                logging_obj=logging_obj,
+                model_response=model_response,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                client=client,
+                headers=request_headers,
+            )
         if client is None or isinstance(client, AsyncHTTPHandler):
-            self.client = HTTPHandler(timeout=timeout)  # type: ignore
+            self.client = HTTPHandler(timeout=timeout)
         else:
             self.client = client
 
         ## EMBEDDING CALL
         try:
-            response = self.client.post(
+            response: Final = self.client.post(
                 api_base,
-                headers=headers,
+                headers=request_headers,
                 data=json.dumps(data),
-            )  # type: ignore
+            )
 
-            response.raise_for_status()  # type: ignore
+            response.raise_for_status()
 
-            response_json = response.json()  # type: ignore
+            response_json: Final = response.json()
         except httpx.HTTPStatusError as e:
             raise OpenAILikeError(
                 status_code=e.response.status_code,

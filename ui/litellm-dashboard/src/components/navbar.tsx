@@ -1,114 +1,109 @@
-import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
+import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
+import { useWorker } from "@/hooks/useWorker";
 import { getProxyBaseUrl } from "@/components/networking";
+import { uiHref } from "@/utils/uiHref";
 import { useTheme } from "@/contexts/ThemeContext";
-import { clearTokenCookies } from "@/utils/cookieUtils";
-import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
-import { fetchProxySettings } from "@/utils/proxyUtils";
-import { MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
-import { Button, Switch, Tag } from "antd";
+import { revokeSessionAndClearClientState, useLogout } from "@/app/(dashboard)/hooks/useLogout";
+import { getLoginUrl } from "@/utils/returnUrlUtils";
+import { Badge } from "@/components/ui/badge";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import Link from "next/link";
-import React, { useEffect, useState } from "react";
+import React from "react";
+import { useTranslation } from "react-i18next";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
+import { DocsLink } from "./Navbar/DocsLink/DocsLink";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
+import { cn } from "@/lib/cva.config";
+import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
+import ThemeToggle from "./ThemeToggle/ThemeToggle";
+import ViewSwitcher from "./Navbar/ViewSwitcher";
 import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
-  userID: string | null;
-  userEmail: string | null;
-  userRole: string | null;
-  premiumUser: boolean;
-  proxySettings: any;
-  setProxySettings: React.Dispatch<React.SetStateAction<any>>;
   accessToken: string | null;
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
-  isDarkMode: boolean;
-  toggleDarkMode: () => void;
+  deploymentHealth?: React.ReactNode;
+  deploymentHealthLink?: React.ReactNode;
+  publicNavigation?: React.ReactNode;
 }
 
+const NAV_LOGO_CLASS_NAME = "h-auto max-h-full w-auto max-w-full object-contain";
+
 const Navbar: React.FC<NavbarProps> = ({
-  userID,
-  userEmail,
-  userRole,
-  premiumUser,
-  proxySettings,
-  setProxySettings,
   accessToken,
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
-  isDarkMode,
-  toggleDarkMode,
+  deploymentHealth,
+  deploymentHealthLink,
+  publicNavigation,
 }) => {
+  const { t } = useTranslation();
   const baseUrl = getProxyBaseUrl();
-  const [logoutUrl, setLogoutUrl] = useState("");
-  const { logoUrl } = useTheme();
-  const { data: healthData } = useHealthReadiness();
+  const { logoUrl, logoUrlDark } = useTheme();
+  const { data: healthData } = useHealthReadinessDetails(accessToken);
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
+  const hideCommunityLinks = useDisableShowPrompts();
+  const { isControlPlane, selectedWorker } = useWorker();
+  const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
-  // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
+  const darkImageUrl = logoUrlDark || logoUrl || `${baseUrl}/get_image?theme=dark`;
 
-  useEffect(() => {
-    const initializeProxySettings = async () => {
-      if (accessToken) {
-        const settings = await fetchProxySettings(accessToken);
-        console.log("response from fetchProxySettings", settings);
-        if (settings) {
-          setProxySettings(settings);
-        }
-      }
-    };
-
-    initializeProxySettings();
-  }, [accessToken]);
-
-  useEffect(() => {
-    setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
-  }, [proxySettings]);
-
-  const handleLogout = () => {
-    clearTokenCookies();
-    localStorage.removeItem("litellm_selected_worker_id");
-    localStorage.removeItem("litellm_worker_url");
-    window.location.href = logoutUrl;
-  };
+  const handleLogout = useLogout(accessToken);
 
   const handleWorkerSwitch = (workerId: string) => {
-    clearTokenCookies();
-    clearStoredReturnUrl();
-    localStorage.removeItem("litellm_selected_worker_id");
-    localStorage.removeItem("litellm_worker_url");
-    window.location.href = `/ui/login?worker=${encodeURIComponent(workerId)}`;
+    void revokeSessionAndClearClientState(accessToken).finally(() => {
+      window.location.href = `${getLoginUrl()}?worker=${encodeURIComponent(workerId)}`;
+    });
   };
 
   return (
-    <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
+    <nav className="sticky top-0 z-chrome border-b border-border bg-card">
       <div className="w-full">
-        <div className="flex items-center h-14 px-4">
-          <div className="flex items-center flex-shrink-0">
+        <div className={cn("flex h-14 items-center px-4", isPublicPage && "gap-4 sm:px-6")}>
+          <div className="flex shrink-0 items-center">
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
-                className="flex items-center justify-center w-10 h-10 mr-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
-                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title={sidebarCollapsed ? t("shell.navbar.expandSidebar") : t("shell.navbar.collapseSidebar")}
               >
-                <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
+                <span className="text-lg">
+                  {sidebarCollapsed ? (
+                    <PanelLeftOpen className="size-[18px]" />
+                  ) : (
+                    <PanelLeftClose className="size-[18px]" />
+                  )}
+                </span>
               </button>
             )}
 
             <div className="flex items-center gap-2">
-              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
+              <Link href={uiHref("")} className="flex items-center">
                 <div className="relative">
-                  <div className="h-10 max-w-48 flex items-center justify-center overflow-hidden">
+                  <div
+                    className={cn(
+                      "flex h-10 max-w-48 items-center justify-center overflow-hidden",
+                      isPublicPage && "h-8 max-w-36 sm:h-10 sm:max-w-48",
+                    )}
+                  >
                     <img
                       src={imageUrl}
-                      alt="LiteLLM Brand"
-                      className="max-w-full max-h-full w-auto h-auto object-contain"
+                      alt={t("shell.navbar.logoAlt")}
+                      className={cn(NAV_LOGO_CLASS_NAME, "dark:hidden")}
+                    />
+                    <img
+                      src={darkImageUrl}
+                      alt=""
+                      aria-hidden
+                      className={cn(NAV_LOGO_CLASS_NAME, "hidden dark:block")}
                     />
                   </div>
                 </div>
@@ -117,48 +112,69 @@ const Navbar: React.FC<NavbarProps> = ({
                 <div className="relative">
                   {!disableBouncingIcon && (
                     <span
-                      className="absolute -top-1 -left-2 text-lg animate-bounce"
+                      className="absolute -left-2 -top-1 animate-bounce text-lg"
                       style={{ animationDuration: "2s" }}
-                      title="Thanks for using LiteLLM!"
+                      title={t("shell.navbar.thanks")}
                     >
                       🌑
                     </span>
                   )}
-                  <Tag className="relative text-xs font-medium cursor-pointer z-10">
+                  <Badge variant="outline" className="relative z-raised cursor-pointer text-xs font-medium">
                     <a
                       href="https://docs.litellm.ai/release_notes"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex-shrink-0"
+                      className="shrink-0"
                     >
                       v{version}
                     </a>
-                  </Tag>
+                  </Badge>
                 </div>
               )}
             </div>
           </div>
-          {/* Right side nav items */}
-          <div className="flex items-center space-x-5 ml-auto">
-            <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
-            <CommunityEngagementButtons />
-            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
-            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
-            {false && (
-              <Switch
-                data-testid="dark-mode-toggle"
-                checked={isDarkMode}
-                onChange={toggleDarkMode}
-                checkedChildren={<MoonOutlined />}
-                unCheckedChildren={<SunOutlined />}
-              />
-            )}
-            <Button type="text" href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer">
-              Docs
-            </Button>
-            <BlogDropdown />
 
-            {!isPublicPage && <UserDropdown onLogout={handleLogout} />}
+          {publicNavigation}
+
+          {!isPublicPage && (
+            <div className="ml-4 flex shrink-0 items-center border-l border-border pl-4">
+              <ViewSwitcher />
+            </div>
+          )}
+
+          <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-4">
+            {showWorkerSwitch && (
+              <div className="flex shrink-0 items-center">
+                <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
+              </div>
+            )}
+
+            <nav
+              aria-label={t("shell.navbar.productDocs")}
+              className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-border pl-4" : ""}`}
+            >
+              <DocsLink />
+              <BlogDropdown />
+            </nav>
+
+            {!hideCommunityLinks && (
+              <div className="hidden shrink-0 items-center border-l border-border pl-4 sm:flex">
+                <CommunityEngagementButtons />
+              </div>
+            )}
+
+            {!isPublicPage && (
+              <div className="flex shrink-0 items-center border-l border-border pl-4">
+                <div className="flex items-center gap-0.5 rounded-lg bg-muted px-1 py-0 transition-colors hover:bg-accent">
+                  <ThemeToggle />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
+                  {deploymentHealth}
+                  <NotificationsBell accessToken={accessToken} deploymentHealthLink={deploymentHealthLink} />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-border" aria-hidden />
+                  <UserDropdown onLogout={handleLogout} />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -7,9 +7,13 @@ These are HTTP (not WebSocket) endpoints used by the WebRTC flow:
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional, Union
+from collections.abc import Mapping
+from typing import Final
 
 import httpx
+
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.types.router import GenericLiteLLMParams
 
 
 class BaseRealtimeHTTPConfig(ABC):
@@ -26,7 +30,7 @@ class BaseRealtimeHTTPConfig(ABC):
     @abstractmethod
     def get_api_base(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         **kwargs,
     ) -> str:
         """
@@ -39,7 +43,7 @@ class BaseRealtimeHTTPConfig(ABC):
     @abstractmethod
     def get_api_key(
         self,
-        api_key: Optional[str],
+        api_key: str | None,
         **kwargs,
     ) -> str:
         """
@@ -49,22 +53,40 @@ class BaseRealtimeHTTPConfig(ABC):
           explicit api_key → litellm.api_key → env var → ""
         """
 
+    def get_extra_headers(
+        self,
+        litellm_params: GenericLiteLLMParams,
+        api_key: str,
+        extra_headers: Mapping[str, object] | None,
+    ) -> Mapping[str, object] | None:
+        return extra_headers
+
     # ------------------------------------------------------------------ #
     # client_secrets endpoint                                              #
     # ------------------------------------------------------------------ #
 
     @abstractmethod
-    def get_complete_url(
-        self, api_base: Optional[str], model: str, api_version: Optional[str] = None
-    ) -> str:
+    def get_complete_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
         """Return the full URL for POST /realtime/client_secrets."""
+
+    def get_transcription_session_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+        """Return the full URL for POST /realtime/transcription_sessions."""
+        base = (api_base or "").rstrip("/")
+        base = base.removesuffix("/v1")
+        return join_api_base(base, "v1/realtime/transcription_sessions")
+
+    def get_translation_client_secret_url(
+        self, api_base: str | None, model: str, api_version: str | None = None
+    ) -> str:
+        base: Final = (api_base or "").rstrip("/")
+        return f"{base}/v1/realtime/translations/client_secrets"
 
     @abstractmethod
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
     ) -> dict:
         """
         Build and return the request headers for the client_secrets call.
@@ -77,12 +99,13 @@ class BaseRealtimeHTTPConfig(ABC):
     # realtime_calls endpoint                                              #
     # ------------------------------------------------------------------ #
 
-    def get_realtime_calls_url(
-        self, api_base: Optional[str], model: str, api_version: Optional[str] = None
-    ) -> str:
+    def get_realtime_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
         """Return the full URL for POST /realtime/calls (SDP exchange)."""
-        base = (api_base or "").rstrip("/")
-        return f"{base}/v1/realtime/calls"
+        return join_api_base(api_base or "", "v1/realtime/calls")
+
+    def get_translation_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+        base: Final = (api_base or "").rstrip("/")
+        return f"{base}/v1/realtime/translations/calls"
 
     def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
         """
@@ -99,9 +122,7 @@ class BaseRealtimeHTTPConfig(ABC):
     # Error handling                                                      #
     # ------------------------------------------------------------------ #
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ):
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers):
         """
         Map HTTP errors to LiteLLM exception types.
 

@@ -4,12 +4,13 @@
  * Works with forms - reads from and writes to router_settings.fallbacks
  */
 
-import { Button as TremorButton } from "@tremor/react";
-import { Button } from "antd";
 import React, { useEffect, useState } from "react";
-import MessageManager from "@/components/molecules/message_manager";
-import NotificationManager from "../../../molecules/notifications_manager";
-import { fetchAvailableModels, ModelGroup } from "../../../playground/llm_calls/fetch_models";
+import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { toast } from "@/lib/toast";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup } from "./FallbackGroupConfig";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
@@ -18,18 +19,14 @@ export type FallbackEntry = { [modelName: string]: string[] };
 export type Fallbacks = FallbackEntry[];
 
 interface AddFallbacksProps {
-  models?: string[];
   accessToken: string;
   value?: Fallbacks; // Current fallbacks value from form
   onChange?: (fallbacks: Fallbacks) => Promise<void>; // Callback to update form value
+  disabledReason?: string; // When set, the button is disabled and this explains why
 }
 
-export default function AddFallbacks({
-  models,
-  accessToken,
-  value = [],
-  onChange,
-}: AddFallbacksProps) {
+export default function AddFallbacks({ accessToken, value = [], onChange, disabledReason }: AddFallbacksProps) {
+  const { t } = useTranslation();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [modalKey, setModalKey] = useState(0); // Key to force remount of form when modal opens
@@ -60,7 +57,6 @@ export default function AddFallbacks({
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
-        console.log("Fetched models for fallbacks:", uniqueModels);
         setModelInfo(uniqueModels);
       } catch (error) {
         console.error("Error fetching model info for fallbacks:", error);
@@ -87,13 +83,9 @@ export default function AddFallbacks({
 
   const handleSaveAll = async () => {
     // Validation
-    const invalidGroups = groups.filter(
-      (g) => !g.primaryModel || g.fallbackModels.length === 0,
-    );
+    const invalidGroups = groups.filter((g) => !g.primaryModel || g.fallbackModels.length === 0);
     if (invalidGroups.length > 0) {
-      MessageManager.error(
-        `Please complete configuration for all groups. ${invalidGroups.length} group(s) incomplete.`,
-      );
+      toast.error(t("routerSettings.addFallbacks.toasts.incomplete", { count: invalidGroups.length }));
       return;
     }
 
@@ -113,7 +105,7 @@ export default function AddFallbacks({
       setIsSaving(true);
       try {
         await onChange(updatedFallbacks);
-        NotificationManager.success(`${groups.length} fallback configuration(s) added successfully!`);
+        toast.success(t("routerSettings.addFallbacks.toasts.added", { count: groups.length }));
         handleCancel();
       } catch (error) {
         // Error handling is done in handleFallbacksChange, so we don't need to show another notification here
@@ -122,19 +114,28 @@ export default function AddFallbacks({
         setIsSaving(false);
       }
     } else {
-      NotificationManager.fromBackend("onChange callback not provided");
+      toast.fromError(t("routerSettings.addFallbacks.toasts.noOnChange"));
     }
   };
 
   return (
     <div>
-      <TremorButton
-        className="mx-auto"
-        onClick={() => setIsModalVisible(true)}
-        icon={() => <span className="mr-1">+</span>}
-      >
-        Add Fallbacks
-      </TremorButton>
+      {disabledReason ? (
+        <Tooltip>
+          <TooltipTrigger render={<span className="inline-flex" tabIndex={0} />}>
+            <Button className="mx-auto" disabled aria-disabled="true">
+              <span>+</span>
+              {t("routerSettings.addFallbacks.addButton")}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{disabledReason}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
+          <span>+</span>
+          {t("routerSettings.addFallbacks.addButton")}
+        </Button>
+      )}
       <AddFallbacksModal open={isModalVisible} onCancel={handleCancel}>
         <FallbackSelectionForm
           key={modalKey}
@@ -146,21 +147,13 @@ export default function AddFallbacks({
         />
         {/* Footer with Cancel and Save buttons */}
         {groups.length > 0 && (
-          <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-gray-100">
-            <Button
-              type="default"
-              onClick={handleCancel}
-              disabled={isSaving}
-            >
-              Cancel
+          <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-border">
+            <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
+              {t("routerSettings.addFallbacks.cancel")}
             </Button>
-            <Button
-              type="default"
-              onClick={handleSaveAll}
-              disabled={groups.length === 0 || isSaving}
-              loading={isSaving}
-            >
-              {isSaving ? "Saving Configuration..." : "Save All Configurations"}
+            <Button variant="outline" onClick={handleSaveAll} disabled={groups.length === 0 || isSaving}>
+              {isSaving && <UiLoadingSpinner className="size-4" />}
+              {isSaving ? t("routerSettings.addFallbacks.saving") : t("routerSettings.addFallbacks.saveAll")}
             </Button>
           </div>
         )}

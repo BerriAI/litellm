@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { OnboardingFormBody } from "./OnboardingFormBody";
@@ -70,20 +70,16 @@ describe("OnboardingFormBody", () => {
     const onSubmit = vi.fn();
     render(<OnboardingFormBody {...defaultProps} onSubmit={onSubmit} />);
 
-    await user.type(screen.getByLabelText("Password"), "mypassword");
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "mypassword" } });
     await user.click(screen.getByRole("button", { name: /sign up/i }));
 
     await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledWith(
-        expect.objectContaining({ password: "mypassword" })
-      );
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ password: "mypassword" }));
     });
   });
 
   it("should show 'Reset Password' on the submit button for reset_password variant", () => {
     render(<OnboardingFormBody {...defaultProps} variant="reset_password" />);
-    expect(
-      screen.getByRole("button", { name: /reset password/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reset password/i })).toBeInTheDocument();
   });
 });

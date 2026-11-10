@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import Field
 
@@ -6,21 +6,21 @@ from .base import GuardrailConfigModel
 
 
 class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description="The API key for the PANW Prisma AIRS guardrail. If not provided, the `PANW_PRISMA_AIRS_API_KEY` environment variable is checked.",
     )
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description="The API base for the PANW Prisma AIRS guardrail. Defaults to https://service.api.aisecurity.paloaltonetworks.com. If not provided, the `PANW_PRISMA_AIRS_API_BASE` environment variable is checked.",
     )
 
-    profile_name: Optional[str] = Field(
+    profile_name: str | None = Field(
         default=None,
         description="PANW Prisma AIRS security profile name configured in Strata Cloud Manager. Optional if API key has a linked profile.",
     )
 
-    app_name: Optional[str] = Field(
+    app_name: str | None = Field(
         default=None,
         description="Application name for tracking this LiteLLM instance in Prisma AIRS analytics and dashboards. Defaults to 'LiteLLM' if not specified.",
     )
@@ -40,6 +40,11 @@ class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
         description="Apply masking to responses that would be blocked. When True, masked content is returned to the user instead of blocking the response.",
     )
 
+    include_masked_response_on_block: bool = Field(
+        default=False,
+        description="When a response is blocked, include AIRS response_masked_data (masked text and pattern_detections) in the 400 error body. Has no effect when mask_response_content is on, because that returns the masked text with a 200 instead.",
+    )
+
     fallback_on_error: Literal["block", "allow"] = Field(
         default="block",
         description="Action when PANW API is unavailable (timeout, rate limit, network error): 'block' (default, maximum security) rejects requests; 'allow' (high availability) proceeds without scanning. Authentication and configuration errors always block.",
@@ -52,11 +57,14 @@ class PanwPrismaAirsGuardrailConfigModel(GuardrailConfigModel):
         description="PANW API call timeout in seconds (1-60).",
     )
 
-    experimental_use_latest_role_message_only: Optional[bool] = Field(
+    experimental_use_latest_role_message_only: bool | None = Field(
         default=None,
-        description="Anthropic /v1/messages only. When unset: scans only latest user/developer "
-        "message on request side. Set false to scan all user/system/developer messages. "
-        "Non-Anthropic unaffected.",
+        description="Scan only the latest user/developer message on the request side instead of "
+        "the full conversation history. Set true to enable for every request shape (chat completions, "
+        "Anthropic /v1/messages, /v1/responses); set false to always scan all user/system/developer "
+        "messages. When unset: latest-only for Anthropic /v1/messages, full history otherwise. "
+        "Latest-only trusts caller-supplied history: earlier turns are not rescanned, so enable it only "
+        "where each turn was scanned when it was the latest message or history is server-controlled.",
     )
 
     @staticmethod

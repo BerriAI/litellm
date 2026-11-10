@@ -3,10 +3,11 @@ Base configuration class for Evals API
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai_evals import (
     CancelEvalResponse,
@@ -46,9 +47,7 @@ class BaseEvalsAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """
         Validate and update headers with provider-specific requirements
 
@@ -64,9 +63,9 @@ class BaseEvalsAPIConfig(ABC):
     @abstractmethod
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         endpoint: str,
-        eval_id: Optional[str] = None,
+        eval_id: str | None = None,
     ) -> str:
         """
         Get the complete URL for the API request
@@ -81,7 +80,7 @@ class BaseEvalsAPIConfig(ABC):
         """
         if api_base is None:
             raise ValueError("api_base is required")
-        return f"{api_base}/v1/{endpoint}"
+        return join_api_base(api_base, f"v1/{endpoint}")
 
     @abstractmethod
     def transform_create_eval_request(
@@ -89,7 +88,7 @@ class BaseEvalsAPIConfig(ABC):
         create_request: CreateEvalRequest,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform create eval request to provider-specific format
 
@@ -101,7 +100,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Provider-specific request body
         """
-        pass
 
     @abstractmethod
     def transform_create_eval_response(
@@ -119,7 +117,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Eval object
         """
-        pass
 
     @abstractmethod
     def transform_list_evals_request(
@@ -127,7 +124,7 @@ class BaseEvalsAPIConfig(ABC):
         list_params: ListEvalsParams,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform list evals request parameters
 
@@ -139,7 +136,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, query_params)
         """
-        pass
 
     @abstractmethod
     def transform_list_evals_response(
@@ -157,7 +153,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             ListEvalsResponse object
         """
-        pass
 
     @abstractmethod
     def transform_get_eval_request(
@@ -166,7 +161,7 @@ class BaseEvalsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform get eval request
 
@@ -179,7 +174,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, headers)
         """
-        pass
 
     @abstractmethod
     def transform_get_eval_response(
@@ -197,7 +191,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Eval object
         """
-        pass
 
     @abstractmethod
     def transform_update_eval_request(
@@ -207,7 +200,7 @@ class BaseEvalsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict, Dict]:
+    ) -> tuple[str, dict, dict]:
         """
         Transform update eval request
 
@@ -221,7 +214,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, headers, body)
         """
-        pass
 
     @abstractmethod
     def transform_update_eval_response(
@@ -239,7 +231,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Eval object
         """
-        pass
 
     @abstractmethod
     def transform_delete_eval_request(
@@ -248,7 +239,7 @@ class BaseEvalsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform delete eval request
 
@@ -261,7 +252,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, headers)
         """
-        pass
 
     @abstractmethod
     def transform_delete_eval_response(
@@ -279,7 +269,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             DeleteEvalResponse object
         """
-        pass
 
     @abstractmethod
     def transform_cancel_eval_request(
@@ -288,7 +277,7 @@ class BaseEvalsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict, Dict]:
+    ) -> tuple[str, dict, dict]:
         """
         Transform cancel eval request
 
@@ -301,7 +290,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, headers, body)
         """
-        pass
 
     @abstractmethod
     def transform_cancel_eval_response(
@@ -319,7 +307,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             CancelEvalResponse object
         """
-        pass
 
     # Run API Transformations
     @abstractmethod
@@ -329,7 +316,7 @@ class BaseEvalsAPIConfig(ABC):
         create_request: CreateRunRequest,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform create run request to provider-specific format
 
@@ -342,7 +329,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, request_body)
         """
-        pass
 
     @abstractmethod
     def transform_create_run_response(
@@ -360,7 +346,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Run object
         """
-        pass
 
     @abstractmethod
     def transform_list_runs_request(
@@ -369,7 +354,7 @@ class BaseEvalsAPIConfig(ABC):
         list_params: ListRunsParams,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform list runs request parameters
 
@@ -382,7 +367,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, query_params)
         """
-        pass
 
     @abstractmethod
     def transform_list_runs_response(
@@ -400,7 +384,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             ListRunsResponse object
         """
-        pass
 
     @abstractmethod
     def transform_get_run_request(
@@ -410,7 +393,7 @@ class BaseEvalsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform get run request
 
@@ -424,7 +407,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, headers)
         """
-        pass
 
     @abstractmethod
     def transform_get_run_response(
@@ -442,7 +424,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Run object
         """
-        pass
 
     @abstractmethod
     def transform_cancel_run_request(
@@ -452,7 +433,7 @@ class BaseEvalsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict, Dict]:
+    ) -> tuple[str, dict, dict]:
         """
         Transform cancel run request
 
@@ -466,7 +447,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, headers, body)
         """
-        pass
 
     @abstractmethod
     def transform_cancel_run_response(
@@ -484,7 +464,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             CancelRunResponse object
         """
-        pass
 
     @abstractmethod
     def transform_delete_run_request(
@@ -494,7 +473,7 @@ class BaseEvalsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict, Dict]:
+    ) -> tuple[str, dict, dict]:
         """
         Transform delete run request
 
@@ -508,7 +487,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             Tuple of (url, headers, body)
         """
-        pass
 
     @abstractmethod
     def transform_delete_run_response(
@@ -526,7 +504,6 @@ class BaseEvalsAPIConfig(ABC):
         Returns:
             RunDeleteResponse object
         """
-        pass
 
     def get_error_class(
         self,

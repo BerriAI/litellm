@@ -1,17 +1,9 @@
 "use client";
 
-import PoliciesPanel from "@/components/policies";
+import PoliciesPanel from "./_components";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
-const PoliciesPage = () => {
+export default function Policies() {
   const { accessToken, userRole } = useAuthorized();
-
-  return (
-    <PoliciesPanel
-      accessToken={accessToken}
-      userRole={userRole}
-    />
-  );
-};
-
-export default PoliciesPage;
+  return <PoliciesPanel accessToken={accessToken} userRole={userRole} />;
+}

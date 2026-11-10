@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
@@ -11,7 +11,7 @@ vi.mock("@/components/networking", () => ({
 
 describe("useStoreModelInDB", () => {
   let queryClient: QueryClient;
-  let fetchSpy: ReturnType<typeof vi.fn>;
+  let fetchSpy: Mock;
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -54,7 +54,7 @@ describe("useStoreModelInDB", () => {
           field_value: true,
           config_type: "general_settings",
         }),
-      })
+      }),
     );
   });
 
@@ -80,15 +80,12 @@ describe("useStoreModelInDB", () => {
           field_value: false,
           config_type: "general_settings",
         }),
-      })
+      }),
     );
   });
 
   it("should throw error when access token is missing", async () => {
-    vi.spyOn(
-      await import("../useAuthorized"),
-      "default"
-    ).mockReturnValue({
+    vi.spyOn(await import("../useAuthorized"), "default").mockReturnValue({
       accessToken: null,
       userRole: null,
       userId: null,
