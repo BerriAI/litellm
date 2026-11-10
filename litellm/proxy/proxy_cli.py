@@ -264,6 +264,7 @@ WORKER_APP: Final = "litellm_cli.main:proxy_worker_app"
 WORKER_LOG_CONFIG_ENV: Final = "LITELLM_WORKER_LOG_CONFIG"
 _LOG_CONFIG: Final = TypeAdapter[str | Mapping[str, object]](str | Mapping[str, object])
 _LOG_CONFIG_FILE: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter[object](object)
 
 
 class ProxyInitializationHelpers:
@@ -1332,8 +1333,7 @@ def run_server(
         ProxyInitializationHelpers.run_test_chat_completion(host, port, model, test)
         return
     else:
-        if headers:
-            headers = json.loads(headers)
+        worker_headers: Final = _DECODED_JSON.validate_python(json.loads(headers) if headers else headers)
         save_worker_config(
             model=model,
             alias=alias,
@@ -1347,7 +1347,7 @@ def run_server(
             max_budget=max_budget,
             drop_params=drop_params,
             add_function_to_prompt=add_function_to_prompt,
-            headers=headers,
+            headers=worker_headers,
             save=save,
             config=config,
             use_queue=use_queue,

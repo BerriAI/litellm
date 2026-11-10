@@ -182,6 +182,9 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
@@ -262,6 +265,7 @@ class ResponsesToCompletionBridgeHandler:
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
                 replays_openai_history=custom_llm_provider == "openai",
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -284,6 +288,9 @@ class ResponsesToCompletionBridgeHandler:
         model_response: Final = validated_kwargs["model_response"]
         logging_obj: Final = validated_kwargs["logging_obj"]
         custom_llm_provider: Final = validated_kwargs["custom_llm_provider"]
+        from .transformation import serves_anthropic_messages
+
+        streams_reasoning_signatures: Final = serves_anthropic_messages(logging_obj)
         if kwargs.get("stream") is True and "stream" not in optional_params:
             optional_params = {**optional_params, "stream": True}
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
@@ -367,6 +374,7 @@ class ResponsesToCompletionBridgeHandler:
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
                 replays_openai_history=custom_llm_provider == "openai",
+                streams_reasoning_signatures=streams_reasoning_signatures,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

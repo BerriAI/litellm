@@ -35,14 +35,16 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
     set_object_permission,
 )
+from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import EndUserRepository
@@ -522,10 +524,12 @@ async def resolve_customer_daily_activity_scope(
     prisma_client: "PrismaClient",
 ) -> _CustomerDailyActivityScope:
     end_user_table: Final = _typed_table(EndUserRepository(prisma_client))
-    end_user_aliases: Final = (
-        await find_many_in(end_user_table, "user_id", end_user_ids)
+    end_user_aliases: Final = await unless_database_fails(
+        find_many_in(end_user_table, "user_id", end_user_ids)
         if end_user_ids is not None
-        else await end_user_table.find_many(where={})
+        else end_user_table.find_many(where={}),
+        (),
+        "its customer aliases",
     )
     metadata: Final = MappingProxyType({end_user.user_id: {"alias": end_user.alias} for end_user in end_user_aliases})
     return _CustomerDailyActivityScope(end_user_ids, metadata)
@@ -810,7 +814,7 @@ async def delete_end_user(
     See below for all params 
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, spend_counter_store
 
     try:
         if prisma_client is None:
@@ -840,6 +844,9 @@ async def delete_end_user(
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
             await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
+            await drop_committed_spend(
+                spend_counter_store, tuple(end_user_counter(user_id) for user_id in data.user_ids)
+            )
 
             return DeleteCustomersResponse(
                 deleted_customers=response,

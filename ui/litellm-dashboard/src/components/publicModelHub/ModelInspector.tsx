@@ -4,6 +4,7 @@ import { ChevronDown } from "lucide-react";
 import * as React from "react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { DeploymentPricingBreakdown } from "@/components/molecules/models/DeploymentPricingBreakdown";
 import type { ModelGroupInfo } from "@/components/PublicModelHubTableColumns";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -17,12 +18,14 @@ import {
   modeLabel,
   modelCapabilities,
   providerName,
+  SECTION_TITLE,
   wildcardExample,
 } from "./hubFormat";
 import { Badges, CodeBlock, type Fact, Facts, PaneSection, ProviderAvatar, ProviderName } from "./HubParts";
 import { curlSnippet, modelSnippet } from "./hubSnippets";
 import { HealthBadge } from "./HubStatus";
 import { InspectorHeader } from "./InspectorHeader";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 const summary = (model: ModelGroupInfo): string | undefined => {
   if (model.description) return model.description;
@@ -96,8 +99,8 @@ function CallThisModel({ model }: { model: ModelGroupInfo }) {
     <PaneSection title={t("publicModelHub.modelInspector.callThisModel.title")}>
       <Tabs defaultValue="python" className="gap-3">
         <TabsList>
-          <TabsTrigger value="python">Python</TabsTrigger>
-          <TabsTrigger value="curl">cURL</TabsTrigger>
+          <TabsTrigger value="python">{productNames.python}</TabsTrigger>
+          <TabsTrigger value="curl">{productNames.curl}</TabsTrigger>
         </TabsList>
         <TabsContent value="python">
           <CodeBlock code={modelSnippet(model)} />
@@ -175,6 +178,10 @@ export function ModelInspector({ model }: { model: ModelGroupInfo }) {
         </Alert>
       )}
       <Facts groups={modelFacts(model)} />
+      <DeploymentPricingBreakdown
+        deployments={model.deployment_pricing}
+        heading={<h3 className={SECTION_TITLE}>{t("publicModelHub.modelInspector.pricingByDeployment")}</h3>}
+      />
       {capabilities.length > 0 && (
         <PaneSection title={t("publicModelHub.modelInspector.capabilities")}>
           <Badges items={capabilities} />

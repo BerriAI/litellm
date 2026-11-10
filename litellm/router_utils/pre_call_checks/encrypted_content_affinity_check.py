@@ -38,7 +38,7 @@ Safe to enable globally:
 
 import hashlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache, lru_cache, partial
 from time import monotonic
 from typing import TYPE_CHECKING, Final, Optional, cast
@@ -62,7 +62,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_param
 from litellm.secret_managers.main import secret_manager_would_be_consulted
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import Deployment, GenericLiteLLMParams
+from litellm.types.router import Deployment, GenericLiteLLMParams, ModelInfo
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_order_filtered_deployments, with_named_credential
 
@@ -91,8 +91,11 @@ class _EncryptionBoundary:
     model: Callable[[], str | None] = field(compare=False)
     account_scope: frozenset[tuple[str, object]]
     explicit_pair: bool
+    declared: str | None = None
 
     def is_shared_with(self, other: "_EncryptionBoundary") -> bool:
+        if self.declared is not None and other.declared is not None:
+            return self.declared == other.declared
         if (self.api_base, self.api_key) != (other.api_base, other.api_key):
             return False
         if self.explicit_pair and other.explicit_pair:
@@ -148,7 +151,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
         return any("encrypted_content_affinity" in checks for checks in model_group_affinity_config.values())
 
-    def _is_enabled_for_model_group(self, model_group: str) -> bool:
+    def is_enabled_for_model_group(self, model_group: str) -> bool:
         group_checks: Final = self.model_group_affinity_config.get(model_group)
         return self.enable_global_affinity or (
             group_checks is not None and "encrypted_content_affinity" in group_checks
@@ -291,6 +294,37 @@ class EncryptedContentAffinityCheck(CustomLogger):
         )
 
     @staticmethod
+    def _deployment_encryption_boundary(
+        litellm_params: object,
+        model_info: object,
+        clock: Callable[[], float] = monotonic,
+    ) -> _EncryptionBoundary | None:
+        """
+        ``_encryption_boundary_key``, overridden by an operator-declared
+        ``model_info.encrypted_content_boundary``. Two deployments that both declare one are peers exactly
+        when the names match, which lets endpoints of one provider organization with different ``api_base``
+        values share encrypted reasoning.
+        """
+        declared: Final = EncryptedContentAffinityCheck._declared_encryption_boundary(model_info)
+        resolved: Final = EncryptedContentAffinityCheck._encryption_boundary_key(litellm_params, clock)
+        if declared is None:
+            return resolved
+        if resolved is None:
+            return _EncryptionBoundary(None, None, lambda: None, frozenset(), explicit_pair=False, declared=declared)
+        return replace(resolved, declared=declared)
+
+    @staticmethod
+    def _declared_encryption_boundary(model_info: object) -> str | None:
+        if isinstance(model_info, ModelInfo):
+            return model_info.encrypted_content_boundary
+        if not isinstance(model_info, Mapping):
+            return None
+        declared: Final = cast(Mapping[str, object], model_info).get(  # cast-ok: narrowed by isinstance
+            "encrypted_content_boundary"
+        )
+        return declared if isinstance(declared, str) and declared else None
+
+    @staticmethod
     @lru_cache(maxsize=1024)
     def _encryption_boundary_in_refresh_window(key: _ParamsInRefreshWindow) -> _EncryptionBoundary | None:
         return EncryptedContentAffinityCheck._resolve_encryption_boundary(key.params)
@@ -408,9 +442,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     def _find_deployments_on_same_encryption_boundary(
         self,
-        healthy_deployments: list[dict],
+        healthy_deployments: list[dict[str, object]],
         model_id: str,
-    ) -> tuple[list[dict], Deployment | None]:
+    ) -> tuple[list[dict[str, object]], Deployment | None]:
         """
         Deployments in ``healthy_deployments`` sharing the originating
         deployment's encryption boundary, alongside the originating
@@ -421,15 +455,20 @@ class EncryptedContentAffinityCheck(CustomLogger):
         originating: Final = self.ctx.registry().deployment(model_id)
         if originating is None:
             return [], None
-        boundary: Final = self._encryption_boundary_key(
-            originating.litellm_params.model_dump(exclude_none=True), self._clock
+        boundary: Final = self._deployment_encryption_boundary(
+            originating.litellm_params.model_dump(exclude_none=True), originating.model_info, self._clock
         )
         if boundary is None:
             return [], originating
         matches: Final = [
             d
             for d in healthy_deployments
-            if (candidate := self._encryption_boundary_key(d.get("litellm_params", {}), self._clock)) is not None
+            if (
+                candidate := self._deployment_encryption_boundary(
+                    d.get("litellm_params", {}), d.get("model_info"), self._clock
+                )
+            )
+            is not None
             and boundary.is_shared_with(candidate)
         ]
         return matches, originating
@@ -464,8 +503,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 boundary
                 for target in target_deployments
                 if (
-                    boundary := EncryptedContentAffinityCheck._encryption_boundary_key(
-                        target.get("litellm_params"), clock
+                    boundary := EncryptedContentAffinityCheck._deployment_encryption_boundary(
+                        target.get("litellm_params"), target.get("model_info"), clock
                     )
                 )
                 is not None
@@ -482,8 +521,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 return False
             origin: Final = ctx.registry().deployment(origin_model_id)
             origin_boundary: Final = (
-                EncryptedContentAffinityCheck._encryption_boundary_key(
-                    origin.litellm_params.model_dump(exclude_none=True), clock
+                EncryptedContentAffinityCheck._deployment_encryption_boundary(
+                    origin.litellm_params.model_dump(exclude_none=True), origin.model_info, clock
                 )
                 if origin is not None
                 else None
@@ -530,7 +569,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments: Final = cast(list[dict[str, object]], healthy_deployments)
-        if not self._is_enabled_for_model_group(model):
+        if not self.is_enabled_for_model_group(model):
             return typed_healthy_deployments
         typed_request_kwargs: Final = _REQUEST_KWARGS_ADAPTER.validate_python(request_kwargs)
         target_order: Final = typed_request_kwargs.get("_target_order")

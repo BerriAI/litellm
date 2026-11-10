@@ -20,6 +20,15 @@ describe("RouterSettingsSummary", () => {
     expect(screen.getByText("Number of Retries: 3")).toBeInTheDocument();
   });
 
+  it("should list each weighted model group with its deployment weights", () => {
+    render(<RouterSettingsSummary routerSettings={{ weights: { "gpt-5": { "dep-a": 9, "dep-b": 1 }, empty: {} } }} />);
+
+    expect(screen.getByText("Deployment Weights:")).toBeInTheDocument();
+    expect(screen.getByText("gpt-5")).toBeInTheDocument();
+    expect(screen.getByText("dep-a: 9, dep-b: 1")).toBeInTheDocument();
+    expect(screen.queryByText("empty")).not.toBeInTheDocument();
+  });
+
   it("should show the empty state when every setting is null", () => {
     render(<RouterSettingsSummary routerSettings={{ fallbacks: null, num_retries: null }} />);
 

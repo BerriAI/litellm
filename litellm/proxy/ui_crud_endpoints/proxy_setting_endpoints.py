@@ -47,10 +47,12 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import CONFIG_PARAMS_TARGET, invalidate_config_param
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
+    AccessGroupRepository,
     SSOConfigRepository,
     UISettingsRepository,
 )
@@ -1172,6 +1174,33 @@ async def update_internal_user_settings(
     )
 
 
+async def _validate_default_access_groups_exist(access_group_ids: Sequence[str]) -> None:
+    if not access_group_ids:
+        return
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    existing_groups: Final = await find_many_in(
+        AccessGroupRepository(prisma_client, use_writer=True).table, "access_group_id", dict.fromkeys(access_group_ids)
+    )
+    existing_ids: Final = {group.access_group_id for group in existing_groups}
+    missing_ids: Final = tuple(dict.fromkeys(ag_id for ag_id in access_group_ids if ag_id not in existing_ids))
+    if missing_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Access group(s) not found: {', '.join(missing_ids)}. "
+                "Create the access group first or remove it from the default team settings."
+            },
+        )
+
+
 @router.patch(
     "/update/default_team_settings",
     tags=["SSO Settings"],
@@ -1188,6 +1217,8 @@ async def update_default_team_settings(
     """
     if settings.organization_id is not None:
         await _validate_default_organization_exists(settings.organization_id)
+    if settings.access_group_ids is not None:
+        await _validate_default_access_groups_exist(settings.access_group_ids)
 
     return await _update_litellm_setting(
         settings=settings,
