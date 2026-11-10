@@ -2,6 +2,7 @@ import enum
 import json
 import os
 from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from types import MappingProxyType as MappingProxyType  # noqa: PLC0414  # public re-export
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
@@ -15,7 +16,9 @@ from pydantic import (
     Field,
     Json,
     JsonValue,
+    ModelWrapValidatorHandler,
     PositiveInt,
+    PrivateAttr,
     TypeAdapter,
     field_validator,
     model_validator,
@@ -66,13 +69,13 @@ from litellm.types.mcp import (
     MCPCredentials,
     MCPDisabledCapabilities,
     MCPExecutionMode,
-    MCPGatewayExecutionMode,
     MCPTransport,
     MCPTransportType,
     MCPUpstreamProtocol,
     validate_mcp_protocol_transport,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.mcp_server.provider_registration import active_registration_extras, normalize_provider_registration
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
@@ -1416,12 +1419,12 @@ def _validate_mcp_transport_fields(values: object) -> None:
 
 
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
-    execution_mode: MCPGatewayExecutionMode = MCPExecutionMode.litellm
+    execution_mode: MCPExecutionMode = MCPExecutionMode.litellm
     server_id: str | None = None
     server_name: str | None = None
     alias: str | None = None
     description: str | None = None
-    transport: MCPTransportType = MCPTransport.sse
+    transport: MCPTransportType | None = MCPTransport.sse
     auth_type: MCPAuthType | None = None
     credentials: MCPCredentials | None = None
     url: str | None = None
@@ -1482,6 +1485,10 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "NewMCPServerRequest":
+        if self.execution_mode == MCPExecutionMode.provider:
+            return self
+        if self.transport is None:
+            raise ValueError("LiteLLM-executed MCP registrations require a transport")
         validate_mcp_protocol_transport(
             TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
                 (self.mcp_info or {}).get("protocol_version", "auto")
@@ -1493,7 +1500,15 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
-        _validate_mcp_transport_fields(values)
+        if not isinstance(values, dict) or values.get("execution_mode") != MCPExecutionMode.provider:
+            _validate_mcp_transport_fields(values)
+        return values
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_registration(cls, values: object) -> object:
+        if isinstance(values, dict) and values.get("execution_mode") == MCPExecutionMode.provider:
+            return normalize_provider_registration(TypeAdapter(dict[str, object]).validate_python(values))
         return values
 
     @model_validator(mode="before")
@@ -1525,11 +1540,13 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
+    _provider_extra_fields: tuple[str, ...] = PrivateAttr(default=())
+
     server_id: str
     server_name: str | None = None
     alias: str | None = None
     description: str | None = None
-    transport: MCPTransportType = MCPTransport.sse
+    transport: MCPTransportType | None = MCPTransport.sse
     auth_type: MCPAuthType | None = None
     credentials: MCPCredentials | None = None
     url: str | None = None
@@ -1574,6 +1591,28 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
 
+    @model_validator(mode="wrap")
+    @classmethod
+    def retain_extra_field_names(
+        cls,
+        values: object,
+        handler: ModelWrapValidatorHandler["UpdateMCPServerRequest"],
+    ) -> "UpdateMCPServerRequest":
+        validated: Final = handler(values)
+        if isinstance(values, Mapping):
+            validated._provider_extra_fields = active_registration_extras(
+                TypeAdapter(dict[str, object]).validate_python(values),
+                cls.model_fields.keys(),
+            )
+        return validated
+
+    def provider_registration_patch(self, fields_set: AbstractSet[str] | None = None) -> Mapping[str, object]:
+        if self._provider_extra_fields:
+            raise ValueError(
+                f"Provider-executed MCP registrations do not accept {', '.join(self._provider_extra_fields)}"
+            )
+        return self.model_dump(include=set(fields_set) if fields_set is not None else None, exclude_unset=True)
+
     @model_validator(mode="before")
     @classmethod
     def reject_execution_mode_changes(cls, values: object) -> object:
@@ -1583,7 +1622,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
-        if not {"transport", "mcp_info"}.issubset(self.model_fields_set):
+        if self.transport is None or not {"transport", "mcp_info"}.issubset(self.model_fields_set):
             return self
         validate_mcp_protocol_transport(
             TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(

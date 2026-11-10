@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually
-from integration._support.database import read_rows
+from integration._support.database import read_rows, scratch_database
 from integration._support.mcp import (
     McpCaller,
     McpPeer,
@@ -207,6 +207,42 @@ def _openapi_server_lists_and_calls_only_its_own_tools(
     called: Final = call_tool(gateway, key, identity, "getpet", {"petId": "7"})
     assert called.status_code == 200, called.text
     assert [(item["method"], item["path"]) for item in peer.drain()] == [("GET", "/pets/7")], identity
+
+
+def test_duplicate_provider_url_is_rejected_where_db_push_skipped_the_unique_index(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    import concurrent.futures
+
+    config: Final = tmp_path / "pushed.yaml"
+    config.write_text(yaml.safe_dump({"model_list": [], "general_settings": {"master_key": gateway.key}}))
+    with scratch_database("provider_url") as database_url, owned_proxy(
+        gateway, tmp_path, {"DATABASE_URL": database_url}, config=config
+    ) as pushed:
+        index: Final = read_rows(
+            "SELECT to_regclass('\"LiteLLM_MCPServerTable_provider_url_key\"')::text AS name", (), database_url=database_url
+        )
+        assert index == [{"name": None}], "db push should leave the SQL-only partial index out"
+        url: Final = f"https://{uuid.uuid4().hex[:12]}.example/mcp"
+
+        def register(name: str, endpoint: str) -> int:
+            return pushed.request(
+                "POST",
+                "/v1/mcp/server",
+                {"server_id": name, "server_name": name, "execution_mode": "provider", "url": endpoint, "allowed_tools": ["search"]},
+            ).status_code
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            statuses: Final = sorted(pool.map(partial(register, endpoint=url), (f"prov{n}" for n in range(8))))
+        assert statuses == [201] + [409] * 7, statuses
+        stored: Final = read_rows(
+            'SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE url = %s', (url,), database_url=database_url
+        )
+        assert len(stored) == 1, stored
+
+        assert register("prov_other", f"https://other-{uuid.uuid4().hex[:8]}.example/mcp") == 201
+        moved: Final = pushed.request("PUT", "/v1/mcp/server", {"server_id": "prov_other", "url": url})
+        assert moved.status_code == 409, moved.text
 
 
 def test_openapi_listing_is_scoped_to_the_exact_alias_when_aliases_overlap(gateway: Gateway) -> None:

@@ -29,11 +29,10 @@ class MCPExecutionMode(str, enum.Enum):
     provider = "provider"
 
 
-MCPGatewayExecutionMode: TypeAlias = Literal[MCPExecutionMode.litellm]
-_GATEWAY_EXECUTION_MODE: Final = TypeAdapter[MCPGatewayExecutionMode](MCPGatewayExecutionMode)
+_GATEWAY_EXECUTION_MODE: Final = TypeAdapter[Literal[MCPExecutionMode.litellm]](Literal[MCPExecutionMode.litellm])
 
 
-def validate_mcp_gateway_execution(value: object) -> MCPGatewayExecutionMode:
+def validate_mcp_gateway_execution(value: object) -> Literal[MCPExecutionMode.litellm]:
     return _GATEWAY_EXECUTION_MODE.validate_python(value)
 
 

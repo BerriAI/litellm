@@ -678,6 +678,7 @@ class TestCredentialMergeOnUpdate:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
+        mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
