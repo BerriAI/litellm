@@ -24,7 +24,7 @@ import {
   type Schema,
 } from "./classify-issue";
 import { MANIFEST, NAMESPACES } from "./issue-labels";
-import schemaJson from "../.github/prompts/issue-classifier.schema.json";
+import schemaJson from "../../.github/prompts/issue-classifier.schema.json";
 
 const schema = schemaJson as Schema;
 const routes = routesOf(schema);
@@ -133,7 +133,7 @@ describe("sections", () => {
   test("the known headings are exactly the field labels of the two issue forms", async () => {
     const labels = await Promise.all(
       ["bug_report.yml", "feature_request.yml"].map(async (file) => {
-        const form = Bun.YAML.parse(await Bun.file(`${import.meta.dir}/../.github/ISSUE_TEMPLATE/${file}`).text()) as {
+        const form = Bun.YAML.parse(await Bun.file(`${import.meta.dir}/../../.github/ISSUE_TEMPLATE/${file}`).text()) as {
           readonly body: readonly { readonly attributes?: { readonly label?: string } }[];
         };
         return form.body.flatMap((field) => (field.attributes?.label === undefined ? [] : [field.attributes.label.trim()]));

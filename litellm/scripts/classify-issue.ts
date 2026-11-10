@@ -376,8 +376,8 @@ export function readConfig(
 
 if (import.meta.main) {
   const { token, apiBase, apiKey, ...config } = readConfig(process.env, new Date());
-  const prompt = await Bun.file(`${import.meta.dir}/../.github/prompts/issue-classifier.md`).text();
-  const schema = (await Bun.file(`${import.meta.dir}/../.github/prompts/issue-classifier.schema.json`).json()) as Schema;
+  const prompt = await Bun.file(`${import.meta.dir}/../../.github/prompts/issue-classifier.md`).text();
+  const schema = (await Bun.file(`${import.meta.dir}/../../.github/prompts/issue-classifier.schema.json`).json()) as Schema;
   const verdict = await classifyIssue(githubApi(token), litellmClient(apiBase, apiKey), config, prompt, schema);
   if (verdict === null) {
     console.error(`#${config.issueNumber}: edit ignored, the issue is already classified or older than the edit window`);

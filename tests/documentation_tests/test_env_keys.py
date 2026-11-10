@@ -1,6 +1,7 @@
 import os
 import re
 from collections.abc import Iterator
+from typing import Final
 
 # Define the base directory for the litellm repository and documentation path
 repo_base = "./litellm"  # Change this to your actual path
@@ -76,6 +77,10 @@ SKIP_DIRS = {
     "build",
 }
 
+NON_SDK_SOURCE_DIRS: Final = frozenset(
+    {"cli", "deploy", "enterprise", "packaging", "proxy-extras", "runtime", "rust", "scripts", "ui", "vscode-extension"}
+)
+
 
 def extract_env_keys(source: str) -> frozenset[str]:
     """Return every documentable env var name read by the given Python source."""
@@ -87,14 +92,18 @@ def extract_env_keys(source: str) -> frozenset[str]:
 def collect_env_keys(base_dir: str) -> frozenset[str]:
     """Return every documentable env var name read anywhere under ``base_dir``."""
     return frozenset(
-        key for file_path in _files_with_suffix(base_dir, (".py",)) for key in extract_env_keys(_read_text(file_path))
+        key
+        for file_path in _files_with_suffix(base_dir, (".py",), NON_SDK_SOURCE_DIRS)
+        for key in extract_env_keys(_read_text(file_path))
     )
 
 
-def _files_with_suffix(base_dir: str, suffixes: tuple[str, ...]) -> Iterator[str]:
+def _files_with_suffix(
+    base_dir: str, suffixes: tuple[str, ...], skip_root_dirs: frozenset[str] = frozenset()
+) -> Iterator[str]:
     for root, dirs, files in os.walk(base_dir):
         # Skip dependency/venv directories - prevents picking up env vars from installed packages
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and (root != base_dir or d not in skip_root_dirs)]
         yield from (os.path.join(root, name) for name in files if name.endswith(suffixes))
 
 
