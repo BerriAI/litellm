@@ -38,6 +38,16 @@ def refused_reasoning_effort_warning(*, suggest_declared_levels: bool, suggest_b
     )
 
 
+def _sent_effort_level(sent_params: Mapping[str, object]) -> str | None:
+    match sent_params:
+        case {"extra_body": {"reasoning_effort": str(level) | {"effort": str(level)}}}:
+            return level
+        case {"reasoning_effort": str(level) | {"effort": str(level)}}:
+            return level
+        case _:
+            return None
+
+
 @dataclass(slots=True)
 class DeferredReasoningDropWarnings:
     logger: WarningLogger
@@ -46,14 +56,13 @@ class DeferredReasoningDropWarnings:
     def warning(self, msg: str, /, *args: object) -> None:
         self.held = (*self.held, (msg, args))
 
-    def log_unless_effort_sent(self, sent_params: Mapping[str, object]) -> None:
-        match sent_params:
-            case {"reasoning_effort": str() | {"effort": str()}} | {
-                "extra_body": {"reasoning_effort": str() | {"effort": str()}}
-            }:
-                return
-            case _:
-                for msg, args in self.held:
+    def log_unless_dropped_effort_sent(self, sent_params: Mapping[str, object]) -> None:
+        sent_effort: Final = _sent_effort_level(sent_params)
+        for msg, args in self.held:
+            match args:
+                case ("reasoning_effort", dropped_effort, *_) if dropped_effort == sent_effort:
+                    continue
+                case _:
                     self.logger.warning(msg, *args)
 
 

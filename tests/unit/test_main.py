@@ -2396,9 +2396,19 @@ def azure_upstream_routes(
             "none",
             id="effort-dict-in-extra-body-bridged",
         ),
+        pytest.param(
+            {"reasoning_effort": "none", "extra_body": {"reasoning_effort": "low"}},
+            "low",
+            id="other-effort-in-extra-body",
+        ),
+        pytest.param(
+            {"reasoning_effort": "none", "tools": [_FUNCTION_TOOL], "extra_body": {"reasoning_effort": "low"}},
+            "low",
+            id="other-effort-in-extra-body-bridged",
+        ),
     ],
 )
-def test_reasoning_effort_drop_warning_fires_only_when_the_provider_gets_no_effort(
+def test_reasoning_effort_drop_warning_fires_unless_the_provider_gets_the_dropped_effort(
     request_params: dict[str, object],
     expected_sent_effort: str | None,
     azure_upstream_routes: AzureUpstreamRoutes,
@@ -2418,15 +2428,13 @@ def test_reasoning_effort_drop_warning_fires_only_when_the_provider_gets_no_effo
     sent_effort: Final = azure_upstream_routes.sent_reasoning_effort()
     drop_warnings: Final = [r.getMessage() for r in caplog.records if "Dropping reasoning_effort" in r.getMessage()]
     assert sent_effort == expected_sent_effort
-    assert len(drop_warnings) == (1 if sent_effort is None else 0)
+    assert len(drop_warnings) == (0 if sent_effort == "none" else 1)
 
 
 @pytest.fixture
-def github_copilot_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def github_copilot_access_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-    (tmp_path / "api-key.json").write_text(
-        json.dumps({"token": "token", "expires_at": 4102444800, "endpoints": {"api": "https://api.githubcopilot.com"}})
-    )
+    (tmp_path / "access-token").write_text("token")
 
 
 @pytest.mark.parametrize(
@@ -2462,7 +2470,7 @@ def test_reasoning_effort_drop_warning_stays_quiet_when_the_summary_alias_restor
     refused_effort: str,
     model_info: dict[str, object] | None,
     azure_upstream_routes: AzureUpstreamRoutes,
-    github_copilot_api_key: None,
+    github_copilot_access_token: None,
     caplog: pytest.LogCaptureFixture,
 ):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
