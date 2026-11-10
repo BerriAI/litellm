@@ -1,11 +1,16 @@
 import asyncio
 import base64
 import contextlib
+import hashlib
+import itertools
 import json
 import logging
 import os
+import re
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from datetime import datetime, timezone
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal
 from unittest import mock
@@ -15,6 +20,9 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 import respx
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.routing import APIRoute
 from fastapi.responses import StreamingResponse
@@ -33,7 +41,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.proxy._types import AwsErrorTypeProxyException, ProxyException
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.passthrough.main import raise_for_provider_status
 from litellm.llms.bedrock.common_utils import BedrockError
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
@@ -2203,7 +2211,7 @@ class TestBedrockAgentRuntimePassthroughToggle:
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str",
                 return_value="us-east-1",
             ),
-            patch("litellm.llms.bedrock.chat.BedrockConverseLLM", return_value=bedrock_llm),
+            patch("litellm.llms.bedrock.passthrough.transformation.BedrockAgentRuntimeAWS", return_value=bedrock_llm),
             patch(
                 "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_request_copy",
                 Mock(),
@@ -2490,6 +2498,67 @@ async def test_bedrock_agent_runtime_region_lookup_leaves_the_event_loop_free(mo
     assert vault.read.is_set()
     assert not vault.read_on_loop.is_set()
     assert retrieve.calls.last.request.headers["authorization"].startswith("AWS4-HMAC-SHA256")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "action"),
+    [
+        ("retrieveAndGenerate/", "bedrock:RetrieveAndGenerate"),
+        ("flows/FLOW123456/aliases/ALIAS12345", "bedrock:InvokeFlow"),
+        ("generateQuery/", "bedrock:GenerateQuery"),
+        ("optimize-prompt/", "bedrock:OptimizePrompt"),
+        ("agents/session-1", "bedrock:InvokeInlineAgent"),
+    ],
+)
+async def test_bedrock_agent_runtime_web_identity_session_grants_the_routes_action(
+    monkeypatch: pytest.MonkeyPatch, endpoint: str, action: str
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    for ambient in (
+        *TestBedrockAgentRuntimePassthroughVirtualKeyLeak.AMBIENT_AWS_ENV,
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+    ):
+        monkeypatch.delenv(ambient, raising=False)
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setenv("AWS_WEB_IDENTITY_TOKEN", "oidc/google/litellm")
+    monkeypatch.setenv("AWS_ROLE_NAME", "arn:aws:iam::123456789012:role/litellm-role")
+    monkeypatch.setenv("AWS_SESSION_NAME", f"agent-runtime-{endpoint}")
+    sts: Final = MagicMock()
+    sts.assume_role_with_web_identity.return_value = {
+        "Credentials": {
+            "AccessKeyId": "k",
+            "SecretAccessKey": "s",
+            "SessionToken": "t",
+            "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+        },
+        "PackedPolicySize": 0,
+    }
+    request: Final = Mock()
+    request.method = "POST"
+    request.state = SimpleNamespace()
+    request.json = AsyncMock(return_value={"input": {"text": "hi"}})
+    module: Final = "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints"
+
+    with (
+        patch("boto3.client", return_value=sts),
+        patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
+        patch(f"{module}.create_request_copy", Mock()),
+        patch(f"{module}.create_pass_through_route", return_value=AsyncMock(return_value="forwarded")),
+    ):
+        _ = await bedrock_proxy_route(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-litellm-caller"),
+        )
+
+    session_policy: Final = json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
+    granted: Final = frozenset(
+        itertools.chain.from_iterable(statement["Action"] for statement in session_policy["Statement"])
+    )
+    assert action in granted, f"/bedrock/{endpoint} authorizes against {action}, which its session does not grant"
 
 
 class TestLLMPassthroughFactoryProxyRoute:
@@ -7590,8 +7659,16 @@ _BEDROCK_COUNT_ALIAS: Final = "count-log-bedrock"
 _BEDROCK_COUNT_MODEL: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
+_BEDROCK_COUNT_BODY: Final = MappingProxyType(
+    {"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user", "content": "hi"}]}
+)
+
+
 async def _bedrock_native_count(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, aws_reply: httpx.Response
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    aws_reply: httpx.Response,
+    request_body: Mapping[str, object] = _BEDROCK_COUNT_BODY,
 ) -> dict[str, object]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         handle_bedrock_count_tokens,
@@ -7631,7 +7708,7 @@ async def _bedrock_native_count(
         request=request,
         fastapi_response=Response(),
         user_api_key_dict=MagicMock(),
-        request_body={"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user", "content": "hi"}]},
+        request_body=dict(request_body),
     )
 
 
@@ -7683,6 +7760,81 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
             "status_code": 400,
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("request_body", "problem"),
+    [
+        ({"model": _BEDROCK_COUNT_ALIAS}, "Request must contain content to count tokens"),
+        ({"model": _BEDROCK_COUNT_ALIAS, "messages": []}, "messages parameter is required for Converse input"),
+        ({"model": _BEDROCK_COUNT_ALIAS, "messages": [{"role": "user"}]}, "Message 0 must have a 'content' field"),
+        ({"model": _BEDROCK_COUNT_ALIAS, "messages": [{"content": "hi"}]}, "Message 0 must have a 'role' field"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_without_calling_bedrock(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    request_body: Mapping[str, object],
+    problem: str,
+) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _bedrock_native_count(
+            monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), request_body
+        )
+
+    assert (exc_info.value.status_code, exc_info.value.detail) == (400, {"error": problem})
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "model_id"),
+    [
+        ("us", "us"),
+        ("global", "global"),
+        ("apac", "apac"),
+        ("bedrock/us", "us"),
+        ("converse/us", "us"),
+        ("invoke/us", "us"),
+        ("bedrock/converse/global", "global"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_for_a_bare_region_prefix_answers_bedrocks_own_400(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    model: str,
+    model_id: str,
+) -> None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIATESTACCESSKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    invalid_model: Final = {"message": "The provided model identifier is invalid."}
+    respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path=f"/model/{model_id}/count-tokens").mock(
+        return_value=httpx.Response(400, json=invalid_model)
+    )
+    request: Final = Request({"type": "http", "method": "POST", "path": f"/bedrock/model/{model}/count-tokens", "headers": []})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handle_bedrock_count_tokens(
+            endpoint=f"model/{model}/count-tokens",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(),
+            request_body={"model": model, "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert json.loads(exc_info.value.detail["error"]) == invalid_model
+    assert len(respx_mock.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -7751,9 +7903,7 @@ async def test_bedrock_native_count_tokens_with_a_region_only_model_answers_the_
             request_body={"model": "us"},
         )
 
-    assert exc_info.value.detail == {
-        "error": "CountTokens processing error: Request must contain content to count tokens"
-    }
+    assert exc_info.value.detail == {"error": "Request must contain content to count tokens"}
     assert token_count_log_lines() == (
         {
             "litellm_call_id": "bedrock-native-region-only",
@@ -10106,3 +10256,914 @@ class TestTinyFishRouteTimeout:
 
         monkeypatch.setattr(proxy_server, "general_settings", {"pass_through_request_timeout": 30}, raising=False)
         assert _tinyfish_route_timeout() is None
+
+
+OPENSEARCH_HOST: Final = "abc123.us-east-1.aoss.amazonaws.com"
+OPENSEARCH_ACCESS_KEY: Final = "AKIDOPENSEARCHPASSTHROUGH"
+OPENSEARCH_SECRET_KEY: Final = "opensearch-passthrough-secret"
+DOCS_UPSTREAM: Final = f"https://{OPENSEARCH_HOST}/prod-docs-v2"
+JSON_TYPE: Final = "application/json"
+NDJSON_TYPE: Final = "application/x-ndjson"
+_SIGV4_AUTHORIZATION: Final = re.compile(
+    r"\AAWS4-HMAC-SHA256 Credential=(?P<key>[^/]+)/\d{8}/(?P<region>[^/]+)/(?P<service>[^/]+)/aws4_request, "
+    r"SignedHeaders=(?P<signed>[^,]+), Signature=(?P<signature>[0-9a-f]{64})\Z"
+)
+
+
+def _verified_sigv4_scope(sent: httpx.Request) -> tuple[str, str]:
+    authorization: Final = _SIGV4_AUTHORIZATION.match(sent.headers["authorization"])
+    assert authorization is not None, sent.headers["authorization"]
+    signed_names: Final = authorization["signed"].split(";")
+    assert {"content-type", "host", "x-amz-content-sha256", "x-amz-date"} <= set(signed_names), signed_names
+    assert sent.headers["x-amz-content-sha256"] == hashlib.sha256(sent.content).hexdigest()
+    received: Final = AWSRequest(
+        method=sent.method,
+        url=str(sent.url),
+        data=sent.content,
+        headers={name: sent.headers[name] for name in signed_names},
+    )
+    received.context["timestamp"] = sent.headers["x-amz-date"]
+    signer: Final = SigV4Auth(
+        Credentials(OPENSEARCH_ACCESS_KEY, OPENSEARCH_SECRET_KEY), authorization["service"], authorization["region"]
+    )
+    expected: Final = signer.signature(signer.string_to_sign(received, signer.canonical_request(received)), received)
+    assert (authorization["key"], authorization["signature"]) == (OPENSEARCH_ACCESS_KEY, expected)
+    return authorization["service"], authorization["region"]
+
+
+def _opensearch_caller(*permissions: str, index_name: str = "docs") -> UserAPIKeyAuth:
+    grant: Final = {
+        "allowed_vector_store_indexes": [{"index_name": index_name, "index_permissions": list(permissions)}]
+    }
+    return UserAPIKeyAuth(api_key="sk-virtual", metadata=grant)
+
+
+def _act_as(monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth) -> None:
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: caller)
+
+
+@pytest.fixture
+def opensearch_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    from litellm.proxy.proxy_server import app
+    from litellm.types.vector_stores import IndexCreateLiteLLMParams, LiteLLM_ManagedVectorStoreIndex
+    from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
+
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    indexes: Final = (
+        ("docs", "prod-docs-v2", "opensearch-store"),
+        ("hr", "hr-private", "opensearch-store"),
+        ("no-credentials", "prod-docs-v3", "opensearch-store-without-credentials"),
+        ("azure-docs", "azure-docs", "azure-store"),
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_index_registry",
+        VectorStoreIndexRegistry(
+            [
+                LiteLLM_ManagedVectorStoreIndex(
+                    id=f"index-{name}",
+                    index_name=name,
+                    litellm_params=IndexCreateLiteLLMParams(vector_store_index=provider_index, vector_store_name=store),
+                )
+                for name, provider_index, store in indexes
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            [
+                {
+                    "vector_store_id": "opensearch-store",
+                    "vector_store_name": "opensearch-store",
+                    "custom_llm_provider": "opensearch",
+                    "litellm_params": {
+                        "api_base": f"https://{OPENSEARCH_HOST}",
+                        "aws_access_key_id": OPENSEARCH_ACCESS_KEY,
+                        "aws_secret_access_key": OPENSEARCH_SECRET_KEY,
+                    },
+                },
+                {
+                    "vector_store_id": "opensearch-store-without-credentials",
+                    "vector_store_name": "opensearch-store-without-credentials",
+                    "custom_llm_provider": "opensearch",
+                    "litellm_params": {
+                        "api_base": f"https://{OPENSEARCH_HOST}",
+                        "aws_profile_name": "opensearch-missing-profile",
+                    },
+                },
+                {
+                    "vector_store_id": "azure-store",
+                    "vector_store_name": "azure-store",
+                    "custom_llm_provider": "azure_ai",
+                    "litellm_params": {"api_base": "https://search.example.search.windows.net"},
+                },
+            ]
+        ),
+    )
+    yield TestClient(app)
+
+
+class TestOpenSearchProxyRoute:
+    SEARCH_BODY: Final = b'{"query":{"match":{"text":"remote work"}}}'
+    HITS: Final = MappingProxyType(
+        {
+            "took": 3,
+            "timed_out": False,
+            "hits": {
+                "total": {"value": 1, "relation": "eq"},
+                "hits": [{"_index": "prod-docs-v2", "_id": "1", "_score": 1.2, "_source": {"text": "Remote work"}}],
+            },
+        }
+    )
+
+    @pytest.mark.parametrize("content_type", [JSON_TYPE, "Application/JSON; charset=UTF-8"])
+    def test_a_read_key_search_is_signed_for_the_mapped_index_and_returns_the_hits(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, content_type: str
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("read"))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_search").mock(
+                return_value=httpx.Response(200, json=dict(self.HITS))
+            )
+            response = opensearch_client.post(
+                "/opensearch/docs/_search",
+                content=self.SEARCH_BODY,
+                headers={"Content-Type": content_type, "Authorization": "Bearer sk-virtual"},
+            )
+
+        assert (response.status_code, response.json()) == (200, dict(self.HITS))
+        sent: Final = route.calls.last.request
+        assert (sent.content, sent.headers["content-type"]) == (self.SEARCH_BODY, JSON_TYPE)
+        assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
+
+    def test_a_team_grant_lets_the_key_search(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        team_grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["read"]}]}
+        _act_as(monkeypatch, UserAPIKeyAuth(api_key="sk-virtual", team_id="team-a", team_metadata=team_grant))
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(f"{DOCS_UPSTREAM}/_search").mock(return_value=httpx.Response(200, json=dict(self.HITS)))
+            response = opensearch_client.post(
+                "/opensearch/docs/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, response.json()) == (200, dict(self.HITS))
+
+    @pytest.mark.parametrize(
+        "method, api",
+        [
+            ("POST", "_doc"),
+            ("PUT", "_doc/1"),
+            ("POST", "_doc/1"),
+            ("DELETE", "_doc/1"),
+            ("PUT", "_create/1"),
+            ("POST", "_update/1"),
+            ("POST", "_bulk"),
+            ("POST", "_delete_by_query"),
+            ("POST", "_update_by_query"),
+        ],
+    )
+    def test_a_read_only_key_cannot_write(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, api: str
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("read"))
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(201, json={}))
+            response = opensearch_client.request(
+                method,
+                f"/opensearch/docs/{api}",
+                content=b'{"title":"Remote work"}',
+                headers={"Content-Type": JSON_TYPE},
+            )
+
+        assert (response.status_code, route.called) == (403, False)
+
+    @pytest.mark.parametrize(
+        "document",
+        [b'{"title":"Remote work","index":"hr-private"}', b'{"title":"Remote work","stream":true}'],
+        ids=["field-named-index", "field-named-stream"],
+    )
+    def test_a_read_write_key_writes_the_document_as_sent(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, document: bytes
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("read", "write"))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
+                return_value=httpx.Response(201, json={"_id": "abc", "result": "created"})
+            )
+            response = opensearch_client.post(
+                "/opensearch/docs/_doc", content=document, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, response.json()["result"]) == (201, "created")
+        assert route.calls.last.request.content == document
+        assert _verified_sigv4_scope(route.calls.last.request) == ("aoss", "us-east-1")
+
+    @pytest.mark.parametrize(
+        "path, body, status_code",
+        [
+            pytest.param("_update/1", b'{"doc":{},"_source":true}', 403, id="update-body-source"),
+            pytest.param("_update/1?_source=text", b'{"doc":{"title":"b"}}', 403, id="update-source-param"),
+            pytest.param(
+                "_update/1",
+                b'{"script":{"source":"throw new IllegalArgumentException(ctx._source.text)"}}',
+                403,
+                id="update-script",
+            ),
+            pytest.param("_update/1", b'{"doc":{} /* c */ ,"_source":true}', 400, id="update-body-json-with-comment"),
+            pytest.param("_bulk", b'{"update":{"_id":"1","_source":true}}\n{"doc":{}}\n', 403, id="bulk-action-source"),
+            pytest.param(
+                "_bulk",
+                b'{"index":{"_id":"2"}}\n{"title":"a"}\n{"update":{"_id":"1"}}\n{"doc":{},"_source":true}\n',
+                403,
+                id="bulk-update-payload-source",
+            ),
+            pytest.param("_bulk?_source_includes=text", b'{"update":{"_id":"1"}}\n{"doc":{}}\n', 403, id="bulk-param"),
+            pytest.param("_delete_by_query", b'{"query":{"prefix":{"text":"a"}}}', 403, id="delete-by-query"),
+            pytest.param("_update_by_query", b'{"query":{"match_all":{}}}', 403, id="update-by-query"),
+        ],
+    )
+    def test_a_write_only_key_cannot_read_documents_back_through_a_write(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str, body: bytes, status_code: int
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("write"))
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(
+                return_value=httpx.Response(200, json={"get": {"_source": {"text": "Remote work"}}})
+            )
+            response = opensearch_client.post(
+                f"/opensearch/docs/{path}", content=body, headers={"Content-Type": NDJSON_TYPE}
+            )
+
+        assert (response.status_code, route.called) == (status_code, False)
+        assert "Remote work" not in response.text
+
+    @pytest.mark.parametrize(
+        "caller, path, body",
+        [
+            pytest.param(
+                _opensearch_caller("write"), "_update/1", b'{"doc":{"script":"a field","_source":"b"}}', id="write-only"
+            ),
+            pytest.param(
+                _opensearch_caller("read", "write"), "_update/1?_source=text", b'{"doc":{},"_source":true}', id="update"
+            ),
+            pytest.param(
+                _opensearch_caller("read", "write"),
+                "_bulk",
+                b'{"update":{"_id":"1","_source":true}}\n{"doc":{},"script":{"source":"ctx._source.n += 1"}}\n',
+                id="bulk",
+            ),
+            pytest.param(
+                _opensearch_caller("read", "write"), "_delete_by_query", b'{"query":{"term":{"a":1}}}', id="by-query"
+            ),
+        ],
+    )
+    def test_a_write_that_reads_no_document_or_has_the_read_grant_is_sent_as_is(
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caller: UserAPIKeyAuth,
+        path: str,
+        body: bytes,
+    ) -> None:
+        _act_as(monkeypatch, caller)
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(url__startswith=f"{DOCS_UPSTREAM}/{path.partition('?')[0]}").mock(
+                return_value=httpx.Response(200, json={"result": "updated"})
+            )
+            response = opensearch_client.post(
+                f"/opensearch/docs/{path}", content=body, headers={"Content-Type": NDJSON_TYPE}
+            )
+
+        assert (response.status_code, route.calls.last.request.content) == (200, body)
+
+    @pytest.mark.parametrize(
+        "caller, index_name",
+        [
+            (_opensearch_caller("read", "write", index_name="hr"), "docs"),
+            (UserAPIKeyAuth(api_key="sk-virtual"), "docs"),
+            (UserAPIKeyAuth(api_key="sk-virtual"), "unregistered"),
+        ],
+        ids=["grant-on-another-index", "no-grant", "no-grant-unregistered-index"],
+    )
+    def test_a_key_without_a_grant_on_the_index_is_refused(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth, index_name: str
+    ) -> None:
+        _act_as(monkeypatch, caller)
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+            response = opensearch_client.post(
+                f"/opensearch/{index_name}/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, route.called) == (403, False)
+        assert index_name in response.json()["detail"]
+
+    @pytest.mark.parametrize(
+        "method, path",
+        [
+            ("POST", "/opensearch/docs/_search/template"),
+            ("POST", "/opensearch/docs/_msearch"),
+            ("GET", "/opensearch/docs/_msearch"),
+            ("PUT", "/opensearch/docs/_mapping"),
+            ("GET", "/opensearch/docs/_settings"),
+            ("POST", "/opensearch/docs/_close"),
+            ("POST", "/opensearch/docs/_refresh"),
+            ("GET", "/opensearch/docs/_doc/1/x"),
+            ("PATCH", "/opensearch/docs/_doc/1"),
+            ("PUT", "/opensearch/docs"),
+            ("DELETE", "/opensearch/docs"),
+        ],
+    )
+    def test_an_unlisted_api_is_for_proxy_admins_only(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, path: str
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("read", "write"))
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+            response = opensearch_client.request(
+                method, path, content=b'{"source":"{}"}', headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, route.called) == (403, False)
+
+    @pytest.mark.parametrize(
+        "method, path, upstream_path, status",
+        [
+            pytest.param("GET", "/opensearch/docs", "/prod-docs-v2", 200, id="get-index"),
+            pytest.param("HEAD", "/opensearch/docs", "/prod-docs-v2", 200, id="index-exists"),
+            pytest.param("HEAD", "/opensearch/docs/_doc/1", "/prod-docs-v2/_doc/1", 404, id="doc-exists"),
+            pytest.param("HEAD", "/opensearch/docs/_source/1", "/prod-docs-v2/_source/1", 200, id="source-exists"),
+            pytest.param(
+                "POST", "/opensearch/docs/_explain/_bulk1", "/prod-docs-v2/_explain/_bulk1", 200, id="id-named-bulk"
+            ),
+        ],
+    )
+    def test_a_read_key_reaches_the_index_and_its_existence_checks(
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        method: str,
+        path: str,
+        upstream_path: str,
+        status: int,
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("read"))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.route(method=method, host=OPENSEARCH_HOST, path=upstream_path).mock(
+                return_value=httpx.Response(status, content=b"" if method == "HEAD" else b"{}")
+            )
+            response = opensearch_client.request(
+                method, path, content=b"" if method == "HEAD" else self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert response.status_code == status
+        assert _verified_sigv4_scope(route.calls.last.request) == ("aoss", "us-east-1")
+
+    def test_a_proxy_admin_can_call_an_unlisted_api(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings: Final = {"prod-docs-v2": {"settings": {"index": {"number_of_shards": "2"}}}}
+        _act_as(monkeypatch, UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.get(f"{DOCS_UPSTREAM}/_settings").mock(return_value=httpx.Response(200, json=settings))
+            response = opensearch_client.get("/opensearch/docs/_settings")
+
+        assert (response.status_code, response.json()) == (200, settings)
+        assert _verified_sigv4_scope(route.calls.last.request) == ("aoss", "us-east-1")
+
+    @pytest.mark.parametrize(
+        "index_name, detail",
+        [
+            ("unknown", "Index unknown is not a litellm managed vector store index"),
+            ("azure-docs", "not an OpenSearch vector store"),
+        ],
+    )
+    def test_an_index_that_is_not_a_managed_opensearch_index_is_a_400(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, index_name: str, detail: str
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("read", index_name=index_name))
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route().mock(return_value=httpx.Response(200, json={}))
+            response = opensearch_client.post(
+                f"/opensearch/{index_name}/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, route.called) == (400, False)
+        assert detail in response.json()["detail"]
+
+    def test_an_index_whose_store_name_two_stores_share_is_a_400(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+        same_name: Final = (
+            ("opensearch-store", f"https://{OPENSEARCH_HOST}"),
+            ("opensearch-store-copy", "https://other123.us-east-1.aoss.amazonaws.com"),
+        )
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_registry",
+            VectorStoreRegistry(
+                [
+                    {
+                        "vector_store_id": store_id,
+                        "vector_store_name": "opensearch-store",
+                        "custom_llm_provider": "opensearch",
+                        "litellm_params": {"api_base": api_base},
+                    }
+                    for store_id, api_base in same_name
+                ]
+            ),
+        )
+        _act_as(monkeypatch, _opensearch_caller("read"))
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route().mock(return_value=httpx.Response(200, json={}))
+            response = opensearch_client.post(
+                "/opensearch/docs/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, route.called) == (400, False)
+        assert "2 vector stores are named opensearch-store" in response.json()["detail"]
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/opensearch/docs/",
+            "/opensearch/docs//_search",
+            "/opensearch/docs/%2E/_search",
+            "/opensearch/docs/%2E%2E/hr/_search",
+            "/opensearch/docs/_search/%2E%2E/%2E%2E/hr/_search",
+        ],
+    )
+    def test_a_path_with_an_empty_or_dot_segment_is_a_400(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, path: str
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("read", "write"))
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+            response = opensearch_client.post(path, content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE})
+
+        assert (response.status_code, route.called) == (400, False)
+
+    @pytest.mark.parametrize(
+        "api, content_type, body, detail",
+        [
+            pytest.param(
+                "_search",
+                JSON_TYPE,
+                b'{"query":{"terms":{"user":{"index":"hr-private","id":"1","path":"followers"}}}}',
+                "'index'",
+                id="search-terms-lookup",
+            ),
+            pytest.param(
+                "_search",
+                JSON_TYPE,
+                b'{"query":{"more_like_this":{"like":[{"_index":"hr-private","_id":"1"}]}}}',
+                "'_index'",
+                id="search-more-like-this",
+            ),
+            pytest.param(
+                "_count",
+                JSON_TYPE,
+                b'{"query":{"terms":{"user":{"\\u0069ndex":"hr-private","id":"1","path":"followers"}}}}',
+                "'index'",
+                id="count-escaped-key",
+            ),
+            pytest.param(
+                "_search",
+                JSON_TYPE,
+                b'{"query":{"terms":{"user":{"index":"hr-private","id":"1","path":"f"}}},"query":{"match_all":{}}}',
+                "'index'",
+                id="search-duplicate-key",
+            ),
+            pytest.param(
+                "_delete_by_query",
+                JSON_TYPE,
+                b'{"query":{"terms":{"user":{"index":"hr-private","id":"1","path":"followers"}}}}',
+                "'index'",
+                id="delete-by-query-terms-lookup",
+            ),
+            pytest.param(
+                "_mget",
+                JSON_TYPE,
+                b'{"docs":[{"_id":"1"},{"_index":"hr-private","_id":"2"}]}',
+                "'_index'",
+                id="mget-docs",
+            ),
+            pytest.param(
+                "_bulk",
+                NDJSON_TYPE,
+                b'{"index":{"_id":"1"}}\n{"title":"a"}\n{"delete":{"_index":"hr-private","_id":"2"}}\n',
+                "'_index'",
+                id="bulk-action-index",
+            ),
+            pytest.param(
+                "_bulk",
+                NDJSON_TYPE,
+                b'{"index":{"_index":"prod-docs-v2","_id":"1"}}\n{"title":"a"}\n',
+                "'_index'",
+                id="bulk-action-names-the-provider-index",
+            ),
+            pytest.param(
+                "_bulk",
+                NDJSON_TYPE,
+                b'{"index":{"_index":"docs","_index":"hr-private","_id":"1"}}\n{"title":"a"}\n',
+                "'_index'",
+                id="bulk-action-duplicate-index",
+            ),
+            pytest.param(
+                "_bulk",
+                NDJSON_TYPE,
+                b'{"index":{"_id":"1"}}\n\n{"delete":{"_index":"hr-private","_id":"2"}}\n',
+                "'_index'",
+                id="bulk-blank-source-line",
+            ),
+            pytest.param(
+                "_bulk",
+                NDJSON_TYPE,
+                b'{"index":{"_id":"1","pipeline":"reroute"}}\n{"title":"a"}\n',
+                "'pipeline'",
+                id="bulk-action-pipeline",
+            ),
+            pytest.param("_bulk", NDJSON_TYPE, b"not json\n", "action line", id="bulk-unparseable-action"),
+            pytest.param(
+                "_search",
+                JSON_TYPE,
+                b'{"profile":true,"query":{"wrapper":{"query":"eyJ0ZXJtcyI6e319"}}}',
+                "'wrapper'",
+                id="search-wrapper-query",
+            ),
+            pytest.param(
+                "_search",
+                JSON_TYPE,
+                b'{"query":{"geo_shape":{"location":{"indexed_shape":{"id":"deu","path":"location"}}}}}',
+                "'indexed_shape'",
+                id="search-indexed-shape",
+            ),
+            pytest.param(
+                "_search",
+                JSON_TYPE,
+                b'{"query":{"match_all":{}},"search_pipeline":{"request_processors":[]}}',
+                "'search_pipeline'",
+                id="search-temporary-pipeline",
+            ),
+            pytest.param(
+                "_mget?source=%7B%22docs%22%3A%5B%7B%22_index%22%3A%22hr-private%22%2C%22_id%22%3A%221%22%7D%5D%7D"
+                "&source_content_type=application%2Fjson",
+                JSON_TYPE,
+                b"",
+                "source query parameter",
+                id="mget-source-query",
+            ),
+            pytest.param(
+                "_search",
+                "application/x-ndjson; multipart/form-data",
+                b'{"stream":true,"custom_body":{}}',
+                "application/json",
+                id="multipart-parameter",
+            ),
+            pytest.param(
+                "_doc", "application/json; boundary=x", b'{"title":"a"}', "application/json", id="content-type-parameter"
+            ),
+            pytest.param("_doc?pipeline=reroute", JSON_TYPE, b'{"title":"a"}', "pipeline", id="pipeline-query"),
+            pytest.param("_search", JSON_TYPE, b'{/*c*/"query":{"match_all":{}}}', "could not parse", id="comment"),
+            pytest.param("_search", "application/smile", b"\x3a\x29\x0a\x01", "application/json", id="smile"),
+            pytest.param("_search", "application/yaml", b"query:\n  match_all: {}\n", "application/json", id="yaml"),
+            pytest.param(
+                "_search", JSON_TYPE, b'{"query":' + b"[" * 100_000 + b"]" * 100_000 + b"}", "nested", id="deep-nesting"
+            ),
+        ],
+    )
+    def test_a_body_or_query_that_could_reach_another_index_is_a_400(
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        api: str,
+        content_type: str,
+        body: bytes,
+        detail: str,
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("read", "write"))
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+            response = opensearch_client.post(
+                f"/opensearch/docs/{api}", content=body, headers={"Content-Type": content_type}
+            )
+
+        assert (response.status_code, route.called) == (400, False)
+        assert detail in response.json()["detail"]
+
+    @pytest.mark.parametrize(
+        "api, body",
+        [
+            pytest.param(
+                "_bulk",
+                b'{"index":{"_id":"1"}}\n{"title":"a","index":"hr-private"}\n{"delete":{"_id":"2"}}\n\n'
+                b'{"update":{"_id":"3"}}\r\n{"doc":{"_index":"hr-private"}}\n',
+                id="bulk",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize("content_type", [NDJSON_TYPE, "application/json"])
+    def test_an_ndjson_body_without_index_references_is_sent_byte_for_byte(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, api: str, body: bytes, content_type: str
+    ) -> None:
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", SHARED_MASTER_KEY)
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/{api}").mock(
+                return_value=httpx.Response(200, json={"errors": False, "items": []})
+            )
+            response = opensearch_client.post(
+                f"/opensearch/docs/{api}",
+                content=body,
+                headers={"Content-Type": content_type, "Authorization": f"Bearer {SHARED_MASTER_KEY}"},
+            )
+
+        assert response.status_code == 200
+        sent: Final = route.calls.last.request
+        assert (sent.content, sent.headers["content-type"]) == (body, content_type)
+        assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            b'{"title":"Remote work","model":"another-model"}',
+            b'{"title":"Remote work","api_base":"https://elsewhere.example"}',
+            b'{"title":"Remote work","base_url":"https://elsewhere.example"}',
+        ],
+        ids=["model", "api_base", "base_url"],
+    )
+    def test_a_document_field_named_like_an_llm_param_is_written_for_a_model_limited_key(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, document: bytes
+    ) -> None:
+        from litellm.proxy import proxy_server
+
+        key: Final = "sk-opensearch-model-limited-writer"
+        grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["write"]}]}
+        cache: Final = DualCache()
+        cache.set_cache(
+            key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant)
+        )
+        monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
+        monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
+                return_value=httpx.Response(201, json={"_id": "abc", "result": "created"})
+            )
+            response = opensearch_client.post(
+                "/opensearch/docs/_doc",
+                content=document,
+                headers={"Content-Type": JSON_TYPE, "Authorization": f"Bearer {key}"},
+            )
+
+        assert (response.status_code, route.calls.last.request.content) == (201, document)
+
+    def test_a_bulk_action_naming_the_path_index_is_sent_to_the_mapped_index(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("write"))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_bulk").mock(
+                return_value=httpx.Response(200, json={"errors": False, "items": []})
+            )
+            response = opensearch_client.post(
+                "/opensearch/docs/_bulk",
+                content=b'{"index":{"_index":"docs","_id":"1"}}\n{"title":"a","_index":"docs"}\n'
+                b'{"delete":{"_id":"2"}}\n{"update":{"_id":"3","_index":"docs"}}\n{"doc":{"title":"b"}}\n',
+                headers={"Content-Type": NDJSON_TYPE},
+            )
+
+        assert response.status_code == 200
+        sent: Final = route.calls.last.request
+        assert sent.content == (
+            b'{"index":{"_index":"prod-docs-v2","_id":"1"}}\n{"title":"a","_index":"docs"}\n'
+            b'{"delete":{"_id":"2"}}\n{"update":{"_id":"3","_index":"prod-docs-v2"}}\n{"doc":{"title":"b"}}\n'
+        )
+        assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
+
+    @pytest.mark.parametrize(
+        "method, path, body, sent_query",
+        [
+            pytest.param(
+                "GET",
+                "/opensearch/docs/_search?q=title:remote+work&routing=a&routing=b",
+                b"",
+                b"q=title%3Aremote%20work&routing=a&routing=b",
+                id="space-and-repeated-key",
+            ),
+            pytest.param(
+                "POST",
+                "/opensearch/docs/_search",
+                b'{"size":1,"query_params":{"routing":"z"}}',
+                b"",
+                id="body-query-params-ignored",
+            ),
+            pytest.param(
+                "POST",
+                "/opensearch/docs/_search?search_pipeline=hybrid-min-max",
+                b'{"query":{"hybrid":{"queries":[{"match":{"title":"remote"}},'
+                b'{"knn":{"embedding":{"vector":[0.1,0.2],"k":2,"filter":{"term":{"lang":"en"}}}}}]}}}',
+                b"search_pipeline=hybrid-min-max",
+                id="hybrid-query-with-named-search-pipeline",
+            ),
+        ],
+    )
+    def test_the_query_string_is_signed_as_sent(
+        self,
+        opensearch_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        method: str,
+        path: str,
+        body: bytes,
+        sent_query: bytes,
+    ) -> None:
+        _act_as(monkeypatch, _opensearch_caller("read"))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.route(method=method, host=OPENSEARCH_HOST, path="/prod-docs-v2/_search").mock(
+                return_value=httpx.Response(200, json=dict(self.HITS))
+            )
+            response = opensearch_client.request(method, path, content=body, headers={"Content-Type": JSON_TYPE})
+
+        assert response.status_code == 200
+        sent: Final = route.calls.last.request
+        assert sent.url.query == sent_query
+        assert _verified_sigv4_scope(sent) == ("aoss", "us-east-1")
+
+    def test_document_fields_named_like_request_params_leave_the_rate_limiter_alone(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.utils import InternalUsageCache
+
+        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+
+        class RateLimit(CustomLogger):
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: DualCache,
+                data: dict[str, object],
+                call_type: CallTypesLiteral,
+            ) -> dict[str, object]:
+                await limiter.async_pre_call_hook(user_api_key_dict, cache, data, call_type)
+                return data
+
+        monkeypatch.setattr(litellm, "callbacks", [RateLimit()])
+        grant: Final = {"index_name": "docs", "index_permissions": ["write"]}
+        _act_as(
+            monkeypatch,
+            UserAPIKeyAuth(
+                api_key="sk-opensearch-rate-limited-writer",
+                metadata={"allowed_vector_store_indexes": [grant], "model_rpm_limit": {"text-embedding-3-small": 1}},
+            ),
+        )
+        documents: Final = (
+            b'{"text":"a","metadata":"handbook"}',
+            b'{"text":"b","metadata":["handbook"]}',
+            b'{"text":"c","model":"text-embedding-3-small"}',
+            b'{"text":"d","model":"text-embedding-3-small"}',
+        )
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(
+                return_value=httpx.Response(201, json={"result": "created"})
+            )
+            statuses: Final = tuple(
+                opensearch_client.post(
+                    "/opensearch/docs/_doc", content=document, headers={"Content-Type": JSON_TYPE}
+                ).status_code
+                for document in documents
+            )
+
+        assert statuses == (201, 201, 201, 201)
+        assert tuple(call.request.content for call in route.calls) == documents
+
+    @pytest.mark.parametrize(
+        "document", [b'[{"text":"array body"}]', b'{"text":"\xff\xfe"}'], ids=["json-array", "invalid-utf-8"]
+    )
+    def test_a_malformed_document_gets_the_opensearch_answer(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, document: bytes
+    ) -> None:
+        rejected: Final = {"error": {"type": "mapper_parsing_exception"}, "status": 400}
+        _act_as(monkeypatch, _opensearch_caller("write"))
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post(f"{DOCS_UPSTREAM}/_doc").mock(return_value=httpx.Response(400, json=rejected))
+            response = opensearch_client.post(
+                "/opensearch/docs/_doc", content=document, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, response.json()) == (400, rejected)
+        assert route.calls.last.request.content == document
+
+    def test_an_opensearch_error_keeps_its_status_and_body(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        not_found: Final = {"error": {"type": "index_not_found_exception", "index": "prod-docs-v2"}, "status": 404}
+        _act_as(monkeypatch, _opensearch_caller("read"))
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post(f"{DOCS_UPSTREAM}/_search").mock(return_value=httpx.Response(404, json=not_found))
+            response = opensearch_client.post(
+                "/opensearch/docs/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, response.json()) == (404, not_found)
+
+    def test_missing_aws_credentials_are_a_401_before_anything_is_sent(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        for name in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"):
+            empty_file: Path = tmp_path / name
+            empty_file.write_text("")
+            monkeypatch.setenv(name, str(empty_file))
+        _act_as(monkeypatch, _opensearch_caller("read", index_name="no-credentials"))
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.route(host=OPENSEARCH_HOST).mock(return_value=httpx.Response(200, json={}))
+            response = opensearch_client.post(
+                "/opensearch/no-credentials/_search", content=self.SEARCH_BODY, headers={"Content-Type": JSON_TYPE}
+            )
+
+        assert (response.status_code, route.called) == (401, False)
+
+    @pytest.mark.parametrize(
+        "method, api, action",
+        [
+            ("GET", "_doc/1", "es:ESHttpGet"),
+            ("HEAD", "_doc/1", "es:ESHttpHead"),
+            ("PUT", "_doc/1", "es:ESHttpPut"),
+            ("DELETE", "_doc/1", "es:ESHttpDelete"),
+            ("POST", "_search", "es:ESHttpPost"),
+        ],
+    )
+    def test_a_web_identity_session_allows_the_verb_sent_to_a_managed_domain(
+        self, opensearch_client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, api: str, action: str
+    ) -> None:
+        from litellm.types.vector_stores import IndexCreateLiteLLMParams, LiteLLM_ManagedVectorStoreIndex
+        from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry, VectorStoreRegistry
+
+        domain: Final = "search-docs-abc123.us-east-1.es.amazonaws.com"
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_index_registry",
+            VectorStoreIndexRegistry(
+                [
+                    LiteLLM_ManagedVectorStoreIndex(
+                        id="index-domain-docs",
+                        index_name="docs",
+                        litellm_params=IndexCreateLiteLLMParams(
+                            vector_store_index="prod-docs-v2", vector_store_name="opensearch-domain"
+                        ),
+                    )
+                ]
+            ),
+        )
+        monkeypatch.setattr(
+            litellm,
+            "vector_store_registry",
+            VectorStoreRegistry(
+                [
+                    {
+                        "vector_store_id": "opensearch-domain",
+                        "vector_store_name": "opensearch-domain",
+                        "custom_llm_provider": "opensearch",
+                        "litellm_params": {
+                            "api_base": f"https://{domain}",
+                            "aws_web_identity_token": "oidc/google/litellm",
+                            "aws_role_name": "arn:aws:iam::123456789012:role/litellm-role",
+                            "aws_session_name": f"opensearch-index-{method}",
+                            "aws_region_name": "us-east-1",
+                        },
+                    }
+                ]
+            ),
+        )
+        sts: Final = MagicMock()
+        sts.assume_role_with_web_identity.return_value = {
+            "Credentials": {
+                "AccessKeyId": "k",
+                "SecretAccessKey": "s",
+                "SessionToken": "t",
+                "Expiration": datetime(2099, 1, 1, tzinfo=timezone.utc),
+            },
+            "PackedPolicySize": 0,
+        }
+        _act_as(monkeypatch, _opensearch_caller("read", "write"))
+        with (
+            patch("boto3.client", return_value=sts),
+            patch("litellm.llms.bedrock.base_aws_llm.get_secret", return_value="oidc-jwt-token"),
+            respx.mock(assert_all_called=True) as upstream,
+        ):
+            upstream.route(method=method, host=domain).mock(return_value=httpx.Response(200, json={}))
+            response = opensearch_client.request(
+                method, f"/opensearch/docs/{api}", content=b"{}", headers={"Content-Type": JSON_TYPE}
+            )
+
+        policy: Final = json.loads(sts.assume_role_with_web_identity.call_args.kwargs["Policy"])
+        granted: Final = frozenset(action for statement in policy["Statement"] for action in statement["Action"])
+        assert (response.status_code, action in granted) == (200, True)

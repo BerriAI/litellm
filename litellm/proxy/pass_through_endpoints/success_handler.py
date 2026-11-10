@@ -1,14 +1,16 @@
 import asyncio
+import functools
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, ParamSpec
 from urllib.parse import urlparse
 
 import anyio
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
@@ -20,6 +22,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.utils import StandardPassThroughResponseObject
 
+from .background_response_settlement import BackgroundResponseSettlementStore, PrismaBackgroundResponseSettlementStore
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -54,9 +57,43 @@ from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
+from .managed_id_codec import decode as decode_managed_id
 from .upstream_usage_headers import has_upstream_reported_usage
 
 cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
+_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
+
+
+async def complete_despite_cancellation(work: Coroutine[object, object, None]) -> None:
+    pending: Final = asyncio.create_task(work)
+    try:
+        await asyncio.shield(pending)
+    except asyncio.CancelledError:
+        with anyio.CancelScope(shield=True):
+            while not pending.done():
+                with suppress(asyncio.CancelledError):
+                    await asyncio.shield(pending)
+            pending.result()
+        raise
+
+
+_HandlerParams: Final = ParamSpec("_HandlerParams")
+
+
+def _finishes_despite_cancellation_when_finalizing(
+    handler: Callable[_HandlerParams, Coroutine[object, object, None]],
+) -> Callable[_HandlerParams, Coroutine[object, object, None]]:
+    @functools.wraps(handler)
+    async def handle(
+        *args: _HandlerParams.args,
+        **kwargs: _HandlerParams.kwargs,  # kwargs-ok: ParamSpec forwards the wrapped handler's exact signature
+    ) -> None:
+        if kwargs.get("finalize_before_dispatch") is True:
+            await complete_despite_cancellation(handler(*args, **kwargs))
+            return
+        await handler(*args, **kwargs)
+
+    return handle
 
 
 def _safe_response_text(httpx_response: httpx.Response) -> str:
@@ -84,11 +121,17 @@ class PassThroughEndpointLogging:
         self,
         transcribe_handler: TranscribePassthroughLoggingHandler | None = None,
         log_dispatch: PassThroughLogDispatch | None = None,
+        background_response_settlement: BackgroundResponseSettlementStore | None = None,
     ):
         self.transcribe_passthrough_logging_handler: Final = (
             transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
         )
         self._injected_log_dispatch: Final = log_dispatch
+        self.background_response_settlement: Final[BackgroundResponseSettlementStore] = (
+            background_response_settlement
+            if background_response_settlement is not None
+            else PrismaBackgroundResponseSettlementStore()
+        )
         self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
@@ -174,16 +217,7 @@ class PassThroughEndpointLogging:
                 )
                 bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
-            pending: Final = asyncio.create_task(finalize_and_enqueue())
-            try:
-                await asyncio.shield(pending)
-            except asyncio.CancelledError:
-                with anyio.CancelScope(shield=True):
-                    while not pending.done():
-                        with suppress(asyncio.CancelledError):
-                            await asyncio.shield(pending)
-                    pending.result()
-                raise
+            await complete_despite_cancellation(finalize_and_enqueue())
             return
 
         await logging_obj.dispatch_success_handlers(
@@ -197,6 +231,13 @@ class PassThroughEndpointLogging:
 
     _handle_logging = handle_logging
 
+    async def background_response_settled_before(self, settled_response_id: str | None) -> bool:
+        if settled_response_id is None:
+            return False
+        managed_id: Final = decode_managed_id(settled_response_id)
+        upstream_response_id: Final = settled_response_id if managed_id is None else managed_id.raw_provider_id
+        return not await self.background_response_settlement.claim(upstream_response_id)
+
     def normalize_llm_passthrough_logging_payload(
         self,
         httpx_response: httpx.Response,
@@ -209,6 +250,7 @@ class PassThroughEndpointLogging:
         end_time: datetime,
         cache_hit: bool,
         custom_llm_provider: str | None = None,
+        background_response_settled_before: bool = False,
         **kwargs,
     ):
         return_dict: Final = {
@@ -294,6 +336,7 @@ class PassThroughEndpointLogging:
                 end_time=end_time,
                 cache_hit=cache_hit,
                 request_body=request_body,
+                background_response_settled_before=background_response_settled_before,
                 **kwargs,
             )
             standard_logging_response_object = openai_passthrough_logging_handler_result["result"]
@@ -489,6 +532,7 @@ class PassThroughEndpointLogging:
             )
         return None
 
+    @_finishes_despite_cancellation_when_finalizing
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
@@ -504,7 +548,7 @@ class PassThroughEndpointLogging:
         custom_llm_provider: str | None = None,
         finalize_before_dispatch: bool = False,
         **kwargs,
-    ):
+    ) -> None:
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
         if self.is_tinyfish_route(url_route, custom_llm_provider):
@@ -558,7 +602,22 @@ class PassThroughEndpointLogging:
             )
             return
         else:
+            from .llm_provider_handlers.openai_passthrough_logging_handler import (
+                OpenAIPassthroughLoggingHandler,
+            )
+
             try:
+                settled_response_id: Final = (
+                    OpenAIPassthroughLoggingHandler.background_response_settled_by_call(
+                        httpx_response.request.method, url_route, _RESPONSE_BODY.validate_python(response_body)
+                    )
+                    if isinstance(response_body, dict)
+                    and OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+                    else None
+                )
+                background_response_settled_before: Final = await self.background_response_settled_before(
+                    settled_response_id
+                )
                 normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
                     httpx_response=httpx_response,
                     response_body=response_body,
@@ -570,6 +629,7 @@ class PassThroughEndpointLogging:
                     end_time=end_time,
                     cache_hit=cache_hit,
                     custom_llm_provider=custom_llm_provider,
+                    background_response_settled_before=background_response_settled_before,
                     **kwargs,
                 )
                 standard_logging_response_object = normalized_llm_passthrough_logging_payload[

@@ -812,8 +812,9 @@ class ModelResponseIterator:
             reasoning_content=reasoning_content,
             speed=self.speed,
         )
-        if usage.speed is not None:
-            self.speed = usage.speed
+        reported_speed: Final = self._cumulative_usage.get("speed")
+        if isinstance(reported_speed, str):
+            self.speed = reported_speed
         return usage
 
     def _content_block_delta_helper(

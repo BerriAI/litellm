@@ -12,6 +12,7 @@ from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
 from litellm.rust_bridge.public_call import (
     AsyncFlag,
     NativeCall,
+    native_acall_hook_on_loop,
     native_call,
     native_call_hook,
     optional_str,
@@ -97,5 +98,5 @@ async def aocr(*args: object, **kwargs: object) -> OCRResponse:  # kwargs-ok: pr
         _FLAG.dropped(kwargs),
         python=runtime.NO_PYTHON,
         binding=NATIVE_AOCR,
-        native=native_call_hook,
+        native=native_acall_hook_on_loop,
     )

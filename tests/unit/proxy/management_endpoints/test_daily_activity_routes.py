@@ -256,6 +256,7 @@ class _FakeRepository:
         self._rows: Final = rows
         self.aggregated = AsyncMock(side_effect=self._aggregated)
         self.guardrail_spend = AsyncMock(return_value=())
+        self.customer_team_spend = AsyncMock(return_value=())
         self.key_page = AsyncMock(side_effect=self._key_page)
         self.key_page_call: tuple[DailyActivityScope, int, int] | None = None
         self.search_keys = AsyncMock(side_effect=self._search_keys)

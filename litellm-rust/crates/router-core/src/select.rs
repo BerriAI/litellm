@@ -108,6 +108,9 @@ impl Candidates {
 pub(crate) struct SelectInputs {
     pub target_order: Option<i64>,
     pub skipped_ids: Vec<String>,
+    /// Every deployment an attempt of this request failed on, whatever the status: the callback
+    /// filters read it as `_retry_skipped_deployment_ids`, so an affinity pin can leave one.
+    pub failed_ids: Vec<String>,
     /// A weighted failover hop's `_excluded_deployment_ids`: never picked.
     pub excluded_ids: Arc<[String]>,
     /// Stop before the plugins, order and skip filters: the group less cooldowns and blocked
@@ -470,7 +473,7 @@ impl Core {
                 StrategyScope::Default,
             );
             ctx.excluded_ids = &inputs.excluded_ids;
-            ctx.skipped_ids = &inputs.skipped_ids;
+            ctx.skipped_ids = &inputs.failed_ids;
             ctx.target_order = inputs.target_order.or(request_order);
             let filtered = self.host.callback_filters(&ctx, healthy).await?;
             healthy = filtered.kept;

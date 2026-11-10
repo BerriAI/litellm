@@ -561,7 +561,11 @@ class TestPostCallFailureHookDoesNotInventAProviderHandoff:
             litellm_call_id="pre-handoff-auth-failure",
             function_id="pre-handoff",
         )
-        request_data: Final[dict[str, object]] = {"litellm_logging_obj": logging_obj, "model": "gpt-4.1", "metadata": {}}
+        request_data: Final[dict[str, object]] = {
+            "litellm_logging_obj": logging_obj,
+            "model": "gpt-4.1",
+            "metadata": {},
+        }
         proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging_obj.alert_types = []
         with (
@@ -1109,6 +1113,44 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
                 status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED, detail="Client disconnected the request"
             ),
         )
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected_input_cost, _ = litellm.cost_per_token(model="gpt-3.5-turbo", prompt_tokens=estimated.prompt_tokens)
+        assert expected_input_cost > 0
+        assert request_data["response_cost"] == pytest.approx(expected_input_cost)
+
+    @pytest.mark.asyncio
+    async def test_a_total_timeout_that_ran_out_after_dispatch_is_priced_at_input_rate(self):
+        from datetime import datetime
+
+        from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired
+        from litellm.proxy._types import ProxyException
+        from litellm.types.utils import Usage
+
+        def ran_out() -> ProxyException:
+            try:
+                raise TotalTimeoutExpired("the request did not finish within its total_timeout of 2.0s")
+            except TotalTimeoutExpired as expired:
+                try:
+                    raise ProxyException(
+                        message=str(expired), type="timeout", param="total_timeout", code=408
+                    ) from expired
+                except ProxyException as answered:
+                    return answered
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data, original_exception=ran_out())
 
         estimated = request_data["combined_usage_object"]
         assert isinstance(estimated, Usage)
@@ -2693,7 +2735,12 @@ def test_an_earlier_attempt_on_another_model_is_priced_at_that_models_rate_not_t
         monkeypatch.setitem(
             litellm.model_cost,
             pricing_model,
-            {"litellm_provider": provider, "mode": "chat", "input_cost_per_token": input_rate, "output_cost_per_token": 1.0},
+            {
+                "litellm_provider": provider,
+                "mode": "chat",
+                "input_cost_per_token": input_rate,
+                "output_cost_per_token": 1.0,
+            },
         )
     usage = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
 
@@ -2926,9 +2973,7 @@ async def test_dropped_stream_failure_attribution_reaches_terminal_spend_row() -
     request_data: Final = {"litellm_logging_obj": logging_obj}
     lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
     terminal_kwargs: Final = {
-        key: value
-        for key, value in {**request_data, **lifted}.items()
-        if key != "litellm_logging_obj"
+        key: value for key, value in {**request_data, **lifted}.items() if key != "litellm_logging_obj"
     }
     row: Final = get_logging_payload(
         kwargs=terminal_kwargs,
@@ -3101,9 +3146,7 @@ async def test_latest_dropped_attempt_publishes_its_payload_after_earlier_dispat
     request_data: Final = {"litellm_logging_obj": logging_obj}
     lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
     terminal_kwargs: Final = {
-        key: value
-        for key, value in {**request_data, **lifted}.items()
-        if key != "litellm_logging_obj"
+        key: value for key, value in {**request_data, **lifted}.items() if key != "litellm_logging_obj"
     }
     row: Final = get_logging_payload(
         kwargs=terminal_kwargs,
@@ -3158,9 +3201,7 @@ async def test_dropped_attempt_attribution_is_published_while_failure_callback_i
     request_data: Final = {"litellm_logging_obj": logging_obj}
     lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
     terminal_kwargs: Final = {
-        key: value
-        for key, value in {**request_data, **lifted}.items()
-        if key != "litellm_logging_obj"
+        key: value for key, value in {**request_data, **lifted}.items() if key != "litellm_logging_obj"
     }
     row: Final = get_logging_payload(
         kwargs=terminal_kwargs,
@@ -3237,9 +3278,7 @@ async def test_failed_attempt_publishes_baseline_reason_after_invalidation(
         request_data: Final = {"litellm_logging_obj": logging_obj}
         lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
         terminal_kwargs: Final = {
-            key: value
-            for key, value in {**request_data, **lifted}.items()
-            if key != "litellm_logging_obj"
+            key: value for key, value in {**request_data, **lifted}.items() if key != "litellm_logging_obj"
         }
         row: Final = get_logging_payload(
             kwargs=terminal_kwargs,
@@ -3254,9 +3293,7 @@ async def test_failed_attempt_publishes_baseline_reason_after_invalidation(
         assert row["prompt_tokens"] == 4
         assert row["completion_tokens"] == 1
         lifted_payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(lifted["standard_logging_object"])
-        callback_payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(
-            recorder.standard_logging_object
-        )
+        callback_payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(recorder.standard_logging_object)
 
         def baseline_reason(payload: StandardLoggingPayload) -> str:
             encoded: Final = payload["autorouter_baseline_observation"]
@@ -3335,9 +3372,7 @@ async def test_queued_stale_attempt_dispatch_does_not_publish_over_current_attem
         request_data: Final = {"litellm_logging_obj": logging_obj}
         lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
         terminal_kwargs: Final = {
-            key: value
-            for key, value in {**request_data, **lifted}.items()
-            if key != "litellm_logging_obj"
+            key: value for key, value in {**request_data, **lifted}.items() if key != "litellm_logging_obj"
         }
         row: Final = get_logging_payload(
             kwargs=terminal_kwargs,
@@ -3402,9 +3437,7 @@ async def test_dropped_stream_failure_does_not_overwrite_newer_terminal_payload(
         request_data: Final = {"litellm_logging_obj": logging_obj}
         lifted: Final = _failure_fields_to_lift(request_data, provider_billed=True)
         terminal_kwargs: Final = {
-            key: value
-            for key, value in {**request_data, **lifted}.items()
-            if key != "litellm_logging_obj"
+            key: value for key, value in {**request_data, **lifted}.items() if key != "litellm_logging_obj"
         }
         row: Final = get_logging_payload(
             kwargs=terminal_kwargs,
@@ -3658,7 +3691,6 @@ def test_a_request_that_timed_out_at_a_provider_bills_its_input_at_the_input_rat
     assert response_cost == pytest.approx(expected_input_cost)
 
 
-
 COMPACTION_INSTRUCTIONS = {"role": "system", "content": "answer briefly"}
 COMPACTED_HISTORY = [
     {"role": "user", "content": "a long turn " * 200},
@@ -3733,8 +3765,6 @@ def test_an_earlier_timed_out_responses_attempt_counts_its_input_from_the_newest
     )
 
     assert sent == earlier_attempt_prompt_tokens([COMPACTION_INSTRUCTIONS, COMPACTION_ITEM, TURN_AFTER_COMPACTION])
-
-
 
 
 @pytest.mark.parametrize(
@@ -4076,9 +4106,7 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
             ]
         )
 
-        response = create_model_info_response(
-            model_id="my-embeddings", provider="openai", llm_router=router
-        )
+        response = create_model_info_response(model_id="my-embeddings", provider="openai", llm_router=router)
     finally:
         litellm.model_cost.clear()
         litellm.model_cost.update(saved_model_cost)
@@ -4108,12 +4136,8 @@ def test_create_model_info_response_resolves_model_group_alias_to_target(model_g
         model_group_alias=model_group_alias,
     )
 
-    alias_response = create_model_info_response(
-        model_id="team-embeddings", provider="openai", llm_router=router
-    )
-    target_response = create_model_info_response(
-        model_id="my-embeddings", provider="openai", llm_router=router
-    )
+    alias_response = create_model_info_response(model_id="team-embeddings", provider="openai", llm_router=router)
+    target_response = create_model_info_response(model_id="my-embeddings", provider="openai", llm_router=router)
 
     assert alias_response["id"] == "team-embeddings"
     for field in ("mode", "max_input_tokens", "max_output_tokens"):
@@ -4196,7 +4220,9 @@ async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeyp
     with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
         await proxy_logging_obj.post_call_failure_hook(
             request_data={"metadata": {}},
-            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
+            original_exception=HTTPException(
+                status_code=400, detail="Upstream passthrough request failed with status 400"
+            ),
             user_api_key_dict=UserAPIKeyAuth(),
             traceback_str=upstream_traceback,
         )
@@ -4260,9 +4286,13 @@ def test_mcp_conversion_preserves_request_policy_and_isolates_guardrail_data(buc
     parent = {
         "model": "parent-model",
         bucket: {
-            "guardrails": ["policy-rule"], "guardrail_config": {"language": "en"},
-            "applied_policies": ["parent-policy"], "policy_sources": {"parent-policy": "model"},
-            "_guardrail_pipelines": [], "_pipeline_managed_guardrails": ["pipeline-rule"], "tags": ["review"],
+            "guardrails": ["policy-rule"],
+            "guardrail_config": {"language": "en"},
+            "applied_policies": ["parent-policy"],
+            "policy_sources": {"parent-policy": "model"},
+            "_guardrail_pipelines": [],
+            "_pipeline_managed_guardrails": ["pipeline-rule"],
+            "tags": ["review"],
         },
         "guardrails": [{"request-rule": {"extra_body": {"threshold": 0.9}}}],
         "guardrail_config": {"entities": ["EMAIL_ADDRESS"]},
@@ -4292,13 +4322,26 @@ def test_mcp_conversion_honors_only_authenticated_global_guardrail_opt_outs(opt_
     from litellm.responses.mcp.request_context import MCPRequestContext
 
     auth = UserAPIKeyAuth(metadata={"opted_out_global_guardrails": ["global-rule"] if opt_out else []})
-    context = MCPRequestContext.resolve(kwargs={"metadata": {
-        "user_api_key_auth": auth, "disable_global_guardrails": True,
-        "user_api_key_metadata": {"disable_global_guardrails": True},
-    }}, tools=None)
+    context = MCPRequestContext.resolve(
+        kwargs={
+            "metadata": {
+                "user_api_key_auth": auth,
+                "disable_global_guardrails": True,
+                "user_api_key_metadata": {"disable_global_guardrails": True},
+            }
+        },
+        tools=None,
+    )
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
-    kwargs = {"name": "execute", "arguments": {}, "user_api_key_auth": auth, "guardrail_context": context.guardrail_context}
-    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    kwargs = {
+        "name": "execute",
+        "arguments": {},
+        "user_api_key_auth": auth,
+        "guardrail_context": context.guardrail_context,
+    }
+    synthetic = proxy_logging._convert_mcp_to_llm_format(
+        proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs
+    )
     guardrail = CustomGuardrail(guardrail_name="global-rule", event_hook="pre_mcp_call", default_on=True)
     assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is (not opt_out)
     synthetic["metadata"]["user_api_key_metadata"]["opted_out_global_guardrails"].append("unrelated")
@@ -4312,19 +4355,26 @@ def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expecte
     from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails
 
     registry = policy_registry.PolicyRegistry()
-    registry._policies = {"model-policy": Policy(
-        condition=PolicyCondition(model="parent-model"), guardrails=PolicyGuardrails(add=["model-rule"])
-    )}
+    registry._policies = {
+        "model-policy": Policy(
+            condition=PolicyCondition(model="parent-model"), guardrails=PolicyGuardrails(add=["model-rule"])
+        )
+    }
     registry._initialized = True
     monkeypatch.setattr(policy_registry, "_policy_registry", registry)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
     kwargs = {
-        "name": "execute", "arguments": {},
+        "name": "execute",
+        "arguments": {},
         "user_api_key_auth": UserAPIKeyAuth(metadata={"policies": ["model-policy"]}),
-        "guardrail_context": MCPRequestContext.resolve_guardrail_context({"model": model, "guardrails": ["request-rule"]}),
+        "guardrail_context": MCPRequestContext.resolve_guardrail_context(
+            {"model": model, "guardrails": ["request-rule"]}
+        ),
     }
-    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    synthetic = proxy_logging._convert_mcp_to_llm_format(
+        proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs
+    )
     assert ("model-rule" in synthetic["metadata"]["guardrails"]) is expected
     assert "request-rule" in synthetic["metadata"]["guardrails"]
 
@@ -4365,7 +4415,5 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
 
     assert _is_client_error_exception(HTTPException(status_code=400, detail="x")) is True
     assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
-    assert _is_client_error_exception(
-        ProxyException(message="x", type="x", param=None, code="429")
-    ) is True
+    assert _is_client_error_exception(ProxyException(message="x", type="x", param=None, code="429")) is True
     assert _is_client_error_exception(ValueError("x")) is False
