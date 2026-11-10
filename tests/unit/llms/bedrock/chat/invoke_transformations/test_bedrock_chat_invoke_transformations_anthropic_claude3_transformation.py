@@ -1180,24 +1180,23 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
     assert result.get("anthropic_beta") == expected_betas
 
 
+_WEATHER_CALL: Final = {
+    "id": "toolu_01Weather",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+}
+_PLAIN_WEATHER_CALL: Final = {"role": "assistant", "content": None, "tool_calls": [_WEATHER_CALL]}
 _REPLAYED_WEATHER_SEARCH: Final = {
-    "role": "assistant",
-    "content": None,
+    **_PLAIN_WEATHER_CALL,
     "tool_calls": [
         {
-            "id": "toolu_01Weather",
+            "id": "srvtoolu_01Search",
             "type": "function",
-            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
-        }
+            "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+        },
+        _WEATHER_CALL,
     ],
     "provider_specific_fields": {
-        "server_tool_calls": [
-            {
-                "id": "srvtoolu_01Search",
-                "type": "function",
-                "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
-            }
-        ],
         "tool_results": [
             {
                 "type": "tool_search_tool_result",
@@ -1209,9 +1208,6 @@ _REPLAYED_WEATHER_SEARCH: Final = {
             }
         ],
     },
-}
-_PLAIN_WEATHER_CALL: Final = {
-    key: value for key, value in _REPLAYED_WEATHER_SEARCH.items() if key != "provider_specific_fields"
 }
 
 

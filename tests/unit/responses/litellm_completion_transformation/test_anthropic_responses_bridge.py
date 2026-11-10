@@ -873,21 +873,17 @@ _SERVER_HELD_SEARCH_TURN: Final = {
                     "content": None,
                     "tool_calls": [
                         {
+                            "id": "srvtoolu_01Search",
+                            "type": "function",
+                            "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                        },
+                        {
                             "id": "toolu_01Weather",
                             "type": "function",
                             "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
-                        }
+                        },
                     ],
-                    "provider_specific_fields": {
-                        "server_tool_calls": [
-                            {
-                                "id": "srvtoolu_01Search",
-                                "type": "function",
-                                "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
-                            }
-                        ],
-                        "tool_results": [_SEARCH_RESULT],
-                    },
+                    "provider_specific_fields": {"tool_results": [_SEARCH_RESULT]},
                 },
             }
         ],

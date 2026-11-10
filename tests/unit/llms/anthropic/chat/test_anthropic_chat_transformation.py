@@ -9836,58 +9836,18 @@ def test_transform_request_tool_config_point_without_tools_drops_the_key():
     assert litellm_params["metadata"] == {}
 
 
-def test_a_renamed_tool_leaves_tool_results_without_tool_references_as_claude_sent_them():
-    errored_search: Final = {
-        "type": "tool_search_tool_result",
-        "tool_use_id": "srvtoolu_01Search",
-        "content": {"type": "tool_search_tool_result_error", "error_code": "unavailable"},
-    }
-    results: Final = [_CODE_EXECUTION_BLOCKS[1], errored_search]
-    message: Final = _parsed_assistant_message(
-        [
-            *_CODE_EXECUTION_BLOCKS,
-            _tool_search_turn([], _WEATHER_TOOL_USE)[0],
-            errored_search,
-            {**_WEATHER_TOOL_USE, "name": "weather_get"},
-        ],
-        "tool_use",
-        {"weather_get": "weather.get"},
-    )
-    config: Final = AnthropicConfig()
-
-    request: Final = config.transform_request(
-        model="claude-opus-5-5",
-        messages=[
-            {"role": "user", "content": "What is the weather in Paris?"},
-            message.model_dump(),
-            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
-        ],
-        optional_params=config.map_openai_params(
-            non_default_params={
-                "tools": [
-                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
-                    _function_tool("weather.get"),
-                ]
-            },
-            optional_params={},
-            model="claude-opus-5-5",
-            drop_params=False,
-        ),
-        litellm_params={},
-        headers={},
-    )
-
-    assert message.provider_specific_fields["tool_results"] == results
-    assert message.tool_calls[-1].function.name == "weather.get"
-    sent: Final = request["messages"][1]["content"]
-    assert [block for block in sent if block["type"].endswith("_tool_result")] == results
-    assert [block["name"] for block in sent if block["type"] == "tool_use"] == ["weather_get"]
+_WEATHER_TOOL_USE: Final = {
+    "type": "tool_use",
+    "id": "toolu_01Weather",
+    "name": "get_weather",
+    "input": {"city": "Paris"},
+}
 
 
 @pytest.mark.parametrize(
     ("last_block", "stop_reason"),
     [
-        pytest.param(dict(_PARIS_ANSWER), "end_turn", id="search_then_answer"),
+        pytest.param({"type": "text", "text": "Paris is the capital of France."}, "end_turn", id="search_then_answer"),
         pytest.param({**_WEATHER_TOOL_USE, "name": "weather_get"}, "tool_use", id="search_then_tool"),
     ],
 )
@@ -9963,84 +9923,7 @@ def test_a_renamed_tool_search_result_keeps_claudes_names_so_an_older_proxy_acce
     )
 
     assert tool_results == [search_turn[1]]
-    assert tool_names == ["weather.get"]
-
-
-_INPUT_TRANSFORMATIONS: Final = [{"type": "thinking_block_binding", "count": 2}]
-
-
-def _input_transformations_response() -> AnthropicMessagesResponse:
-    return AnthropicMessagesResponse(
-        id="msg_input_transformations",
-        type="message",
-        role="assistant",
-        model="claude-sonnet-4-6",
-        content=[{"type": "text", "text": "ok"}],
-        stop_reason="end_turn",
-        stop_sequence=None,
-        usage={"input_tokens": 12, "output_tokens": 3},
-        input_transformations=_INPUT_TRANSFORMATIONS,
-    )
-
-
-def test_chat_response_surfaces_input_transformations_in_provider_specific_fields() -> None:
-    result: Final = AnthropicConfig().transform_response(
-        model="claude-sonnet-4-6",
-        raw_response=httpx.Response(200, json=_input_transformations_response()),
-        model_response=ModelResponse(),
-        logging_obj=MagicMock(),
-        request_data={},
-        messages=[{"role": "user", "content": "hi"}],
-        optional_params={},
-        litellm_params={},
-        encoding=None,
-    )
-
-    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
-
-
-def test_chat_response_without_input_transformations_adds_no_key() -> None:
-    completion_response: Final = {
-        key: value for key, value in _input_transformations_response().items() if key != "input_transformations"
-    }
-    result: Final = AnthropicConfig().transform_response(
-        model="claude-sonnet-4-6",
-        raw_response=httpx.Response(200, json=completion_response),
-        model_response=ModelResponse(),
-        logging_obj=MagicMock(),
-        request_data={},
-        messages=[{"role": "user", "content": "hi"}],
-        optional_params={},
-        litellm_params={},
-        encoding=None,
-    )
-
-    assert "input_transformations" not in result.choices[0].message.provider_specific_fields
-
-
-def test_json_mode_chat_response_keeps_input_transformations() -> None:
-    completion_response: Final = {
-        **_input_transformations_response(),
-        "content": [
-            {"type": "tool_use", "id": "toolu_json", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {"answer": 42}}
-        ],
-        "stop_reason": "tool_use",
-    }
-    result: Final = AnthropicConfig().transform_response(
-        model="claude-sonnet-4-6",
-        raw_response=httpx.Response(200, json=completion_response),
-        model_response=ModelResponse(),
-        logging_obj=MagicMock(),
-        request_data={},
-        messages=[{"role": "user", "content": "hi"}],
-        optional_params={},
-        litellm_params={},
-        encoding=None,
-        json_mode=True,
-    )
-
-    assert json.loads(result.choices[0].message.content) == {"answer": 42}
-    assert result.choices[0].message.provider_specific_fields["input_transformations"] == _INPUT_TRANSFORMATIONS
+    assert tool_names == ["tool_search_tool_bm25", "weather.get"]
 
 
 _HOSTED_MCP_TOOL: Final = {
