@@ -155,13 +155,13 @@ class _ChatRequestTranslator(Protocol):
 
 
 def _needs_chat_translation(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "tool" or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
+
+
+def _counts_blank_text_as_chat_sends_it(messages: Sequence[Mapping[str, object]]) -> bool:
     from litellm.litellm_core_utils.prompt_templates.factory import carries_empty_text
 
-    return (
-        message.get("role") == "tool"
-        or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
-        or carries_empty_text(message)
-    )
+    return any(map(carries_empty_text, messages)) and not any(map(_has_non_chat_user_block, messages))
 
 
 def _is_chat_tool(tool: Mapping[str, object]) -> bool:
@@ -319,6 +319,7 @@ def anthropic_fields_for_chat_tool_use(
         not chat_params
         and not any(map(_needs_tool_translation, counted_tools))
         and not any(map(_needs_chat_translation, messages))
+        and not _counts_blank_text_as_chat_sends_it(messages)
     ):
         return None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)

@@ -902,6 +902,32 @@ async def test_counter_sends_a_blank_user_turn_as_the_text_chat_inference_sends(
     assert [body["messages"] for body in bodies] == [inference["messages"]]
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("httpx_transport_clients")
+@_COUNTERS
+async def test_counter_sends_a_native_image_turn_as_sent_next_to_a_blank_assistant_turn(
+    counter_type: type[AnthropicTokenCounter] | type[AzureAIAnthropicTokenCounter],
+    count_endpoint: str,
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}},
+                {"type": "text", "text": "What is in this image?"},
+            ],
+        },
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "Describe it."},
+    ]
+
+    result, bodies = await _counted_body(counter_type, count_endpoint, deepcopy(messages), None, "openai")
+
+    assert result is not None
+    assert result.error is not True
+    assert [body["messages"] for body in bodies] == [messages]
+
+
 _ANSWER_SCHEMA: Final[dict[str, JsonValue]] = {
     "type": "object",
     "properties": {"answer": {"type": "string"}},

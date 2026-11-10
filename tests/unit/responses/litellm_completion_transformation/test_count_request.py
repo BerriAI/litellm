@@ -1,5 +1,8 @@
 import json
+from collections.abc import Mapping, Sequence
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 from pydantic import JsonValue
@@ -11,6 +14,7 @@ from litellm.responses.litellm_completion_transformation.count_request import (
     chat_count_request,
 )
 from litellm.responses.litellm_completion_transformation.transformation import ChatCompletionSession
+from litellm.responses.utils import ResponsesAPIRequestUtils
 
 _MARK: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
 _MARKED_RESPONSES_REQUEST: Final[dict[str, JsonValue]] = {
@@ -300,3 +304,94 @@ async def test_converse_count_request_reads_an_arn_deployment_model_from_base_mo
         ("assistant", "Four."),
         *((("user", ""),) if fills else ()),
     ]
+
+
+@pytest.mark.asyncio
+async def test_claude_count_request_reads_the_deployment_model_when_the_request_names_an_alias() -> None:
+    request: Final = await chat_count_request(
+        model="claude-opus-5-5",
+        custom_llm_provider="anthropic",
+        api_base=None,
+        responses_request={"model": "my-claude-alias", "input": _ANSWERED_THEN_EMPTY},
+        policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+    )
+
+    assert isinstance(request, ChatCountRequest)
+    assert [(message.get("role"), message.get("content")) for message in request.messages] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        ("user", ""),
+    ]
+
+
+class _StoredTurns:
+    def __init__(self, rows: tuple[Mapping[str, object], ...]) -> None:
+        self.rows: Final = rows
+
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict[str, object]]:
+        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] in request_ids}
+        return [dict(row) for row in self.rows if row["session_id"] in sessions]
+
+
+def _stored_converse_turn(request_id: str, input_items: object, reply: str) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "converse-session",
+        "model": "us.anthropic.claude-opus-5-5",
+        "custom_llm_provider": "bedrock",
+        "proxy_server_request": {"input": input_items, "model": "bedrock/us.anthropic.claude-opus-5-5"},
+        "response": {
+            "id": request_id,
+            "object": "response",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": reply, "annotations": []}],
+                }
+            ],
+        },
+    }
+
+
+def _response_id(chat_id: str) -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="bedrock", model_id="deployment-a", response_id=chat_id
+    )
+
+
+@pytest.mark.asyncio
+async def test_converse_count_request_replays_a_stored_empty_user_turn_for_a_string_input_like_a_list_input() -> None:
+    first_id: Final = _response_id("chatcmpl-turn-one")
+    follow_up_id: Final = _response_id("chatcmpl-turn-two")
+    stored: Final = _StoredTurns(
+        (
+            _stored_converse_turn(first_id, "What is 2+2?", "Four."),
+            _stored_converse_turn(follow_up_id, [{"role": "user", "content": None}], "Eight."),
+        )
+    )
+
+    async def counted_turns(follow_up_input: JsonValue) -> list[object]:
+        request: Final = await chat_count_request(
+            model="us.anthropic.claude-opus-5-5",
+            custom_llm_provider="bedrock",
+            api_base=None,
+            responses_request={
+                "model": "us.anthropic.claude-opus-5-5",
+                "previous_response_id": follow_up_id,
+                "input": follow_up_input,
+            },
+            policy=DropPolicy(drop_params=False, additional_drop_params=frozenset()),
+        )
+        assert isinstance(request, ChatCountRequest)
+        return [message.get("role") for message in request.messages]
+
+    with patch(  # test-quality-ok: no DI seam for the stored-turn read; test_handler.py stubs this same boundary
+        "litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)
+    ):
+        string_input_turns: Final = await counted_turns("Double it.")
+        list_input_turns: Final = await counted_turns([{"role": "user", "content": "Double it."}])
+
+    assert string_input_turns == list_input_turns == ["user", "assistant", "user", "assistant", "user"]

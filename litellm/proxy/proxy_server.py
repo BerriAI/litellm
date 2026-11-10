@@ -15962,7 +15962,9 @@ def _deployment_api_base(
 
 
 def _inference_base_model(deployment: _TokenCountDeployment, responses_request: Mapping[str, object]) -> str | None:
-    return _non_empty_str(_inference_params(deployment.get("litellm_params", {}), responses_request).get("base_model"))
+    return _non_empty_str(
+        _inference_params(deployment.get("litellm_params", {}), responses_request).get("base_model")
+    ) or _non_empty_str(deployment.get("model_info", {}).get("base_model"))
 
 
 def _deployment_provider(

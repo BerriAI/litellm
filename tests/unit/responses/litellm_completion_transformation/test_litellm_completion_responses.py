@@ -6056,6 +6056,29 @@ def test_a_final_user_input_item_without_content_stays_an_empty_user_turn(
 
 
 @pytest.mark.parametrize(
+    ("model_info", "expected_tail"),
+    (({"base_model": "anthropic.claude-opus-5-5"}, [("user", "")]), ({}, [])),
+    ids=("model_info_base_model", "no_base_model"),
+)
+def test_an_arn_deployment_reads_its_model_from_model_info_base_model_like_chat_inference(
+    model_info: dict[str, object], expected_tail: list[tuple[object, object]]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc",
+        input=cast(ResponseInputParam, [_QUESTION_ITEM, _ANSWER_ITEM, _NULL_USER_ITEM]),
+        responses_api_request={},
+        custom_llm_provider="bedrock",
+        model_info=model_info,
+    )
+
+    assert [(message["role"], message.get("content")) for message in result["messages"]] == [
+        ("user", "What is 2+2?"),
+        ("assistant", "Four."),
+        *expected_tail,
+    ]
+
+
+@pytest.mark.parametrize(
     ("items", "expected"),
     (
         ((_NULL_USER_ITEM,), []),

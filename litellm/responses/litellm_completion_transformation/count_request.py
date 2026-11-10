@@ -123,6 +123,11 @@ def _caller_input(responses_request: Mapping[str, object]) -> ResponseInputParam
     )
 
 
+def _request_input(responses_request: Mapping[str, object]) -> str | ResponseInputParam | None:
+    responses_input: Final = responses_request.get("input")
+    return responses_input if isinstance(responses_input, str) else _caller_input(responses_request)
+
+
 def _with_emulated_file_search(responses_request: Mapping[str, object]) -> Mapping[str, object]:
     tools: Final = responses_request.get("tools")
     if tools is None:
@@ -155,7 +160,7 @@ async def _with_previous_turns(
         request_kwargs={"drop_params": policy.drop_params, "base_model": base_model},
         previous_response_client_ids=previous_response_client_ids(previous_response_id, responses_request),
         input_replaces_history=holds_compaction_summary(responses_request.get("input")),
-        request_input=_caller_input(responses_request),
+        request_input=_request_input(responses_request),
     )
 
 
@@ -195,7 +200,9 @@ async def chat_count_request(
             responses_batch_body_to_chat_body(
                 _with_compaction_as_summary_text(
                     _with_emulated_file_search(
-                        with_additional_tools_hoisted(responses_request, drop_params=policy.drop_params)
+                        with_additional_tools_hoisted(
+                            {**responses_request, "model": model}, drop_params=policy.drop_params
+                        )
                     )
                 ),
                 custom_llm_provider,
