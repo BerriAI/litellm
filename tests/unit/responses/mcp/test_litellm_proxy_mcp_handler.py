@@ -1834,6 +1834,34 @@ async def test_an_mcp_entry_allows_a_tool_its_allowed_tools_names_by_display_nam
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("server_url", ["litellm_proxy/mcp/calc", "litellm_proxy"], ids=["one_server", "whole_gateway"])
+async def test_an_mcp_entry_allows_no_tool_whose_hyphenated_display_name_ends_in_a_name_it_lists(
+    monkeypatch: pytest.MonkeyPatch, server_url: str
+):
+    calc_showing_add_as_not_subtract: Final = GATEWAY_SERVERS[0].model_copy(
+        update={"tool_name_to_display_name": {"add": "not-subtract"}}
+    )
+
+    ran: Final = await _calls_the_entries_run(
+        monkeypatch,
+        UserAPIKeyAuth(
+            api_key="sk-team",
+            team_id="team-1",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key", mcp_servers=["srv-1", "srv-2"]
+            ),
+        ),
+        ({"type": "mcp", "server_label": "reader", "server_url": server_url, "allowed_tools": ["subtract"]},),
+        "reader",
+        ("not-subtract", "calc-subtract"),
+        servers=(calc_showing_add_as_not_subtract, GATEWAY_SERVERS[1]),
+    )
+
+    assert ran == ("calc-subtract",)
+
+
+@pytest.mark.asyncio
 async def test_an_mcp_entry_allows_no_call_on_a_server_the_gateway_cannot_resolve(monkeypatch: pytest.MonkeyPatch):
     ran: Final = await _calls_the_gateway_runs(
         monkeypatch,
