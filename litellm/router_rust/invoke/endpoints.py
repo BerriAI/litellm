@@ -2118,7 +2118,10 @@ class RustEndpoints:
 
     def text_completion(self, request: Mapping[str, object]) -> object:
         """The sync `text_completion`: one pick, no retries, the group name as the model."""
-        from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin
+        from litellm.litellm_core_utils.routing_common_utils import (
+            deployment_model_id_pin,
+            metadata_defaults_under_request,
+        )
 
         kwargs: Final = without(request, "is_retry", "is_fallback", "is_async")
         model: Final = kwargs.get("model")
@@ -2139,9 +2142,9 @@ class RustEndpoints:
             if key not in kwargs:
                 kwargs[key] = value
             elif key == "metadata":
-                bucket = kwargs[key]
-                if isinstance(bucket, dict):
-                    bucket.update(as_dict(value))  # pyright: ignore[reportUnknownMemberType]  # the request's metadata dict
+                metadata_bucket(kwargs, key).update(
+                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(kwargs[key]))
+                )
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
             kwargs["model_id"] = pinned
