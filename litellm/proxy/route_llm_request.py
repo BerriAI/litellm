@@ -802,8 +802,9 @@ async def route_request(
         )
 
         loaded_by_read_through: Final = await model_registry_read_through.attempt(requested_model)
-        if not loaded_by_read_through and not _may_call_bedrock_without_a_deployment(
-            route_type, JSON_OBJECT_ADAPTER.validate_python(data)
+        if not loaded_by_read_through and not (
+            model_registry_read_through.confirmed_missing(requested_model)
+            and _may_call_bedrock_without_a_deployment(route_type, JSON_OBJECT_ADAPTER.validate_python(data))
         ):
             raise
         return await _route_request_single_attempt(

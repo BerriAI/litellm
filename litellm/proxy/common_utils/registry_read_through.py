@@ -88,11 +88,14 @@ class RegistryReadThrough:
         self._window_resyncs += 1
         return True
 
+    def confirmed_missing(self, key: str) -> bool:
+        return self._recent_misses.get_cache(key) is not None
+
     async def attempt(self, key: str) -> bool:
-        if self._recent_misses.get_cache(key) is not None:
+        if self.confirmed_missing(key):
             return False
         async with self._lock:
-            if self._recent_misses.get_cache(key) is not None:
+            if self.confirmed_missing(key):
                 return False
             if self._is_loaded(key):
                 return True

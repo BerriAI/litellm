@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import httpx
@@ -23,6 +23,7 @@ from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils import registry_read_through
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
@@ -3236,6 +3237,49 @@ async def test_route_request_only_calls_bedrock_directly_for_a_plain_bedrock_mod
                 None,
                 "allm_passthrough_route",
             )
+
+    assert not upstream.called
+
+
+def _nothing_is_loaded(_: str) -> bool:
+    return False
+
+
+@pytest.mark.parametrize(
+    "inconclusive_read_through",
+    [
+        pytest.param(
+            registry_read_through.RegistryReadThrough(
+                resync=AsyncMock(side_effect=ConnectionError("database is unreachable")),
+                is_loaded=_nothing_is_loaded,
+            ),
+            id="lookup-fails",
+        ),
+        pytest.param(
+            registry_read_through.RegistryReadThrough(
+                resync=AsyncMock(return_value=False),
+                is_loaded=_nothing_is_loaded,
+                max_resyncs_per_window=0,
+            ),
+            id="lookup-budget-exhausted",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_does_not_call_bedrock_directly_until_the_lookup_confirms_the_model_is_missing(
+    inconclusive_read_through: registry_read_through.RegistryReadThrough,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(registry_read_through, "model_registry_read_through", inconclusive_read_through)
+    router: Final = litellm.Router(model_list=[])
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route(host__regex=r"bedrock-runtime\..*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        with pytest.raises(ProxyModelNotFoundError):
+            await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
 
     assert not upstream.called
 
