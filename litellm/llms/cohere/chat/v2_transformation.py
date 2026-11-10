@@ -320,11 +320,11 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         )
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        reasoning: Final = (
-            ["reasoning_effort"]
-            if _any_model_supports(litellm.supports_reasoning, _cohere_model_ids(model, None))
-            else []
+        model_ids: Final = _cohere_model_ids(model, None)
+        json_mode: Final = (
+            ["response_format"] if _any_model_supports(litellm.supports_response_schema, model_ids) else []
         )
+        reasoning: Final = ["reasoning_effort"] if _any_model_supports(litellm.supports_reasoning, model_ids) else []
         return [
             "stream",
             "temperature",
@@ -337,9 +337,9 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             "n",
             "tools",
             "tool_choice",
-            "response_format",
             "seed",
             "extra_headers",
+            *json_mode,
             *reasoning,
         ]
 

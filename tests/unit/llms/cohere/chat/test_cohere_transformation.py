@@ -1001,7 +1001,6 @@ def test_cohere_v2_thinking_budget_fits_within_max_tokens(
             {"type": "json_object", "json_schema": CITY_SCHEMA},
         ),
         (JSON_SCHEMA_MODEL, {"type": "text"}, None),
-        (NO_JSON_SCHEMA_MODEL, {"type": "text"}, None),
     ],
 )
 def test_cohere_v2_response_format_reaches_cohere(
@@ -1085,6 +1084,7 @@ UNSUPPORTED_COHERE_V2_PARAMS: Final = [
         id="no-json-schema-model",
     ),
     pytest.param(NO_JSON_SCHEMA_MODEL, {"response_format": {"type": "json_object"}}, id="no-json-mode-model"),
+    pytest.param(NO_JSON_SCHEMA_MODEL, {"response_format": {"type": "text"}}, id="text-on-no-json-mode-model"),
     pytest.param(
         "command-r-08-2024",
         {"tools": [WEATHER_TOOL], "response_format": {"type": "json_object"}},
@@ -1139,7 +1139,6 @@ def test_cohere_v2_unsupported_param_is_dropped_with_drop_params(
     [
         pytest.param(NO_TOOL_CHOICE_MODEL, {"tools": [WEATHER_TOOL], "tool_choice": "none"}, "tool_choice", id="tool"),
         pytest.param(REASONING_MODEL, {"reasoning_effort": "extreme"}, "reasoning_effort", id="effort"),
-        pytest.param(NO_JSON_SCHEMA_MODEL, {"response_format": {"type": "json_object"}}, "response_format", id="json"),
     ],
 )
 def test_cohere_v2_drop_params_warns_about_the_dropped_param(
@@ -1294,3 +1293,25 @@ def test_cohere_v2_deployment_model_info_unlocks_params(
 
     body: Final = _sent_body(route)
     assert {key: body.get(key) for key in cohere_params} == cohere_params
+
+
+
+def test_cohere_v2_pre_call_checks_skip_a_deployment_without_json_mode() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "cohere-json",
+                "litellm_params": {"model": f"cohere_chat/{model}", "api_key": "cohere-test-key", "order": order},
+            }
+            for order, model in ((1, NO_JSON_SCHEMA_MODEL), (2, JSON_SCHEMA_MODEL))
+        ],
+        enable_pre_call_checks=True,
+    )
+
+    picked: Final = router.get_available_deployment(
+        model="cohere-json",
+        messages=[{"role": "user", "content": "Name one city and its country."}],
+        request_kwargs={"response_format": {"type": "json_schema", "json_schema": {"name": "city", "schema": CITY_SCHEMA}}},
+    )
+
+    assert picked["litellm_params"]["model"] == f"cohere_chat/{JSON_SCHEMA_MODEL}"
