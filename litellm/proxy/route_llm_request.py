@@ -6,6 +6,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeVar
 from uuid import uuid4
@@ -15,11 +16,12 @@ from fastapi import HTTPException, status
 from pydantic import BeforeValidator, TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.exceptions import ModelNotMappedError
+from litellm.litellm_core_utils.core_helpers import as_object_list, normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.routing_common_utils import is_proxy_admin_request
 from litellm.litellm_core_utils.total_deadline import enforce_total_timeout_scope
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router import router_arguments
 from litellm.router_api import router_init_args
@@ -148,17 +150,37 @@ def _may_call_bedrock_without_a_deployment(route_type: str, data: Mapping[str, o
     )
 
 
-def _deployment_names_bedrock_model(params: Mapping[str, object], model_id: str) -> bool:
-    model: Final = params.get("model")
-    return params.get("model_id") == model_id or (isinstance(model, str) and model.endswith(f"/{model_id}"))
+@lru_cache(maxsize=4096)
+def _bedrock_base_model(model: str) -> str:
+    return get_bedrock_base_model(model.rsplit("/", 1)[-1])
+
+
+@lru_cache(maxsize=8)
+def _bedrock_base_models_of(models: tuple[str, ...]) -> frozenset[str]:
+    return frozenset(_bedrock_base_model(model) for model in models)
 
 
 def _a_deployment_serves_bedrock_model(llm_router: LitellmRouter | None, model_id: str) -> bool:
     if llm_router is None:
         return False
-    return any(
-        _deployment_names_bedrock_model(deployment["litellm_params"], model_id)
-        for deployment in llm_router.registry().deployments() or []
+    deployment_models: Final = as_object_list(llm_router.registry().names(kind="deployment_names")) or ()
+    models: Final = tuple(model for model in deployment_models if isinstance(model, str))
+    return _bedrock_base_model(model_id) in _bedrock_base_models_of(models)
+
+
+def _cost_map_lists_bedrock_model(model_id: str) -> bool:
+    try:
+        litellm.get_model_info(model=model_id, custom_llm_provider="bedrock")
+    except ModelNotMappedError:
+        return False
+    return True
+
+
+def _may_call_bedrock_directly_for(llm_router: LitellmRouter | None, model_id: str) -> bool:
+    return (
+        _cost_map_lists_bedrock_model(model_id)
+        and (llm_router is None or llm_router.registry().plugins("budget_limiter") is None)
+        and not _a_deployment_serves_bedrock_model(llm_router, model_id)
     )
 
 
@@ -174,6 +196,10 @@ async def _bedrock_answer_or_original_error(
         return await direct_call
     except BedrockError as error:
         if isinstance(error.__context__, NoCredentialsError):
+            raise original_error from error
+        raise
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == status.HTTP_403_FORBIDDEN:
             raise original_error from error
         raise
 
@@ -841,7 +867,7 @@ async def route_request(
         if not loaded_by_read_through and not (
             model_registry_read_through.confirmed_missing(requested_model)
             and _may_call_bedrock_without_a_deployment(route_type, JSON_OBJECT_ADAPTER.validate_python(data))
-            and not _a_deployment_serves_bedrock_model(proxy_server.llm_router, requested_model)
+            and _may_call_bedrock_directly_for(proxy_server.llm_router, requested_model)
         ):
             raise
         retried_call: Final = await _route_request_single_attempt(

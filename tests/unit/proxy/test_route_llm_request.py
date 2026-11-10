@@ -3188,7 +3188,7 @@ def proxy_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
             f"arn:aws:bedrock:us-west-2:111122223333:inference-profile/{_BEDROCK_MODEL_ID}",
             id="inference-profile-arn",
         ),
-        pytest.param("acme.brand-new-model-v1:0", id="vendor-missing-from-the-cost-map"),
+        pytest.param(_BEDROCK_MODEL_ID.removeprefix("us."), id="base-model-id"),
     ],
 )
 @pytest.mark.asyncio
@@ -3228,6 +3228,10 @@ async def test_route_request_sends_a_bedrock_model_id_missing_from_the_config_to
         pytest.param(
             {"model": "application-inference-profile/abc123", "endpoint": "model/application-inference-profile/abc123/converse"},
             id="slash-in-an-id-that-is-not-an-arn",
+        ),
+        pytest.param(
+            {"model": "acme.brand-new-model-v1:0", "endpoint": "model/acme.brand-new-model-v1:0/converse"},
+            id="model-missing-from-the-cost-map",
         ),
     ],
 )
@@ -3451,9 +3455,13 @@ async def test_route_request_keeps_a_bedrock_model_the_router_routes_on_its_depl
         pytest.param({"model": f"bedrock/converse/{_BEDROCK_MODEL_ID}"}, id="converse-route-prefix"),
         pytest.param({"model": f"bedrock/us-west-2/{_BEDROCK_MODEL_ID}"}, id="region-path"),
         pytest.param(
-            {"model": "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0", "model_id": _BEDROCK_MODEL_ID},
-            id="model-id-param",
+            {
+                "model": f"bedrock/{_BEDROCK_MODEL_ID.removeprefix('us.')}",
+                "model_id": "arn:aws:bedrock:us-east-1:111122223333:application-inference-profile/abc123",
+            },
+            id="application-profile-of-the-base-model",
         ),
+        pytest.param({"model": f"bedrock/eu.{_BEDROCK_MODEL_ID.removeprefix('us.')}"}, id="another-region-profile"),
     ],
 )
 @pytest.mark.asyncio
@@ -3489,14 +3497,25 @@ async def test_route_request_does_not_call_bedrock_directly_for_a_model_id_a_con
     assert not upstream.called
 
 
+@pytest.mark.parametrize(
+    "requested_model",
+    [
+        pytest.param(_BEDROCK_MODEL_ID.removeprefix("us."), id="base-model-id"),
+        pytest.param(f"global.{_BEDROCK_MODEL_ID.removeprefix('us.')}", id="global-profile-id"),
+        pytest.param(
+            f"arn:aws:bedrock:us-west-2:111122223333:inference-profile/{_BEDROCK_MODEL_ID}",
+            id="inference-profile-arn",
+        ),
+    ],
+)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_aws_env")
-async def test_route_request_calls_bedrock_directly_for_a_base_model_id_when_a_deployment_serves_only_its_profile(
+async def test_route_request_does_not_call_bedrock_directly_for_another_id_of_a_model_a_deployment_serves(
+    requested_model: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import litellm.proxy.proxy_server as proxy_server
 
-    base_model_id: Final = _BEDROCK_MODEL_ID.removeprefix("us.")
     router: Final = litellm.Router(
         model_list=[
             {
@@ -3507,16 +3526,73 @@ async def test_route_request_calls_bedrock_directly_for_a_base_model_id_when_a_d
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
 
-    with respx.mock(assert_all_called=True) as respx_mock:
-        upstream: Final = respx_mock.post(
-            url__regex=r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/.+/converse"
-        ).mock(return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER)))
-        response: Final = await (
-            await route_request(_bedrock_passthrough_data(base_model_id), router, None, "allm_passthrough_route")
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route(host__regex=r"bedrock-runtime\..*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
         )
+        with pytest.raises(ProxyModelNotFoundError):
+            await route_request(_bedrock_passthrough_data(requested_model), router, None, "allm_passthrough_route")
 
-    assert response.json() == dict(_BEDROCK_CONVERSE_ANSWER)
-    assert upstream.calls.last.request.url.raw_path.decode() == f"/model/{base_model_id}/converse"
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_does_not_call_bedrock_directly_when_provider_budgets_are_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = litellm.Router(
+        model_list=[], provider_budget_config={"bedrock": {"budget_limit": 100, "time_period": "1d"}}
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        upstream: Final = respx_mock.route(host__regex=r"bedrock-runtime\..*").mock(
+            return_value=httpx.Response(200, json=dict(_BEDROCK_CONVERSE_ANSWER))
+        )
+        with pytest.raises(ProxyModelNotFoundError):
+            await route_request(_bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route")
+
+    assert not upstream.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_keeps_the_invalid_model_error_when_bedrock_denies_the_proxy_the_model() -> None:
+    router: Final = litellm.Router(model_list=[])
+    denied: Final = {"message": "User: arn:aws:sts::111122223333:assumed-role/proxy is not authorized"}
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.post(url__regex=r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/.*").mock(
+            return_value=httpx.Response(403, json=denied)
+        )
+        direct_call: Final = await route_request(
+            _bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route"
+        )
+        with pytest.raises(ProxyModelNotFoundError) as raised:
+            await direct_call
+
+    assert "111122223333" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_aws_env")
+async def test_route_request_passes_through_a_bedrock_error_for_a_bad_request_body() -> None:
+    router: Final = litellm.Router(model_list=[])
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.post(url__regex=r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/.*").mock(
+            return_value=httpx.Response(400, json={"message": "maxTokens must be positive"})
+        )
+        direct_call: Final = await route_request(
+            _bedrock_passthrough_data(_BEDROCK_MODEL_ID), router, None, "allm_passthrough_route"
+        )
+        with pytest.raises(httpx.HTTPStatusError) as raised:
+            await direct_call
+
+    assert raised.value.response.status_code == 400
 
 
 def _router_answering_hi() -> "litellm.Router":

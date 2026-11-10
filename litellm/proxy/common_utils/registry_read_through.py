@@ -43,17 +43,20 @@ if TYPE_CHECKING:
 ModelLoadOutcome: TypeAlias = Literal["loaded", "missing", "no_router", "auto_router"]
 
 READ_THROUGH_MISS_TTL_SECONDS: Final = 2.0
+READ_THROUGH_CONFIRMED_MISS_TTL_SECONDS: Final = 60.0
 READ_THROUGH_RESYNC_WINDOW_SECONDS: Final = 5.0
 READ_THROUGH_MAX_RESYNCS_PER_WINDOW: Final = 20
+_MISSED_AT: Final = TypeAdapter[float | None](float | None)
 
 
 class RegistryReadThrough:
     __slots__ = (
+        "_confirmed_miss_ttl_seconds",
         "_is_loaded",
         "_lock",
         "_max_resyncs_per_window",
         "_miss_ttl_seconds",
-        "_recent_misses",
+        "_misses",
         "_resync",
         "_resync_window_seconds",
         "_window_resyncs",
@@ -67,14 +70,16 @@ class RegistryReadThrough:
         miss_ttl_seconds: float = READ_THROUGH_MISS_TTL_SECONDS,
         max_resyncs_per_window: int = READ_THROUGH_MAX_RESYNCS_PER_WINDOW,
         resync_window_seconds: float = READ_THROUGH_RESYNC_WINDOW_SECONDS,
+        confirmed_miss_ttl_seconds: float = READ_THROUGH_CONFIRMED_MISS_TTL_SECONDS,
     ) -> None:
         self._resync = resync
         self._is_loaded = is_loaded
         self._miss_ttl_seconds = miss_ttl_seconds
         self._max_resyncs_per_window = max_resyncs_per_window
         self._resync_window_seconds = resync_window_seconds
+        self._confirmed_miss_ttl_seconds = confirmed_miss_ttl_seconds
         self._lock = asyncio.Lock()
-        self._recent_misses = InMemoryCache(max_size_in_memory=1000)
+        self._misses = InMemoryCache(max_size_in_memory=1000)
         self._window_started_at = float("-inf")
         self._window_resyncs = 0
 
@@ -88,16 +93,21 @@ class RegistryReadThrough:
         self._window_resyncs += 1
         return True
 
+    def _missed_within(self, key: str, seconds: float) -> bool:
+        missed_at: Final = _MISSED_AT.validate_python(self._misses.get_cache(key))
+        return missed_at is not None and time.monotonic() - missed_at < seconds
+
     def confirmed_missing(self, key: str) -> bool:
-        return self._recent_misses.get_cache(key) is not None
+        return self._missed_within(key, self._confirmed_miss_ttl_seconds)
 
     async def attempt(self, key: str) -> bool:
-        if self.confirmed_missing(key):
+        if self._missed_within(key, self._miss_ttl_seconds):
             return False
         async with self._lock:
-            if self.confirmed_missing(key):
+            if self._missed_within(key, self._miss_ttl_seconds):
                 return False
             if self._is_loaded(key):
+                self._misses.delete_cache(key)
                 return True
             if not self._consume_resync_budget():
                 verbose_proxy_logger.warning(
@@ -112,9 +122,13 @@ class RegistryReadThrough:
             except Exception as e:  # noqa: BLE001  # a failed read-through must surface the original miss error, not a 500
                 verbose_proxy_logger.warning("registry read-through for %r failed: %s", key, e)
                 return False
-            if not found:
-                self._recent_misses.set_cache(key, True, ttl=self._miss_ttl_seconds)
-            return found
+            if found:
+                self._misses.delete_cache(key)
+                return True
+            self._misses.set_cache(
+                key, time.monotonic(), ttl=max(self._miss_ttl_seconds, self._confirmed_miss_ttl_seconds)
+            )
+            return False
 
 
 def _db_backed_registries_enabled(object_type: str) -> bool:

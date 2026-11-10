@@ -120,7 +120,7 @@ async def test_resync_budget_exhausted_blocks_resync_without_negative_caching():
     assert await read_through.attempt("ghost-b") is False
     assert await read_through.attempt("ghost-c") is False
     assert spy.calls == ["ghost-a", "ghost-b"]
-    assert read_through._recent_misses.get_cache("ghost-c") is None
+    assert read_through.confirmed_missing("ghost-c") is False
 
 
 @pytest.mark.asyncio
@@ -171,6 +171,29 @@ async def test_resync_budget_replenishes_after_window():
     await asyncio.sleep(0.1)
     assert await read_through.attempt("model-b") is True
     assert spy.calls == ["model-a", "model-b"]
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_miss_outlives_the_retry_window_until_a_lookup_finds_the_key():
+    spy: Final = ResyncSpy(found=False)
+    read_through: Final = RegistryReadThrough(
+        resync=spy,
+        is_loaded=nothing_loaded,
+        miss_ttl_seconds=0.05,
+        max_resyncs_per_window=1,
+        resync_window_seconds=0.3,
+    )
+
+    assert await read_through.attempt("ghost-model") is False
+    await asyncio.sleep(0.1)
+    assert await read_through.attempt("ghost-model") is False
+    assert read_through.confirmed_missing("ghost-model") is True
+
+    spy.found = True
+    await asyncio.sleep(0.3)
+    assert await read_through.attempt("ghost-model") is True
+    assert read_through.confirmed_missing("ghost-model") is False
+    assert spy.calls == ["ghost-model", "ghost-model"]
 
 
 class FakeAgentRow:
