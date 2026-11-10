@@ -445,7 +445,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
             model_group: Final = request_kwargs.get("model")
             if deployment_metadata is None or not isinstance(model_group, str):
                 return
-            await self.increment_deployment_usage_before_callbacks(
+            _ = await self.increment_deployment_usage_before_callbacks(
                 deployment_metadata,
                 model_group,
                 response_total_token_count(response),
@@ -462,10 +462,10 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         model_group: str,
         total_tokens: int,
         parent_otel_span: "Span | None",
-    ) -> None:
+    ) -> bool:
         deployment_id: Final = _metadata_model_id(deployment_metadata.get("model_info"))
         if deployment_id is None:
-            return
+            return False
         deployment_name: Final = deployment_metadata.get("deployment")
         await count_before_callbacks(
             deployment_metadata,
@@ -480,6 +480,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
                 parent_otel_span=parent_otel_span,
             ),
         )
+        return True
 
     @with_service_target(ROUTER_USAGE_TARGET)
     async def _increment_deployment_usage(

@@ -9,6 +9,7 @@ selectors, limiters and checks are the live Python objects the host keeps.
 """
 
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -35,10 +36,27 @@ def turn_admission(
     return partial(admit_deployment_turn, core, model_group, deployment, kwargs)
 
 
-def turn_usage_recorder(
-    core: "EndpointCore", model_group: str, kwargs: Mapping[str, object]
-) -> Callable[[Mapping[str, object], int], Awaitable[None]]:
-    return partial(record_deployment_turn_usage, core, model_group, kwargs)
+@dataclass(slots=True)
+class TurnUsageRecorder:
+    core: "EndpointCore"
+    model_group: str
+    request_kwargs: Mapping[str, object]
+    counted_a_turn: bool = field(default=False, init=False)
+
+    async def __call__(self, turn_litellm_params: Mapping[str, object], total_tokens: int) -> None:
+        if await record_deployment_turn_usage(
+            self.core, self.model_group, self.request_kwargs, turn_litellm_params, total_tokens
+        ):
+            self.counted_a_turn = True
+
+
+def turn_usage_recorder(core: "EndpointCore", model_group: str, kwargs: Mapping[str, object]) -> TurnUsageRecorder:
+    return TurnUsageRecorder(core, model_group, kwargs)
+
+
+def turns_counted_their_requests(kwargs: Mapping[str, object]) -> bool:
+    recorder: Final = kwargs.get("turn_usage_recorder")
+    return isinstance(recorder, TurnUsageRecorder) and recorder.counted_a_turn
 
 
 async def record_deployment_turn_usage(
@@ -47,20 +65,31 @@ async def record_deployment_turn_usage(
     request_kwargs: Mapping[str, object],
     turn_litellm_params: Mapping[str, object],
     total_tokens: int,
-) -> None:
-    try:
-        deployment_metadata: Final = find_deployment_metadata(turn_litellm_params)
-        if deployment_metadata is None:
-            return
-        parent_otel_span: Final = get_parent_otel_span_from_kwargs(dict(request_kwargs))
-        await core.router.increment_deployment_usage_before_callbacks(
+) -> bool:
+    """Count a finished turn early. Returns whether the router's own usage counted its request."""
+    deployment_metadata: Final = find_deployment_metadata(turn_litellm_params)
+    if deployment_metadata is None:
+        return False
+    parent_otel_span: Final = get_parent_otel_span_from_kwargs(dict(request_kwargs))
+    counted_request: Final = await _counted_early(
+        core.router.increment_deployment_usage_before_callbacks(
             deployment_metadata, model_group, total_tokens, parent_otel_span
         )
-        await _count_usage_based_routing_tokens(
+    )
+    _ = await _counted_early(
+        _count_usage_based_routing_tokens(
             core, model_group, request_kwargs, deployment_metadata, total_tokens, parent_otel_span
         )
+    )
+    return counted_request
+
+
+async def _counted_early(count: Awaitable[bool]) -> bool:
+    try:
+        return await count
     except Exception as e:  # noqa: BLE001  # a failed early count must not break the turn; its logging counts it
         verbose_router_logger.debug("record_deployment_turn_usage: not counted early. Got - %s", e)
+        return False
 
 
 async def _count_usage_based_routing_tokens(
@@ -70,7 +99,7 @@ async def _count_usage_based_routing_tokens(
     deployment_metadata: dict[str, object],  # mutable-ok: the success callbacks read the counted tokens off it
     total_tokens: int,
     parent_otel_span: "Span | None",
-) -> None:
+) -> bool:
     from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 
     routing_kwargs: Final = without(request_kwargs, "litellm_logging_obj")
@@ -85,7 +114,7 @@ async def _count_usage_based_routing_tokens(
         or deployment_id is None
         or not isinstance(deployment_name, str)
     ):
-        return
+        return False
     await count_before_callbacks(
         deployment_metadata,
         USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
@@ -98,6 +127,7 @@ async def _count_usage_based_routing_tokens(
             parent_otel_span=parent_otel_span,
         ),
     )
+    return True
 
 
 def _deployment_as_configured_now(core: "EndpointCore", deployment: Mapping[str, object]) -> Mapping[str, object]:
@@ -197,4 +227,11 @@ async def _admit_turn_through_routing_strategy(
         await selector.async_pre_call_check(dict(deployment), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
 
 
-__all__ = ["admit_deployment_turn", "record_deployment_turn_usage", "turn_admission", "turn_usage_recorder"]
+__all__ = [
+    "TurnUsageRecorder",
+    "admit_deployment_turn",
+    "record_deployment_turn_usage",
+    "turn_admission",
+    "turn_usage_recorder",
+    "turns_counted_their_requests",
+]

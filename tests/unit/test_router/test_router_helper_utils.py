@@ -6,6 +6,7 @@ import time
 import weakref
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -395,6 +396,18 @@ async def _usage_now(router: Router, model_group: str) -> tuple[int, int]:
     return await _usage_after(router, model_group, (0, 0))
 
 
+def _websocket_connection(model_name: str) -> Logging:
+    return Logging(
+        model=model_name,
+        messages=[],
+        stream=False,
+        call_type=CallTypes.aresponses_websocket.value,
+        start_time=time.time(),
+        litellm_call_id=f"{model_name}-connection",
+        function_id=model_name,
+    )
+
+
 async def _websocket_turn_hooks(
     monkeypatch: pytest.MonkeyPatch, router: Router, model_name: str
 ) -> tuple[dict[str, object], ResponsesWsTurnAdmission, ResponsesWsTurnUsageRecorder]:
@@ -404,16 +417,7 @@ async def _websocket_turn_hooks(
         routed.update(kwargs)
 
     monkeypatch.setattr(litellm, "_aresponses_websocket", _aresponses_websocket)
-    connection: Final = Logging(
-        model=model_name,
-        messages=[],
-        stream=False,
-        call_type=CallTypes.aresponses_websocket.value,
-        start_time=time.time(),
-        litellm_call_id=f"{model_name}-connection",
-        function_id=model_name,
-    )
-    await router._aresponses_websocket(model=model_name, litellm_logging_obj=connection)
+    await router._aresponses_websocket(model=model_name, litellm_logging_obj=_websocket_connection(model_name))
     admit_turn: Final = routed["turn_admission"]
     record_turn: Final = routed["turn_usage_recorder"]
     assert callable(admit_turn)
@@ -536,6 +540,38 @@ async def test_websocket_turn_counts_its_tokens_against_its_deployment_once(
     await _complete_35_token_turn(turn)
 
     assert await _usage_after(router, "gpt-5-mini", opened) == (35, 1)
+
+
+_TURN_WITHOUT_DEPLOYMENT: Final = MappingProxyType({"litellm_metadata": {"model_group": "gpt-5-mini"}})
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("router_minute_pinned")
+@pytest.mark.parametrize(
+    ("turns", "socket_usage"),
+    [
+        ((), (0, 1)),
+        (({},), (35, 1)),
+        (({}, {}, {}), (105, 3)),
+        ((_TURN_WITHOUT_DEPLOYMENT,), (0, 1)),
+    ],
+    ids=["no_turns", "one_turn", "three_turns", "turn_without_deployment"],
+)
+async def test_websocket_counts_one_router_request_per_counted_turn_or_one_for_the_socket(
+    monkeypatch: pytest.MonkeyPatch, turns: tuple[Mapping[str, object], ...], socket_usage: tuple[int, int]
+):
+    router: Final = _with_success_callbacks_of(monkeypatch, lambda: _rpm_tpm_router("ws-requests"))
+
+    async def _aresponses_websocket(*, turn_usage_recorder: ResponsesWsTurnUsageRecorder, **kwargs: object) -> None:
+        for index, turn in enumerate(turns):
+            await turn_usage_recorder(
+                _open_websocket_turn({**kwargs, **turn}, f"ws-requests-turn-{index}").litellm_params, 35
+            )
+
+    monkeypatch.setattr(litellm, "_aresponses_websocket", _aresponses_websocket)
+    await router._aresponses_websocket(model="gpt-5-mini", litellm_logging_obj=_websocket_connection("gpt-5-mini"))
+
+    assert await _usage_now(router, "gpt-5-mini") == socket_usage
 
 
 @pytest.mark.asyncio
