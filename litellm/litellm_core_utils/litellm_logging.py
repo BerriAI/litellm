@@ -13,7 +13,8 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime as dt_object
 from enum import Enum
@@ -1270,6 +1271,16 @@ class Logging(LiteLLMLoggingBaseClass):
         self.applied_timeout = timeout
         self.litellm_params["timeout"] = timeout
         self.model_call_details["litellm_params"] = self.litellm_params
+
+    @contextmanager
+    def preserve_entrypoint_acompletion(self) -> Generator[None]:
+        acompletion: Final = (as_str_mapping(self._model_call_details_view.get("litellm_params")) or {}).get(
+            CallTypes.acompletion.value
+        )
+        try:
+            yield
+        finally:
+            self.litellm_params[CallTypes.acompletion.value] = acompletion
 
     def update_from_kwargs(
         self,

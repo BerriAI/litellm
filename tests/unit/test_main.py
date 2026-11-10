@@ -5795,6 +5795,39 @@ async def test_aspeech_gemini_bridge_bills_one_call_with_proxy_metadata_and_comp
     assert speech_event.logged_response_cost == pytest.approx(expected_cost)
 
 
+
+@pytest.mark.asyncio
+async def test_aspeech_gemini_bridge_runs_sync_function_callbacks_once_with_the_speech_response(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    logged: Final[list[tuple[type, object]]] = []  # mutable-ok: records what the sync callback receives
+
+    def sync_callback(kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+        logged.append((type(response_obj), kwargs.get("litellm_call_id")))
+
+    monkeypatch.setattr(litellm, "success_callback", [sync_callback])
+    respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/v1beta/models/gemini-2\.5-flash-preview-tts:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_gemini_tts_generate_content_response()))
+
+    await litellm.aspeech(
+        model="gemini/gemini-2.5-flash-preview-tts",
+        input="sync callback check",
+        voice="Kore",
+        api_key="fake-gemini-key",
+        litellm_call_id="speech-call-id",
+    )
+    for _ in range(100):
+        if logged:
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.3)
+
+    assert logged == [(HttpxBinaryResponseContent, "speech-call-id")]
+
 @pytest.mark.asyncio
 async def test_aspeech_gemini_bridge_logs_a_cached_reply_as_a_free_cache_hit(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch

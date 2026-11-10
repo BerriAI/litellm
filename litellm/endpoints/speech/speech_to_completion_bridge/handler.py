@@ -32,7 +32,7 @@ class SpeechToCompletionBridgeHandlerInputKwargs(TypedDict):
     model: str
     input: str
     voice: str | dict | None
-    optional_params: dict
+    optional_params: dict[str, object]
     litellm_params: dict
     logging_obj: "LiteLLMLoggingObj"
     headers: dict
@@ -138,10 +138,10 @@ class SpeechToCompletionBridgeHandler:
             voice=voice,
         )
 
-        requested_response_format: Final = optional_params.get("response_format")
+        requested_response_format: Final = validated_kwargs["optional_params"].get("response_format")
         response_format: Final = requested_response_format if isinstance(requested_response_format, str) else None
         if aspeech:
-            return self._aspeech(acompletion(**request_data), model, response_format, logging_obj.litellm_call_id)
+            return self._aspeech(acompletion(**request_data), model, response_format, logging_obj)
 
         with internal_sub_call(logging_obj.litellm_call_id):
             result: Final = completion(
@@ -154,9 +154,9 @@ class SpeechToCompletionBridgeHandler:
         pending_completion: Coroutine[object, object, object],
         model: str,
         response_format: str | None,
-        litellm_call_id: str | None,
+        logging_obj: "LiteLLMLoggingObj",
     ) -> "HttpxBinaryResponseContent":
-        with internal_sub_call(litellm_call_id):
+        with logging_obj.preserve_entrypoint_acompletion(), internal_sub_call(logging_obj.litellm_call_id):
             result: Final = await pending_completion
         return self._to_speech_response(result, model, response_format)
 
