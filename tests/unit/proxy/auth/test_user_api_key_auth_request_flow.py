@@ -13982,6 +13982,7 @@ async def test_exhausted_key_budget_is_waived_only_when_the_served_model_is_free
     mock_request.headers = {"authorization": f"Bearer {api_key}"}
     mock_request.query_params = {}
     mock_request.state = SimpleNamespace()
+    mock_request.scope = {}
 
     proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.budget_alerts = AsyncMock()

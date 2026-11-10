@@ -2494,6 +2494,7 @@ def test_prefixed_alias_over_a_bare_catch_all_lists_ids_that_route_through_it(mo
         ("free-team", {"team_model_aliases": {"free-team": "free-model"}}),
         ("free-team", {"team_model_aliases": {"free-team": "free-model"}, "aliases": {"free-model": "paid-model"}}),
         ("free-model", {"aliases": {"paid-model": "free-model"}}),
+        ("free-team", {"team_model_aliases": {"free-team": ""}}),
         (
             "free-team",
             {"team_id": "t1", "team_model_aliases": {"free-team": "model_name_t1_deleted"}},

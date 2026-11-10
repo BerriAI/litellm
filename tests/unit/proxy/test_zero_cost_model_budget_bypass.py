@@ -13,6 +13,7 @@ import pytest
 from starlette.requests import Request as StarletteRequest
 
 import litellm
+from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
@@ -696,7 +697,16 @@ class TestOverBudgetRequestThroughModelGroupAlias:
 
 
 def _http_request(path: str) -> StarletteRequest:
-    return StarletteRequest({"type": "http", "method": "POST", "path": path, "headers": [], "query_string": b""})
+    return StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": path,
+            "headers": [],
+            "query_string": b"",
+            MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: True,
+        }
+    )
 
 
 class TestOverBudgetRequestThroughKeyAndTeamAliases:

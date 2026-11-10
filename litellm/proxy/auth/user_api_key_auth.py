@@ -372,8 +372,11 @@ async def budget_served_model(
     """The model the zero-cost budget waiver judges. For a string body `model` on a chat, completions, responses
     or messages route, that is the model request preparation serves it with, through the caller's team, key,
     global and router aliases. Anywhere request preparation could pick the model otherwise (a path or query
-    `model`, a configured `completion_model` or CLI `--model`), it stays the requested model."""
+    `model`, a configured `completion_model` or CLI `--model`, or before auth has applied the router aliases to
+    the body), it stays the requested model."""
     if request is None or llm_router is None or route not in _SERVED_MODEL_BUDGET_WAIVER_ROUTES:
+        return model
+    if request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True:
         return model
     if not isinstance(model, str) or request_data.get("model") != model:
         return model

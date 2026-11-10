@@ -3744,7 +3744,8 @@ def key_alias_target(model: str, user_api_key_dict: UserAPIKeyAuth) -> str:
 
 def caller_alias_target(model: str, user_api_key_dict: UserAPIKeyAuth, llm_router: Router | None) -> str:
     """The model `add_litellm_data_to_request` leaves after the team's and then the key's aliases."""
-    return key_alias_target(team_alias_target(model, user_api_key_dict, llm_router) or model, user_api_key_dict)
+    team_target: Final = team_alias_target(model, user_api_key_dict, llm_router)
+    return key_alias_target(team_target if team_target is not None else model, user_api_key_dict)
 
 
 def global_then_key_alias_target(model: str, user_api_key_dict: UserAPIKeyAuth) -> str:

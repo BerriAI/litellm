@@ -455,14 +455,15 @@ def test_apply_budget_limits_copies_per_model_limits_onto_end_user_params():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "requested_model, key_aliases, expect_enforced",
+    "requested_model, key_aliases, run_common_checks, expect_enforced",
     [
-        ("free-key", {"free-key": "free-model"}, False),
-        ("free-model", {"free-model": "paid-model"}, True),
+        ("free-key", {"free-key": "free-model"}, True, False),
+        ("free-model", {"free-model": "paid-model"}, True, True),
+        ("free-key", {"free-key": "free-model"}, False, True),
     ],
 )
 async def test_custom_auth_judges_the_zero_cost_waiver_by_the_key_alias_target(
-    requested_model: str, key_aliases: dict[str, str], expect_enforced: bool
+    requested_model: str, key_aliases: dict[str, str], run_common_checks: bool, expect_enforced: bool
 ) -> None:
     router: Final = litellm.Router(
         model_list=[
@@ -510,6 +511,7 @@ async def test_custom_auth_judges_the_zero_cost_waiver_by_the_key_alias_target(
     with (
         patch("litellm.proxy.proxy_server.llm_router", router),
         patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+        patch("litellm.proxy.proxy_server.general_settings", {"custom_auth_run_common_checks": run_common_checks}),
     ):
         if expect_enforced:
             with pytest.raises(litellm.BudgetExceededError):
