@@ -50,18 +50,20 @@ pub(super) fn resolve_request(
     config: &'static dyn BaseConfig,
 ) -> Result<ResolvedChatCompletionsRequest, Error> {
     let messages = serde_json::from_value::<Vec<ChatMessage>>(call.messages).map_err(|err| {
-        Error::InvalidRequest(litellm_llms::ErrorDetail::invalid(
+        Error::invalid_request(litellm_llms::ErrorDetail::invalid(
             "chat completions messages",
             err,
         ))
     })?;
     if messages.is_empty() {
-        return Err(Error::InvalidRequest(
-            "chat completions requires at least one message".into(),
+        return Err(Error::invalid_request(
+            litellm_llms::ErrorDetail::NoMessages {
+                route: "chat completions",
+            },
         ));
     }
     if let Some(reason) = config.unsupported_reason(&messages, &call.optional_params) {
-        return Err(Error::Unsupported(reason.0));
+        return Err(Error::Declined(reason));
     }
     Ok(ResolvedChatCompletionsRequest {
         messages,

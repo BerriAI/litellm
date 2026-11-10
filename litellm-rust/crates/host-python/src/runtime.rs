@@ -7,6 +7,7 @@ use std::time::Duration;
 use crate::fork_gate::{ForkGate, Refused, RuntimeAlreadyStarted};
 use crate::{Error, Pythonized, panic_to_pyerr, release_gil};
 use futures_util::FutureExt;
+use litellm_error::Report;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::Serialize;
@@ -42,25 +43,46 @@ pub fn reserve_process_for_forking() -> Result<(), RuntimeAlreadyStarted> {
 
 /// Claims process-bound native state before runtime startup or tokenizer execution.
 pub fn enter_native() -> PyResult<()> {
-    FORK_GATE
-        .enter(std::process::id())
-        .map_err(|refused| match refused {
-            Refused::ReservedForForking => ProcessReservedForForking::new_err(
-                "this process is reserved for forking workers and cannot run native routes; \
-                 move the call into a worker, after the fork",
-            ),
-            Refused::ForkedAfterStart => ForkedAfterNativeRuntimeStarted::new_err(
-                "this process was forked after the native runtime started, and runtime threads \
-                 do not survive fork(); start workers with spawn or forkserver, or fork before \
-                 the first native call",
-            ),
-        })
+    Ok(FORK_GATE.enter(std::process::id())?)
+}
+
+impl From<Refused> for PyErr {
+    fn from(refused: Refused) -> Self {
+        let message = Report::new(&refused).to_string();
+        match refused {
+            Refused::ReservedForForking => ProcessReservedForForking::new_err(message),
+            Refused::ForkedAfterStart => ForkedAfterNativeRuntimeStarted::new_err(message),
+        }
+    }
+}
+
+impl From<RuntimeAlreadyStarted> for PyErr {
+    fn from(error: RuntimeAlreadyStarted) -> Self {
+        PyRuntimeError::new_err(Report::new(&error).to_string())
+    }
 }
 
 #[expect(clippy::disallowed_methods, reason = "this is the gated door")]
 fn runtime() -> PyResult<&'static Runtime> {
     enter_native()?;
     Ok(pyo3_async_runtimes::tokio::get_runtime())
+}
+
+/// Runs `future` on a current-thread runtime built and shut down inside the call, its blocking pool joined before
+/// it returns. No thread outlives the call, so unlike every other door this one never claims the process in the fork
+/// gate: a process that only used it can still fork. The future must not hold resources tied to another runtime
+pub fn run_isolated<F: Future>(future: F) -> std::io::Result<F::Output> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let output = runtime.block_on(future);
+    runtime.shutdown_timeout(Duration::from_secs(5));
+    Ok(output)
+}
+
+/// The native runtime, for work that must outlive the call that schedules it.
+pub fn runtime_handle() -> PyResult<Handle> {
+    Ok(runtime()?.handle().clone())
 }
 
 #[expect(clippy::disallowed_methods, reason = "this is the gated door")]
@@ -807,5 +829,22 @@ asyncio.run(exercise())
             py.run(&code, Some(&locals), Some(&locals))
                 .expect("async route contract should hold");
         });
+    }
+
+    #[rstest]
+    fn an_isolated_run_joins_blocking_work_it_left_running_before_returning() {
+        let finished = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&finished);
+        let output = run_isolated(async move {
+            drop(tokio::task::spawn_blocking(move || {
+                thread::sleep(Duration::from_millis(50));
+                flag.store(true, Ordering::SeqCst);
+            }));
+            7
+        })
+        .unwrap();
+
+        assert_eq!(output, 7);
+        assert!(finished.load(Ordering::SeqCst));
     }
 }

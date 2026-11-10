@@ -37,6 +37,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
             .map(|value| value.expose().to_owned())
             .or_else(|| std::env::var(name).ok())
     };
+    let router = ModelRouter::from_config(config, &lookup);
     let settings = &config.litellm_settings;
     let http_settings = HttpSettings::from_layers([
         HttpSettingsLayer::from_environment(&lookup),
@@ -64,23 +65,32 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         Arc::new(EnvironmentSecrets::python_compatible(client)),
     ));
     let resources = CoreResources::new(pool);
-    Ok(Arc::new(Gateway::new(
-        resources,
-        http,
-        secrets,
-        ModelRouter::from_model_list(&config.model_list),
-    )?))
+    Ok(Arc::new(Gateway::new(resources, http, secrets, router)?))
 }
 
-pub async fn build_redis(config: &Config) -> Result<RedisClients, Error> {
-    let environment = secrets::environment_values(&config.environment_variables)?;
-    let lookup = |name: &str| {
+pub fn install_crypto_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+}
+
+pub async fn build_redis(
+    config: &Config,
+    pool: &HttpClientPool,
+    http: &litellm_http::HttpClientConfig,
+) -> Result<RedisClients, Error> {
+    let environment = Arc::new(secrets::environment_values(&config.environment_variables)?);
+    let lookup: litellm_redis_connect::SharedEnvironment = Arc::new(move |name: &str| {
         environment
             .get(name)
             .map(|value| value.expose().to_owned())
             .or_else(|| std::env::var(name).ok())
+    });
+    let resources = redis::Resources {
+        http: pool.client(http, ClientVariant::Provider)?,
+        lookup: lookup.clone(),
     };
-    redis::connect(config, &lookup).await
+    redis::connect(config, &*lookup, &resources).await
 }
 
 pub async fn build_mcp(
@@ -109,16 +119,16 @@ pub async fn build_mcp(
         || !config.policies.is_empty()
         || !config.policy_attachments.is_empty()
     {
-        return Err(Error::McpSetting("guardrails or policies".into()));
+        return Err(Error::McpGuardrails);
     }
     Auth::from_config(config, secrets.clone())
         .validate()
         .await?;
-    let client = pool.mcp_client(http)?;
+    let client = pool.client(http, ClientVariant::NoRedirect)?;
     Ok(Some(
         litellm_gateway_mcp::ConfiguredGateway::connect(
             &config.mcp_servers,
-            client,
+            (*client).clone(),
             secrets.as_ref(),
             shutdown,
         )

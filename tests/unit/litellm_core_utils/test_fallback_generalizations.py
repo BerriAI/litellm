@@ -7,7 +7,12 @@ its end-to-end wiring into provider routing (get_llm_provider) and model-info
 resolution (get_model_info) including the shipped rules in the bundled cost map.
 """
 
+import json
 import logging
+import re
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -20,6 +25,8 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
     set_fallback_generalizations,
 )
+
+REPO_ROOT: Final = Path(__file__).parents[3]
 
 
 @pytest.fixture
@@ -148,7 +155,7 @@ def test_fill_missing_requires_per_rule_opt_in(restore_generalizations):
             }
         ]
     )
-    assert match_fill_missing_generalizations("acme-1", "openai") == {"supports_vision": True}
+    assert match_fill_missing_generalizations("acme-1", "openai") is None
 
     restore_generalizations(
         [
@@ -203,89 +210,13 @@ def test_reinstalling_rules_replaces_compiled_rules(restore_generalizations):
 
 
 # --------------------------------------------------------------------------- #
-# Engine: install-time validation and legacy-schema shim
+# Engine: install-time validation
 # --------------------------------------------------------------------------- #
 
 
-def test_legacy_mixed_rule_acts_as_both_kinds(restore_generalizations):
-    """A legacy rule mixing ``litellm_provider`` with capability keys routes AND
-    contributes its full model_info (provider included) to the capability union."""
-    restore_generalizations(
-        [
-            {
-                "name": "legacy-mixed",
-                "pattern": r"^acme-",
-                "model_info": {"litellm_provider": "anthropic", "supports_vision": True},
-            },
-            {"name": "new-caps", "pattern": r"^acme-pro-", "model_info": {"supports_reasoning": True}},
-        ]
-    )
-    assert match_routing_generalization("acme-pro-1") == "anthropic"
-    assert match_capability_generalizations("acme-pro-1") == {
-        "litellm_provider": "anthropic",
-        "supports_vision": True,
-        "supports_reasoning": True,
-    }
-
-
-LEGACY_MAIN_RULES = [
-    {
-        "name": "anthropic-claude-adaptive-thinking",
-        "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))",
-        "description": "Claude opus/sonnet/haiku at version 4.6 or higher: 4.6 through 4.99, then any 5.x, 6.x or later major. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new families with no code change.",
-        "extends": "anthropic-claude",
-        "model_info": {"supports_adaptive_thinking": True},
-    },
-    {
-        "name": "anthropic-claude",
-        "pattern": "^claude-[a-z]+-\\d+[-.]\\d+(?:-\\d{8})?$",
-        "description": "Any Claude family-major-minor id, optionally with an 8-digit date suffix, anchored to the whole name. Version-neutral fallback that gives an unmapped Claude provider routing and baseline capabilities; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
-        "model_info": {
-            "litellm_provider": "anthropic",
-            "mode": "chat",
-            "max_input_tokens": 200000,
-            "max_output_tokens": 64000,
-            "max_tokens": 64000,
-            "supports_function_calling": True,
-            "supports_parallel_function_calling": True,
-            "supports_vision": True,
-            "supports_tool_choice": True,
-            "supports_assistant_prefill": True,
-            "supports_prompt_caching": True,
-            "supports_response_schema": True,
-            "supports_reasoning": True,
-            "supports_pdf_input": True,
-            "supports_system_messages": True,
-        },
-    },
-]
-
-
-def test_legacy_main_schema_keeps_unmapped_claude_working(restore_generalizations):
-    """Pins the remote-map transition window: a released proxy running this engine
-    against main's old-schema block (mixed provider+capability rule plus ``extends``,
-    copied verbatim above) must keep unmapped-Claude inference and info resolution
-    working until the new-schema JSON reaches main."""
-    restore_generalizations([dict(rule) for rule in LEGACY_MAIN_RULES])
-    litellm.get_model_info.cache_clear()
-
-    _, provider, _, _ = litellm.get_llm_provider(model="claude-opus-9-9")
-    assert provider == "anthropic"
-
-    info = litellm.get_model_info("claude-opus-9-9")
-    assert info["litellm_provider"] == "anthropic"
-    assert info["supports_adaptive_thinking"] is True
-    assert info["supports_function_calling"] is True
-    assert info["max_input_tokens"] == 200000
-    assert not info.get("input_cost_per_token")
-
-    low = litellm.get_model_info("claude-opus-4-0")
-    assert low["litellm_provider"] == "anthropic"
-    assert low["supports_function_calling"] is True
-    assert low.get("supports_adaptive_thinking") is None
-
-
-def test_non_string_provider_rule_warns_and_is_skipped(restore_generalizations, warning_messages):
+def test_non_string_provider_rule_warns_and_is_skipped(
+    restore_generalizations: Callable[[list | None], None], warning_messages: list[str]
+) -> None:
     restore_generalizations([{"name": "bad-provider", "pattern": r"^acme-", "model_info": {"litellm_provider": 42}}])
     assert any("bad-provider" in message for message in warning_messages)
     assert match_routing_generalization("acme-1") is None
@@ -304,6 +235,40 @@ def test_malformed_rules_are_skipped_not_fatal(restore_generalizations):
         ]
     )
     assert match_capability_generalizations("claude-opus-9-9") == {"good": True}
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        [
+            {
+                "name": "stale-rule",
+                "pattern": r"^acme-",
+                "model_info": {"litellm_provider": "anthropic", "supports_vision": True},
+            }
+        ],
+        [
+            {"name": "parent", "pattern": r"^zeta-only$", "model_info": {"supports_vision": True}},
+            {
+                "name": "stale-rule",
+                "pattern": r"^acme-",
+                "extends": "parent",
+                "model_info": {"supports_reasoning": True},
+            },
+        ],
+    ],
+    ids=["provider-mixed-with-capabilities", "extends"],
+)
+def test_old_format_rule_is_skipped_with_a_warning_pointing_at_a_current_cost_map(
+    restore_generalizations: Callable[[list | None], None], warning_messages: list[str], rules: list[dict]
+) -> None:
+    restore_generalizations(rules)
+    assert any(
+        "stale-rule" in m and "LITELLM_MODEL_COST_MAP_URL" in m and "LITELLM_LOCAL_MODEL_COST_MAP " in m
+        for m in warning_messages
+    )
+    assert match_routing_generalization("acme-1") is None
+    assert match_capability_generalizations("acme-1") is None
 
 
 # --------------------------------------------------------------------------- #
@@ -433,6 +398,18 @@ def test_exact_entries_fill_only_missing_fields(restore_generalizations, monkeyp
 # --------------------------------------------------------------------------- #
 # Shipped rules (bundled cost map)
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "cost_map_path",
+    ["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"],
+)
+def test_every_shipped_rule_installs_without_a_skip_warning(
+    restore_generalizations: Callable[[list | None], None], warning_messages: list[str], cost_map_path: str
+) -> None:
+    rules: Final = json.loads((REPO_ROOT / cost_map_path).read_text())["fallback_generalizations"]["rules"]
+    restore_generalizations(rules)
+    assert warning_messages == []
 
 
 @pytest.fixture
@@ -584,6 +561,23 @@ def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_ma
     assert info["thinking_always_on"] is True
     other = litellm.get_model_info("claude-opus-4-9", custom_llm_provider="anthropic")
     assert other.get("thinking_always_on") is None
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "on_by_default"),
+    [
+        ("claude-opus-5-9", "anthropic", True),
+        ("claude-newfamily-6", "anthropic", True),
+        ("us.anthropic.claude-sonnet-5-9", "bedrock", True),
+        ("claude-opus-4-9", "anthropic", None),
+    ],
+)
+def test_shipped_rules_flag_unmapped_claude_5_and_later_as_thinking_by_default(
+    shipped_cost_map, model, provider, on_by_default
+):
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info.get("thinking_on_by_default") is on_by_default
 
 
 @pytest.mark.parametrize(
@@ -816,6 +810,35 @@ def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map)
         assert matched is None or not matched.get("supports_reasoning"), foreign
 
 
+@pytest.mark.parametrize("model", ["minimax/MiniMax-M3.2", "minimax/MiniMax-Text-02"])
+def test_shipped_rules_flag_unmapped_minimax_ids_as_reasoning(shipped_cost_map, model):
+    """MiniMax ships reasoning models faster than the registry names them. The rule
+    carries no mode and no pricing, so cost stays on the standard unpriced behavior."""
+    assert model not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider="minimax")
+    assert info["litellm_provider"] == "minimax"
+    assert info["supports_reasoning"] is True
+    assert info.get("mode") is None
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+
+def test_shipped_minimax_rule_is_anchored_to_the_minimax_namespace(shipped_cost_map):
+    """``^minimax/`` is anchored, so it cannot leak onto another provider's ids."""
+    assert match_capability_generalizations("minimax/some-new-model") == {"supports_reasoning": True}
+    for foreign in ("openrouter/minimax/minimax-m3", "notminimax/MiniMax-M3", "together_ai/minimax/MiniMax-M3"):
+        matched = match_capability_generalizations(foreign)
+        assert matched is None or not matched.get("supports_reasoning"), foreign
+
+
+@pytest.mark.parametrize("model", ["speech-02-hd", "MiniMax-H3"])
+def test_shipped_minimax_rule_leaves_mapped_entries_alone(shipped_cost_map, model):
+    assert f"minimax/{model}" in litellm.model_cost
+    assert match_fill_missing_generalizations(f"minimax/{model}", "minimax") is None
+    assert litellm.supports_reasoning(model=model, custom_llm_provider="minimax") is False
+
+
 def test_shipped_wandb_rule_keeps_reasoning_effort_on_an_unmapped_model(shipped_cost_map):
     """End to end through the provider config: the gate WandbConfig applies reads the
     rule, so reasoning_effort is advertised and survives get_optional_params rather than
@@ -939,6 +962,7 @@ def test_shipped_claude_thinking_rules_backfill_only_anthropic(shipped_cost_map)
     assert info.get("supports_legacy_thinking") is None
     assert info.get("max_input_tokens") is None
     assert match_fill_missing_generalizations("claude-sonnet-4-6", "anthropic") == {
+        **_claude_baseline()["model_info"],
         "supports_adaptive_thinking": True,
         "supports_legacy_thinking": True,
         "supports_tool_search": True,
@@ -985,3 +1009,63 @@ def test_shipped_tool_search_rule_fills_mapped_claude_entries_without_flag(shipp
     assert match_fill_missing_generalizations("claude-opus-5", "bedrock")["supports_tool_search"] is True
     assert match_fill_missing_generalizations("claude-opus-5", "azure_ai")["supports_tool_search"] is True
     assert match_fill_missing_generalizations("claude-opus-5", "perplexity") is None
+
+
+CLAUDE_BASELINE_FILL_PROVIDERS: Final = (
+    "anthropic",
+    "azure_ai",
+    "bedrock",
+    "bedrock_converse",
+    "vertex_ai-anthropic_models",
+)
+
+
+def _claude_baseline() -> Mapping[str, object]:
+    return next(rule for rule in get_fallback_generalization_rules() if rule["name"] == "claude-family-baseline")
+
+
+def _mapped_claude_chat_entries() -> tuple[tuple[str, Mapping[str, object]], ...]:
+    pattern: Final = re.compile(_claude_baseline()["pattern"], re.IGNORECASE)
+    return tuple(
+        (key, entry)
+        for key, entry in litellm.model_cost.items()
+        if isinstance(entry, dict) and entry.get("mode") == "chat" and pattern.search(key) is not None
+    )
+
+
+def _fields_overriding_baseline(entry: Mapping[str, object], baseline: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(field for field in entry.keys() & baseline.keys() if entry[field] != baseline[field])
+
+
+@pytest.mark.parametrize("provider", CLAUDE_BASELINE_FILL_PROVIDERS)
+def test_shipped_claude_baseline_fills_only_missing_keys_on_mapped_entries(shipped_cost_map, provider):
+    """A mapped Claude entry from a first-party host gets each baseline key it leaves out,
+    while every baseline key the entry sets keeps the entry's own value."""
+    baseline: Final = _claude_baseline()["model_info"]
+    entries: Final = tuple(
+        (key, entry) for key, entry in _mapped_claude_chat_entries() if entry["litellm_provider"] == provider
+    )
+    assert any(baseline.keys() - entry.keys() for _, entry in entries)
+    assert any(_fields_overriding_baseline(entry, baseline) for _, entry in entries)
+
+    for key, entry in entries:
+        info = litellm.get_model_info(key)
+        assert info["key"] == key
+        assert {field: info[field] for field in baseline} == {
+            field: entry.get(field, value) for field, value in baseline.items()
+        }, key
+
+
+def test_shipped_claude_baseline_leaves_other_providers_entries_unfilled(shipped_cost_map):
+    baseline: Final = _claude_baseline()["model_info"]
+    entries: Final = tuple(
+        (key, entry)
+        for key, entry in _mapped_claude_chat_entries()
+        if entry["litellm_provider"] not in CLAUDE_BASELINE_FILL_PROVIDERS
+    )
+    assert any("supports_parallel_function_calling" not in entry for _, entry in entries)
+
+    for key, entry in entries:
+        info = litellm.get_model_info(key)
+        missing = baseline.keys() - entry.keys()
+        assert {field: info.get(field) for field in missing} == dict.fromkeys(missing), key
