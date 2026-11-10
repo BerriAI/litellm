@@ -88,6 +88,7 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
+    key_logging_entries,
     strip_callback_config,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -1246,9 +1247,11 @@ def convert_key_logging_metadata_to_callback(
     return team_callback_settings_obj
 
 
-def get_validated_callback_metadata(item: dict, *, source: str) -> AddTeamCallback | None:
+def get_validated_callback_metadata(item: object, *, source: str) -> AddTeamCallback | None:
+    if not isinstance(item, Mapping):
+        raise TypeError(f"{source} metadata.logging must be a list of objects, got an item of {type(item).__name__}")
     try:
-        return AddTeamCallback(**item)
+        return AddTeamCallback.model_validate(item)
     except (PydanticValidationError, ValueError) as e:
         verbose_proxy_logger.warning(
             "Ignoring invalid %s callback metadata: %s",
@@ -1267,9 +1270,9 @@ class KeyAndTeamLoggingSettings:
     """
 
     @staticmethod
-    def get_key_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth):
+    def get_key_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth) -> tuple[Mapping[str, object], ...] | None:
         if user_api_key_dict.metadata is not None and "logging" in user_api_key_dict.metadata:
-            return decrypt_callback_vars(user_api_key_dict.metadata).get("logging")
+            return key_logging_entries(user_api_key_dict.metadata)
         return None
 
     @staticmethod
@@ -1283,9 +1286,7 @@ def get_dynamic_logging_metadata(
     user_api_key_dict: UserAPIKeyAuth, proxy_config: ProxyConfig
 ) -> TeamCallbackMetadata | None:
     callback_settings_obj: TeamCallbackMetadata | None = None
-    key_dynamic_logging_settings: Final[dict | None] = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(
-        user_api_key_dict
-    )
+    key_dynamic_logging_settings: Final = KeyAndTeamLoggingSettings.get_key_dynamic_logging_settings(user_api_key_dict)
     team_dynamic_logging_settings: Final[dict | None] = KeyAndTeamLoggingSettings.get_team_dynamic_logging_settings(
         user_api_key_dict
     )
