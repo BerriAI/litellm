@@ -896,8 +896,10 @@ async def test_chat_stream_sends_fallback_metadata_in_place_of_a_stripped_usage_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_model", ["fallback-model", None])
 async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_framed_like_its_neighbours(
     monkeypatch: pytest.MonkeyPatch,
+    fallback_model: str | None,
 ) -> None:
     _patch_logging_flags(monkeypatch)
     monkeypatch.setitem(ps.general_settings, "expose_fallback_errors_to_caller", True)
@@ -922,7 +924,7 @@ async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_framed_
         hidden_params={
             "additional_headers": {
                 "x-litellm-attempted-fallbacks": 1,
-                "x-litellm-model-group": "fallback-model",
+                **({"x-litellm-model-group": fallback_model} if fallback_model else {}),
                 "x-litellm-fallback-errors": json.dumps(fallback_errors),
             }
         },
@@ -952,10 +954,11 @@ async def test_responses_stream_sends_fallback_metadata_as_a_typed_event_framed_
     )
     assert payloads[1] == {
         "type": "litellm.fallback_metadata",
-        "model": "fallback-model",
-        "litellm_fallback": {"fallback_model": "fallback-model", "errors": fallback_errors},
+        "id": "litellm-fallback-metadata",
+        **({"model": fallback_model} if fallback_model else {}),
+        "litellm_fallback": {"fallback_model": fallback_model, "errors": fallback_errors},
     }
-    assert {payload.get("model") for payload in payloads} == {"fallback-model"}
+    assert {payload.get("model") for payload in payloads} == {fallback_model}
     assert len({frame.startswith("event: ") for frame in event_frames}) == 1
 
 

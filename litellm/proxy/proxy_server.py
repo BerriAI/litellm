@@ -9907,6 +9907,7 @@ def _get_streaming_fallback_metadata(
     return True, None, fallback_errors
 
 
+_FALLBACK_METADATA_ID: Final = "litellm-fallback-metadata"
 _RESPONSES_FALLBACK_METADATA_EVENT_TYPE: Final = "litellm.fallback_metadata"
 
 
@@ -9920,13 +9921,14 @@ def _format_fallback_metadata_sse_event(
     if error_state is not None:
         event: Final = {
             "type": _RESPONSES_FALLBACK_METADATA_EVENT_TYPE,
-            "model": fallback_model or "",
+            "id": _FALLBACK_METADATA_ID,
+            **({"model": fallback_model} if fallback_model else {}),
             "litellm_fallback": litellm_fallback,
         }
         error_state.observe_chunk(event)
         return error_state.mark_emitted(f"data: {json.dumps(event)}\n\n")
     payload: Final = {
-        "id": "litellm-fallback-metadata",
+        "id": _FALLBACK_METADATA_ID,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": fallback_model or "",
