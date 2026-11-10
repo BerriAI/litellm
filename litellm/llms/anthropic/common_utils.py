@@ -1716,6 +1716,12 @@ def tool_search_result_renamed(block: object, name_map: Mapping[str, str]) -> ob
     return {**fields, "content": tool_search_content_renamed(fields.get("content"), name_map)}
 
 
+def replays_tool_search(messages: object) -> bool:
+    contents: Final = (message_field(message, "content") for message in parts_of(messages))
+    blocks: Final = chain.from_iterable(map(parts_of, contents))
+    return any(anthropic_tool_search_result(block) is not None for block in blocks)
+
+
 def without_stale_tool_search_results(
     messages: Sequence[AllAnthropicPassThroughMessageValues], tools: Sequence[object]
 ) -> tuple[AllAnthropicPassThroughMessageValues, ...]:
