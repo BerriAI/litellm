@@ -358,6 +358,24 @@ describe("KeyEditView", () => {
     });
   });
 
+  it("submits the spend prompt storage restriction in metadata", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmit}
+        accessToken=""
+        userID=""
+        userRole="Admin"
+      />,
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Store prompts in spend logs" }));
+    fireEvent.click(screen.getByText("Save Changes"));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    expect(JSON.parse(onSubmit.mock.calls[0][0].metadata).store_prompts_in_spend_logs).toBe(false);
+  });
+
   it("should render tags", async () => {
     renderWithProviders(
       <KeyEditView

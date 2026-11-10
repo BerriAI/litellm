@@ -26,6 +26,7 @@ import {
   movePinnedAlias,
   orderAliases,
 } from "./model_group_alias_ordering";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 type ModelGroupAliasValue = string | { model: string; hidden?: boolean };
 
@@ -542,7 +543,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                 {Object.keys(aliasObject).length === 0 ? (
                   <span className="text-muted-foreground">
                     <br />
-                    &nbsp;&nbsp;&nbsp;&nbsp;# No aliases configured yet
+                    {codeSamples.models.noModelGroupAliasesYamlComment}
                   </span>
                 ) : (
                   Object.entries(aliasObject).map(([key, value]) => (

@@ -13,6 +13,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import i18n from "@/i18n/i18n";
+import { productNames } from "@/i18n/untranslated/productNames";
 
 type OnboardingFormBodyProps = {
   variant: "signup" | "reset_password";
@@ -41,7 +42,7 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
     <div className="mx-auto w-full max-w-md mt-10">
       <Card>
         <CardContent>
-          <h5 className="text-center mb-5 text-base font-semibold text-foreground">🚅 LiteLLM</h5>
+          <h5 className="text-center mb-5 text-base font-semibold text-foreground">{productNames.liteLLMWithLogo}</h5>
           <h3 className="text-2xl font-semibold text-foreground">{actionLabel}</h3>
           <p className="text-sm text-foreground">
             {isResetPassword ? t("onboarding.formBody.resetDescription") : t("onboarding.formBody.signUpDescription")}

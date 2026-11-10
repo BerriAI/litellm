@@ -17,7 +17,7 @@ use litellm_router_core::{
 };
 use parking_lot::Mutex;
 use rstest::{fixture, rstest};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[derive(Default)]
 struct ScriptedHost {
@@ -1808,4 +1808,56 @@ fn request_for(model: &str) -> RouterRequest {
         model: model.to_owned(),
         ..RouterRequest::default()
     }
+}
+
+#[rstest]
+#[tokio::test]
+async fn every_event_of_a_retried_and_fallen_back_call_serializes_tagged_by_its_name(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![failure(FailureKind::RateLimit, 429); 3],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 1, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let tags: Value = host
+        .events
+        .lock()
+        .iter()
+        .map(|event| serde_json::to_value(event).unwrap()["event"].clone())
+        .collect();
+    assert_eq!(
+        tags,
+        json!([
+            "RetriesOpened",
+            "PickStarted",
+            "Selected",
+            "AttemptFailed",
+            "CooldownSet",
+            "RetryBudget",
+            "RetryLogged",
+            "Retry",
+            "PickStarted",
+            "Selected",
+            "AttemptFailed",
+            "CooldownSet",
+            "RetryLogged",
+            "FallingBack",
+            "RetryLogged",
+            "Fallback",
+            "RetriesOpened",
+            "PickStarted",
+            "Selected",
+            "Succeeded",
+            "FallbackDone",
+        ])
+    );
 }

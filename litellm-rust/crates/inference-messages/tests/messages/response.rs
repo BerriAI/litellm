@@ -2,7 +2,7 @@ use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
 };
-use litellm_inference_messages::{MessagesCallResponse, messages_body};
+use litellm_inference_messages::{MessagesBody, MessagesCallResponse, messages_body};
 use litellm_inference_testing::{
     RecordingSecrets, http_config, no_secrets, provider_http, resources,
 };
@@ -47,6 +47,9 @@ async fn calls_defer_execution_until_polled(
 
     let MessagesCallResponse::Complete(response) = future.await.unwrap() else {
         panic!("expected a completed message");
+    };
+    let MessagesBody::Message(response) = response else {
+        panic!("expected a message");
     };
     assert_eq!(
         response.content,
@@ -241,9 +244,41 @@ async fn an_unparseable_success_body_is_reported_as_the_upstream_answer(call: Me
 }
 
 #[rstest]
+#[case::error_object(
+    json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}),
+    json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"},
+        "stop_sequence": null}),
+)]
+#[case::message_missing_id(
+    json!({"type": "message", "content": [], "stop_sequence": "###"}),
+    json!({"type": "message", "content": [], "stop_sequence": "###"}),
+)]
+#[tokio::test]
+async fn a_success_body_that_is_not_a_message_passes_through(
+    call: MessagesCall,
+    #[case] body: Value,
+    #[case] expected: Value,
+) {
+    let upstream = upstream([json_response(body)]).await;
+
+    let response = run(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        ..call
+    })
+    .await
+    .expect("any JSON object is returned");
+
+    let MessagesOutput::Complete(response) = response else {
+        panic!("expected a completed response");
+    };
+    assert_eq!(serde_json::to_value(response).unwrap(), expected);
+}
+
+#[rstest]
 #[tokio::test]
 async fn an_unreadable_success_body_is_an_invalid_response(call: MessagesCall) {
-    let upstream = upstream([json_response(json!({"unexpected": true}))]).await;
+    let upstream = upstream([json_response(json!(["unexpected"]))]).await;
 
     let error = run(MessagesCall {
         api_key: Some("sk".into()),
@@ -319,6 +354,9 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
 
     let MessagesCallResponse::Complete(message) = response else {
         panic!("a non-streaming request returns a message");
+    };
+    let MessagesBody::Message(message) = message else {
+        panic!("expected a message");
     };
     assert_eq!(message.id, "msg_1");
     let sent = only_request(&upstream).await;
@@ -412,6 +450,9 @@ async fn route_uses_injected_dependencies_and_optional_cache(
         else {
             panic!("expected a completed message");
         };
+        let MessagesBody::Message(response) = response else {
+            panic!("expected a message");
+        };
         assert_eq!(
             response.content,
             message_body()["content"].as_array().unwrap().as_slice()
@@ -483,6 +524,9 @@ async fn cache_overrides_preserve_the_routes_isolated_scope(call: MessagesCall) 
             route.execute(request, &(), override_options).await.unwrap()
         else {
             panic!("expected a completed message");
+        };
+        let MessagesBody::Message(response) = response else {
+            panic!("expected a message");
         };
         assert_eq!(response.id, expected["id"].as_str().unwrap());
     }
