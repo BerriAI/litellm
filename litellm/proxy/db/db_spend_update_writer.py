@@ -37,7 +37,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
-from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, finite_cost, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
@@ -94,7 +94,7 @@ from litellm.proxy.spend_tracking.savings import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
-from litellm.types.utils import CallTypes
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypes
 from litellm.types.videos.utils import VIDEO_COST_REQUEST_ID_SUFFIX, VIDEO_STATUS_CALL_TYPES
 
 if TYPE_CHECKING:
@@ -115,6 +115,16 @@ _JsonPayload: TypeAlias = Mapping[str, object] | Sequence[object] | str | int | 
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[_JsonPayload]] = TypeAdapter(
     _JsonPayload, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
+
+
+def _response_read_reuses_addressed_id(payload: Mapping[str, object], request: Mapping[str, object]) -> bool:
+    if payload.get("call_type") not in {CallTypes.aget_responses.value, CallTypes.acancel_responses.value}:
+        return False
+    params: Final = as_str_mapping(request.get("litellm_params")) or {}
+    proxy_request: Final = as_str_mapping(params.get("proxy_server_request")) or {}
+    body: Final = as_str_mapping(proxy_request.get("body")) or {}
+    addressed_id: Final = body.get(ADDRESSED_RESPONSE_ID_FIELD)
+    return isinstance(addressed_id, str) and payload.get("request_id") == addressed_id
 
 
 def _parsed_request_tags(request_tags: object) -> Iterable[object] | TypeError | None:
@@ -767,6 +777,8 @@ class DBSpendUpdateWriter:
                 llm_router=llm_router,
             )
             billable_cost: Final = _billable_cost(response_cost, payload)
+            if not billable_cost and _response_read_reuses_addressed_id(payload, request_fields):
+                return True
             payload["spend"] = billable_cost or 0.0
             payload["startTime"] = _iso_timestamp(payload["startTime"])
             payload["endTime"] = _iso_timestamp(payload["endTime"])
