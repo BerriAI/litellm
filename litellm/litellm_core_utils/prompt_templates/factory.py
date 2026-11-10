@@ -2414,7 +2414,7 @@ def anthropic_process_openai_file_message(
     raise Exception(f"Either file_data or file_id must be present in the file message: {message}")
 
 
-_EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
+EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
 def _dict_block(block: object) -> Mapping[str, object] | None:
@@ -2437,7 +2437,7 @@ def _with_placeholder_text(block: object) -> object:
     fields: Final = _dict_block(block)
     if fields is None or not _is_empty_text_block(fields):
         return block
-    return {**fields, "text": _EMPTY_TEXT_PLACEHOLDER}
+    return {**fields, "text": EMPTY_TEXT_PLACEHOLDER}
 
 
 def _survives_assistant_conversion(block: object) -> bool:
@@ -2523,7 +2523,7 @@ def _sanitize_empty_text_content(
             return message
         if drop_empty_text:
             return _with_content(message, None, "Dropped empty text content")
-        return _with_content(message, _EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
+        return _with_content(message, EMPTY_TEXT_PLACEHOLDER, "Replaced empty text content")
 
     blocks: Final = parts_of(content)
     if not isinstance(content, list) or not any(_is_empty_text_block(block) for block in blocks):
@@ -2989,7 +2989,7 @@ def _tool_result_later_in_turn(
 
 
 def _empty_text_placeholder(message: AllMessageValues) -> AnthropicMessagesTextParam:
-    placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
+    placeholder: Final = AnthropicMessagesTextParam(type="text", text=EMPTY_TEXT_PLACEHOLDER)
     add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=message)
     return placeholder
 
@@ -4824,7 +4824,7 @@ def _bedrock_placeholder_turn(
     )
     return BedrockMessageBlock(
         role="user",
-        content=[BedrockContentBlock(text=_EMPTY_TEXT_PLACEHOLDER), *([] if cache_point is None else [cache_point])],
+        content=[BedrockContentBlock(text=EMPTY_TEXT_PLACEHOLDER), *([] if cache_point is None else [cache_point])],
     )
 
 

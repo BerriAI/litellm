@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_completion_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    _EMPTY_TEXT_PLACEHOLDER,
+    EMPTY_TEXT_PLACEHOLDER,
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
     THOUGHT_SIGNATURE_SEPARATOR,
     BedrockConverseMessagesProcessor,
@@ -1157,7 +1157,7 @@ async def test_bedrock_converse_keeps_an_empty_trailing_user_turn(
     )
 
     assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    assert result[-1]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert result[-1]["content"] == [{"text": EMPTY_TEXT_PLACEHOLDER}]
 
 
 _ANSWERED_HISTORY: Final = ({"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"})
@@ -1179,7 +1179,7 @@ async def test_bedrock_converse_treats_a_blank_trailing_user_turn_as_empty(
 ) -> None:
     result: Final = await _converse([*_ANSWERED_HISTORY, blank_user_message], use_async)
 
-    assert result[-1] == {"role": "user", "content": [{"text": _EMPTY_TEXT_PLACEHOLDER}]}
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
 
 
 @pytest.mark.asyncio
@@ -1208,7 +1208,7 @@ async def test_bedrock_converse_reads_a_hidden_arn_model_from_base_model_for_the
         use_async,
     )
 
-    assert result[-1] == {"role": "user", "content": [{"text": _EMPTY_TEXT_PLACEHOLDER}]}
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
 
 
 @pytest.mark.asyncio
@@ -1254,7 +1254,7 @@ async def test_bedrock_converse_keeps_the_cache_mark_of_an_empty_trailing_user_t
 ) -> None:
     result: Final = await _converse([*_ANSWERED_HISTORY, marked_user_message], use_async)
 
-    assert result[-1]["content"] == [{"text": _EMPTY_TEXT_PLACEHOLDER}, {"cachePoint": {"type": "default"}}]
+    assert result[-1]["content"] == [{"text": EMPTY_TEXT_PLACEHOLDER}, {"cachePoint": {"type": "default"}}]
 
 
 @pytest.mark.asyncio
@@ -1286,7 +1286,7 @@ async def test_bedrock_converse_fills_a_blank_trailing_user_turn_under_a_guardra
 
     result: Final = await _converse(guarded, use_async)
 
-    assert result[-1] == {"role": "user", "content": [{"text": _EMPTY_TEXT_PLACEHOLDER}]}
+    assert result[-1] == {"role": "user", "content": [{"text": EMPTY_TEXT_PLACEHOLDER}]}
 
 
 @pytest.mark.asyncio
@@ -1312,7 +1312,7 @@ async def test_bedrock_converse_empty_user_message_beside_a_tool_result_keeps_th
 
 def _carries_the_placeholder(turns: Sequence[Mapping[str, object]]) -> bool:
     blocks: Final = chain.from_iterable(turn["content"] for turn in turns)
-    return any(block.get("text") == _EMPTY_TEXT_PLACEHOLDER for block in blocks)
+    return any(block.get("text") == EMPTY_TEXT_PLACEHOLDER for block in blocks)
 
 
 @pytest.mark.asyncio
@@ -1920,7 +1920,7 @@ def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_conten
     )
 
     assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert result[-1]["content"] == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER}]
 
 
 @EMPTY_USER_MESSAGES
@@ -2024,7 +2024,7 @@ def test_anthropic_messages_pt_keeps_every_breakpoint_of_a_long_run_of_empty_use
 
     assert (
         result[-1]["content"]
-        == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
+        == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
     )
 
 

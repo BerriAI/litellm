@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    _EMPTY_TEXT_PLACEHOLDER as PLACEHOLDER,
+    EMPTY_TEXT_PLACEHOLDER as PLACEHOLDER,
     _sanitize_empty_text_content,
     sanitize_messages_for_tool_calling,
     anthropic_messages_pt,

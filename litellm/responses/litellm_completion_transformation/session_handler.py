@@ -12,6 +12,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
+from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.responses.litellm_completion_transformation.client_tool_search import (
     bridge_client_tool_search,
     client_tool_search_loaded_tools,
@@ -484,6 +485,7 @@ class ResponsesSessionHandler:
                         chat_completion_message_history,
                         item_cache_control,
                         route_fills_empty_user_turns,
+                        text=EMPTY_TEXT_PLACEHOLDER,
                     )
                 )
 
