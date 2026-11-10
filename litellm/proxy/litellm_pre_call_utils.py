@@ -814,6 +814,22 @@ def _strip_client_callback_credentials(
         )
 
 
+_CLIENT_OAUTH_PAIR_FIELDS: Final = ("client_id", "client_secret")
+
+
+def _strip_blank_client_oauth_pair(
+    data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
+) -> None:
+    sent: Final = tuple(field for field in _CLIENT_OAUTH_PAIR_FIELDS if field in data)
+    if not sent or any(data[field] for field in sent):
+        return
+    for field in sent:
+        data.pop(field)
+    verbose_proxy_logger.debug(
+        "Stripped blank client-supplied %s so the deployment's own OAuth credentials apply", ", ".join(sent)
+    )
+
+
 def _strip_client_pricing_overrides(data: dict[str, object]) -> None:
     """Drop pricing overrides from the request body and any metadata variant.
 
@@ -2857,6 +2873,9 @@ async def add_litellm_data_to_request(
     # Same reason as the strips above: runs after the metadata string-to-dict parse
     # so JSON-string metadata cannot smuggle callback credentials past the dict guard.
     _strip_client_callback_credentials(data)
+    _strip_blank_client_oauth_pair(
+        cast(dict[str, object], data)  # cast-ok: the request body is a str-keyed JSON object
+    )
 
     if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
         _strip_client_message_redaction_opt_out(data)

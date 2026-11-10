@@ -8177,6 +8177,50 @@ async def test_add_litellm_data_to_request_strips_caller_supplied_callback_crede
     assert updated[TRUSTED_CALLBACK_VARS_FIELD] == {"dd_api_key": "team-dd-key"}
 
 
+async def _pre_call_body(oauth_fields: dict[str, object]) -> dict:
+    return await add_litellm_data_to_request(
+        data={"model": "databricks-model", "messages": [{"role": "user", "content": "hello"}], **oauth_fields},
+        request=_callback_credential_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "oauth_fields",
+    [
+        {"client_id": "", "client_secret": ""},
+        {"client_id": None, "client_secret": None},
+        {"client_secret": None},
+        {"client_id": ""},
+    ],
+)
+async def test_add_litellm_data_to_request_drops_blank_caller_oauth_pair(oauth_fields):
+    """A blank caller pair would blank the deployment's own and fall back to the proxy's ambient identity."""
+    updated = await _pre_call_body(oauth_fields)
+
+    assert "client_id" not in updated
+    assert "client_secret" not in updated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "oauth_fields",
+    [
+        {"client_id": "caller-id", "client_secret": "caller-secret"},
+        {"client_id": "caller-id", "client_secret": ""},
+        {"client_id": None, "client_secret": "caller-secret"},
+    ],
+)
+async def test_add_litellm_data_to_request_keeps_caller_oauth_pair_with_a_value(oauth_fields):
+    updated = await _pre_call_body(oauth_fields)
+
+    assert {field: updated[field] for field in oauth_fields} == oauth_fields
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_omits_trusted_callback_vars_without_team_callbacks():
     """Without team/key callback settings the trusted field must not exist for a callback to read."""
