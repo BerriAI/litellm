@@ -66,7 +66,7 @@ def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
 
 
 _ROUTER_OWNED_METADATA_KEYS: Final = frozenset({"caching_groups", "redis_namespace"})
-_MASKING_METADATA_KEYS: Final = frozenset({"mask_input", "mask_output"})
+_PRIVATE_SETTING_BY_FLAG: Final = MappingProxyType({"mask_input": True, "mask_output": True, "trace_public": False})
 _JOINED_LIST_METADATA_KEYS: Final = frozenset({"tags", "guardrails"})
 
 
@@ -82,7 +82,7 @@ def metadata_defaults_under_request(
 def _default_under_request(key: str, default: object, requested: object) -> object:
     if key in _ROUTER_OWNED_METADATA_KEYS:
         return default
-    if key in _MASKING_METADATA_KEYS and _is_flag_on(default):
+    if _PRIVATE_SETTING_BY_FLAG.get(key) is _is_flag_on(default):
         return default
     if key in _JOINED_LIST_METADATA_KEYS:
         return _request_items_then_default_items(default=default, requested=requested)

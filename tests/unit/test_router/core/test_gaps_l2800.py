@@ -454,6 +454,31 @@ async def test_default_metadata_masking_stays_on_once_either_side_turns_it_on(
     assert _metadata(host.calls[0].kwargs)[mask_key] == sent_mask
 
 
+@pytest.mark.parametrize(
+    ("default_public", "request_public", "sent_public"),
+    [
+        (False, True, False),
+        ("false", True, "false"),
+        (False, None, False),
+        (True, False, False),
+        (True, None, True),
+        ("true", True, True),
+    ],
+)
+async def test_a_private_default_trace_stays_private_whatever_the_request_sends(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    default_public: object,
+    request_public: object,
+    sent_public: object,
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"trace_public": default_public}}
+    )
+    await core.acompletion(model="g", messages=MESSAGES, metadata={"trace_public": request_public})  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["trace_public"] == sent_public
+
+
 async def test_a_default_redis_namespace_beats_the_request_redis_namespace(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
@@ -481,6 +506,23 @@ async def test_default_metadata_tags_follow_the_request_tags(
     make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_tags: object
 ) -> None:
     core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params=_PROXY_DEFAULT_TAGS)
+    await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+    assert _metadata(host.calls[0].kwargs)["tags"] == sent_tags
+
+
+@pytest.mark.parametrize(
+    ("request_metadata", "sent_tags"),
+    [
+        ({"tags": ["caller"]}, ["caller"]),
+        ({}, "proxy-default"),
+    ],
+)
+async def test_a_default_tags_that_is_not_a_list_yields_to_the_request_tags(
+    make_core: MakeCore, host: ScriptedHost, request_metadata: Mapping[str, object], sent_tags: object
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"tags": "proxy-default"}}
+    )
     await core.acompletion(model="g", messages=MESSAGES, metadata=dict(request_metadata))  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
     assert _metadata(host.calls[0].kwargs)["tags"] == sent_tags
 
