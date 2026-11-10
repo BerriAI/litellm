@@ -557,12 +557,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         anthropic_messages_request: Mapping[str, object],
         beta_set: set[str],  # mutable-ok: the caller's beta set is grown in place, like the sibling helpers
     ) -> None:
-        """
-        A top-level ``compaction`` request needs the ``compact-2026-09-04``
-        anthropic-beta; without it Bedrock answers 400 "compaction: Extra inputs
-        are not permitted". A later request that adopts the returned signed
-        block needs the same beta, so it is added for that block too, as the
-        Anthropic route does.
+        """``compaction`` and an adopted signed block both need the compact-2026-09-04 beta on Bedrock.
 
         Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
         """
@@ -850,8 +845,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
 
-        # ``compaction`` travels only with its beta. A beta map without compact-2026-09-04
-        # (bedrock_mantle) or a non-object value keeps the earlier strip instead of a 400.
         if "compaction" in anthropic_messages_request and not (
             isinstance(anthropic_messages_request["compaction"], dict) and "compact-2026-09-04" in filtered_betas
         ):

@@ -1632,7 +1632,7 @@ def test_bedrock_messages_adds_compact_2026_09_04_beta_for_signed_block_without_
 
 @pytest.mark.usefixtures("local_beta_headers_config")
 @pytest.mark.parametrize("compaction", [None, "summarize", []])
-def test_bedrock_messages_drops_compaction_that_is_not_an_object(compaction):
+def test_bedrock_messages_drops_compaction_that_is_not_an_object(compaction: object):
     """
     Only an object ``compaction`` gets the beta. Any other value is dropped, as it
     was before the field was allowed, instead of reaching Bedrock without its beta.

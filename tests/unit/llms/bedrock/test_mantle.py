@@ -808,7 +808,7 @@ def test_mantle_messages_drops_compaction_without_its_beta():
     from litellm.types.router import GenericLiteLLMParams
 
     config = AmazonMantleMessagesConfig()
-    headers: dict = {}
+    headers: dict[str, str] = {}
     request = config.transform_anthropic_messages_request(
         model="mantle/anthropic.claude-mythos-preview",
         messages=[{"role": "user", "content": "Hello"}],
