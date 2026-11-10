@@ -183,6 +183,39 @@ def test_base_hidden_params_precomputed():
 
 
 # ---------------------------------------------------------------------------
+# Azure Responses API bridge: missing chunk model must not overwrite it
+# ---------------------------------------------------------------------------
+
+
+def test_azure_bridge_preserves_model_when_chunks_omit_it():
+    for provider in ("azure", "azure_ai"):
+        wrapper = _make_wrapper([], provider=provider)
+        chunks = [
+            ModelResponseStream(
+                model=chunk_model,
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(role="assistant", content="hello"),
+                        finish_reason=None,
+                    )
+                ],
+            )
+            for chunk_model in (None, "upstream-gpt", None)
+        ]
+
+        results = [wrapper.chunk_creator(chunk) for chunk in chunks]
+
+        assert all(isinstance(result, ModelResponseStream) for result in results)
+        assert [result.model for result in results] == [
+            "claude-3-5-sonnet",
+            "upstream-gpt",
+            "upstream-gpt",
+        ]
+        assert wrapper.model == "upstream-gpt"
+
+
+# ---------------------------------------------------------------------------
 # 3. Sync path: model_dump() is NOT called on non-usage chunks
 # ---------------------------------------------------------------------------
 
