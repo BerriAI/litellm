@@ -74,6 +74,9 @@ class TokenCountSettings:
         return (narrower if narrower is not None else self.framing) or 0
 
 
+FRAMING_ADVICE: Final = "Or set token_count_framing in this deployment's model_info to estimate the count locally"
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderCountFailure:
     status_code: int
@@ -97,6 +100,11 @@ class ProviderCountFailure:
         if not self._provider_answered:
             return self
         return replace(self, message=_with_hint(self.message, hint))
+
+    def with_framing_advice(self) -> "ProviderCountFailure":
+        if not self.no_count_endpoint:
+            return self
+        return replace(self, message=_with_hint(self.message, FRAMING_ADVICE))
 
     def to_proxy_exception(self) -> ProxyException:
         return ProxyException(

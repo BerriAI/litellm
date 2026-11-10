@@ -23,9 +23,9 @@ MANTLE_ANTHROPIC_VERSION: Final = "2023-06-01"
 NO_MANTLE_ENDPOINT_MESSAGE: Final = (
     "This model counts tokens on bedrock-mantle, but the deployment pins its own bedrock-runtime endpoint "
     "through api_base, aws_bedrock_runtime_endpoint, or AWS_BEDROCK_RUNTIME_ENDPOINT, so its prompt is not sent "
-    "to the public bedrock-mantle host. Set BEDROCK_MANTLE_API_BASE to a bedrock-mantle endpoint this proxy may "
-    "use, which also becomes the inference host of every Mantle deployment without its own api_base, or set "
-    "token_count_framing in this deployment's model_info to estimate the count locally."
+    "to the public bedrock-mantle host. To count it, set BEDROCK_MANTLE_API_BASE to a bedrock-mantle endpoint this "
+    "proxy may use. Every bedrock_mantle/ deployment without its own api_base also sends inference to that exact URL, "
+    "so give those deployments their own api_base first."
 )
 
 

@@ -15496,8 +15496,9 @@ async def _provider_token_count(
     framing_can_stand_in: Final = (count_model is None or not count_model.configured) and (
         failure.cannot_count_model or (pinned_count_model is not None and failure.denied_in_region)
     )
-    if not (framing_can_stand_in and settings.frames_counts and local_estimate_allowed):
-        raise failure.to_proxy_exception()
+    framing_would_stand_in: Final = framing_can_stand_in and local_estimate_allowed
+    if not (framing_would_stand_in and settings.frames_counts):
+        raise (failure.with_framing_advice() if framing_would_stand_in else failure).to_proxy_exception()
     if pinned_count_model is not None:
         verbose_proxy_logger.warning(
             "Token count for %s answered %s from %s in %s, so it falls back to the framed local estimate",
