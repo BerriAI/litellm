@@ -336,7 +336,8 @@ def _set_ciphers(context: ssl.SSLContext, ssl_security_level: str | None, rsa_ke
         except ssl.SSLError:
             context.minimum_version = ssl.TLSVersion.TLSv1_3  # rebind-ok: sets up the caller's context in place
             verbose_logger.warning(
-                "fips_mode: cipher list '%s' has no TLS 1.2 suite without RSA key exchange, so outbound TLS offers only TLS 1.3 and TLS 1.2-only servers will fail.",
+                "fips_mode: cipher list '%s' has no TLS 1.2 suite without RSA key exchange, "
+                "so outbound TLS offers only TLS 1.3 and TLS 1.2-only servers will fail.",
                 ciphers,
             )
 
