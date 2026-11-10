@@ -1,6 +1,5 @@
 import hashlib
 import json
-from itertools import chain
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
@@ -379,8 +378,8 @@ def format_chain_for_lookup_groups(config_name: str, configured: object, lookup_
         return f"{config_name} has no chain for {searched}" + (
             f" ({others} other model groups are configured)" if others else ""
         )
-    owner, chain = resolved
-    return f"{config_name}: {owner!r} -> {mask_sensitive_structure(chain)}"
+    owner, fallback_chain = resolved
+    return f"{config_name}: {owner!r} -> {mask_sensitive_structure(fallback_chain)}"
 
 
 def format_content_policy_fallback_hint(
