@@ -353,7 +353,6 @@ async def new_end_user(
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
-    - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
@@ -387,7 +386,7 @@ async def new_end_user(
         --header 'Content-Type: application/json' \
         --data '{
             "user_id" : "ishaan-jaff-3",
-            "allowed_region": "eu",
+            "allowed_model_region": "eu",
             "budget_id": "free_tier",
             "models": ["gpt-4o-mini"],
             "default_model": "azure/gpt-3.5-turbo-eu"

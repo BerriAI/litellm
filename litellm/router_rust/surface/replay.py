@@ -22,6 +22,10 @@ def untrack_live_registry(registry: HostRegistry) -> None:
     _live_registries.discard(registry)
 
 
+def live_registries() -> tuple[HostRegistry, ...]:
+    return tuple(_live_registries)
+
+
 def _replay_live_registries() -> None:
     for registry in tuple(_live_registries):
         registry.replay_model_cost_registrations()
