@@ -26,9 +26,21 @@ function UsageSummary({ spend, budget }: { spend: number; budget: EndUser["litel
         {t("customerPortal.detail.spendThisMonth")}{" "}
         <span className="font-medium text-foreground">{t("format.usd", { val: spend })}</span>
       </span>
-      <span>{max === null ? t("customerPortal.detail.noBudget") : t("customerPortal.detail.ofBudget", { max })}</span>
-      {tpmLimit !== null && <Badge variant="outline">{t("customerPortal.detail.tpm", { val: tpmLimit })}</Badge>}
-      {rpmLimit !== null && <Badge variant="outline">{t("customerPortal.detail.rpm", { val: rpmLimit })}</Badge>}
+      <span>
+        {max === null
+          ? t("customerPortal.detail.noBudget")
+          : t("customerPortal.detail.ofBudget", { max: t("format.usd", { val: max }) })}
+      </span>
+      {tpmLimit !== null && (
+        <Badge variant="outline">
+          {t("customerPortal.detail.tpm", { val: t("format.number", { val: tpmLimit }) })}
+        </Badge>
+      )}
+      {rpmLimit !== null && (
+        <Badge variant="outline">
+          {t("customerPortal.detail.rpm", { val: t("format.number", { val: rpmLimit }) })}
+        </Badge>
+      )}
     </p>
   );
 }

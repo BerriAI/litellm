@@ -105,7 +105,10 @@ export default function CustomersPage() {
                   <TableCell className="text-right tabular-nums text-muted-foreground">
                     {max === null
                       ? t("customerPortal.common.noBudget")
-                      : t("customerPortal.list.budgetUsage", { spend, max })}
+                      : t("customerPortal.list.budgetUsage", {
+                          spend: t("format.usd", { val: spend }),
+                          max: t("format.usd", { val: max }),
+                        })}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{keys}</TableCell>
                   <TableCell>

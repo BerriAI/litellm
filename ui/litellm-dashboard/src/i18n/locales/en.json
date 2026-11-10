@@ -20534,14 +20534,14 @@
       },
       "loading": "Loading customers...",
       "empty": "No customers yet. Create one to start tracking spend.",
-      "budgetUsage": "{{spend, usd}} / {{max, usd}}"
+      "budgetUsage": "{{spend}} / {{max}}"
     },
     "detail": {
       "spendThisMonth": "Spend this month",
-      "ofBudget": "of {{max, usd}} budget",
+      "ofBudget": "of {{max}} budget",
       "noBudget": "no budget",
-      "tpm": "{{val, number}} TPM",
-      "rpm": "{{val, number}} RPM",
+      "tpm": "{{val}} TPM",
+      "rpm": "{{val}} RPM",
       "keysTitle": "Keys",
       "keysSubtitle": "Keys that sent requests as this customer this month.",
       "keysEmpty": "No traffic from this customer this month.",
