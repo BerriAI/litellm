@@ -1335,6 +1335,71 @@ async fn while_the_batch_deployment_cools_down_a_batch_upload_finds_no_healthy_d
     assert_eq!(healthy, expected);
 }
 
+#[rstest]
+#[case::a_batch_upload_finds_no_deployment(true, vec![])]
+#[case::a_batch_create_falls_back_to_chat(false, vec!["c1"])]
+#[tokio::test]
+async fn while_the_batch_deployment_is_paused_a_batch_upload_finds_no_healthy_deployment(
+    #[case] batch_upload: bool,
+    #[case] expected: Vec<&str>,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat", "order": 1}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch", "order": 2}, "model_info": {"id": "b2", "mode": "batch", "blocked": true}},
+        ]
+    }))
+    .unwrap();
+    let router = router(config, json!({}), Arc::new(ScriptedHost::default()));
+    let upload = RouterRequest {
+        batch_create: true,
+        batch_upload,
+        ..request()
+    };
+    let healthy: Vec<String> = router
+        .healthy(&Op::from("acreate_file"), &upload)
+        .await
+        .map(|candidates| {
+            candidates
+                .healthy
+                .iter()
+                .map(|d| d.id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(healthy, expected);
+}
+
+#[rstest]
+#[case::a_rate_limit(FailureKind::RateLimit, 429)]
+#[case::a_wrong_key(FailureKind::Authentication, 401)]
+#[tokio::test]
+async fn a_batch_upload_the_batch_deployment_refuses_keeps_its_error_with_retries_on(
+    #[case] kind: FailureKind,
+    #[case] status: u16,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        (0..3).map(|_| failure(kind, status)).collect(),
+    ));
+    let router = router(
+        azure_chat_then_batch(),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let upload = RouterRequest {
+        batch_create: true,
+        batch_upload: true,
+        ..request()
+    };
+    let error = router
+        .call(Op::from("acreate_file"), upload)
+        .await
+        .unwrap_err();
+    assert_eq!(host.selected(), vec!["b2"]);
+    assert!(matches!(error, Error::Attempt(refused) if refused.kind == kind));
+}
+
 #[tokio::test]
 async fn the_order_path_reports_no_failed_fallbacks() {
     let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));

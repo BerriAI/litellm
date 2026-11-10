@@ -8062,9 +8062,9 @@ async def test_a_failed_batch_file_upload_tries_the_batch_deployment_once_and_le
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [429, 401])
+@pytest.mark.parametrize(("status", "raised"), [(429, openai.RateLimitError), (401, openai.AuthenticationError)])
 async def test_a_batch_file_upload_the_batch_deployment_refuses_stays_off_chat_and_leaves_chat_serving(
-    monkeypatch: pytest.MonkeyPatch, status: int
+    monkeypatch: pytest.MonkeyPatch, status: int, raised: type[Exception]
 ):
     from io import BytesIO
 
@@ -8088,7 +8088,7 @@ async def test_a_batch_file_upload_the_batch_deployment_refuses_stays_off_chat_a
         chat_completions: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
             return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
         )
-        with pytest.raises(RouterRateLimitError, match="No deployments available"):
+        with pytest.raises(raised, match="upload refused"):
             await router.acreate_file(model="gpt-mixed", purpose="batch", file=BytesIO(json.dumps(batch_row).encode()))
         await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
         for _ in range(3):

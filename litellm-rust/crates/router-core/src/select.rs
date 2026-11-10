@@ -232,6 +232,25 @@ fn filter_team_based(
         .collect())
 }
 
+/// `without_deployments_that_cannot_batch`: a batch create on a group the caller may use a healthy
+/// batch deployment of skips the Azure deployments that cannot run batches. A batch upload skips
+/// them while the caller may use any batch deployment of the group, healthy or not, and the retry
+/// count reads the same list.
+fn without_deployments_that_cannot_batch(
+    request: &RouterRequest,
+    all: &[Arc<Deployment>],
+    healthy: Vec<Arc<Deployment>>,
+) -> Vec<Arc<Deployment>> {
+    let has_batch = |pool: &[Arc<Deployment>]| pool.iter().any(|d| d.is_batch_capable());
+    if !request.batch_create || !(has_batch(&healthy) || (request.batch_upload && has_batch(all))) {
+        return healthy;
+    }
+    healthy
+        .into_iter()
+        .filter(|d| !d.cannot_run_batches())
+        .collect()
+}
+
 impl Core {
     fn context<'a>(
         &'a self,
@@ -482,6 +501,11 @@ impl Core {
             None
         };
         if inputs.count_only {
+            let healthy = if resolution.kind.is_single() {
+                healthy
+            } else {
+                without_deployments_that_cannot_batch(request, &all, healthy)
+            };
             return Ok(Candidates {
                 name: name.to_owned(),
                 model_group: resolution.group,
@@ -646,19 +670,8 @@ impl Core {
                 .await?;
         }
 
-        // `without_deployments_that_cannot_batch`: a batch create on a group the caller may use a
-        // batch deployment of skips the Azure deployments that cannot run batches. A batch upload
-        // keeps skipping them while that batch deployment cools down.
-        let batch_cooling = || {
-            all.iter()
-                .any(|d| d.is_batch_capable() && cooling.iter().any(|(id, _)| *id == d.id))
-        };
-        if request.batch_create
-            && !resolution.kind.is_single()
-            && (healthy.iter().any(|d| d.is_batch_capable())
-                || (request.batch_upload && batch_cooling()))
-        {
-            healthy.retain(|d| !d.cannot_run_batches());
+        if !resolution.kind.is_single() {
+            healthy = without_deployments_that_cannot_batch(request, &all, healthy);
         }
 
         if let Some(pinned) = [
