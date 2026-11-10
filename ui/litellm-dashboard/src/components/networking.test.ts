@@ -602,6 +602,27 @@ describe("uiSpendLogsCall exclude_internal_health_checks serialization", () => {
   });
 });
 
+describe("uiSpendLogDetailsCall", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["chatcmpl-123#a1", "chatcmpl-123?a=1", "chatcmpl-123%41b", "chatcmpl-123 a&b"])(
+    "requests the details of %s with the full request id and start date",
+    async (logId) => {
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({ id: logId }) });
+      vi.stubGlobal("fetch", mockFetch);
+
+      await Networking.uiSpendLogDetailsCall("token", logId, "2026-01-01 00:00:00");
+
+      const url = new URL(String(mockFetch.mock.calls.at(-1)?.[0]), "http://example.com");
+      expect(decodeURIComponent(url.pathname.split("/spend/logs/ui/")[1])).toBe(logId);
+      expect(url.hash).toBe("");
+      expect([...url.searchParams.entries()]).toEqual([["start_date", "2026-01-01 00:00:00"]]);
+    },
+  );
+});
+
 describe("sessionSpendLogsCall", () => {
   const originalFetch = global.fetch;
 
@@ -1176,5 +1197,73 @@ describe("getUiConfig runtime backend discovery", () => {
       url: "https://agent.example.com",
       discovery_mode: "well_known_fallback",
     });
+  });
+});
+
+describe("searchToolQueryCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("rejects with the backend error message for a denied search", async () => {
+    const errorMessage = "User not allowed to access search tool: exa-search-2";
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: errorMessage,
+            type: "user_search_tool_access_denied",
+            code: "403",
+          },
+        }),
+        { status: 403 },
+      ),
+    );
+
+    await expect(Networking.searchToolQueryCall("token", "exa-search-2", "litellm")).rejects.toThrow(errorMessage);
+  });
+});
+
+describe("uploadClaudeCodeSkill", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the archive bytes and metadata as one authenticated multipart request", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ status: "success" }));
+    vi.stubGlobal("fetch", fetch);
+    const file = new File(["skill archive bytes"], "personal.zip", { type: "application/zip" });
+    const metadata = { name: "personal", description: "Personal workflow", keywords: ["workflow"] };
+
+    await Networking.uploadClaudeCodeSkill("upload-token", file, metadata);
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe(`${Networking.getProxyBaseUrl()}/claude-code/plugins/upload`);
+    expect(init?.method).toBe("POST");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer upload-token");
+    expect(headers.has("Content-Type")).toBe(false);
+    expect(Object.fromEntries(init?.body as FormData)).toEqual({ file, metadata: JSON.stringify(metadata) });
+  });
+});
+
+describe("modelPatchUpdateCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("surfaces the server's error message", async () => {
+    const rejected = {
+      ok: false,
+      status: 400,
+      headers: new Headers(),
+      text: async () => JSON.stringify({ detail: { error: "tool Read already has built-in semantics" } }),
+    };
+    global.fetch = vi.fn().mockResolvedValue(rejected) as unknown as typeof global.fetch;
+
+    await expect(Networking.modelPatchUpdateCall("token", { model_name: "router" }, "model-1")).rejects.toThrow(
+      "tool Read already has built-in semantics",
+    );
   });
 });

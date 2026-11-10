@@ -9,6 +9,8 @@ from litellm.types.utils import CallTypes
 from . import *
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from litellm.llms.base_llm.guardrail_translation.base_translation import (
         BaseTranslation,
     )
@@ -30,7 +32,29 @@ def get_cost_for_google_maps_grounding_request(
     return cost_per_google_maps_grounding_request(usage=usage, model_info=model_info)
 
 
-def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", model_info: "ModelInfo") -> float | None:
+def _with_served_model_search_pricing(
+    model_info: "ModelInfo",
+    response_model: str | None,
+    served_model_provider: str,
+    lookup_model_info: "Callable[[str, str | None], ModelInfo | None] | None",
+) -> "ModelInfo":
+    if model_info.get("search_context_cost_per_query") is not None or response_model is None:
+        return model_info
+    served_model_info: Final = (
+        lookup_model_info(response_model, served_model_provider) if lookup_model_info is not None else None
+    )
+    if served_model_info is None:
+        return model_info
+    return {**model_info, "search_context_cost_per_query": served_model_info.get("search_context_cost_per_query")}
+
+
+def get_cost_for_web_search_request(
+    custom_llm_provider: str,
+    usage: "Usage",
+    model_info: "ModelInfo",
+    response_model: str | None = None,
+    lookup_model_info: "Callable[[str, str | None], ModelInfo | None] | None" = None,
+) -> float | None:
     """
     Get the cost for a web search request for a given model.
 
@@ -38,6 +62,8 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
         custom_llm_provider: The custom LLM provider.
         usage: The usage object.
         model_info: The model info.
+        response_model: The model the provider response names.
+        lookup_model_info: Looks up a model's cost map entry, returning None when it is not mapped.
     """
     if custom_llm_provider == "gemini":
         from .gemini.cost_calculator import cost_per_web_search_request
@@ -46,17 +72,25 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
     elif custom_llm_provider == "anthropic":
         from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
 
-        return get_cost_for_anthropic_web_search(model_info=model_info, usage=usage)
+        return get_cost_for_anthropic_web_search(
+            model_info=_with_served_model_search_pricing(model_info, response_model, "anthropic", lookup_model_info),
+            usage=usage,
+        )
     elif custom_llm_provider.startswith("vertex_ai"):
         # Anthropic Claude models on Vertex AI populate server_tool_use.web_search_requests
         # (same as the direct Anthropic API), not prompt_tokens_details.web_search_requests
         # (which is the Gemini field). Route claude-* models to the Anthropic calculator.
         model_key: Final[str] = model_info.get("key", "") if model_info else ""
-        if "claude" in model_key.lower():
+        if "claude" in (response_model or model_key).lower():
             from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
 
             verbose_logger.debug("vertex_ai/claude model detected — routing web search cost to Anthropic calculator")
-            return get_cost_for_anthropic_web_search(model_info=model_info, usage=usage)
+            return get_cost_for_anthropic_web_search(
+                model_info=_with_served_model_search_pricing(
+                    model_info, response_model, "vertex_ai", lookup_model_info
+                ),
+                usage=usage,
+            )
 
         from .vertex_ai.gemini.cost_calculator import (
             cost_per_web_search_request as cost_per_web_search_request_vertex_ai,
@@ -71,7 +105,10 @@ def get_cost_for_web_search_request(custom_llm_provider: str, usage: "Usage", mo
             return None
         from .anthropic.cost_calculation import get_cost_for_anthropic_web_search
 
-        return get_cost_for_anthropic_web_search(model_info=model_info, usage=usage)
+        return get_cost_for_anthropic_web_search(
+            model_info=_with_served_model_search_pricing(model_info, response_model, "azure_ai", lookup_model_info),
+            usage=usage,
+        )
     elif custom_llm_provider == "perplexity":
         # Perplexity handles search costs internally in its own cost calculator
         # Return 0.0 to indicate costs are already accounted for
@@ -144,7 +181,7 @@ def discover_guardrail_translation_mappings() -> dict[CallTypes, type["BaseTrans
                     continue
 
         try:
-            from litellm.proxy._experimental.mcp_server.guardrail_translation import (
+            from litellm.proxy.mcp_server.guardrail_translation import (
                 guardrail_translation_mappings as mcp_guardrail_translation_mappings,
             )
 

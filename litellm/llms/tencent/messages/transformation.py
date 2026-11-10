@@ -7,7 +7,7 @@ alongside its standard OpenAI-compatible chat completions endpoint.
 
 import litellm
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str

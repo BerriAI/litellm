@@ -1,10 +1,12 @@
 import asyncio
 import copy
+import datetime
 import importlib
 import itertools
 import random
 import time
-from collections.abc import Mapping
+import uuid
+from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock, patch
 
@@ -14,16 +16,19 @@ import respx
 
 import litellm
 from litellm import Router
-from litellm._internal_context import current_service_target
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
+from litellm.router_api import RoutingContext
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
     _get_deployment_cooldown_policy,
     _has_explicit_allowed_fails_policy_for_exception,
-    _increment_allowed_fails,
+    _has_fallback_group,
     _is_cooldown_required,
     _resolve_allowed_fails_from_policy,
     _should_cooldown_based_on_deployment_policy,
@@ -32,7 +37,9 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     cast_exception_status_to_int,
     get_cooldown_deployments,
+    is_response_lookup_not_found,
     mark_advisor_orchestration_failure,
+    set_cooldown_deployments,
     should_cooldown_based_on_allowed_fails_policy,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -53,14 +60,63 @@ from litellm.types.utils import CooldownDeploymentInfo, CredentialItem
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
+def _ctx_double(
+    *,
+    deployment_dict: Mapping[str, object] | None = None,
+    cooldown_time: float = 60.0,
+    allowed_fails: int = 0,
+    store: DualCache | MagicMock | None = None,
+) -> MagicMock:
+    """A RoutingContext double answering the registry, settings and health reads the cooldown helpers make."""
+    ctx: Final = MagicMock()
+    ctx.registry.return_value.deployment.return_value = None
+    ctx.registry.return_value.deployment_dict.return_value = deployment_dict
+    ctx.settings.return_value.cooldown_time = cooldown_time
+    ctx.settings.return_value.allowed_fails = allowed_fails
+    ctx.settings.return_value.allowed_fails_policy = None
+    ctx.settings.return_value.allowed_fails_for.return_value = None
+    ctx.health.return_value.store = store if store is not None else DualCache(in_memory_cache=InMemoryCache())
+    ctx.health.return_value.cooldowns = CooldownCache(RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
+    return ctx
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "expected_cooldown"),
+    (
+        (litellm.APIConnectionError, False),
+        (litellm.UnsupportedEndpointError, False),
+        (litellm.BadRequestError, True),
+    ),
+)
+async def test_unsupported_endpoint_preserves_cooldown_exclusion_with_bad_request_policy(
+    exception_type: type[litellm.APIConnectionError | litellm.BadRequestError], expected_cooldown: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "not-needed"},
+                "model_info": {"id": "deployment", "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}},
+            }
+        ],
+    )
+    exception: Final = exception_type(message="Request failed", model="claude-sonnet-5-5", llm_provider="anthropic")
+    set_cooldown_deployments(
+        ctx=RoutingContext(router),
+        original_exception=exception,
+        exception_status=exception.status_code,
+        deployment="deployment",
+        time_to_cooldown=60,
+    )
+    assert await async_get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == (
+        ["deployment"] if expected_cooldown else []
+    )
+
+
 class TestGetDeploymentCooldownPolicy:
-    def _make_router(self, deployment_id: str, model_info: dict | None = None):
-        router = MagicMock()
-        if model_info is None:
-            router.get_model_info.return_value = None
-        else:
-            router.get_model_info.return_value = {"model_info": model_info}
-        return router
+    def _make_router(self, deployment_id: str, model_info: dict | None = None) -> MagicMock:
+        return _ctx_double(deployment_dict=None if model_info is None else {"model_info": model_info})
 
     def test_deployment_not_found_returns_none_none(self):
         router = self._make_router("dep-1")
@@ -69,8 +125,7 @@ class TestGetDeploymentCooldownPolicy:
         assert allowed is None
 
     def test_no_model_info_returns_none_none(self):
-        router = MagicMock()
-        router.get_model_info.return_value = {"model_info": {}}
+        router = _ctx_double(deployment_dict={"model_info": {}})
         policy, allowed = _get_deployment_cooldown_policy(router, "dep-1")
         assert policy is None
         assert allowed is None
@@ -148,13 +203,8 @@ class TestResolveAllowedFailsFromPolicy:
 
 
 class TestShouldCooldownBasedOnDeploymentPolicy:
-    def _make_router(self, model_info: dict | None = None):
-        router = MagicMock()
-        if model_info is None:
-            router.get_model_info.return_value = None
-        else:
-            router.get_model_info.return_value = model_info
-        return router
+    def _make_router(self, model_info: dict | None = None) -> MagicMock:
+        return _ctx_double(deployment_dict=model_info)
 
     def test_policy_match_uses_exception_type_as_cache_key_suffix(self):
         policy = {"RateLimitErrorAllowedFails": 0}
@@ -313,91 +363,42 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 
 
 class TestShouldCooldownBasedOnAllowedFailsPolicy:
-    def _make_router(self, cooldown_time: float = 60.0, cache: DualCache | None = None) -> MagicMock:
-        router = MagicMock()
-        router.cooldown_time = cooldown_time
-        router.allowed_fails = 0
-        router.allowed_fails_policy = None
-        router.get_allowed_fails_from_policy.return_value = None
-        router.cache = cache if cache is not None else DualCache(in_memory_cache=InMemoryCache())
-        return router
+    def _make_router(self, cooldown_time: float = 60.0, store: RouterCooldowns | None = None) -> MagicMock:
+        ctx: Final = _ctx_double(cooldown_time=cooldown_time, allowed_fails=0)
+        ctx.health.return_value.cooldowns = CooldownCache(store or RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
+        return ctx
 
     def test_cooldown_time_override_zero_is_not_falsy(self):
-        """cooldown_time_override=0 must be honored; it must not fall through to the router-level value."""
-        router = self._make_router(cooldown_time=60.0)
-        router.cache = MagicMock()
-        router.cache.increment_cache.return_value = 1
-        exc = litellm.RateLimitError("429", "openai", "gpt-4")
-
-        should_cooldown_based_on_allowed_fails_policy(
-            litellm_router_instance=router,
-            deployment="dep-1",
-            original_exception=exc,
-            allowed_fails_override=5,
-            cooldown_time_override=0.0,
+        store: Final = MagicMock(spec=RouterCooldowns)
+        store.increment_allowed_fails.return_value = 1
+        ctx: Final = self._make_router(cooldown_time=60.0, store=store)
+        exc: Final = litellm.RateLimitError("429", "openai", "gpt-4")
+        assert not should_cooldown_based_on_allowed_fails_policy(
+            ctx=ctx, deployment="dep-1", original_exception=exc, allowed_fails_override=5, cooldown_time_override=0.0
         )
-
-        increment_call = router.cache.increment_cache.call_args
-        assert increment_call is not None
-        assert increment_call[1]["ttl"] == 0.0, (
-            "cooldown_time_override=0 should be used as TTL, not the router-level 60.0"
-        )
+        store.increment_allowed_fails.assert_called_once_with("dep-1", None, 0.0)
 
     def test_fail_counter_is_shared_across_router_instances(self):
-        """Two workers (two Router objects over one shared cache) must pool their failures toward allowed_fails."""
-        shared_cache = DualCache(in_memory_cache=InMemoryCache())
-        workers = (self._make_router(cache=shared_cache), self._make_router(cache=shared_cache))
-        exc = litellm.AuthenticationError("401", "openai", "gpt-4")
-
-        results = [
+        shared: Final = RouterCooldownStore(connect(None).router_cooldowns())
+        workers: Final = tuple(self._make_router(store=shared) for _ in range(2))
+        exc: Final = litellm.AuthenticationError("401", "openai", "gpt-4")
+        results: Final = [
             should_cooldown_based_on_allowed_fails_policy(
-                litellm_router_instance=workers[i % 2],
-                deployment="dep-1",
-                original_exception=exc,
-                allowed_fails_override=5,
+                ctx=workers[i % 2], deployment="dep-1", original_exception=exc, allowed_fails_override=5
             )
             for i in range(6)
         ]
-
         assert results == [False, False, False, False, False, True]
-        assert shared_cache.get_cache(key="deployment:dep-1:allowed_fails") == 6
 
-    def test_fleet_wide_count_from_redis_decides_cooldown(self):
-        """The Redis (fleet-wide) count decides, even when this process has only seen one failure."""
-        redis_cache = MagicMock()
-        redis_cache.increment_cache.return_value = 6
-        router = self._make_router(cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache))
-        exc = litellm.AuthenticationError("401", "openai", "gpt-4")
-
-        result = should_cooldown_based_on_allowed_fails_policy(
-            litellm_router_instance=router,
-            deployment="dep-1",
-            original_exception=exc,
-            allowed_fails_override=5,
+    def test_fleet_wide_count_from_the_store_decides_cooldown(self):
+        store: Final = MagicMock(spec=RouterCooldowns)
+        store.increment_allowed_fails.return_value = 6
+        ctx: Final = self._make_router(store=store)
+        exc: Final = litellm.AuthenticationError("401", "openai", "gpt-4")
+        assert should_cooldown_based_on_allowed_fails_policy(
+            ctx=ctx, deployment="dep-1", original_exception=exc, allowed_fails_override=5
         )
-
-        assert result is True
-        redis_cache.increment_cache.assert_called_once_with("deployment:dep-1:allowed_fails", 1, ttl=60.0)
-
-    def test_redis_outage_falls_back_to_this_workers_count(self):
-        """When every Redis increment fails, the worker's own in-memory count must still cool the deployment down."""
-        redis_cache = MagicMock()
-        redis_cache.increment_cache.side_effect = ConnectionError("redis down")
-        router = self._make_router(cache=DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache))
-        exc = litellm.AuthenticationError("401", "openai", "gpt-4")
-
-        results = [
-            should_cooldown_based_on_allowed_fails_policy(
-                litellm_router_instance=router,
-                deployment="dep-1",
-                original_exception=exc,
-                allowed_fails_override=5,
-            )
-            for _ in range(6)
-        ]
-
-        assert results == [False, False, False, False, False, True]
-        assert redis_cache.increment_cache.call_count == 6
+        store.increment_allowed_fails.assert_called_once_with("dep-1", None, 60.0)
 
 
 class TestRoutingGroupCooldownAlternatives:
@@ -434,7 +435,7 @@ class TestRoutingGroupCooldownAlternatives:
         )
         assert (
             _should_cooldown_deployment(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="cg-deploy-1",
                 exception_status=429,
                 original_exception=Exception("rate limited"),
@@ -457,7 +458,7 @@ class TestRoutingGroupCooldownAlternatives:
         )
         assert (
             _should_cooldown_deployment(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="cg-deploy-1",
                 exception_status=429,
                 original_exception=Exception("rate limited"),
@@ -472,7 +473,7 @@ class TestRoutingGroupCooldownAlternatives:
         router = self._router(routing_groups=None)
         assert (
             _should_cooldown_deployment(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="cg-deploy-1",
                 exception_status=429,
                 original_exception=Exception("rate limited"),
@@ -505,7 +506,7 @@ class TestTeamModelCooldownAlternatives:
         router = self._router(team_deployments=2)
         assert (
             _should_cooldown_deployment(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="team-deploy-0",
                 exception_status=429,
                 original_exception=Exception("rate limited"),
@@ -520,7 +521,7 @@ class TestTeamModelCooldownAlternatives:
         router = self._router(team_deployments=1)
         assert (
             _should_cooldown_deployment(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="team-deploy-0",
                 exception_status=429,
                 original_exception=Exception("rate limited"),
@@ -535,7 +536,7 @@ class TestTeamModelCooldownAlternatives:
         router = self._router(team_deployments=2, blocked_ids=frozenset({"team-deploy-1"}))
         assert (
             _should_cooldown_deployment(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="team-deploy-0",
                 exception_status=429,
                 original_exception=Exception("rate limited"),
@@ -543,38 +544,6 @@ class TestTeamModelCooldownAlternatives:
             )
             is False
         )
-
-
-class TestIncrementAllowedFailsServiceTarget:
-    def test_fail_counter_bump_declares_the_router_cooldowns_key_family(self):
-        """The allowed_fails INCR is cooldown bookkeeping, so its service span must read
-        ``redis.incr router_cooldowns`` rather than a bare ``redis.incr``."""
-        seen: list[str | None] = []
-        cache = MagicMock(spec=DualCache)
-
-        def _increment(**_kwargs):
-            seen.append(current_service_target())
-            return 2
-
-        cache.increment_cache.side_effect = _increment
-
-        assert _increment_allowed_fails(cache, "deployment:dep-1:fails", ttl=60.0) == 2
-        assert seen == ["router_cooldowns"]
-        assert current_service_target() is None
-
-    def test_in_memory_fallback_reads_under_the_same_target(self):
-        seen: list[str | None] = []
-        cache = MagicMock(spec=DualCache)
-        cache.increment_cache.side_effect = ConnectionError("redis down")
-
-        def _get(**_kwargs):
-            seen.append(current_service_target())
-            return 4
-
-        cache.get_cache.side_effect = _get
-
-        assert _increment_allowed_fails(cache, "deployment:dep-1:fails", ttl=60.0) == 4
-        assert seen == ["router_cooldowns"]
 
 
 @pytest.fixture()
@@ -637,7 +606,7 @@ class TestDeploymentLevelAllowedFails:
 
         _exception = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         should_cooldown = _should_cooldown_deployment(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="primary",
             exception_status=429,
             original_exception=_exception,
@@ -671,7 +640,7 @@ class TestDeploymentLevelAllowedFails:
 
         _exception = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         should_cooldown = _should_cooldown_deployment(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="secondary",
             exception_status=429,
             original_exception=_exception,
@@ -680,6 +649,47 @@ class TestDeploymentLevelAllowedFails:
         assert should_cooldown is False, (
             "secondary has no deployment-level policy; with allowed_fails=10 it should not cool down on first failure"
         )
+
+
+def _gpt_4_group_with_a_sibling() -> Sequence[Mapping[str, object]]:
+    return (
+        {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}},
+        {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "secondary"}},
+    )
+
+
+def _primary_cooldown_decisions_on_repeated_503s(router: Router) -> tuple[bool, ...]:
+    exception: Final = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+    return tuple(
+        _should_cooldown_deployment(
+            ctx=RoutingContext(router),
+            deployment="primary",
+            exception_status=503,
+            original_exception=exception,
+        )
+        for _ in range(litellm.allowed_fails + 1)
+    )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestRouterLevelAllowedFailsEqualToDefault:
+    def test_allowed_fails_equal_to_the_default_cools_down_after_that_many_fails(self):
+        router: Final = _make_router(
+            model_list=list(_gpt_4_group_with_a_sibling()), allowed_fails=litellm.allowed_fails
+        )
+
+        assert _primary_cooldown_decisions_on_repeated_503s(router) == (False,) * litellm.allowed_fails + (True,)
+
+    def test_unset_allowed_fails_keeps_the_rate_based_default(self):
+        router: Final = _make_router(model_list=list(_gpt_4_group_with_a_sibling()))
+
+        assert _primary_cooldown_decisions_on_repeated_503s(router) == (False,) * (litellm.allowed_fails + 1)
+
+    def test_default_allowed_fails_saved_through_update_settings_keeps_the_rate_based_default(self):
+        router: Final = _make_router(model_list=list(_gpt_4_group_with_a_sibling()))
+        router.update_settings(allowed_fails=litellm.allowed_fails)
+
+        assert _primary_cooldown_decisions_on_repeated_503s(router) == (False,) * (litellm.allowed_fails + 1)
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -708,7 +718,7 @@ class TestDeploymentLevelAllowedFailsPolicyByExceptionType:
 
         rate_limit_exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         should_cooldown = _should_cooldown_deployment(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="primary",
             exception_status=429,
             original_exception=rate_limit_exc,
@@ -741,7 +751,7 @@ class TestDeploymentLevelAllowedFailsPolicyByExceptionType:
 
         for _ in range(5):
             should_cooldown = _should_cooldown_deployment(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="primary",
                 exception_status=500,
                 original_exception=ise,
@@ -749,7 +759,7 @@ class TestDeploymentLevelAllowedFailsPolicyByExceptionType:
             assert should_cooldown is False, "Should not cooldown within the allowed_fails threshold"
 
         should_cooldown = _should_cooldown_deployment(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="primary",
             exception_status=500,
             original_exception=ise,
@@ -778,136 +788,57 @@ class TestExceptionTypeCountersTrackedIndependently:
         rate_limit_exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         ise = litellm.InternalServerError("Internal error", "openai", "gpt-4")
 
-        for _ in range(3):
+        assert [
             should_cooldown_based_on_allowed_fails_policy(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="primary",
                 original_exception=rate_limit_exc,
-                allowed_fails_override=5,
+                allowed_fails_override=3,
                 cache_key_suffix="RateLimitError",
             )
-
-        rl_counter = router.cache.get_cache(key="deployment:primary:allowed_fails:RateLimitError") or 0
-        generic_counter = router.cache.get_cache(key="deployment:primary:allowed_fails:generic") or 0
-
-        assert rl_counter == 3, "RateLimitError counter should be 3"
-        assert generic_counter == 0, "generic counter must be untouched by RateLimitError increments"
-
-        should_cooldown_based_on_allowed_fails_policy(
-            litellm_router_instance=router,
+            for _ in range(3)
+        ] == [False, False, False]
+        assert not should_cooldown_based_on_allowed_fails_policy(
+            ctx=RoutingContext(router),
             deployment="primary",
             original_exception=ise,
-            allowed_fails_override=5,
+            allowed_fails_override=1,
             cache_key_suffix="generic",
         )
-
-        generic_counter_after = router.cache.get_cache(key="deployment:primary:allowed_fails:generic") or 0
-        rl_counter_after = router.cache.get_cache(key="deployment:primary:allowed_fails:RateLimitError") or 0
-
-        assert generic_counter_after == 1, "generic counter should now be 1"
-        assert rl_counter_after == 3, "RateLimitError counter must remain unchanged after InternalServerError"
+        assert not should_cooldown_based_on_allowed_fails_policy(
+            ctx=RoutingContext(router),
+            deployment="primary",
+            original_exception=rate_limit_exc,
+            allowed_fails_override=4,
+            cache_key_suffix="RateLimitError",
+        )
+        assert should_cooldown_based_on_allowed_fails_policy(
+            ctx=RoutingContext(router),
+            deployment="primary",
+            original_exception=ise,
+            allowed_fails_override=1,
+            cache_key_suffix="generic",
+        )
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestCooldownCacheTTLCorrection:
-    def _make_cooldown_cache(self) -> CooldownCache:
-        in_memory = InMemoryCache()
-        dual_cache = DualCache(in_memory_cache=in_memory)
-        return CooldownCache(cache=dual_cache, default_cooldown_time=60.0)
-
-    def test_expired_entry_evicted_and_not_returned(self):
-        """
-        An entry with timestamp+cooldown_time in the past must be evicted from
-        in-memory cache and excluded from the active cooldown list.
-        """
-        cc = self._make_cooldown_cache()
-        model_id = "expired-deployment"
-        key = CooldownCache.get_cooldown_cache_key(model_id)
-
-        expired_value: CooldownCacheValue = {
-            "exception_received": "Rate limit",
-            "status_code": "429",
-            "timestamp": time.time() - 120.0,
-            "cooldown_time": 60.0,
-        }
-        cc.in_memory_cache.set_cache(key, expired_value, ttl=600)
-
-        active = cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
-
-        assert active == [], "Expired cooldown entry must not appear in active cooldowns"
-        assert cc.in_memory_cache.get_cache(key) is None, "Expired entry must be evicted from in-memory cache"
-
-    def test_active_entry_is_returned(self):
-        """
-        An entry whose cooldown window has not elapsed must appear in the active list.
-        """
-        cc = self._make_cooldown_cache()
-        model_id = "active-deployment"
-        key = CooldownCache.get_cooldown_cache_key(model_id)
-
-        active_value: CooldownCacheValue = {
-            "exception_received": "Rate limit",
-            "status_code": "429",
-            "timestamp": time.time(),
-            "cooldown_time": 60.0,
-        }
-        cc.in_memory_cache.set_cache(key, active_value, ttl=60)
-
-        active = cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
-
-        assert len(active) == 1
-        assert active[0][0] == model_id
-
-    def test_ttl_corrected_when_in_memory_expiry_far_exceeds_remaining(self):
-        """
-        When DualCache backfills from Redis using the default 600s TTL, the in-memory
-        TTL must be corrected to min(remaining, 60) seconds.
-        """
-        cc = self._make_cooldown_cache()
-        model_id = "backfilled-deployment"
-        key = CooldownCache.get_cooldown_cache_key(model_id)
-
-        remaining = 30.0
-        value: CooldownCacheValue = {
-            "exception_received": "Rate limit",
-            "status_code": "429",
-            "timestamp": time.time() - (60.0 - remaining),
-            "cooldown_time": 60.0,
-        }
-        cc.in_memory_cache.set_cache(key, value, ttl=600)
-
-        before_expiry = cc.in_memory_cache.ttl_dict.get(key)
-        assert before_expiry is not None
-
-        cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
-
-        after_expiry = cc.in_memory_cache.ttl_dict.get(key)
-        assert after_expiry is not None
-        corrected_remaining = after_expiry - time.time()
-        assert corrected_remaining <= 60.0, "Corrected TTL must not exceed 60s"
-        assert corrected_remaining > 0, "Corrected TTL must be positive (cooldown still active)"
-
+    @pytest.mark.parametrize(("age", "active"), ((120.0, False), (0.0, True)))
+    @pytest.mark.parametrize("asynchronous", (False, True))
     @pytest.mark.asyncio
-    async def test_async_expired_entry_evicted(self):
-        """
-        Async path must also evict expired entries.
-        """
-        cc = self._make_cooldown_cache()
-        model_id = "async-expired"
-        key = CooldownCache.get_cooldown_cache_key(model_id)
-
-        expired_value: CooldownCacheValue = {
-            "exception_received": "Rate limit",
-            "status_code": "429",
-            "timestamp": time.time() - 120.0,
-            "cooldown_time": 60.0,
-        }
-        cc.in_memory_cache.set_cache(key, expired_value, ttl=600)
-
-        active = await cc.async_get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
-
-        assert active == [], "Expired entry must not appear in async active cooldowns"
-        assert cc.in_memory_cache.get_cache(key) is None
+    async def test_only_unexpired_cooldowns_are_returned(self, age: float, active: bool, asynchronous: bool):
+        store: Final = RouterCooldownStore(connect(None).router_cooldowns())
+        cc: Final = CooldownCache(store, default_cooldown_time=60.0)
+        value: Final = CooldownCacheValue(
+            exception_received="Rate limit", status_code="429", timestamp=time.time() - age, cooldown_time=60.0
+        )
+        store.put("deployment", value, 600)
+        result: Final = (
+            await cc.async_get_active_cooldowns(("deployment",), None)
+            if asynchronous
+            else cc.get_active_cooldowns(("deployment",), None)
+        )
+        assert result == ([("deployment", value)] if active else [])
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -917,16 +848,14 @@ class TestFallbackDeploymentCooldown:
         _trigger_cooldown_for_failed_deployment must call set_cooldown_deployments
         with the deployment ID stamped on the exception.
         """
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _ctx_double(cooldown_time=60.0)
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router,
+                ctx=ctx,
                 kwargs={},
                 exception=exc,
             )
@@ -941,11 +870,11 @@ class TestFallbackDeploymentCooldown:
         _trigger_cooldown_for_failed_deployment must not raise and must skip
         set_cooldown_deployments when the exception has no failed_deployment_id.
         """
-        mock_router = MagicMock()
+        ctx = _ctx_double()
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router,
+                ctx=ctx,
                 kwargs={},
                 exception=RuntimeError("no stamped deployment id"),
             )
@@ -959,9 +888,7 @@ class TestFallbackDeploymentCooldown:
         set metadata must not be able to get an arbitrary deployment cooled down
         by forging a deployment_model_name marker.
         """
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _ctx_double(cooldown_time=60.0)
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         kwargs = {
@@ -973,7 +900,7 @@ class TestFallbackDeploymentCooldown:
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router,
+                ctx=ctx,
                 kwargs=kwargs,
                 exception=exc,
             )
@@ -986,9 +913,7 @@ class TestFallbackDeploymentCooldown:
         primary path uses, or repeated fallback failures never accumulate toward
         the default percent-fail-rate cooldown threshold.
         """
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _ctx_double(cooldown_time=60.0)
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
@@ -999,11 +924,9 @@ class TestFallbackDeploymentCooldown:
                 "litellm.router_utils.fallback_event_handlers.increment_deployment_failures_for_current_minute"
             ) as mock_increment,
         ):
-            _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
+            _trigger_cooldown_for_failed_deployment(ctx=ctx, kwargs={}, exception=exc)
 
-            mock_increment.assert_called_once_with(
-                litellm_router_instance=mock_router, deployment_id="fallback-deployment"
-            )
+            mock_increment.assert_called_once_with(ctx=ctx, deployment_id="fallback-deployment")
             mock_set_cooldown.assert_called_once()
 
     def test_trigger_cooldown_uses_deployment_cooldown_time_override(self):
@@ -1011,16 +934,14 @@ class TestFallbackDeploymentCooldown:
         When the deployment has a model_info.cooldown_time, that value must be
         passed as time_to_cooldown rather than the router-level cooldown_time.
         """
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 300.0
-        mock_router.get_model_info.return_value = {"model_info": {"cooldown_time": 30.0}}
+        ctx = _ctx_double(cooldown_time=300.0, deployment_dict={"model_info": {"cooldown_time": 30.0}})
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router,
+                ctx=ctx,
                 kwargs={},
                 exception=exc,
             )
@@ -1036,9 +957,7 @@ class TestFallbackDeploymentCooldown:
         deployment) must not cool down the fallback deployment, matching the same
         guard already applied in Router.deployment_callback_on_failure.
         """
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 60.0
-        mock_router.get_model_info.return_value = None
+        ctx = _ctx_double(cooldown_time=60.0)
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
@@ -1046,7 +965,7 @@ class TestFallbackDeploymentCooldown:
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router,
+                ctx=ctx,
                 kwargs={},
                 exception=exc,
             )
@@ -1060,16 +979,14 @@ class TestFallbackDeploymentCooldown:
         honored as a fallback when model_info doesn't set it, unlike the new
         allowed_fails/allowed_fails_policy fields which are model_info-only.
         """
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 300.0
-        mock_router.get_model_info.return_value = {"litellm_params": {"cooldown_time": 30.0}}
+        ctx = _ctx_double(cooldown_time=300.0, deployment_dict={"litellm_params": {"cooldown_time": 30.0}})
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router,
+                ctx=ctx,
                 kwargs={},
                 exception=exc,
             )
@@ -1080,19 +997,20 @@ class TestFallbackDeploymentCooldown:
             )
 
     def test_trigger_cooldown_prefers_model_info_cooldown_time_over_litellm_params(self):
-        mock_router = MagicMock()
-        mock_router.cooldown_time = 300.0
-        mock_router.get_model_info.return_value = {
-            "model_info": {"cooldown_time": 15.0},
-            "litellm_params": {"cooldown_time": 30.0},
-        }
+        ctx = _ctx_double(
+            cooldown_time=300.0,
+            deployment_dict={
+                "model_info": {"cooldown_time": 15.0},
+                "litellm_params": {"cooldown_time": 30.0},
+            },
+        )
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         exc.failed_deployment_id = "fallback-deployment"
 
         with patch("litellm.router_utils.fallback_event_handlers.set_cooldown_deployments") as mock_set_cooldown:
             _trigger_cooldown_for_failed_deployment(
-                litellm_router=mock_router,
+                ctx=ctx,
                 kwargs={},
                 exception=exc,
             )
@@ -1123,7 +1041,7 @@ class TestSingleDeploymentModelGroupProtection:
         exc = Exception("Internal error")
         for _ in range(2):
             should_cooldown = _should_cooldown_deployment(
-                litellm_router_instance=router,
+                ctx=RoutingContext(router),
                 deployment="solo",
                 exception_status=500,
                 original_exception=exc,
@@ -1153,7 +1071,7 @@ class TestSingleDeploymentModelGroupProtection:
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         should_cooldown = _should_cooldown_deployment(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="solo",
             exception_status=429,
             original_exception=exc,
@@ -1183,7 +1101,7 @@ class TestShouldCooldownBasedOnAllowedFailsPolicyFalsyZero:
 
         exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
         should_cooldown = should_cooldown_based_on_allowed_fails_policy(
-            litellm_router_instance=router,
+            ctx=RoutingContext(router),
             deployment="primary",
             original_exception=exc,
         )
@@ -1206,80 +1124,6 @@ class TestResolveAllowedFailsFromPolicyFallsThrough:
         exc = litellm.ContentPolicyViolationError("flagged", "openai", "gpt-4")
         result = _resolve_allowed_fails_from_policy(policy=policy, exception=exc)
         assert result == 3, "must fall through to BadRequestErrorAllowedFails when the more specific field is unset"
-
-
-@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-class TestDeploymentCallbackOnFailureCooldownTimePrecedence:
-    def test_model_info_cooldown_time_used_in_primary_sync_path(self):
-        """
-        Router.deployment_callback_on_failure (the primary sync failure-callback path,
-        as opposed to the fallback path covered by TestFallbackDeploymentCooldown) must
-        also honor a model_info.cooldown_time, not just litellm_params.cooldown_time.
-        """
-        router = _make_router(
-            model_list=[
-                {
-                    "model_name": "gpt-4",
-                    "litellm_params": {"model": "openai/gpt-4"},
-                    "model_info": {"id": "primary", "cooldown_time": 15.0},
-                },
-            ],
-        )
-
-        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
-        kwargs = {
-            "exception": exc,
-            "litellm_params": {
-                "model_info": {"id": "primary", "cooldown_time": 15.0},
-            },
-        }
-
-        with patch("litellm.router.set_cooldown_deployments") as mock_set_cooldown:
-            router.deployment_callback_on_failure(
-                kwargs=kwargs,
-                completion_response=None,
-                start_time=0,
-                end_time=1,
-            )
-
-            mock_set_cooldown.assert_called_once()
-            call_kwargs = mock_set_cooldown.call_args[1]
-            assert call_kwargs["time_to_cooldown"] == 15.0, (
-                "model_info.cooldown_time must be honored in the primary sync failure-callback path"
-            )
-
-    def test_litellm_params_cooldown_time_still_honored_as_fallback(self):
-        """cooldown_time has pre-existing litellm_params support on this primary
-        path; it must keep working when model_info doesn't set it."""
-        router = _make_router(
-            model_list=[
-                {
-                    "model_name": "gpt-4",
-                    "litellm_params": {"model": "openai/gpt-4", "cooldown_time": 20.0},
-                    "model_info": {"id": "primary"},
-                },
-            ],
-        )
-
-        exc = litellm.RateLimitError("Rate limit", "openai", "gpt-4")
-        kwargs = {
-            "exception": exc,
-            "litellm_params": {
-                "model_info": {"id": "primary"},
-                "cooldown_time": 20.0,
-            },
-        }
-
-        with patch("litellm.router.set_cooldown_deployments") as mock_set_cooldown:
-            router.deployment_callback_on_failure(
-                kwargs=kwargs,
-                completion_response=None,
-                start_time=0,
-                end_time=1,
-            )
-
-            call_kwargs = mock_set_cooldown.call_args[1]
-            assert call_kwargs["time_to_cooldown"] == 20.0, "litellm_params.cooldown_time must still be honored"
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -1348,8 +1192,8 @@ class TestCallerScopedOAuthAuthFailureCooldown:
         result: Final = self._callback(router, model_id, self._auth_exception(status))
 
         assert result is False
-        assert get_deployment_failures_for_current_minute(router, model_id) == 0
-        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+        assert get_deployment_failures_for_current_minute(RoutingContext(router), model_id) == 0
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", (401, 403))
@@ -1379,8 +1223,8 @@ class TestCallerScopedOAuthAuthFailureCooldown:
         result: Final = self._callback(router, model_id, self._auth_exception(status))
 
         assert result is False
-        assert get_deployment_failures_for_current_minute(router, model_id) == 0
-        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+        assert get_deployment_failures_for_current_minute(RoutingContext(router), model_id) == 0
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == []
 
     @pytest.mark.asyncio
     async def test_api_key_deployment_still_cools_down_on_401(self) -> None:
@@ -1393,8 +1237,8 @@ class TestCallerScopedOAuthAuthFailureCooldown:
             litellm.AuthenticationError("upstream rejected the API key", "openai", "gpt-4o-mini"),
         )
 
-        assert get_deployment_failures_for_current_minute(router, model_id) == 1
-        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+        assert get_deployment_failures_for_current_minute(RoutingContext(router), model_id) == 1
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("status", (429, 500))
@@ -1420,8 +1264,8 @@ class TestCallerScopedOAuthAuthFailureCooldown:
 
         self._callback(router, model_id, exception)
 
-        assert get_deployment_failures_for_current_minute(router, model_id) == 1
-        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+        assert get_deployment_failures_for_current_minute(RoutingContext(router), model_id) == 1
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
 
     @pytest.mark.parametrize("status", (401, 403))
     def test_fallback_oauth_caller_auth_failure_does_not_cooldown(self, status: int) -> None:
@@ -1437,10 +1281,10 @@ class TestCallerScopedOAuthAuthFailureCooldown:
         exception: Final = self._auth_exception(status)
         exception.failed_deployment_id = model_id
 
-        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+        _trigger_cooldown_for_failed_deployment(ctx=RoutingContext(router), kwargs={}, exception=exception)
 
-        assert get_deployment_failures_for_current_minute(router, model_id) == 0
-        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+        assert get_deployment_failures_for_current_minute(RoutingContext(router), model_id) == 0
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == []
 
     @pytest.mark.asyncio
     async def test_fallback_api_key_auth_failure_still_cools_down(self) -> None:
@@ -1449,10 +1293,10 @@ class TestCallerScopedOAuthAuthFailureCooldown:
         exception: Final = litellm.AuthenticationError("API key rejected", "openai", "gpt-4o-mini")
         exception.failed_deployment_id = model_id
 
-        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+        _trigger_cooldown_for_failed_deployment(ctx=RoutingContext(router), kwargs={}, exception=exception)
 
-        assert get_deployment_failures_for_current_minute(router, model_id) == 1
-        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+        assert get_deployment_failures_for_current_minute(RoutingContext(router), model_id) == 1
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -1518,7 +1362,7 @@ class TestPerUserCopilotAuthFailureCooldown:
         )
         result: Final = self._callback(router, model_id, exception)
         assert result is False
-        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == []
 
     @pytest.mark.asyncio
     async def test_shared_mode_copilot_auth_failure_still_cools_down(self) -> None:
@@ -1535,8 +1379,8 @@ class TestPerUserCopilotAuthFailureCooldown:
                 model_id,
                 litellm.AuthenticationError("upstream rejected the shared token", "github_copilot", "gpt-4o"),
             )
-        assert get_deployment_failures_for_current_minute(router, model_id) == 1
-        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+        assert get_deployment_failures_for_current_minute(RoutingContext(router), model_id) == 1
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
 
     @pytest.mark.asyncio
     async def test_fallback_per_user_caller_auth_failure_does_not_cooldown(
@@ -1563,9 +1407,9 @@ class TestPerUserCopilotAuthFailureCooldown:
         )
         exception.failed_deployment_id = model_id
 
-        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+        _trigger_cooldown_for_failed_deployment(ctx=RoutingContext(router), kwargs={}, exception=exception)
 
-        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == []
 
     @pytest.mark.asyncio
     async def test_fallback_shared_mode_auth_failure_still_cools_down(self) -> None:
@@ -1582,9 +1426,9 @@ class TestPerUserCopilotAuthFailureCooldown:
             )
             exception.failed_deployment_id = model_id
 
-            _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+            _trigger_cooldown_for_failed_deployment(ctx=RoutingContext(router), kwargs={}, exception=exception)
 
-        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
 
     @pytest.mark.asyncio
     async def test_fallback_rate_limit_on_per_user_deployment_does_not_cooldown(
@@ -1613,9 +1457,9 @@ class TestPerUserCopilotAuthFailureCooldown:
         exception: Final = litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o")
         exception.failed_deployment_id = model_id
 
-        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+        _trigger_cooldown_for_failed_deployment(ctx=RoutingContext(router), kwargs={}, exception=exception)
 
-        assert get_cooldown_deployments(router, parent_otel_span=None) == []
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == []
 
     @pytest.mark.asyncio
     async def test_fallback_rate_limit_on_shared_deployment_still_cools_down(self) -> None:
@@ -1634,9 +1478,9 @@ class TestPerUserCopilotAuthFailureCooldown:
             exception: Final = litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o")
             exception.failed_deployment_id = model_id
 
-            _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exception)
+            _trigger_cooldown_for_failed_deployment(ctx=RoutingContext(router), kwargs={}, exception=exception)
 
-        assert get_cooldown_deployments(router, parent_otel_span=None) == [model_id]
+        assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -1737,19 +1581,18 @@ async def test_router_cooldown_event_callback_no_deployment():
 
     In this scenario it should do nothing
     """
-    # Mock Router instance
-    mock_router = MagicMock()
-    mock_router.get_deployment.return_value = None
+    # Routing context whose registry has no such deployment
+    ctx = _ctx_double()
 
     await router_cooldown_event_callback(
-        litellm_router_instance=mock_router,
+        ctx=ctx,
         deployment_id="test-deployment",
         exception_status="429",
         cooldown_time=60.0,
     )
 
-    # Assert that the router's get_deployment method was called
-    mock_router.get_deployment.assert_called_once_with(model_id="test-deployment")
+    # Assert that the registry was asked for the deployment
+    ctx.registry().deployment.assert_called_once_with("test-deployment")
 
 
 @pytest.fixture
@@ -1779,15 +1622,21 @@ def testing_litellm_router():
 def test_should_run_cooldown_logic(testing_litellm_router):
     testing_litellm_router.disable_cooldowns = True
     # don't run cooldown logic if disable_cooldowns is True
-    assert _should_run_cooldown_logic(testing_litellm_router, "test_deployment", 500, Exception("Test")) is False
+    assert (
+        _should_run_cooldown_logic(RoutingContext(testing_litellm_router), "test_deployment", 500, Exception("Test"))
+        is False
+    )
 
     # don't cooldown if deployment is None
     testing_litellm_router.disable_cooldowns = False
-    assert _should_run_cooldown_logic(testing_litellm_router, None, 500, Exception("Test")) is False
+    assert _should_run_cooldown_logic(RoutingContext(testing_litellm_router), None, 500, Exception("Test")) is False
 
     # don't cooldown if it's a provider default deployment
     testing_litellm_router.provider_default_deployment_ids = ["test_deployment"]
-    assert _should_run_cooldown_logic(testing_litellm_router, "test_deployment", 500, Exception("Test")) is False
+    assert (
+        _should_run_cooldown_logic(RoutingContext(testing_litellm_router), "test_deployment", 500, Exception("Test"))
+        is False
+    )
 
 
 @pytest.fixture
@@ -1816,7 +1665,7 @@ def test_should_run_cooldown_logic_generic_bad_request_excluded_by_default(
     configured for that exception type. This is the pre-existing, intentional
     default: a client error is usually not the deployment's fault."""
     exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
-    assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is False
+    assert _should_run_cooldown_logic(RoutingContext(single_deployment_router), "dep-1", 400, exc) is False
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -1830,7 +1679,7 @@ def test_should_run_cooldown_logic_router_level_policy_does_not_override_bad_req
     see test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_content_policy_exclusion."""
     exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
     single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(BadRequestErrorAllowedFails=5)
-    assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is False
+    assert _should_run_cooldown_logic(RoutingContext(single_deployment_router), "dep-1", 400, exc) is False
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -1842,14 +1691,17 @@ def test_should_run_cooldown_logic_explicit_deployment_level_policy_overrides_co
     exc = litellm.ContentPolicyViolationError("flagged content", "openai", "gpt-5-mini")
     deployment_dict = single_deployment_router.get_model_info(id="dep-1")
     deployment_dict["model_info"]["allowed_fails_policy"] = {"ContentPolicyViolationErrorAllowedFails": 0}
-    assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 400, exc) is True
+    assert _should_run_cooldown_logic(RoutingContext(single_deployment_router), "dep-1", 400, exc) is True
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestHasExplicitAllowedFailsPolicyForException:
     def test_no_policy_anywhere_returns_false(self, single_deployment_router):
         exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
-        assert _has_explicit_allowed_fails_policy_for_exception(single_deployment_router, "dep-1", exc) is False
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(RoutingContext(single_deployment_router), "dep-1", exc)
+            is False
+        )
 
     def test_router_level_policy_for_matching_exception_returns_false(self, single_deployment_router):
         """Deliberately scoped to deployment-level only: a router-level policy
@@ -1857,23 +1709,35 @@ class TestHasExplicitAllowedFailsPolicyForException:
         opt-in for cooldown-gate purposes."""
         exc = litellm.RateLimitError("rate limited", "openai", "gpt-5-mini")
         single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(RateLimitErrorAllowedFails=3)
-        assert _has_explicit_allowed_fails_policy_for_exception(single_deployment_router, "dep-1", exc) is False
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(RoutingContext(single_deployment_router), "dep-1", exc)
+            is False
+        )
 
     def test_router_level_policy_for_different_exception_returns_false(self, single_deployment_router):
         exc = litellm.BadRequestError("bad request", "openai", "gpt-5-mini")
         single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(RateLimitErrorAllowedFails=3)
-        assert _has_explicit_allowed_fails_policy_for_exception(single_deployment_router, "dep-1", exc) is False
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(RoutingContext(single_deployment_router), "dep-1", exc)
+            is False
+        )
 
     def test_deployment_level_policy_for_matching_exception_returns_true(self, single_deployment_router):
         exc = litellm.ContentPolicyViolationError("flagged", "openai", "gpt-5-mini")
         deployment_dict = single_deployment_router.get_model_info(id="dep-1")
         deployment_dict["model_info"]["allowed_fails_policy"] = {"ContentPolicyViolationErrorAllowedFails": 0}
-        assert _has_explicit_allowed_fails_policy_for_exception(single_deployment_router, "dep-1", exc) is True
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(RoutingContext(single_deployment_router), "dep-1", exc)
+            is True
+        )
 
     def test_none_deployment_returns_false(self, single_deployment_router):
         exc = litellm.RateLimitError("rate limited", "openai", "gpt-5-mini")
         single_deployment_router.allowed_fails_policy = AllowedFailsPolicy(RateLimitErrorAllowedFails=3)
-        assert _has_explicit_allowed_fails_policy_for_exception(single_deployment_router, None, exc) is False
+        assert (
+            _has_explicit_allowed_fails_policy_for_exception(RoutingContext(single_deployment_router), None, exc)
+            is False
+        )
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -1883,7 +1747,9 @@ def test_should_cooldown_deployment_rate_limit_error(testing_litellm_router):
     """
     # Test 429 error (rate limit) -> always cooldown a deployment returning 429s
     _exception = litellm.exceptions.RateLimitError("Rate limit", "openai", "gpt-5-mini")
-    assert _should_cooldown_deployment(testing_litellm_router, "test_deployment", 429, _exception) is True
+    assert (
+        _should_cooldown_deployment(RoutingContext(testing_litellm_router), "test_deployment", 429, _exception) is True
+    )
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -1893,7 +1759,9 @@ def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
     """
     # Test 401 error (auth limit) -> always cooldown a deployment returning 401s
     _exception = litellm.exceptions.AuthenticationError("Unauthorized", "openai", "gpt-5-mini")
-    assert _should_cooldown_deployment(testing_litellm_router, "test_deployment", 401, _exception) is True
+    assert (
+        _should_cooldown_deployment(RoutingContext(testing_litellm_router), "test_deployment", 401, _exception) is True
+    )
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -1901,7 +1769,7 @@ def test_should_cooldown_deployment_auth_limit_error(testing_litellm_router):
 def test_is_cooldown_required_for_account_errors(testing_litellm_router, exception_status):
     assert (
         _is_cooldown_required(
-            litellm_router_instance=testing_litellm_router,
+            ctx=RoutingContext(testing_litellm_router),
             model_id="test_deployment",
             exception_status=exception_status,
         )
@@ -1916,15 +1784,17 @@ def test_single_deployment_402_does_not_cooldown(
 ) -> None:
     assert (
         _should_cooldown_deployment(
-            Router(
-                model_list=[
-                    {
-                        "model_name": "gpt-5-mini",
-                        "litellm_params": {"model": "gpt-5-mini"},
-                        "model_info": {"id": "dep-1"},
-                    },
-                ],
-                allowed_fails=allowed_fails,
+            RoutingContext(
+                Router(
+                    model_list=[
+                        {
+                            "model_name": "gpt-5-mini",
+                            "litellm_params": {"model": "gpt-5-mini"},
+                            "model_info": {"id": "dep-1"},
+                        },
+                    ],
+                    allowed_fails=allowed_fails,
+                )
             ),
             "dep-1",
             402,
@@ -1942,15 +1812,17 @@ def test_single_deployment_402_does_not_cooldown(
 def test_single_deployment_402_respects_router_allowed_fails_policy() -> None:
     assert (
         _should_cooldown_deployment(
-            Router(
-                model_list=[
-                    {
-                        "model_name": "gpt-5-mini",
-                        "litellm_params": {"model": "gpt-5-mini"},
-                        "model_info": {"id": "dep-1"},
-                    },
-                ],
-                allowed_fails_policy=AllowedFailsPolicy(BadRequestErrorAllowedFails=0),
+            RoutingContext(
+                Router(
+                    model_list=[
+                        {
+                            "model_name": "gpt-5-mini",
+                            "litellm_params": {"model": "gpt-5-mini"},
+                            "model_info": {"id": "dep-1"},
+                        },
+                    ],
+                    allowed_fails_policy=AllowedFailsPolicy(BadRequestErrorAllowedFails=0),
+                )
             ),
             "dep-1",
             402,
@@ -1968,17 +1840,19 @@ def test_single_deployment_402_respects_router_allowed_fails_policy() -> None:
 def test_single_deployment_402_respects_deployment_allowed_fails_policy() -> None:
     assert (
         _should_cooldown_deployment(
-            Router(
-                model_list=[
-                    {
-                        "model_name": "gpt-5-mini",
-                        "litellm_params": {"model": "gpt-5-mini"},
-                        "model_info": {
-                            "id": "dep-1",
-                            "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0},
+            RoutingContext(
+                Router(
+                    model_list=[
+                        {
+                            "model_name": "gpt-5-mini",
+                            "litellm_params": {"model": "gpt-5-mini"},
+                            "model_info": {
+                                "id": "dep-1",
+                                "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0},
+                            },
                         },
-                    },
-                ],
+                    ],
+                )
             ),
             "dep-1",
             402,
@@ -1996,7 +1870,7 @@ def test_single_deployment_402_respects_deployment_allowed_fails_policy() -> Non
 def test_multi_deployment_402_cools_down(testing_litellm_router: Router) -> None:
     assert (
         _should_cooldown_deployment(
-            testing_litellm_router,
+            RoutingContext(testing_litellm_router),
             "test_deployment",
             402,
             litellm.PaymentRequiredError(
@@ -2023,7 +1897,9 @@ async def test_should_cooldown_deployment(testing_litellm_router):
 
     # Test 429 error (rate limit) -> always cooldown a deployment returning 429s
     _exception = litellm.exceptions.RateLimitError("Rate limit", "openai", "gpt-5-mini")
-    assert _should_cooldown_deployment(testing_litellm_router, "test_deployment", 429, _exception) is True
+    assert (
+        _should_cooldown_deployment(RoutingContext(testing_litellm_router), "test_deployment", 429, _exception) is True
+    )
 
     available_deployment = testing_litellm_router.get_available_deployment(model="test_deployment")
     print("available_deployment", available_deployment)
@@ -2035,7 +1911,7 @@ async def test_should_cooldown_deployment(testing_litellm_router):
     # set current success for deployment to 40
     for _ in range(40):
         increment_deployment_successes_for_current_minute(
-            litellm_router_instance=testing_litellm_router, deployment_id=deployment_id
+            ctx=RoutingContext(testing_litellm_router), deployment_id=deployment_id
         )
 
     # now we fail 40 requests in a row
@@ -2057,7 +1933,10 @@ async def test_should_cooldown_deployment(testing_litellm_router):
     await asyncio.sleep(1)
 
     # expect this to fail since it's now 51% of requests are failing
-    assert _should_cooldown_deployment(testing_litellm_router, deployment_id, 500, Exception("Test")) is True
+    assert (
+        _should_cooldown_deployment(RoutingContext(testing_litellm_router), deployment_id, 500, Exception("Test"))
+        is True
+    )
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -2082,9 +1961,9 @@ async def test_should_cooldown_deployment_allowed_fails_set_on_router():
 
     # should not cooldown when fails are below the allowed limit
     for _ in range(100):
-        assert _should_cooldown_deployment(router, "test_deployment", 500, Exception("Test")) is False
+        assert _should_cooldown_deployment(RoutingContext(router), "test_deployment", 500, Exception("Test")) is False
 
-    assert _should_cooldown_deployment(router, "test_deployment", 500, Exception("Test")) is True
+    assert _should_cooldown_deployment(RoutingContext(router), "test_deployment", 500, Exception("Test")) is True
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
@@ -2098,7 +1977,6 @@ def test_increment_deployment_successes_for_current_minute_does_not_write_to_red
     """
     from litellm.caching.dual_cache import DualCache
     from litellm.caching.in_memory_cache import InMemoryCache
-    from litellm.caching.redis_cache import RedisCache
     from litellm.router_utils.router_callbacks.track_deployment_metrics import (
         increment_deployment_successes_for_current_minute,
     )
@@ -2110,11 +1988,11 @@ def test_increment_deployment_successes_for_current_minute_does_not_write_to_red
 
     # Call the function we're testing
     increment_deployment_successes_for_current_minute(
-        litellm_router_instance=testing_litellm_router, deployment_id="test_deployment"
+        ctx=RoutingContext(testing_litellm_router), deployment_id="test_deployment"
     )
 
     increment_deployment_failures_for_current_minute(
-        litellm_router_instance=testing_litellm_router, deployment_id="test_deployment"
+        ctx=RoutingContext(testing_litellm_router), deployment_id="test_deployment"
     )
 
     time.sleep(1)
@@ -2162,7 +2040,7 @@ def test_should_cooldown_high_traffic_all_fails(mock_failures, mock_successes, r
     mock_successes.return_value = 0
 
     should_cooldown = _should_cooldown_deployment(
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         deployment="gpt-4--0",
         exception_status=500,
         original_exception=Exception("Test error"),
@@ -2180,7 +2058,7 @@ def test_no_cooldown_low_traffic(mock_failures, mock_successes, router):
     mock_successes.return_value = 0
 
     should_cooldown = _should_cooldown_deployment(
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         deployment="gpt-4--0",
         exception_status=500,
         original_exception=Exception("Test error"),
@@ -2200,7 +2078,7 @@ def test_cooldown_rate_limit(mock_failures, mock_successes, router):
     mock_successes.return_value = 0
 
     should_cooldown = _should_cooldown_deployment(
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         deployment="gpt-4--0",
         exception_status=429,  # Rate limit error
         original_exception=Exception("Rate limit exceeded"),
@@ -2218,7 +2096,7 @@ def test_mixed_success_failure(mock_failures, mock_successes, router):
     mock_successes.return_value = 7
 
     should_cooldown = _should_cooldown_deployment(
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         deployment="gpt-4--0",
         exception_status=500,
         original_exception=Exception("Test error"),
@@ -2233,7 +2111,7 @@ def test_is_cooldown_required_empty_string_exception_status(testing_litellm_rout
     Test that _is_cooldown_required returns False when exception_status is an empty string
     """
     result = _is_cooldown_required(
-        litellm_router_instance=testing_litellm_router,
+        ctx=RoutingContext(testing_litellm_router),
         model_id="test_deployment",
         exception_status="",
     )
@@ -2265,13 +2143,15 @@ def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_ro
     # Simulate only 1 failure (below minimum threshold)
     # This should NOT trigger cooldown even though 100% > 50%
     increment_deployment_failures_for_current_minute(
-        litellm_router_instance=testing_litellm_router, deployment_id=deployment_id
+        ctx=RoutingContext(testing_litellm_router), deployment_id=deployment_id
     )
 
     _exception = litellm.exceptions.InternalServerError("Internal error", "openai", "gpt-5-mini")
 
     # With only 1 request, should NOT cooldown (below minimum threshold)
-    should_cooldown = _should_cooldown_deployment(testing_litellm_router, deployment_id, 500, _exception)
+    should_cooldown = _should_cooldown_deployment(
+        RoutingContext(testing_litellm_router), deployment_id, 500, _exception
+    )
     assert should_cooldown is False, (
         f"Should NOT cooldown with only 1 failed request (below minimum threshold of {DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS})"
     )
@@ -2279,11 +2159,13 @@ def test_should_cooldown_deployment_minimum_request_threshold(testing_litellm_ro
     # Now add more failures to reach the minimum threshold
     for _ in range(DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS - 1):
         increment_deployment_failures_for_current_minute(
-            litellm_router_instance=testing_litellm_router, deployment_id=deployment_id
+            ctx=RoutingContext(testing_litellm_router), deployment_id=deployment_id
         )
 
     # Now with enough requests (all failures), it SHOULD trigger cooldown
-    should_cooldown = _should_cooldown_deployment(testing_litellm_router, deployment_id, 500, _exception)
+    should_cooldown = _should_cooldown_deployment(
+        RoutingContext(testing_litellm_router), deployment_id, 500, _exception
+    )
     assert should_cooldown is True, (
         f"Should cooldown when we have {DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS} failed requests (100% failure rate)"
     )
@@ -2357,22 +2239,19 @@ async def test_cooldown_time_zero_uses_zero_not_default():
         num_retries=0,
     )
 
-    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown") as mock_add_cooldown:
-        try:
-            await router.acompletion(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hey, how's it going?"}],
-                mock_response="litellm.RateLimitError",
-            )
-        except litellm.RateLimitError:
-            pass
+    try:
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="litellm.RateLimitError",
+        )
+    except litellm.RateLimitError:
+        pass
 
-        mock_add_cooldown.assert_not_called()
-
-    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooldown_list = await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None)
     assert len(cooldown_list) == 0
 
-    healthy_deployments, _ = await router._async_get_healthy_deployments(model="gpt-3.5-turbo", parent_otel_span=None)
+    healthy_deployments = await router.select("gpt-3.5-turbo", {}, kind="healthy")
     assert len(healthy_deployments) == 1
 
 
@@ -2396,7 +2275,7 @@ def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
     )
 
     result = _should_run_cooldown_logic(
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         deployment="test-deployment-id",
         exception_status=429,
         original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
@@ -2405,7 +2284,7 @@ def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
     assert result is False, "Should not run cooldown logic when time_to_cooldown is 0"
 
     result = _should_run_cooldown_logic(
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         deployment="test-deployment-id",
         exception_status=429,
         original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
@@ -2414,7 +2293,7 @@ def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
     assert result is False, "Should not run cooldown logic when time_to_cooldown is effectively 0"
 
     result = _should_run_cooldown_logic(
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         deployment="test-deployment-id",
         exception_status=429,
         original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
@@ -2423,7 +2302,7 @@ def test_should_run_cooldown_logic_early_exit_on_zero_cooldown():
     assert result is True, "Should run cooldown logic when time_to_cooldown is None"
 
     result = _should_run_cooldown_logic(
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         deployment="test-deployment-id",
         exception_status=429,
         original_exception=litellm.RateLimitError("test error", "openai", "gpt-3.5-turbo"),
@@ -2451,20 +2330,17 @@ def test_single_deployment_no_cooldowns(num_deployments: int):
 
     router = Router(model_list=model_list, num_retries=0)
 
-    with patch.object(router.cooldown_cache, "add_deployment_to_cooldown", new=MagicMock()) as mock_client:
-        try:
-            router.completion(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hey, how's it going?"}],
-                mock_response="litellm.RateLimitError",
-            )
-        except litellm.RateLimitError:
-            pass
+    try:
+        router.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hey, how's it going?"}],
+            mock_response="litellm.RateLimitError",
+        )
+    except litellm.RateLimitError:
+        pass
 
-        if num_deployments == 1:
-            mock_client.assert_not_called()
-        else:
-            mock_client.assert_called_once()
+    cooled = get_cooldown_deployments(RoutingContext(router), parent_otel_span=None)
+    assert len(cooled) == (0 if num_deployments == 1 else 1)
 
 
 @pytest.mark.asyncio
@@ -2592,13 +2468,12 @@ async def test_high_traffic_cooldowns_all_healthy_deployments():
             await asyncio.sleep(0.0001)
         except litellm.InternalServerError:
             model_stats[model_id]["failures"] += 1
-            pass
         except Exception as e:
             print("Failed test model stats=", model_stats)
             raise e
     print("model_stats: ", model_stats)
 
-    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooldown_list = await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None)
     assert len(cooldown_list) == 0
 
 
@@ -2686,13 +2561,12 @@ async def test_high_traffic_cooldowns_one_bad_deployment():
             await asyncio.sleep(0.0001)
         except litellm.InternalServerError:
             model_stats[model_id]["failures"] += 1
-            pass
         except Exception as e:
             print("Failed test model stats=", model_stats)
             raise e
     print("model_stats: ", model_stats)
 
-    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooldown_list = await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None)
     assert len(cooldown_list) == 1
 
 
@@ -2780,16 +2654,14 @@ async def test_high_traffic_cooldowns_one_rate_limited_deployment():
             await asyncio.sleep(0.0001)
         except litellm.InternalServerError:
             model_stats[model_id]["failures"] += 1
-            pass
         except litellm.RateLimitError:
             model_stats[bad_deployment_id]["failures"] += 1
-            pass
         except Exception as e:
             print("Failed test model stats=", model_stats)
             raise e
     print("model_stats: ", model_stats)
 
-    cooldown_list = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooldown_list = await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None)
     assert len(cooldown_list) == 1
 
 
@@ -2855,7 +2727,7 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
             model="gpt-3.5-turbo", messages=messages, api_key="my-bad-key-1", mock_response="litellm.RateLimitError"
         )
     await asyncio.sleep(1)
-    assert await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
+    assert await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None) == []
 
     response = await router.acompletion(
         model="gpt-3.5-turbo", messages=messages, api_key="my-good-key-2", mock_response="served with credential 2"
@@ -2865,7 +2737,7 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
     with pytest.raises(litellm.RateLimitError):
         await router.acompletion(model="gpt-3.5-turbo", messages=messages, mock_response="litellm.RateLimitError")
     await asyncio.sleep(1)
-    cooled_down = await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+    cooled_down = await async_get_cooldown_deployments(ctx=RoutingContext(router), parent_otel_span=None)
     assert len(cooled_down) == 1 and cooled_down[0] in {"123", "456"}
 
 
@@ -2882,7 +2754,7 @@ async def test_router_fallbacks_with_cooldowns_and_dynamic_credentials():
 def test_caller_credential_errors_never_cool_down_the_shared_deployment(single_deployment_router, exception, status):
     """A per-user credential failure is scoped to one caller's stored token; cooling down the
     shared deployment would punish every other user on the group."""
-    assert _should_run_cooldown_logic(single_deployment_router, "dep-1", status, exception) is False
+    assert _should_run_cooldown_logic(RoutingContext(single_deployment_router), "dep-1", status, exception) is False
 
 
 @pytest.mark.asyncio
@@ -2923,7 +2795,7 @@ async def test_bad_request_error_does_not_cool_down_a_deployment(
         )
 
     cooldown_deployments: Final = await async_get_cooldown_deployments(
-        litellm_router_instance=router,
+        ctx=RoutingContext(router),
         parent_otel_span=None,
     )
 
@@ -2931,10 +2803,163 @@ async def test_bad_request_error_does_not_cool_down_a_deployment(
     assert tuple(cooldown_deployments) == ()
 
 
-@pytest.mark.parametrize("use_policy", [False, True], ids=["allowed_fails", "allowed_fails_policy"])
+async def _complete_like_the_proxy(router: Router, model: str) -> str:
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.datetime(2026, 1, 1),
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id=str(uuid.uuid4()),
+    )
+    response: Final = await router.acompletion(**request, litellm_logging_obj=logging_obj)
+    model_id: Final = response._hidden_params["model_id"]
+    assert isinstance(model_id, str)
+    return model_id
+
+
+_CHAT_COMPLETION_OK: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+def _openai_deployment(model_name: str, host: str, deployment_id: str) -> Mapping[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "openai/gpt-4o", "api_key": "k", "api_base": f"https://{host}/v1"},
+        "model_info": {"id": deployment_id},
+    }
+
+
 @pytest.mark.asyncio
-async def test_allowed_fails_cools_a_single_deployment(
-    use_policy: bool,
+async def test_fallback_deployment_stays_up_while_the_primary_is_in_cooldown(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://primary.test/v1/chat/completions").mock(
+        return_value=httpx.Response(503, json={"error": {"message": "down", "type": "server_error"}})
+    )
+    backup_route: Final = respx_mock.post("https://backup.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            _openai_deployment("primary", "primary.test", "primary-dep"),
+            _openai_deployment("backup", "backup.test", "backup-dep"),
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        allowed_fails=litellm.allowed_fails,
+        num_retries=0,
+    )
+
+    served_by: Final = [await _complete_like_the_proxy(router, "primary") for _ in range(20)]
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        ctx=RoutingContext(router),
+        parent_otel_span=None,
+    )
+
+    assert served_by == ["backup-dep"] * 20
+    assert len(backup_route.calls) == 20
+    assert tuple(cooldown_deployments) == ("primary-dep",)
+
+
+@pytest.mark.asyncio
+async def test_fallback_group_stays_up_after_a_bad_key_cools_the_primary_under_the_rate_based_default(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://primary.test/v1/chat/completions").mock(
+        return_value=httpx.Response(401, json={"error": {"message": "bad key", "type": "invalid_request_error"}})
+    )
+    respx_mock.post("https://backup.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=_CHAT_COMPLETION_OK)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            _openai_deployment("primary", "primary.test", "primary-dep"),
+            _openai_deployment("backup", "backup.test", "backup-1"),
+            _openai_deployment("backup", "backup.test", "backup-2"),
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    served_by: Final = [await _complete_like_the_proxy(router, "primary") for _ in range(12)]
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        ctx=RoutingContext(router),
+        parent_otel_span=None,
+    )
+
+    assert set(served_by) <= {"backup-1", "backup-2"}
+    assert tuple(cooldown_deployments) == ("primary-dep",)
+
+
+TIMED_OUT_DEPLOYMENT: Final = {
+    "model_name": "test-model",
+    "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
+    "model_info": {"id": "test-deployment"},
+}
+BACKUP_DEPLOYMENT: Final = {
+    "model_name": "backup-model",
+    "litellm_params": {"model": "openai/backup-model", "api_key": "test-key", "api_base": "https://backup.test/v1"},
+    "model_info": {"id": "backup-deployment"},
+}
+BACKUP_REPLY: Final = {
+    "id": "chatcmpl-backup",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "backup-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+async def _lone_call_outcome(router: Router) -> type[Exception]:
+    try:
+        await router.acompletion(model="test-model", messages=[{"role": "user", "content": "timeout test"}])
+    except (litellm.Timeout, RouterRateLimitError) as error:
+        return type(error)
+    pytest.fail("the timed-out deployment answered")
+
+
+BENCHED: Final = (litellm.Timeout, litellm.Timeout, RouterRateLimitError, RouterRateLimitError, RouterRateLimitError)
+
+
+@pytest.mark.parametrize(
+    ("router_kwargs", "model_info", "outcomes"),
+    [
+        ({"allowed_fails": 1}, {}, (litellm.Timeout,) * 5),
+        ({"allowed_fails": 1}, {"allowed_fails_policy": {}}, (litellm.Timeout,) * 5),
+        ({"allowed_fails_policy": AllowedFailsPolicy(RateLimitErrorAllowedFails=1)}, {}, (litellm.Timeout,) * 5),
+        ({"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}, {}, BENCHED),
+        ({"allowed_fails": 1, "fallbacks": [{"test-model": ["backup-model"]}]}, {}, BENCHED),
+        (
+            {"allowed_fails": 1, "fallbacks": [{"test-model": [{"model": "backup-model", "temperature": 0}]}]},
+            {},
+            BENCHED,
+        ),
+    ],
+    ids=[
+        "allowed_fails",
+        "allowed_fails_with_an_empty_deployment_policy",
+        "policy_names_another_exception",
+        "policy_names_timeout",
+        "allowed_fails_with_a_fallback_group",
+        "allowed_fails_with_a_dict_fallback_target",
+    ],
+)
+@pytest.mark.asyncio
+async def test_router_allowed_fails_benches_a_lone_deployment_only_when_the_policy_names_the_exception(
+    router_kwargs: Mapping[str, object],
+    model_info: Mapping[str, object],
+    outcomes: tuple[type[Exception], ...],
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2942,38 +2967,80 @@ async def test_allowed_fails_cools_a_single_deployment(
     route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
         side_effect=httpx.ReadTimeout("upstream timeout")
     )
-    policy_kwargs: Final = (
-        {"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}
-        if use_policy
-        else {"allowed_fails": 1}
+    deployment: Final = {**TIMED_OUT_DEPLOYMENT, "model_info": {**TIMED_OUT_DEPLOYMENT["model_info"], **model_info}}
+    router: Final = Router(model_list=[deployment], cooldown_time=300, num_retries=0, **router_kwargs)
+
+    seen: Final = tuple([await _lone_call_outcome(router) for _ in range(5)])
+
+    assert seen == outcomes
+    assert len(route.calls) == outcomes.count(litellm.Timeout)
+
+
+@pytest.mark.parametrize(
+    ("fallbacks", "expected"),
+    [
+        ([{"test-model": "backup-model"}], True),
+        ([{"*": "backup-model"}], True),
+        ([{"test-model": ["backup-model"]}], True),
+        ([{"test-model": 5}, {"*": "backup-model"}], True),
+        ([{"test-model": 5}], False),
+        ([{"other-model": ["backup-model"]}], False),
+    ],
+    ids=[
+        "string_target",
+        "string_catch_all_from_default_fallbacks",
+        "list_target",
+        "unparseable_entry_does_not_hide_the_catch_all",
+        "unparseable_entry_alone",
+        "another_groups_chain",
+    ],
+)
+def test_has_fallback_group_reads_string_targets_and_skips_unparseable_entries(
+    fallbacks: Sequence[Mapping[str, object]], expected: bool
+) -> None:
+    router: Final = Router(model_list=[TIMED_OUT_DEPLOYMENT])
+    router.fallbacks = list(fallbacks)
+
+    assert _has_fallback_group(RoutingContext(router), "test-model") is expected
+
+
+async def _group_call_outcome(router: Router) -> str:
+    try:
+        response: Final = await router.acompletion(
+            model="test-model", messages=[{"role": "user", "content": "timeout test"}]
+        )
+    except litellm.Timeout:
+        return "timeout"
+    return response.id
+
+
+@pytest.mark.asyncio
+async def test_router_allowed_fails_still_benches_a_deployment_that_has_a_sibling_in_its_group(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    timed_out: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=httpx.ReadTimeout("upstream timeout")
     )
+    respx_mock.post("https://backup.test/v1/chat/completions").mock(return_value=httpx.Response(200, json=BACKUP_REPLY))
     router: Final = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
-                "model_info": {"id": "test-deployment"},
-            }
-        ],
+        model_list=[TIMED_OUT_DEPLOYMENT, {**BACKUP_DEPLOYMENT, "model_name": "test-model"}],
         cooldown_time=300,
         num_retries=0,
-        **policy_kwargs,
+        allowed_fails=1,
     )
 
-    for _ in range(2):
-        with pytest.raises(litellm.Timeout):
-            await router.acompletion(
-                model="test-model",
-                messages=[{"role": "user", "content": "timeout test"}],
-            )
-
+    while len(timed_out.calls) < 2:
+        await _group_call_outcome(router)
     cooldown_deployments: Final = await async_get_cooldown_deployments(
-        litellm_router_instance=router,
-        parent_otel_span=None,
+        ctx=RoutingContext(router), parent_otel_span=None
     )
+    served: Final = tuple([await _group_call_outcome(router) for _ in range(5)])
 
-    assert len(route.calls) == 2
     assert tuple(cooldown_deployments) == ("test-deployment",)
+    assert served == ("chatcmpl-backup",) * 5
+    assert len(timed_out.calls) == 2
 
 
 def test_per_user_session_upstream_errors_never_cool_down_the_shared_deployment(single_deployment_router):
@@ -2992,7 +3059,9 @@ def test_per_user_session_upstream_errors_never_cool_down_the_shared_deployment(
         (litellm.InternalServerError("copilot 500", "github_copilot", "gpt-4o"), 500),
     ):
         assert (
-            _should_run_cooldown_logic(single_deployment_router, "dep-1", status, exc, request_kwargs=session_kwargs)
+            _should_run_cooldown_logic(
+                RoutingContext(single_deployment_router), "dep-1", status, exc, request_kwargs=session_kwargs
+            )
             is False
         )
 
@@ -3003,11 +3072,15 @@ def test_shared_mode_upstream_429_still_cools_down_the_deployment(single_deploym
     exc = litellm.RateLimitError("copilot 429", "github_copilot", "gpt-4o")
     assert (
         _should_run_cooldown_logic(
-            single_deployment_router, "dep-1", 429, exc, request_kwargs={"model": "github_copilot/gpt-4o"}
+            RoutingContext(single_deployment_router),
+            "dep-1",
+            429,
+            exc,
+            request_kwargs={"model": "github_copilot/gpt-4o"},
         )
         is True
     )
-    assert _should_run_cooldown_logic(single_deployment_router, "dep-1", 429, exc) is True
+    assert _should_run_cooldown_logic(RoutingContext(single_deployment_router), "dep-1", 429, exc) is True
 
 
 REFUSAL_MESSAGES: Final = [{"role": "user", "content": "cooldown"}]
@@ -3299,33 +3372,6 @@ def test_naming_tag_routed_deployments_leaves_the_request_metadata_untouched() -
     assert metadata == {"tags": ["tenant-a"]}
 
 
-@pytest.mark.parametrize(
-    ("has_request_input", "expected"), ((True, (TENANT_A, SHARED)), (False, EVERY_TENANT)), ids=("chat", "no-input")
-)
-def test_region_routable_deployments_follow_the_pre_call_region_check(
-    has_request_input: bool, expected: tuple[CooldownDeploymentInfo, ...]
-) -> None:
-    router: Final = _tenant_router((), **REGION_CHECKS_ON)
-    kept: Final = router._region_routable_deployments(
-        router.get_model_list(model_name="tenants") or [], {"allowed_model_region": "eu"}, has_request_input
-    )
-    assert router._deployment_ids(kept) == frozenset(deployment["model_id"] for deployment in expected)
-
-
-def test_routable_cooled_deployment_ids_skip_healthy_deployments_and_peel_tag_fallbacks() -> None:
-    router: Final = _tenant_router((TENANT_A, SHARED), **TAGS_ON)
-    routable: Final = asyncio.run(
-        router._async_routable_cooled_deployment_ids(
-            model="tenants",
-            request_deployments=router.get_model_list(model_name="tenants") or [],
-            cooldown_deployments=(TENANT_A["model_id"], SHARED["model_id"]),
-            request_kwargs={"metadata": {}},
-            has_request_input=True,
-        )
-    )
-    assert routable == frozenset((TENANT_A["model_id"], SHARED["model_id"]))
-
-
 REACHABILITY_REQUESTS: Final = (
     {"metadata": {"tags": ["tenant-a"]}},
     {"metadata": {}},
@@ -3363,3 +3409,25 @@ def test_the_refusal_names_each_cooled_deployment_some_cooldown_state_routes_the
     with pytest.raises(RouterRateLimitError) as refusal:
         _select(_tenant_router(EVERY_TENANT, **BOTH_ON), "async", "tenants", copy.deepcopy(request_kwargs))
     assert {deployment["model_id"] for deployment in refusal.value.cooldown_deployments or ()} == reachable
+
+
+@pytest.mark.parametrize(
+    ("status_code", "call_type", "expected"),
+    [
+        (404, "aget_responses", True),
+        (404, "adelete_responses", True),
+        (404, "acancel_responses", True),
+        (404, "alist_input_items", True),
+        (404, "get_responses", True),
+        (404, "aresponses", False),
+        (404, "acompact_responses", False),
+        (404, "acompletion", False),
+        (500, "aget_responses", False),
+        (429, "alist_input_items", False),
+    ],
+)
+def test_is_response_lookup_not_found(status_code: int, call_type: str, expected: bool) -> None:
+    error: Final = litellm.NotFoundError(message="gone", llm_provider="openai", model="gpt-4o-mini")
+    error.status_code = status_code
+
+    assert is_response_lookup_not_found(error, {"call_type": call_type}) is expected

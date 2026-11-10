@@ -23,6 +23,8 @@ from litellm.types.mcp import (
 def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
     if "protocol_version" in value:
         TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
+    if "skip_tool_output_validation" in value:
+        TypeAdapter[bool](bool).validate_python(value["skip_tool_output_validation"], strict=True)
     return value
 
 
@@ -204,9 +206,11 @@ class MCPServer(LiteLLMBaseModel):
     access_groups: list[str] | None = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
-    # Legacy opt-in to upstream-delegated authentication for ``oauth2``
-    # servers. LiteLLM admission still applies; use ``oauth_delegate`` for the
-    # supported client-forwarded OAuth flow.
+    # Deprecated opt-in to upstream-delegated authentication for ``oauth2``
+    # servers. A bare ``Authorization`` that is not a LiteLLM credential is the
+    # upstream token and is forwarded; see
+    # ``MCPRequestHandler._admit_legacy_delegate_bearer``. New servers should use
+    # ``true_passthrough`` or ``oauth_delegate``.
     #
     # Honored only for ``auth_type == oauth2``; ignored for any other
     # ``auth_type``. OAuth pass-through for non-oauth2 servers
@@ -294,6 +298,10 @@ class MCPServer(LiteLLMBaseModel):
         breaking regression introduced with the M2M feature.
         """
         return self.oauth2_flow == "client_credentials"
+
+    @property
+    def skip_tool_output_validation(self) -> bool:
+        return (self.mcp_info or {}).get("skip_tool_output_validation") is True
 
     @model_validator(mode="after")
     def resolve_protocol_version(self) -> Self:

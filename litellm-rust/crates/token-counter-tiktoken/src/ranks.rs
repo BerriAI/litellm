@@ -1,10 +1,10 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
+use litellm_error::Source;
 use once_cell::sync::OnceCell;
 use rustc_hash::FxHashMap;
-use thiserror::Error;
 use tiktoken_rs::{CoreBPE, O200K_BASE_PAT_STR, Rank};
 
-use crate::UnsupportedTokenizer;
+use crate::error::{Error, RankError};
 
 const CL100K: &str = "9b5ad71b2ce5302211f9c61530b329a4922fc6a4";
 const O200K: &str = "fb374d419588a4632f3f557e76b4b70aebbca790";
@@ -76,22 +76,30 @@ impl Vocabulary {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum LoadError {
-    #[error(transparent)]
-    Unsupported(#[from] UnsupportedTokenizer),
-    #[error("failed to load tiktoken ranks: {0}")]
-    Ranks(String),
-}
-
 /// Loads `name` once per process. The returned name is the one requested (`gpt2` stays
 /// `gpt2`, as `tiktoken.get_encoding("gpt2").name` does), while `gpt2` and `r50k_base` share
 /// one cached encoder.
 pub(super) fn load(
     name: &str,
     load_file: impl FnOnce(&str) -> std::io::Result<String>,
-) -> Result<(&'static Loaded, &'static str), LoadError> {
-    let (requested, canonical, file, cache) = match name {
+) -> Result<(&'static Loaded, &'static str), Error> {
+    let (requested, canonical, file, cache) = encoding(name)?;
+    let loaded = cache.get_or_try_init(|| {
+        let ranks = load_file(file).map_err(|source| Error::Read { file, source })?;
+        build(canonical, &ranks)
+    })?;
+    Ok((loaded, requested))
+}
+
+type Encoding = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static OnceCell<Loaded>,
+);
+
+fn encoding(name: &str) -> Result<Encoding, Error> {
+    Ok(match name {
         "cl100k_base" => ("cl100k_base", "cl100k_base", CL100K, &CL100K_ENCODER),
         "o200k_base" => ("o200k_base", "o200k_base", O200K, &O200K_ENCODER),
         "o200k_harmony" => ("o200k_harmony", "o200k_harmony", O200K, &HARMONY_ENCODER),
@@ -99,16 +107,11 @@ pub(super) fn load(
         "p50k_edit" => ("p50k_edit", "p50k_edit", P50K, &EDIT_ENCODER),
         "r50k_base" => ("r50k_base", "r50k_base", P50K, &R50K_ENCODER),
         "gpt2" => ("gpt2", "r50k_base", P50K, &R50K_ENCODER),
-        _ => return Err(UnsupportedTokenizer(name.to_owned()).into()),
-    };
-    let loaded = cache.get_or_try_init(|| {
-        let ranks = load_file(file).map_err(|error| LoadError::Ranks(error.to_string()))?;
-        build(canonical, &ranks)
-    })?;
-    Ok((loaded, requested))
+        _ => return Err(Error::UnsupportedTokenizer(name.to_owned())),
+    })
 }
 
-fn build(name: &str, ranks: &str) -> Result<Loaded, LoadError> {
+fn build(name: &str, ranks: &str) -> Result<Loaded, Error> {
     let parsed = ranks
         .lines()
         .map(parse_rank)
@@ -122,9 +125,11 @@ fn build(name: &str, ranks: &str) -> Result<Loaded, LoadError> {
         .collect::<std::collections::HashSet<_>>()
         .len()
         != encoder.len()
-        || (0..=u8::MAX).any(|byte| !encoder.contains_key(&[byte][..]))
     {
-        return Err(LoadError::Ranks("invalid vocabulary ranks".into()));
+        return Err(RankError::DuplicateRank.into());
+    }
+    if let Some(byte) = (0..=u8::MAX).find(|byte| !encoder.contains_key(&[*byte][..])) {
+        return Err(RankError::MissingByte(byte).into());
     }
     let (pattern, specials): (&str, &[(&str, Rank)]) = match name {
         "cl100k_base" => (
@@ -185,9 +190,12 @@ fn build(name: &str, ranks: &str) -> Result<Loaded, LoadError> {
         .chain(special_tokens.values())
         .copied()
         .max()
-        .ok_or_else(|| LoadError::Ranks("empty vocabulary".into()))?;
-    let bpe = CoreBPE::new(encoder.clone(), special_tokens.clone(), pattern)
-        .map_err(|error| LoadError::Ranks(error.to_string()))?;
+        .unwrap_or_default();
+    let bpe = CoreBPE::new(encoder.clone(), special_tokens.clone(), pattern).map_err(|error| {
+        Error::Encoder(Source::from(
+            Box::<dyn std::error::Error + Send + Sync>::from(error),
+        ))
+    })?;
     Ok(Loaded {
         bpe,
         vocabulary: Vocabulary {
@@ -198,16 +206,12 @@ fn build(name: &str, ranks: &str) -> Result<Loaded, LoadError> {
     })
 }
 
-fn parse_rank(line: &str) -> Result<(Vec<u8>, Rank), LoadError> {
+fn parse_rank(line: &str) -> Result<(Vec<u8>, Rank), RankError> {
     let (token, rank) = line
         .split_once(' ')
-        .ok_or_else(|| LoadError::Ranks("missing rank".into()))?;
-    let bytes = STANDARD
-        .decode(token)
-        .map_err(|error| LoadError::Ranks(error.to_string()))?;
-    let rank = rank
-        .parse()
-        .map_err(|error: std::num::ParseIntError| LoadError::Ranks(error.to_string()))?;
+        .ok_or_else(|| RankError::MissingRank(line.to_owned()))?;
+    let bytes = STANDARD.decode(token).map_err(RankError::InvalidToken)?;
+    let rank = rank.parse().map_err(RankError::InvalidRank)?;
     Ok((bytes, rank))
 }
 
@@ -226,79 +230,117 @@ mod tests {
         )
     }
 
-    #[test]
-    fn packaged_encodings_match_embedded_encodings_and_reuse_successful_loads() {
-        for name in [
+    #[rstest]
+    #[case::cl100k_base("cl100k_base", None)]
+    #[case::o200k_base("o200k_base", None)]
+    #[case::o200k_harmony("o200k_harmony", None)]
+    #[case::p50k_base("p50k_base", None)]
+    #[case::p50k_edit("p50k_edit", None)]
+    #[case::r50k_base_shared_with_gpt2("r50k_base", Some("gpt2"))]
+    fn packaged_encodings_load_once_and_match_embedded_encodings(
+        #[case] name: &str,
+        #[case] alias: Option<&str>,
+    ) {
+        assert!(
+            TiktokenTokenizer::from_cached_ranks(name, |_| {
+                Err(std::io::Error::other("unreadable vocabulary"))
+            })
+            .is_err()
+        );
+        let loads = std::sync::atomic::AtomicUsize::new(0);
+        let barrier = std::sync::Barrier::new(4);
+        let encoders = std::thread::scope(|scope| {
+            let tasks: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        TiktokenTokenizer::from_cached_ranks(name, |file| {
+                            loads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            read_packaged_ranks(file)
+                        })
+                        .unwrap()
+                    })
+                })
+                .collect();
+            tasks
+                .into_iter()
+                .map(|task| task.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(loads.into_inner(), 1);
+        let actual = &encoders[0];
+        let expected = TiktokenTokenizer::from_name(name).unwrap();
+        assert_eq!(actual.special_tokens(), expected.special_tokens());
+        let specials: Vec<_> = expected.special_tokens().into_iter().collect();
+        let special_text = specials.join(" ");
+        assert_eq!(
+            actual.encode_special(&special_text, &specials).unwrap(),
+            expected.encode_special(&special_text, &specials).unwrap()
+        );
+        assert_eq!(actual.encode(&special_text), expected.encode(&special_text));
+        let cached =
+            TiktokenTokenizer::from_cached_ranks(name, |_| panic!("reloaded cached vocabulary"))
+                .unwrap();
+        assert_eq!(cached.encode("cached"), expected.encode("cached"));
+        assert_eq!(cached.name(), name);
+        assert!(expected.vocabulary().is_none());
+        assert_vocabulary_lookups(name, actual);
+        if let Some(alias) = alias {
+            let shared = TiktokenTokenizer::from_cached_ranks(alias, |_| {
+                panic!("reloaded the shared vocabulary")
+            })
+            .unwrap();
+            assert_eq!(shared.name(), alias);
+            assert_vocabulary_lookups(alias, &shared);
+        }
+    }
+
+    fn uncached(name: &str) -> TiktokenTokenizer {
+        static BUILT: std::sync::Mutex<Vec<(&'static str, &'static Loaded)>> =
+            std::sync::Mutex::new(Vec::new());
+        let (requested, canonical, file, _) = encoding(name).unwrap();
+        let mut built = BUILT.lock().unwrap();
+        let loaded = match built.iter().find(|(built, _)| *built == requested) {
+            Some((_, loaded)) => *loaded,
+            None => {
+                let ranks = read_packaged_ranks(file).unwrap();
+                let loaded: &'static Loaded =
+                    Box::leak(Box::new(build(canonical, &ranks).unwrap()));
+                built.push((requested, loaded));
+                loaded
+            }
+        };
+        TiktokenTokenizer {
+            encoder: &loaded.bpe,
+            vocabulary: Some(&loaded.vocabulary),
+            name: requested,
+        }
+    }
+
+    #[rstest]
+    fn packaged_ranks_encode_like_embedded_encodings(
+        #[values(
             "cl100k_base",
             "o200k_base",
             "o200k_harmony",
             "p50k_base",
             "p50k_edit",
             "r50k_base",
-            "gpt2",
-        ] {
-            if name != "gpt2" {
-                assert!(
-                    TiktokenTokenizer::from_cached_ranks(name, |_| {
-                        Err(std::io::Error::other("unreadable vocabulary"))
-                    })
-                    .is_err()
-                );
-            }
-            let loads = std::sync::atomic::AtomicUsize::new(0);
-            let barrier = std::sync::Barrier::new(4);
-            let encoders = std::thread::scope(|scope| {
-                let tasks: Vec<_> = (0..4)
-                    .map(|_| {
-                        scope.spawn(|| {
-                            barrier.wait();
-                            TiktokenTokenizer::from_cached_ranks(name, |file| {
-                                loads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                read_packaged_ranks(file)
-                            })
-                            .unwrap()
-                        })
-                    })
-                    .collect();
-                tasks
-                    .into_iter()
-                    .map(|task| task.join().unwrap())
-                    .collect::<Vec<_>>()
-            });
-            assert_eq!(loads.into_inner(), usize::from(name != "gpt2"));
-            let actual = &encoders[0];
-            let expected = TiktokenTokenizer::from_name(name).unwrap();
-            assert_eq!(actual.special_tokens(), expected.special_tokens());
-            let specials: Vec<_> = expected.special_tokens().into_iter().collect();
-            let special_text = specials.join(" ");
-            assert_eq!(
-                actual.encode_special(&special_text, &specials).unwrap(),
-                expected.encode_special(&special_text, &specials).unwrap()
-            );
-            for text in [
-                "",
-                "café 漢字 ع 🙂",
-                "a\r\nb\t ",
-                "       hello 123456789",
-                &special_text,
-            ] {
-                let ids = expected.encode(text);
-                assert_eq!(actual.encode(text), ids, "{name}: {text:?}");
-                assert_eq!(actual.count_tokens(text), ids.len(), "{name}: {text:?}");
-                assert_eq!(
-                    actual.decode_bytes(&ids).unwrap(),
-                    expected.decode_bytes(&ids).unwrap()
-                );
-            }
-            let cached = TiktokenTokenizer::from_cached_ranks(name, |_| {
-                panic!("reloaded cached vocabulary")
-            })
-            .unwrap();
-            assert_eq!(cached.encode("cached"), expected.encode("cached"));
-            assert_eq!(cached.name(), name);
-            assert!(expected.vocabulary().is_none());
-            assert_vocabulary_lookups(name, actual);
-        }
+            "gpt2"
+        )]
+        name: &str,
+        #[values("", "café 漢字 ع 🙂", "a\r\nb\t ", "       hello 123456789")] text: &str,
+    ) {
+        let actual = uncached(name);
+        let expected = TiktokenTokenizer::from_name(name).unwrap();
+
+        let ids = expected.encode(text);
+        assert_eq!(actual.encode(text), ids);
+        assert_eq!(actual.count_tokens(text), ids.len());
+        assert_eq!(
+            actual.decode_bytes(&ids).unwrap(),
+            expected.decode_bytes(&ids).unwrap()
+        );
     }
 
     /// The token-level lookups tiktoken's Python `Encoding` exposes, checked against the

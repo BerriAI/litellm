@@ -1,42 +1,46 @@
 import asyncio
 import contextlib
 import gc
+import json
 import threading
 import weakref
-import httpx
-import json
-import litellm
-import pytest
-import redis
-import respx
-
-
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from datetime import datetime
 from types import SimpleNamespace
-from uuid import uuid4
 from typing import Final
 from unittest.mock import MagicMock
+from uuid import uuid4
 
+import httpx
+import pytest
+import redis
+import respx
 from fakeredis import TcpFakeServer
 from fastapi import HTTPException
 
+import litellm
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_deployment
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyModelNotFoundError,
     UserConfigRouters,
+    endpoint_unsupported_by_model,
     route_request,
     user_config_routers,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.router_api import RouterSettings
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
     ADAPTIVE_ROUTER_RESPONSE_HEADER,
 )
 from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
+from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
 @pytest.mark.parametrize(
@@ -60,7 +64,7 @@ async def test_route_request_dynamic_credentials(route_type, required_body_param
         "api_base": "https://api.openai.com/v1 ",
         **required_body_params,
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     # Ensure that the dynamic method exists on the llm_router mock.
     getattr(llm_router, route_type).return_value = "fake_response"
 
@@ -74,7 +78,6 @@ async def test_route_request_dynamic_credentials(route_type, required_body_param
 @pytest.mark.asyncio
 async def test_route_request_proxy_admin_can_call_all_team_scoped_deployments_without_team_id():
     import litellm
-
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
     router = litellm.Router(
@@ -283,7 +286,7 @@ async def test_route_request_no_model_required():
         # Test data without model parameter
         data = {"input": "test input", "query": "test query", "api_key": "test-key"}
 
-        llm_router = MagicMock()
+        llm_router = route_entry_points_to_stubs(MagicMock())
         getattr(llm_router, route_type).return_value = "fake_response"
 
         response = await route_request(data, llm_router, None, route_type)
@@ -316,7 +319,7 @@ async def test_route_request_no_model_required_with_router_settings():
             "model": "test-model",  # Include dummy model to avoid KeyError
         }
 
-        llm_router = MagicMock()
+        llm_router = route_entry_points_to_stubs(MagicMock())
         # Set up router settings
         llm_router.router_general_settings.pass_through_all_models = False
         llm_router.default_deployment = None
@@ -356,7 +359,7 @@ async def test_route_request_vector_store_routes_model_none_no_api_key_in_body()
     ]
 
     for route_type, data in cases:
-        llm_router = MagicMock()
+        llm_router = route_entry_points_to_stubs(MagicMock())
         llm_router.router_general_settings.pass_through_all_models = False
         llm_router.default_deployment = None
         llm_router.pattern_router.patterns = []
@@ -420,7 +423,7 @@ async def test_route_request_with_router_settings_override():
         },
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "success"
 
     response = await route_request(data, llm_router, None, "acompletion")
@@ -489,7 +492,7 @@ async def test_route_request_with_router_settings_override_preserves_existing():
         },
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "success"
 
     response = await route_request(data, llm_router, None, "acompletion")
@@ -652,7 +655,7 @@ async def test_route_request_rejects_mock_params_by_default(monkeypatch):
         "messages": [{"role": "user", "content": "Hello"}],
         "mock_testing_fallbacks": True,
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
 
     with pytest.raises(HTTPException) as exc_info:
         await route_request(data, llm_router, None, "acompletion")
@@ -666,7 +669,6 @@ async def test_route_request_forwards_mock_params_when_opted_in(monkeypatch):
     """End-to-end through ``route_request``: with the opt-in set the param
     reaches the router, which is what makes a fallback drill possible."""
     import litellm.proxy.proxy_server as proxy_server
-
     from litellm.proxy.route_llm_request import MOCK_TESTING_CONFIG_KEY
 
     monkeypatch.setattr(
@@ -681,7 +683,7 @@ async def test_route_request_forwards_mock_params_when_opted_in(monkeypatch):
         "messages": [{"role": "user", "content": "Hello"}],
         "mock_testing_fallbacks": True,
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "ok"
 
     await route_request(data, llm_router, None, "acompletion")
@@ -705,7 +707,7 @@ async def test_route_request_maps_generation_config_for_google_routes(route_type
             "imageConfig": {"aspectRatio": "9:16", "imageSize": "4K"},
         },
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     getattr(llm_router, route_type).return_value = "ok"
 
     await route_request(data, llm_router, None, route_type)
@@ -729,7 +731,7 @@ async def test_route_request_preserves_existing_config_for_google_routes(route_t
         "config": {"existing": True},
         "generationConfig": {"shouldNotWin": True},
     }
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     getattr(llm_router, route_type).return_value = "ok"
 
     await route_request(data, llm_router, None, route_type)
@@ -771,9 +773,11 @@ async def test_route_request_realtime_wildcard_model_resolves_credentials(
     POST /realtime/client_secrets with a request model like openai/gpt-realtime
     must match an openai/* deployment and forward its api_key upstream.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -809,9 +813,11 @@ async def test_route_request_realtime_team_scoped_model_resolves_credentials(
     Team-scoped deployments (team_public_model_name) must be selected when
     user_api_key_team_id is present, same as /chat/completions.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -855,9 +861,11 @@ async def test_route_request_realtime_litellm_credential_name_resolves_api_key(
     litellm_credential_name on a wildcard deployment must resolve to the stored
     api_key when routing acreate_realtime_client_secret through the router.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -890,9 +898,9 @@ async def test_route_request_realtime_unresolvable_model_raises_not_found(
     An unknown model must not silently fall through to litellm with an empty
     OPENAI_API_KEY env var.
     """
-    import litellm
     from unittest.mock import AsyncMock, patch
 
+    import litellm
     from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -922,9 +930,11 @@ async def test_route_request_realtime_calls_resolves_api_base(monkeypatch):
     non-default (self-hosted / proxied) OpenAI endpoint is honored, instead of
     defaulting to https://api.openai.com.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
@@ -965,9 +975,11 @@ async def test_route_request_realtime_transcription_session_resolves_credentials
     /realtime/transcription_sessions must resolve credentials through the router
     (wildcard deployment) rather than falling back to an empty OPENAI_API_KEY.
     """
-    import httpx
-    import litellm
     from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    import litellm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -1009,7 +1021,7 @@ async def test_route_request_merges_enable_tag_filtering_from_override():
         },
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "success"
 
     response = await route_request(data, llm_router, None, "acompletion")
@@ -1031,7 +1043,7 @@ async def test_route_request_strips_client_supplied_enable_tag_filtering():
         "enable_tag_filtering": True,
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "ok"
 
     await route_request(data, llm_router, None, "acompletion")
@@ -1055,7 +1067,7 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
         },
     }
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
     llm_router.acompletion.return_value = "ok"
 
     await route_request(data, llm_router, None, "acompletion")
@@ -1395,7 +1407,9 @@ async def test_route_request_applies_override_fallbacks_when_request_carries_cre
 @pytest.mark.parametrize(
     "router_only_setting",
     [
-        pytest.param({"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"),
+        pytest.param(
+            {"model_group_retry_policy": {"gpt-4": {"TimeoutErrorRetries": 1}}}, id="model-group-retry-policy"
+        ),
         pytest.param({"context_window_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="context-window-fallbacks"),
         pytest.param({"content_policy_fallbacks": [{"gpt-4": ["gpt-3.5-turbo"]}]}, id="content-policy-fallbacks"),
     ],
@@ -1494,7 +1508,7 @@ async def test_route_request_keeps_key_fallbacks_out_of_pass_through_provider_bo
         ("avideo_create_character", "name", "/videos/characters"),
         ("acreate_container", "name", "/containers"),
         ("aupload_container_file", "file", "/containers/{container_id}/files"),
-        ("acreate_agent", "name", "/v1beta/agents"),
+        ("acreate_agent", "id", "/v1beta/agents"),
         ("acreate_eval", "data_source_config", "/evals"),
         ("acreate_run", "data_source", "/evals/{eval_id}/runs"),
     ],
@@ -1516,6 +1530,37 @@ def test_raise_if_required_body_param_missing_rejects_missing_param(route_type, 
     assert exc_info.value.param == param
     assert exc_info.value.type == "invalid_request_error"
     assert exc_info.value.message == f"{route}: Missing required parameter: '{param}'."
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"model": "gemini-4-argon", "input": "prove the prime number theorem"},
+        {"model": "gemini-4-argon", "previous_interaction_id": "v1_abc", "continuation_token": "tok-1"},
+        {"model": "gemini-4-argon", "input": "prove it again", "continuation_token": "tok-1"},
+    ],
+)
+def test_create_interaction_accepts_input_or_a_continuation_token(data: dict[str, object]) -> None:
+    from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+
+    assert raise_if_required_body_param_missing(route_type="acreate_interaction", data=data, llm_router=None) is None
+
+
+def test_create_interaction_without_input_or_continuation_token_names_input() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        raise_if_required_body_param_missing,
+    )
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        raise_if_required_body_param_missing(
+            route_type="acreate_interaction",
+            data={"model": "gemini-4-argon", "previous_interaction_id": "v1_abc"},
+            llm_router=None,
+        )
+
+    assert exc_info.value.param == "input"
+    assert exc_info.value.message == "/interactions: Missing required parameter: 'input'."
 
 
 @pytest.mark.parametrize(
@@ -1699,7 +1744,7 @@ def test_required_present_body_param_with_none_router_wide_default_still_raises(
         ("asearch", {"model": "search-model"}, "query"),
         ("acreate_eval", {"model": "eval-model"}, "data_source_config"),
         ("acreate_run", {"model": "eval-model"}, "data_source"),
-        ("acreate_agent", {"model": "agent-model"}, "name"),
+        ("acreate_agent", {"model": "agent-model"}, "id"),
         ("avector_store_search", {}, "query"),
     ],
 )
@@ -1779,7 +1824,13 @@ def test_required_present_body_param_ignores_global_router_defaults_for_user_con
     "llm_router",
     [
         pytest.param(MagicMock(), id="magicmock-router"),
-        pytest.param(SimpleNamespace(get_model_list=lambda **_kwargs: ()), id="router-without-defaults-attr"),
+        pytest.param(
+            SimpleNamespace(
+                registry=lambda: SimpleNamespace(deployments=lambda *_args, **_kwargs: ()),
+                settings=lambda: RouterSettings(_unset=frozenset({"default_litellm_params"})),
+            ),
+            id="router-without-defaults-attr",
+        ),
     ],
 )
 def test_required_present_body_param_ignores_non_mapping_router_defaults(llm_router: object) -> None:
@@ -1842,6 +1893,8 @@ def test_raise_if_required_body_param_missing_names_each_missing_param(route_typ
         ("acreate_eval", {"data_source_config": {"type": "custom"}, "testing_criteria": []}),
         ("acreate_interaction", {"model": "gemini-3-pro-preview", "input": "hi"}),
         ("acreate_interaction", {"agent": "deep-research", "input": "hi"}),
+        ("acreate_agent", {"id": "sentinel"}),
+        ("acreate_agent", {"name": "sentinel"}),
         ("aimage_generation", {"model": "gpt-image-1", "prompt": "a cat"}),
         ("aspeech", {"model": "gpt-4o-mini-tts", "input": "hi", "voice": "alloy"}),
         ("amoderation", {"model": "omni-moderation-latest", "input": ""}),
@@ -1864,7 +1917,7 @@ async def test_route_request_rejects_chat_completion_without_messages():
     Router.acompletion() and surface the resulting TypeError as a 500."""
     from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
 
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
         await route_request({"model": "gpt-4o"}, llm_router, None, "acompletion")
@@ -1878,7 +1931,7 @@ async def test_route_request_rejects_chat_completion_without_messages():
 async def test_route_request_rejects_responses_without_input():
     from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 
-    llm_router = MagicMock()
+    llm_router = route_entry_points_to_stubs(MagicMock())
 
     with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
         await route_request({"model": "gpt-4o"}, llm_router, None, "aresponses")
@@ -2059,10 +2112,11 @@ async def test_route_request_read_through_disabled_without_store_model_in_db(mon
 
 @pytest.mark.asyncio
 async def test_route_request_read_through_supplies_db_model_default_for_missing_param(monkeypatch):
-    import litellm
-    import litellm.proxy.proxy_server as proxy_server
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
 
     model_name = "e2e-db-only-max-tokens-default"
     router = litellm.Router(
@@ -2384,19 +2438,44 @@ def _registered_bedrock_kb_search(team_id: str) -> dict[str, object]:
     }
 
 
-def _team_a_router(*team_models: tuple[str, dict[str, object]]) -> litellm.Router:
+def _team_a_deployment(public_name: str, litellm_params: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "model_name": f"internal-team-a-{public_name}",
+        "litellm_params": dict(litellm_params),
+        "model_info": {
+            "id": f"team-a-{public_name}",
+            "team_id": "team-a",
+            "team_public_model_name": public_name,
+        },
+    }
+
+
+def _team_a_router(*team_models: tuple[str, Mapping[str, object]]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[_team_a_deployment(public_name, litellm_params) for public_name, litellm_params in team_models]
+    )
+
+
+_PROXY_OPENAI_BASE: Final = "https://proxy-openai.example/v1"
+
+
+def _team_a_openai_router_beside_a_proxy_openai_wildcard() -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
-                "model_name": f"internal-team-a-{public_name}",
-                "litellm_params": litellm_params,
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "proxy-openai-key", "api_base": _PROXY_OPENAI_BASE},
+            },
+            {
+                "model_name": "model_name_team-a_6f0c8a52",
+                "litellm_params": dict(_TEAM_OPENAI_PARAMS),
                 "model_info": {
-                    "id": f"team-a-{public_name}",
+                    "id": "team-a-openai",
                     "team_id": "team-a",
-                    "team_public_model_name": public_name,
+                    "team_public_model_name": "openai/*",
+                    "db_model": True,
                 },
-            }
-            for public_name, litellm_params in team_models
+            },
         ]
     )
 
@@ -2459,6 +2538,414 @@ async def test_team_key_search_of_registered_bedrock_store_reaches_bedrock_with_
     assert "Credential=AKIAREGISTRYKEY00000/" in signed_auth, signed_auth
 
 
+_TEAM_OPENAI_BASE: Final = "https://team-openai.example/v1"
+_TEAM_OPENAI_PARAMS: Final[Mapping[str, object]] = {
+    "model": "openai/*",
+    "api_key": "team-openai-key",
+    "api_base": _TEAM_OPENAI_BASE,
+}
+_VECTOR_STORE_FILE: Final[Mapping[str, object]] = {
+    "id": "file-ingested",
+    "object": "vector_store.file",
+    "vector_store_id": "vs_team",
+    "status": "completed",
+    "created_at": 1,
+    "usage_bytes": 1,
+    "last_error": None,
+}
+_VECTOR_STORE_FILE_CALLS: Final[Mapping[str, tuple[str, str, Mapping[str, object]]]] = {
+    "avector_store_file_list": (
+        "GET",
+        "/vector_stores/vs_team/files",
+        {"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False},
+    ),
+    "avector_store_file_retrieve": ("GET", "/vector_stores/vs_team/files/file-ingested", _VECTOR_STORE_FILE),
+    "avector_store_file_content": (
+        "GET",
+        "/vector_stores/vs_team/files/file-ingested/content",
+        {"object": "vector_store.file_content.page", "data": [], "has_more": False, "next_page": None},
+    ),
+    "avector_store_file_delete": (
+        "DELETE",
+        "/vector_stores/vs_team/files/file-ingested",
+        {"id": "file-ingested", "object": "vector_store.file.deleted", "deleted": True},
+    ),
+    "avector_store_file_create": ("POST", "/vector_stores/vs_team/files", _VECTOR_STORE_FILE),
+    "avector_store_file_update": ("POST", "/vector_stores/vs_team/files/file-ingested", _VECTOR_STORE_FILE),
+}
+_TEAM_A_MEMBER: Final = UserAPIKeyAuth(api_key="team-a-member-key", team_id="team-a")
+
+
+def _model_less_vector_store_file_request(
+    route_type: str, litellm_credential_name: str | None = None
+) -> Mapping[str, object]:
+    return {
+        "model": None,
+        "vector_store_id": "vs_team",
+        **({} if route_type == "avector_store_file_list" else {"file_id": "file-ingested"}),
+        **({"attributes": {"source": "rag-ingest"}} if route_type == "avector_store_file_update" else {}),
+        "custom_llm_provider": "openai",
+        "metadata": {"user_api_key_team_id": "team-a"},
+        "litellm_credential_name": litellm_credential_name,
+    }
+
+
+def _team_a_openai_db_deployment(deployment_id: str, api_base: str, created_at: datetime) -> Mapping[str, object]:
+    return {
+        "model_name": f"internal-team-a-{deployment_id}",
+        "litellm_params": {"model": "openai/*", "api_key": f"{deployment_id}-key", "api_base": api_base},
+        "model_info": {
+            "id": deployment_id,
+            "team_id": "team-a",
+            "team_public_model_name": f"openai-{deployment_id}",
+            "db_model": True,
+            "created_at": created_at,
+        },
+    }
+
+
+@pytest.mark.parametrize("route_type", sorted(_VECTOR_STORE_FILE_CALLS))
+@pytest.mark.parametrize(
+    "team_models",
+    [
+        pytest.param((("openai/*", _TEAM_OPENAI_PARAMS),), id="openai-only"),
+        pytest.param(
+            (("a-langgraph-agent", _LANGGRAPH_AGENT_PARAMS), ("openai/*", _TEAM_OPENAI_PARAMS)),
+            id="langgraph-first",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_key_model_less_vector_store_file_call_reaches_openai_with_the_team_deployment_key(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+    team_models: tuple[tuple[str, Mapping[str, object]], ...],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    method, path, body = _VECTOR_STORE_FILE_CALLS[route_type]
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request(route_type)),
+                _team_a_router(*team_models),
+                None,
+                route_type,
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == "Bearer team-openai-key"
+
+
+@pytest.mark.parametrize("route_type", sorted(_VECTOR_STORE_FILE_CALLS))
+@pytest.mark.asyncio
+async def test_missing_vector_store_files_do_not_cool_down_the_team_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    method, path, _ = _VECTOR_STORE_FILE_CALLS[route_type]
+    router: Final = _team_a_openai_router_beside_a_proxy_openai_wildcard()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        file_route: Final = respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
+            return_value=httpx.Response(404, json={"error": {"message": "No file found", "type": "invalid_request_error"}})
+        )
+        chat_route: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/chat/completions").mock(
+            return_value=_chat_completion_response("gpt-5.4-mini")
+        )
+        for _ in range(5):
+            with pytest.raises(litellm.NotFoundError):
+                await (
+                    await route_request(
+                        dict(_model_less_vector_store_file_request(route_type)),
+                        router,
+                        None,
+                        route_type,
+                        user_api_key_dict=_TEAM_A_MEMBER,
+                    )
+                )
+        response: Final = await (
+            await route_request(
+                {
+                    "model": "openai/gpt-5.4-mini",
+                    "messages": list(_HELLO_MESSAGES),
+                    "metadata": {"user_api_key_team_id": "team-a"},
+                },
+                router,
+                None,
+                "acompletion",
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+
+    assert file_route.call_count == 5
+    assert response.choices[0].message.content == "hi", response
+    assert chat_route.calls.last.request.headers["Authorization"] == "Bearer team-openai-key"
+
+
+_DIRECT_VECTOR_STORE_FILE_ROUTES: Final = (
+    "avector_store_file_content",
+    "avector_store_file_delete",
+    "avector_store_file_list",
+    "avector_store_file_retrieve",
+)
+
+
+@pytest.mark.parametrize("route_type", _DIRECT_VECTOR_STORE_FILE_ROUTES)
+@pytest.mark.parametrize(
+    "restricted_member",
+    [
+        pytest.param(
+            UserAPIKeyAuth(api_key="restricted-member-key", team_id="team-a", models=["a-langgraph-agent"]),
+            id="key-allowlist",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(api_key="team-blocked-member-key", team_id="team-a", team_models=["a-langgraph-agent"]),
+            id="team-models",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_team_key_restricted_away_from_the_openai_deployment_keeps_proxy_credentials_on_a_file_call(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+    restricted_member: UserAPIKeyAuth,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "proxy-openai-key")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    method, path, body = _VECTOR_STORE_FILE_CALLS[route_type]
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.route(method=method, url=f"https://api.openai.com/v1{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request(route_type)),
+                _team_a_router(("openai/*", _TEAM_OPENAI_PARAMS)),
+                None,
+                route_type,
+                user_api_key_dict=restricted_member,
+            )
+        )
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer proxy-openai-key"
+
+
+@pytest.mark.parametrize("route_type", ["avector_store_file_create", "avector_store_file_update"])
+@pytest.mark.asyncio
+async def test_a_team_without_an_openai_deployment_never_sends_the_proxy_key_on_a_model_less_file_write(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_API_KEY", "proxy-openai-key")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    method, path, body = _VECTOR_STORE_FILE_CALLS[route_type]
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = respx_mock.route(method=method, url=f"https://api.openai.com/v1{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        with pytest.raises(litellm.APIConnectionError, match="not supported for anthropic"):
+            await (
+                await route_request(
+                    dict(_model_less_vector_store_file_request(route_type)),
+                    _team_a_router(("claude", {"model": "anthropic/claude-sonnet-4-5", "api_key": "team-anthropic"})),
+                    None,
+                    route_type,
+                    user_api_key_dict=_TEAM_A_MEMBER,
+                )
+            )
+
+    assert route.call_count == 0
+
+
+class _SuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+        self.standard_logging_objects: Final[list[object]] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.standard_logging_objects.append(kwargs.get("standard_logging_object"))
+        self.logged.set()
+
+
+@pytest.mark.parametrize("route_type", sorted(_VECTOR_STORE_FILE_CALLS))
+@pytest.mark.asyncio
+async def test_a_model_less_file_call_logs_the_team_deployment_it_used(
+    monkeypatch: pytest.MonkeyPatch,
+    route_type: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    recorder: Final = _SuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    method, path, body = _VECTOR_STORE_FILE_CALLS[route_type]
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request(route_type)),
+                _team_a_router(("openai/*", _TEAM_OPENAI_PARAMS)),
+                None,
+                route_type,
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    logged: Final = recorder.standard_logging_objects[-1]
+    assert isinstance(logged, dict), logged
+    assert (logged["model_id"], logged["model_group"], logged["model"]) == ("team-a-openai/*", "openai/*", "openai/*")
+
+
+@pytest.mark.parametrize("newer_first", [True, False])
+@pytest.mark.asyncio
+async def test_a_model_less_file_call_uses_the_team_openai_deployment_ingest_uploads_through(
+    monkeypatch: pytest.MonkeyPatch,
+    newer_first: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    older: Final = _team_a_openai_db_deployment("deployment-z", "https://older-openai.example/v1", datetime(2026, 1, 1))
+    newer: Final = _team_a_openai_db_deployment("deployment-a", "https://newer-openai.example/v1", datetime(2026, 6, 1))
+    router: Final = litellm.Router(model_list=[dict(newer), dict(older)] if newer_first else [dict(older), dict(newer)])
+    ingest_deployment: Final = get_team_provider_deployment(router, _TEAM_A_MEMBER, "openai")
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = respx_mock.get(url__regex=r"/v1/vector_stores/vs_team/files/file-ingested$").mock(
+            return_value=httpx.Response(200, json=_VECTOR_STORE_FILE)
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request("avector_store_file_retrieve")),
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+
+    assert ingest_deployment is not None
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == f"Bearer {ingest_deployment.deployment_id}-key"
+
+
+@pytest.mark.asyncio
+async def test_registered_store_credential_wins_over_the_team_deployment_on_a_model_less_file_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="store-credential",
+                credential_info={"custom_llm_provider": "openai"},
+                credential_values={"api_key": "store-credential-key", "api_base": "https://store-openai.example/v1"},
+            )
+        ],
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get("https://store-openai.example/v1/vector_stores/vs_team/files/file-ingested").mock(
+            return_value=httpx.Response(200, json=_VECTOR_STORE_FILE)
+        )
+        await (
+            await route_request(
+                dict(
+                    _model_less_vector_store_file_request(
+                        "avector_store_file_retrieve", litellm_credential_name="store-credential"
+                    )
+                ),
+                _team_a_router(("openai/*", _TEAM_OPENAI_PARAMS)),
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer store-credential-key"
+
+
+
+@pytest.mark.asyncio
+async def test_a_model_less_file_call_leaves_the_team_credential_headers_intact_for_later_file_uploads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.openai_files_endpoints.common_utils import get_credentials_for_model
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="team-a-openai",
+                credential_info={"custom_llm_provider": "openai"},
+                credential_values={
+                    "api_key": "team-openai-key",
+                    "api_base": _TEAM_OPENAI_BASE,
+                    "extra_headers": {"X-Team": "team-a"},
+                },
+            )
+        ],
+    )
+    router: Final = _team_a_router(("openai/*", {"model": "openai/*", "litellm_credential_name": "team-a-openai"}))
+    method, path, body = _VECTOR_STORE_FILE_CALLS["avector_store_file_retrieve"]
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
+            return_value=httpx.Response(200, json=body)
+        )
+        upload: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/files").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "file-uploaded",
+                    "object": "file",
+                    "bytes": 5,
+                    "created_at": 1,
+                    "filename": "notes.txt",
+                    "purpose": "assistants",
+                    "status": "processed",
+                },
+            )
+        )
+        await (
+            await route_request(
+                dict(_model_less_vector_store_file_request("avector_store_file_retrieve")),
+                router,
+                None,
+                "avector_store_file_retrieve",
+                user_api_key_dict=_TEAM_A_MEMBER,
+            )
+        )
+        await litellm.acreate_file(
+            file=("notes.txt", b"hello", "text/plain"),
+            purpose="assistants",
+            **get_credentials_for_model(llm_router=router, model_id="team-a-openai/*"),
+        )
+
+    assert upload.calls.last.request.headers["Content-Type"].startswith("multipart/form-data")
+    assert upload.calls.last.request.headers["X-Team"] == "team-a"
+
 @pytest.fixture(autouse=True)
 def discard_cached_user_config_routers() -> Iterator[None]:
     yield
@@ -2502,7 +2989,34 @@ def _mock_deployment(model_name: str, **deployment_limits: int) -> dict[str, obj
     }
 
 
+async def _settle_router_accounting() -> None:
+    try:
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        await GLOBAL_LOGGING_WORKER.stop()
+    while pending := {task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)}:
+        _, still_running = await asyncio.wait(pending, timeout=5)
+        assert not still_running, still_running
+
+
+def _is_periodic_sync(task: asyncio.Task[object]) -> bool:
+    return task.get_coro().__qualname__.endswith(".periodic_sync_in_memory_spend_with_redis")
+
+
 async def _user_config_request_outcome(
+    redis_port: int | None,
+    routing_settings: Mapping[str, object],
+    deployment_limits: Mapping[str, int],
+    logging_obj: LiteLLMLoggingObj | None,
+) -> str:
+    outcome: Final = await _unsettled_user_config_request_outcome(
+        redis_port, routing_settings, deployment_limits, logging_obj
+    )
+    await _settle_router_accounting()
+    return outcome
+
+
+async def _unsettled_user_config_request_outcome(
     redis_port: int | None,
     routing_settings: Mapping[str, object],
     deployment_limits: Mapping[str, int],
@@ -2523,8 +3037,6 @@ async def _user_config_request_outcome(
         await (await route_request(data, None, None, "acompletion"))
     except (litellm.RateLimitError, RouterRateLimitError):
         return "429"
-    finally:
-        await asyncio.sleep(0.3)
     return "200"
 
 
@@ -2563,7 +3075,7 @@ async def _proxy_router_outcomes(
         except (litellm.RateLimitError, RouterRateLimitError):
             return "429"
         finally:
-            await asyncio.sleep(0.3)
+            await _settle_router_accounting()
         return "200"
 
     try:
@@ -2593,7 +3105,9 @@ async def test_a_user_config_adaptive_request_answers_with_the_model_it_picked()
                 },
                 {
                     **_mock_deployment("smart"),
-                    "model_info": {"adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}},
+                    "model_info": {
+                        "adaptive_router_preferences": {"quality_tier": 3, "strengths": ["code_generation"]}
+                    },
                 },
             ]
         },
@@ -2657,16 +3171,21 @@ async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_l
     tpm_for_three_requests: Final = await _tpm_for_three_requests()
 
     def request() -> Coroutine[None, None, str]:
-        return _user_config_request_outcome(
+        return _unsettled_user_config_request_outcome(
             fake_redis_port,
             {"routing_strategy": "usage-based-routing-v2"},
             {"tpm": tpm_for_three_requests},
             _proxy_logging_obj() if arrives_with_logging_obj else None,
         )
 
+    async def settled(*requests: Coroutine[None, None, str]) -> list[str]:
+        outcomes: Final = await asyncio.gather(*requests)
+        await _settle_router_accounting()
+        return outcomes
+
     await _wait_out_a_rate_limit_minute_rollover()
-    concurrent_outcomes: Final = await asyncio.gather(request(), request())
-    later_outcomes: Final = [await request() for _ in range(2)]
+    concurrent_outcomes: Final = await settled(request(), request())
+    later_outcomes: Final = [*(await settled(request())), *(await settled(request()))]
 
     assert [*concurrent_outcomes, *later_outcomes] == ["200", "200", "200", "429"]
 
@@ -2674,12 +3193,13 @@ async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_l
 @pytest.mark.asyncio
 async def test_overlapping_user_config_requests_share_one_rpm_limit(fake_redis_port: int) -> None:
     def request() -> Coroutine[None, None, str]:
-        return _user_config_request_outcome(
+        return _unsettled_user_config_request_outcome(
             fake_redis_port, {"routing_strategy": "usage-based-routing-v2"}, {"rpm": 2}, _proxy_logging_obj()
         )
 
     await _wait_out_a_rate_limit_minute_rollover()
     outcomes: Final = await asyncio.gather(*(request() for _ in range(4)))
+    await _settle_router_accounting()
 
     assert outcomes.count("200") <= 2, outcomes
     assert "429" in outcomes, outcomes
@@ -2704,13 +3224,14 @@ async def test_a_proxy_router_on_the_same_strategy_leaves_the_user_config_limit_
     async def outcomes() -> list[str]:
         first_instance: Final = [await request() for _ in range(2)]
         user_config_routers.clear()
+        await _settle_router_accounting()
         second_instance: Final = [await request() for _ in range(3)]
         return [*first_instance, *second_instance]
 
     await _wait_out_a_rate_limit_minute_rollover()
     alone: Final = await outcomes()
     user_config_routers.clear()
-    await asyncio.sleep(0.3)
+    await _settle_router_accounting()
     redis.Redis(host="127.0.0.1", port=fake_redis_port).flushall()
     proxy_router: Final = litellm.Router(
         routing_strategy=routing_strategy,
@@ -2738,7 +3259,7 @@ async def test_user_config_requests_stay_under_the_proxy_provider_budget(
     )
     try:
         await proxy_router.acompletion(model="proxy-model", messages=[{"role": "user", "content": "hi"}])
-        await asyncio.sleep(0.3)
+        await _settle_router_accounting()
         with pytest.raises(ValueError, match=RouterErrors.no_deployments_with_provider_budget_routing.value):
             await _user_config_request_outcome(None, user_config_settings, {}, _proxy_logging_obj())
     finally:
@@ -3025,3 +3546,71 @@ async def test_user_config_routers_discard_the_least_recently_used_router_past_c
     assert first_handler() is not None
     assert second_handler() is None
     routers.clear()
+
+
+def test_fallback_probe_skips_only_a_loaded_model_that_refuses_the_route() -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chat-fallback",
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "unit-provider-key"},
+            },
+            {
+                "model_name": "embed-only",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "unit-provider-key"},
+                "model_info": {"enforce_supported_endpoints": True, "supported_endpoints": ["/v1/embeddings"]},
+            },
+        ],
+        num_retries=0,
+    )
+
+    def skipped(model: str) -> bool:
+        return endpoint_unsupported_by_model("acompletion", {"model": model}, router, None)
+
+    assert skipped("embed-only") is True
+    assert skipped("chat-fallback") is False
+    assert skipped("added-on-another-worker") is False
+
+
+def _router_answering_hi() -> "litellm.Router":
+    import litellm
+
+    return litellm.Router(
+        model_list=[{"model_name": "g", "litellm_params": {"model": "openai/gpt-5.4-nano", "mock_response": "hi"}}]
+    )
+
+
+@pytest.mark.parametrize("flag", ["stream", "background"])
+@pytest.mark.asyncio
+async def test_a_request_a_hook_made_stream_or_run_in_the_background_is_refused_under_a_body_total_timeout(
+    flag: str,
+) -> None:
+    from litellm.litellm_core_utils.total_deadline import TotalTimeoutNotApplicable, total_deadline
+
+    async with total_deadline(60, from_body=True):
+        with pytest.raises(TotalTimeoutNotApplicable):
+            await route_request(
+                data={"model": "g", "messages": [{"role": "user", "content": "hi"}], flag: True},
+                llm_router=_router_answering_hi(),
+                user_model=None,
+                route_type="acompletion",
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_total_timeout() -> None:
+    from litellm.litellm_core_utils.total_deadline import current_total_deadline, total_deadline
+
+    async with total_deadline(60, from_body=False):
+        llm_call: Final = await route_request(
+            data={"model": "g", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+            llm_router=_router_answering_hi(),
+            user_model=None,
+            route_type="acompletion",
+        )
+        stream: Final = await llm_call
+        chunks: Final = [chunk async for chunk in stream]
+        deadline: Final = current_total_deadline()
+
+    assert chunks
+    assert deadline is not None and deadline.allows_wait(10**9)

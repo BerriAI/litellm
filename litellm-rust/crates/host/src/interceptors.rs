@@ -22,12 +22,34 @@ pub struct RequestContext {
     /// Optional-param names that carry credentials and must be redacted when logged.
     pub secret_fields: Vec<String>,
     /// The credential the route resolved for the provider call.
-    pub api_key: Option<litellm_auth::SecretValue>,
+    pub api_key: Option<litellm_secret_value::SecretValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawResponse {
     pub body: String,
+    /// The provider's HTTP status and headers, when the route forwards them to logging.
+    pub head: Option<ResponseHead>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResponseHead {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+}
+
+impl RawResponse {
+    pub fn new(body: String) -> Self {
+        Self { body, head: None }
+    }
+
+    #[must_use]
+    pub fn with_head(self, head: ResponseHead) -> Self {
+        Self {
+            head: Some(head),
+            ..self
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,7 +208,7 @@ mod tests {
                 .await?;
                 Interceptors::after_provider_response(
                     &channel.interceptors,
-                    RawResponse { body: "raw".into() },
+                    RawResponse::new("raw".into()),
                 )
                 .await?;
                 Ok((sent, ()))
@@ -212,7 +234,7 @@ mod tests {
             panic!("on_event yields Emit");
         };
         assert_eq!(raw.body, "raw");
-        reply.send(());
+        reply.send(Ok(()));
 
         let Ok(MachineStep::Complete((sent, ()))) = machine.resume().await else {
             panic!("the call completes with the answers");

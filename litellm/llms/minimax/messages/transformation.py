@@ -4,7 +4,7 @@ MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's 
 
 import litellm
 from litellm.litellm_core_utils.url_utils import ensure_api_route
-from litellm.llms.anthropic.pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str

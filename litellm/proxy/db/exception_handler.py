@@ -31,12 +31,33 @@ _CONNECTION_CAPACITY_PHRASES: Final = (
     "too many connections for database",
     "remaining connection slots are reserved",
 )
+_NOT_ACCEPTING_CONNECTIONS_SQLSTATE: Final = "57P03"
+_NOT_ACCEPTING_CONNECTIONS_PHRASES: Final = (
+    "the database system is starting up",
+    "the database system is shutting down",
+    "the database system is not yet accepting connections",
+    "the database system is not accepting connections",
+    "the database system is in recovery mode",
+)
+_SERVER_TERMINATED_SQLSTATES: Final = frozenset({"57P01", "57P02", "57P05"})
+_SERVER_TERMINATED_PHRASES: Final = (
+    "terminating connection due to administrator command",
+    "terminating connection due to immediate shutdown command",
+    "terminating connection because of unexpected sigquit signal",
+    "terminating connection because of crash of another server process",
+    "terminating connection due to idle-session timeout",
+)
+_UNREACHABLE_PRISMA_CODE: Final = "P1001"
+_UNREACHABLE_PHRASES: Final = ("can't reach database server", "cannot reach database server")
 _PRISMA_POOL_TIMEOUT_CODE: Final = "P2024"
 _LOCK_TIMEOUT_SQLSTATE: Final = "55P03"
 _LOCK_TIMEOUT_PHRASE: Final = "canceling statement due to lock timeout"
+_STATEMENT_TIMEOUT_SQLSTATE: Final = "57014"
+_REJECTED_ROW_SQLSTATE_CLASSES: Final = frozenset({"22", "23", "54"})
+_STATEMENT_TIMEOUT_PHRASE: Final = "canceling statement due to statement timeout"
 
 
-def _exception_chain(e: BaseException) -> Iterator[BaseException]:
+def exception_chain(e: BaseException) -> Iterator[BaseException]:
     current = e  # rebind-ok: advances one link per iteration of the bounded walk
     for _ in range(_MAX_EXCEPTION_CHAIN_DEPTH):
         yield current
@@ -49,7 +70,7 @@ def _exception_chain(e: BaseException) -> Iterator[BaseException]:
 def _database_service_unavailable_errors(e: BaseException) -> tuple[Exception, ...]:
     return tuple(
         link
-        for link in _exception_chain(e)
+        for link in exception_chain(e)
         if isinstance(link, Exception) and PrismaDBExceptionHandler.is_database_service_unavailable_error(link)
     )
 
@@ -70,6 +91,22 @@ def _exception_types(*candidates: object) -> tuple[type[BaseException], ...]:
     False. Dropping the non-types lets the call fall through to the other checks.
     """
     return tuple(c for c in candidates if isinstance(c, type) and issubclass(c, BaseException))
+
+
+def _prisma_error_code(e: Exception) -> str | None:
+    import prisma.engine.errors
+
+    if isinstance(e, _exception_types(prisma.errors.DataError)):
+        code: Final[object] = getattr(e, "code", None)
+        return code if isinstance(code, str) else None
+    if not isinstance(e, _exception_types(prisma.engine.errors.EngineRequestError)):
+        return None
+    try:
+        body: Final = _DATABASE_ERROR_META.validate_json(str(e).partition(": ")[2])
+    except ValidationError:
+        return None
+    engine_code: Final = body.get("error_code")
+    return engine_code if isinstance(engine_code, str) else None
 
 
 class PrismaDBExceptionHandler:
@@ -120,6 +157,8 @@ class PrismaDBExceptionHandler:
         if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
             return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
+            return True
+        if PrismaDBExceptionHandler.is_database_not_accepting_connections_error(e):
             return True
         return isinstance(e, ProxyException) and e.type == ProxyErrorTypes.no_db_connection
 
@@ -184,6 +223,20 @@ class PrismaDBExceptionHandler:
         return type(e) is prisma.errors.DataError
 
     @staticmethod
+    def is_rejected_row_error(e: Exception) -> bool:
+        """True iff Postgres refused the rows themselves: a base ``DataError``, or a raw query failing with a data
+        exception (SQLSTATE class 22), integrity violation (class 23) or a value too large for an index (class 54). Systemic raw failures such as a missing
+        table (42P01) or a deadlock (40P01) stay False so the batch is retried instead of dropped."""
+        import prisma
+
+        if PrismaDBExceptionHandler.is_prisma_data_error(e):
+            return True
+        if not isinstance(e, _exception_types(prisma.errors.RawQueryError)):
+            return False
+        sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
+        return sqlstate is not None and sqlstate[:2] in _REJECTED_ROW_SQLSTATE_CLASSES
+
+    @staticmethod
     def is_database_transport_error(e: Exception) -> bool:
         """
         Returns True only for transport/connectivity failures where a reconnect
@@ -206,6 +259,8 @@ class PrismaDBExceptionHandler:
             return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return False
+        if _prisma_error_code(e) == "P1017":
+            return True
         if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             error_message: Final = str(e).lower()
             connection_keywords: Final = (
@@ -270,6 +325,39 @@ class PrismaDBExceptionHandler:
         return any(phrase in error_message for phrase in _CONNECTION_CAPACITY_PHRASES)
 
     @staticmethod
+    def is_database_not_accepting_connections_error(e: Exception) -> bool:
+        """True iff Postgres refused the connection because it is starting up, shutting
+        down or in crash recovery (SQLSTATE 57P03). The refusal comes before any statement
+        runs, so nothing the write carried was applied."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        if PrismaDBExceptionHandler.postgres_sqlstate(e) == _NOT_ACCEPTING_CONNECTIONS_SQLSTATE:
+            return True
+        error_message: Final = str(e).lower()
+        return any(phrase in error_message for phrase in _NOT_ACCEPTING_CONNECTIONS_PHRASES)
+
+    @staticmethod
+    def is_database_lifecycle_error(e: Exception) -> bool:
+        """True iff Postgres failed the statement because of a server lifecycle event:
+        a refused connection during startup, shutdown or recovery (57P03), or a session
+        the server terminated (57P01, 57P02, 57P05). The server comes back on its own,
+        so the rows are not at fault. A terminated session may have committed before it
+        was cut, so only ``is_database_not_accepting_connections_error`` proves a
+        non-idempotent write never applied."""
+        import prisma
+
+        if PrismaDBExceptionHandler.is_database_not_accepting_connections_error(e):
+            return True
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        if PrismaDBExceptionHandler.postgres_sqlstate(e) in _SERVER_TERMINATED_SQLSTATES:
+            return True
+        error_message: Final = str(e).lower()
+        return any(phrase in error_message for phrase in _SERVER_TERMINATED_PHRASES)
+
+    @staticmethod
     def is_lock_timeout_error(e: Exception) -> bool:
         """True iff Postgres cancelled a statement for exceeding ``lock_timeout``
         (SQLSTATE 55P03). The statement never acquired its lock, so it never
@@ -283,6 +371,17 @@ class PrismaDBExceptionHandler:
         if PrismaDBExceptionHandler.postgres_sqlstate(e) == _LOCK_TIMEOUT_SQLSTATE:
             return True
         return _LOCK_TIMEOUT_PHRASE in str(e).lower()
+
+    @staticmethod
+    def is_statement_timeout_error(e: Exception) -> bool:
+        """True iff Postgres cancelled a statement for exceeding ``statement_timeout`` (SQLSTATE 57014)."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.PrismaError)):
+            return False
+        if PrismaDBExceptionHandler.postgres_sqlstate(e) == _STATEMENT_TIMEOUT_SQLSTATE:
+            return True
+        return _STATEMENT_TIMEOUT_PHRASE in str(e).lower()
 
     @staticmethod
     def postgres_sqlstate(e: Exception) -> str | None:
@@ -375,6 +474,8 @@ class PrismaDBExceptionHandler:
             return True
         if PrismaDBExceptionHandler.is_database_capacity_error(e):
             return True
+        if PrismaDBExceptionHandler.is_database_lifecycle_error(e):
+            return True
         if PrismaDBExceptionHandler.is_prisma_engine_internal_error(e):
             return True
         if "cached plan must not change result type" in str(e).lower():
@@ -435,7 +536,7 @@ class PrismaDBExceptionHandler:
         return ProxyException(
             message=PrismaDBExceptionHandler.database_unavailable_message(e),
             type=ProxyErrorTypes.no_db_connection,
-            param="None",
+            param=None,
             code=HTTPStatus.SERVICE_UNAVAILABLE.value,
         )
 
@@ -649,3 +750,18 @@ def db_write_failure_is_requeue_safe(e: Exception) -> bool:
         return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
     sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
     return sqlstate is None or sqlstate[:2] not in _DATA_REJECTED_SQLSTATE_CLASSES
+
+
+def db_write_never_sent(e: Exception) -> bool:
+    """Whether the database could not take the write at all, because it was unreachable (P1001),
+    refusing connections (57P03) or full (53300, P2024), so even a non-idempotent write can be sent again."""
+    if PrismaDBExceptionHandler.is_database_not_accepting_connections_error(e):
+        return True
+    if PrismaDBExceptionHandler.is_database_capacity_error(e):
+        return True
+    if _prisma_error_code(e) == _UNREACHABLE_PRISMA_CODE:
+        return True
+    if not PrismaDBExceptionHandler.is_prisma_error(e):
+        return False
+    error_message: Final = str(e).lower()
+    return any(phrase in error_message for phrase in _UNREACHABLE_PHRASES)

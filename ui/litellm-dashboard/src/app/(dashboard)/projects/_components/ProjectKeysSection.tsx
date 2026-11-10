@@ -1,5 +1,6 @@
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { KeyIcon, SearchIcon, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { ProjectKeysTable } from "./ProjectKeysTable";
@@ -10,6 +11,7 @@ interface ProjectKeysSectionProps {
 }
 
 export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
+  const { t } = useTranslation();
   const {
     search: keyAlias,
     setSearch: setKeyAlias,
@@ -30,7 +32,7 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <KeyIcon className="size-4" />
-          Keys
+          {t("projects.keys.title")}
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -40,13 +42,17 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
               <SearchIcon className="size-3.5 text-muted-foreground" />
             </InputGroupAddon>
             <InputGroupInput
-              placeholder="Filter by key name..."
+              placeholder={t("projects.keys.filterPlaceholder")}
               value={keyAlias}
               onChange={(e) => setKeyAlias(e.target.value)}
             />
             {keyAlias && (
               <InputGroupAddon align="inline-end">
-                <InputGroupButton size="icon-xs" aria-label="Clear key filter" onClick={() => setKeyAlias("")}>
+                <InputGroupButton
+                  size="icon-xs"
+                  aria-label={t("projects.keys.clearFilter")}
+                  onClick={() => setKeyAlias("")}
+                >
                   <X />
                 </InputGroupButton>
               </InputGroupAddon>

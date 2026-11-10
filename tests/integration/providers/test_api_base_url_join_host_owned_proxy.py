@@ -1,6 +1,7 @@
 import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -8,6 +9,7 @@ import yaml
 from integration._support.client import JSON_OBJECT, Gateway, gateway_from_environment
 from integration._support.forward_proxy import ForwardProxy, refusing_forward_proxy
 from integration._support.process import graceful_stop_seconds, owned_proxy
+from integration._support.vertex import service_account_json
 from integration.providers._api_base_trailing_slash_support import KEY, new_marker
 from pydantic import JsonValue
 
@@ -17,6 +19,12 @@ _RERANK: Final = "host-rerank"
 _AZURE_CLAUDE: Final = "host-azure-claude"
 _AZURE_COUNT: Final = "host-azure-count"
 _EMPTY_BASE: Final = "host-empty-base"
+_VERTEX_HOST: Final = "vertex-gateway"
+_VERTEX_PROJECT: Final = "url-join-project"
+_VERTEX_LOCATION: Final = "us-east5"
+_VERTEX_CLAUDE_BASES: Final = MappingProxyType(
+    {"host-vertex-claude": f"http://{_VERTEX_HOST}", "host-vertex-claude-slash": f"http://{_VERTEX_HOST}/"}
+)
 _SCRUBBED_PREFIXES: Final = ("ANTHROPIC_", "AZURE_AI_", "INFINITY_")
 _PROXY_VARIABLES: Final = frozenset({"HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY"})
 _load_yaml: Final[Callable[[str], object]] = yaml.safe_load
@@ -28,7 +36,20 @@ def _deployment(name: str, model: str, api_base: str) -> dict[str, JsonValue]:
     return {"model_name": name, "litellm_params": {"model": model, "api_base": api_base, "api_key": KEY}}
 
 
-def _config(directory: Path) -> Path:
+def _vertex_claude_deployment(name: str, api_base: str, token_url: str) -> dict[str, JsonValue]:
+    return {
+        "model_name": name,
+        "litellm_params": {
+            "model": "vertex_ai/claude-haiku-5-5",
+            "api_base": api_base,
+            "vertex_project": _VERTEX_PROJECT,
+            "vertex_location": _VERTEX_LOCATION,
+            "vertex_credentials": service_account_json(_VERTEX_PROJECT, token_url),
+        },
+    }
+
+
+def _config(directory: Path, token_url: str) -> Path:
     base: Final = JSON_OBJECT.validate_python(_load_yaml(Path("tests/integration/proxy_config.yaml").read_text()))
     configuration: Final = {
         **base,
@@ -38,6 +59,7 @@ def _config(directory: Path) -> Path:
             _deployment(_AZURE_CLAUDE, "azure_ai/claude-haiku-5-5", f"http://{_AZURE_HOST}/anthropic"),
             _deployment(_AZURE_COUNT, "azure_ai/claude-haiku-5-5", f"http://{_AZURE_HOST}"),
             _deployment(_EMPTY_BASE, "anthropic/claude-haiku-5-5", ""),
+            *(_vertex_claude_deployment(name, base, token_url) for name, base in _VERTEX_CLAUDE_BASES.items()),
         ],
         "router_settings": {"disable_cooldowns": True, "num_retries": 0},
     }
@@ -72,7 +94,7 @@ def isolated(forward: ForwardProxy, tmp_path_factory: pytest.TempPathFactory) ->
             "NO_PROXY": "127.0.0.1,localhost",
             "PROXY_BATCH_POLLING_ENABLED": "false",
         },
-        config=_config(directory),
+        config=_config(directory, shared.upstream_url.rstrip("/")),
         remove_environment=_scrubbed(),
     ) as candidate:
         yield candidate
@@ -138,3 +160,14 @@ def test_azure_claude_count_tokens_on_a_bare_host_starting_with_anthropic_adds_t
 def test_empty_api_base_falls_back_to_the_provider_default_host(isolated: Gateway, forward: ForwardProxy) -> None:
     targets: Final = _targets_after(forward, lambda: _chat(isolated, _EMPTY_BASE))
     assert targets == {"api.anthropic.com:443"}
+
+
+@pytest.mark.parametrize("model", tuple(_VERTEX_CLAUDE_BASES), ids=("no-slash", "slash"))
+def test_vertex_partner_claude_on_a_bare_host_reaches_one_single_slash_url(
+    isolated: Gateway, forward: ForwardProxy, model: str
+) -> None:
+    targets: Final = _targets_after(forward, lambda: _chat(isolated, model))
+    assert targets == {
+        f"http://{_VERTEX_HOST}/v1/projects/{_VERTEX_PROJECT}/locations/{_VERTEX_LOCATION}"
+        "/publishers/anthropic/models/claude-haiku-5-5:rawPredict"
+    }

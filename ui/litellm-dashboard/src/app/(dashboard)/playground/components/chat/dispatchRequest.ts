@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import type { MessageType } from "@/components/chat_ui/types";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
@@ -16,6 +17,7 @@ import { makeOpenAIEmbeddingsRequest } from "../../llm_calls/embeddings_api";
 import { makeOpenAIImageEditsRequest } from "../../llm_calls/image_edits";
 import { makeOpenAIImageGenerationRequest } from "../../llm_calls/image_generation";
 import { makeInteractionsRequest } from "../../llm_calls/interactions_api";
+import i18n from "@/i18n/i18n";
 import type { PlaygroundSettings } from "./playgroundSettings";
 
 type ApiMessage = { role: string; content: string | any[] };
@@ -63,7 +65,10 @@ const inExchange = (history: readonly MessageType[], index: number): boolean =>
 export const textHistory = (history: readonly MessageType[]): ApiMessage[] =>
   history.filter((_, index) => inExchange(history, index)).map(({ role, content }) => ({ role, content }));
 
-const toolResultText = (result: { content?: { type: string; text?: string }[] } | null): string => {
+const toolResultText = (
+  result: { content?: { type: string; text?: string }[] } | null,
+  t: TFunction = i18n.t.bind(i18n),
+): string => {
   if (result?.content && result.content.length > 0) {
     return JSON.stringify(
       result.content.map((item) => (item.type === "text" ? item.text : item)).filter(Boolean),
@@ -71,7 +76,7 @@ const toolResultText = (result: { content?: { type: string; text?: string }[] } 
       2,
     );
   }
-  return JSON.stringify(result, null, 2) || "Tool executed successfully.";
+  return JSON.stringify(result, null, 2) || t("playground.chat.dispatch.toolExecuted");
 };
 
 export async function dispatchRequest(context: DispatchContext): Promise<void> {

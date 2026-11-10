@@ -6,8 +6,10 @@ import httpx
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.utils import CountContextManagement
 
 RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
@@ -70,6 +72,59 @@ async def test_claude_model_bedrock_runtime_cannot_count_is_counted_on_mantle() 
     mantle_body: Final = _JSON_BODY.validate_json(bedrock.requests[1].content)
     assert mantle_body["model"] == "anthropic.claude-opus-4-8"
     assert mantle_body["system"] == "You are a terse assistant."
+
+
+@pytest.mark.asyncio
+async def test_claude_model_message_without_content_is_rejected_without_calling_runtime_or_mantle() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[{"role": "user"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message, result.rejected_before_provider_call) == (
+        True,
+        400,
+        "Message 0 must have a 'content' field",
+        True,
+    )
+    assert bedrock.posted_hosts() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "problem"),
+    [
+        ({"role": "user"}, "Message 0 must have a 'content' field"),
+        ({"content": "hi"}, "Message 0 must have a 'role' field"),
+    ],
+)
+async def test_mantle_counted_model_rejects_a_malformed_message_without_calling_mantle(
+    message: dict[str, str], problem: str
+) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 1353}), mantle=(200, {"input_tokens": 1336}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="bedrock_mantle/anthropic.claude-opus-5-5",
+        messages=[message],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-5-5",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.error_message, result.rejected_before_provider_call) == (
+        True,
+        400,
+        problem,
+        True,
+    )
+    assert bedrock.posted_hosts() == ()
 
 
 @pytest.mark.asyncio
@@ -141,6 +196,104 @@ async def test_mantle_failure_is_reported_with_its_status() -> None:
     assert result.tokenizer_type == "bedrock_mantle_api"
     assert "does not exist" in (result.error_message or "")
     assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejection_of_an_edit_stands_when_mantle_does_not_serve_the_model() -> None:
+    rejection: Final = "'claude-haiku-4-5-20251001' does not support the 'compact_20260112' context management strategy"
+    bedrock: Final = _Bedrock(
+        runtime=(400, {"message": rejection}),
+        mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "does not exist"}}),
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-haiku-4-5",
+        context_management=CountContextManagement(
+            spec={"edits": [{"type": "compact_20260112"}]}, drop_invalid_edits=False
+        ),
+    )
+
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 400
+    assert result.tokenizer_type == "bedrock_api"
+    assert rejection in (result.error_message or "")
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_runtime_400_without_an_edit_still_reports_the_mantle_failure() -> None:
+    bedrock: Final = _Bedrock(
+        runtime=(400, {"message": "The provided model identifier is invalid."}),
+        mantle=(404, {"type": "error", "error": {"type": "not_found_error", "message": "does not exist"}}),
+    )
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-haiku-4-5",
+    )
+
+    assert result is not None
+    assert result.status_code == 404
+    assert result.tokenizer_type == "bedrock_mantle_api"
+    assert "does not exist" in (result.error_message or "")
+    assert bedrock.posted_hosts() == (RUNTIME_HOST, MANTLE_HOST)
+
+
+@pytest.mark.asyncio
+async def test_plain_text_history_with_an_edit_is_counted_through_invoke_carrying_the_edit() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 57}), mantle=(200, {"input_tokens": 1}))
+    spec: Final[dict[str, JsonValue]] = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=MESSAGES,
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+    )
+
+    assert result is not None
+    assert result.total_tokens == 57
+    assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+    invoke_body: Final = _invoke_body(bedrock.requests[0])
+    assert invoke_body["context_management"] == spec
+    assert invoke_body["anthropic_beta"] == ["context-management-2025-06-27"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_string_turn_with_an_edit_is_sent_as_an_empty_string_not_an_empty_text_block() -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 16}), mantle=(200, {"input_tokens": 1}))
+    spec: Final[dict[str, JsonValue]] = {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "third question here"},
+        ],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        context_management=CountContextManagement(spec=spec, drop_invalid_edits=False),
+    )
+
+    assert result is not None
+    assert result.total_tokens == 16
+    assert _invoke_body(bedrock.requests[0])["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "first"}]},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": [{"type": "text", "text": "third question here"}]},
+    ]
 
 
 @pytest.mark.asyncio
@@ -263,6 +416,79 @@ async def test_claude_chat_tool_use_is_counted_in_the_shape_claude_inference_sen
         {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}]},
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "sunny"}]},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool",
+    (
+        {"type": "mcp", "server_label": "wiki", "server_url": "https://mcp.example/mcp"},
+        {"type": "computer_use_preview", "display_width": 1024, "display_height": 768, "environment": "browser"},
+    ),
+    ids=("mcp", "computer_use_preview"),
+)
+async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedrock(tool: dict[str, JsonValue]) -> None:
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="global.anthropic.claude-opus-4-8",
+        messages=[{"role": "user", "content": "Ask the wiki"}],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model="claude-opus-4-8",
+        tools=[tool],
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert bedrock.posted_hosts() == ()
+
+
+_CLAUDE_REPLY: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude",
+    "content": [{"type": "text", "text": "ok"}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 3, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_model",
+    ("bedrock/invoke/us.anthropic.claude-sonnet-5-5", "bedrock_mantle/us.anthropic.claude-sonnet-5-5"),
+)
+async def test_claude_count_sends_the_tool_search_tool_the_deployments_inference_sends(deployment_model: str) -> None:
+    credentials: Final = DEPLOYMENT["litellm_params"]
+    inference: Final = _Bedrock(runtime=(200, _CLAUDE_REPLY), mantle=(200, _CLAUDE_REPLY))
+    await litellm.acompletion(
+        model=deployment_model,
+        messages=MESSAGES,
+        tools=[{"type": "tool_search"}],
+        max_tokens=8,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(inference)),
+        **credentials,
+    )
+    bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 412}), mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use="bedrock_mantle/us.anthropic.claude-opus-5-5",
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**credentials, "model": deployment_model}},
+        request_model="claude-sonnet-5-5",
+        tools=[{"type": "tool_search"}],
+        messages_format="openai",
+    )
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 2177)
+    counted_tools: Final = _JSON_BODY.validate_json(bedrock.requests[0].content)["tools"]
+    assert counted_tools == _JSON_BODY.validate_json(inference.requests[0].content)["tools"]
+
 
 @pytest.mark.asyncio
 async def test_claude_chat_tool_use_counted_on_mantle_metadata_route_is_translated_too() -> None:

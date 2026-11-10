@@ -1,4 +1,5 @@
 use litellm_core_utils::serde_compat::parse_str_bool;
+use litellm_error::Report;
 use pyo3::{
     exceptions::{PyAttributeError, PyRuntimeError, PyValueError},
     prelude::*,
@@ -9,15 +10,20 @@ use pyo3::{
 pub(crate) enum ProjectionError {
     Python(PyErr),
     InvalidConfiguration(ProjectionDetail),
-    UnsupportedLiveObject(String),
+    UnsupportedLiveObject(ProjectionDetail),
     InternalSchemaFailure(ProjectionDetail),
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ProjectionDetail {
-    #[error("{0}")]
-    Message(String),
-    #[error("{field}: {source}")]
+    #[error("{group}.{name}: expected {expected}, got {actual}")]
+    Expected {
+        group: &'static str,
+        name: &'static str,
+        expected: &'static str,
+        actual: String,
+    },
+    #[error("{field}")]
     InvalidField {
         field: &'static str,
         #[source]
@@ -30,12 +36,6 @@ pub(crate) enum ProjectionDetail {
     },
 }
 
-impl From<String> for ProjectionDetail {
-    fn from(message: String) -> Self {
-        Self::Message(message)
-    }
-}
-
 impl From<PyErr> for ProjectionError {
     fn from(error: PyErr) -> Self {
         Self::Python(error)
@@ -46,12 +46,12 @@ impl From<ProjectionError> for PyErr {
     fn from(error: ProjectionError) -> Self {
         match error {
             ProjectionError::Python(error) => error,
-            ProjectionError::InvalidConfiguration(detail) => {
-                PyValueError::new_err(detail.to_string())
+            ProjectionError::InvalidConfiguration(detail)
+            | ProjectionError::UnsupportedLiveObject(detail) => {
+                PyValueError::new_err(Report::new(&detail).to_string())
             }
-            ProjectionError::UnsupportedLiveObject(message) => PyValueError::new_err(message),
             ProjectionError::InternalSchemaFailure(detail) => {
-                PyRuntimeError::new_err(detail.to_string())
+                PyRuntimeError::new_err(Report::new(&detail).to_string())
             }
         }
     }
@@ -124,26 +124,26 @@ impl<'py> Field<'py> {
             && getter.is(object.getattr("__getattribute__")?))
     }
 
-    pub(crate) fn path(&self) -> String {
-        format!("{}.{}", self.group, self.name)
-    }
-
     /// A member of this field's collection, reported under the same path.
     pub(crate) fn member(&self, value: Bound<'py, PyAny>) -> Self {
         Self::new(self.group, self.name, value)
     }
 
-    pub(crate) fn expected(&self, expected: &str) -> Result<String, ProjectionError> {
-        Ok(format!(
-            "{}: expected {expected}, got {}",
-            self.path(),
-            self.value.get_type().name()?
-        ))
+    pub(crate) fn expected(
+        &self,
+        expected: &'static str,
+    ) -> Result<ProjectionDetail, ProjectionError> {
+        Ok(ProjectionDetail::Expected {
+            group: self.group,
+            name: self.name,
+            expected,
+            actual: self.value.get_type().name()?.to_string(),
+        })
     }
 
-    pub(crate) fn invalid(&self, expected: &str) -> ProjectionError {
+    pub(crate) fn invalid(&self, expected: &'static str) -> ProjectionError {
         match self.expected(expected) {
-            Ok(message) => ProjectionError::InvalidConfiguration(message.into()),
+            Ok(detail) => ProjectionError::InvalidConfiguration(detail),
             Err(error) => error,
         }
     }
@@ -163,24 +163,23 @@ impl<'py> Field<'py> {
     pub(crate) fn schema_bool(&self) -> Result<bool, ProjectionError> {
         if !self.value.is_instance_of::<PyBool>() {
             return Err(ProjectionError::InternalSchemaFailure(
-                self.expected("a Boolean")?.into(),
+                self.expected("a Boolean")?,
             ));
         }
         Ok(self.exact_true())
     }
 
     pub(crate) fn strict_string(&self) -> Result<String, ProjectionError> {
-        let value = self
-            .value
-            .cast::<PyString>()
-            .map_err(|_| self.invalid("a string"))?;
+        let Ok(value) = self.value.cast::<PyString>() else {
+            return Err(self.invalid("a string"));
+        };
         Ok(value.to_str()?.to_owned())
     }
 
     pub(crate) fn schema_string(&self) -> Result<String, ProjectionError> {
         if !self.value.is_instance_of::<PyString>() {
             return Err(ProjectionError::InternalSchemaFailure(
-                self.expected("a string")?.into(),
+                self.expected("a string")?,
             ));
         }
         self.strict_string()
@@ -474,12 +473,7 @@ text = Text(' False ')
         });
     }
 
-    #[test]
-    fn missing_snapshot_fields_and_descriptor_attribute_errors_are_distinct() {
-        with_python(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                c"
+    const RAISING_ATTRIBUTES: &std::ffi::CStr = c"
 failure = AttributeError('descriptor failed')
 class Snapshot:
     @property
@@ -491,46 +485,56 @@ class Intercepted:
     def __getattribute__(self, name): raise failure
 dynamic = Dynamic()
 intercepted = Intercepted()
-",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let snapshot = locals.get_item("snapshot").unwrap().unwrap();
-            let descriptor = PyErr::from(Field::read(&snapshot, "test", "flag").err().unwrap());
+";
+
+    #[rstest]
+    #[case::descriptor("snapshot")]
+    #[case::dynamic("dynamic")]
+    #[case::intercepted("intercepted")]
+    fn attribute_errors_raised_by_a_snapshot_surface_as_raised(#[case] name: &str) {
+        with_python(|py| {
+            let locals = PyDict::new(py);
+            py.run(RAISING_ATTRIBUTES, Some(&locals), Some(&locals))
+                .unwrap();
+            let value = locals.get_item(name).unwrap().unwrap();
+            let error = PyErr::from(Field::read(&value, "test", "flag").err().unwrap());
             assert!(
-                descriptor
+                error
                     .value(py)
                     .is(locals.get_item("failure").unwrap().unwrap())
             );
-            for name in ["dynamic", "intercepted"] {
-                let value = locals.get_item(name).unwrap().unwrap();
-                let error = PyErr::from(Field::read(&value, "test", "flag").err().unwrap());
-                assert!(
-                    error
-                        .value(py)
-                        .is(locals.get_item("failure").unwrap().unwrap())
-                );
-            }
+        });
+    }
+
+    #[test]
+    fn missing_snapshot_fields_are_runtime_errors_naming_the_field() {
+        with_python(|py| {
+            let locals = PyDict::new(py);
+            py.run(RAISING_ATTRIBUTES, Some(&locals), Some(&locals))
+                .unwrap();
+            let snapshot = locals.get_item("snapshot").unwrap().unwrap();
             let missing = PyErr::from(Field::read(&snapshot, "test", "missing").err().unwrap());
             assert!(missing.is_instance_of::<PyRuntimeError>(py));
             assert!(missing.to_string().contains("test.missing"));
         });
     }
 
-    #[test]
-    fn configuration_errors_name_fields_without_exposing_values() {
+    #[rstest]
+    #[case::mapping("{'secret': 'do-not-print'}")]
+    #[case::nested("['host.test', {'secret': 'do-not-print'}]")]
+    fn configuration_errors_name_fields_without_exposing_values(#[case] source: &str) {
         with_python(|py| {
-            for source in [
-                "{'secret': 'do-not-print'}",
-                "['host.test', {'secret': 'do-not-print'}]",
-            ] {
-                let field = Field::new("test", "setting", evaluate(py, source));
-                let error = PyErr::from(field.falsy_optional_string().err().unwrap());
-                assert!(error.is_instance_of::<PyValueError>(py));
-                assert!(error.to_string().contains("test.setting"));
-                assert!(!error.to_string().contains("do-not-print"));
-            }
+            let field = Field::new("test", "setting", evaluate(py, source));
+            let error = PyErr::from(field.falsy_optional_string().err().unwrap());
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.to_string().contains("test.setting"));
+            assert!(!error.to_string().contains("do-not-print"));
+        });
+    }
+
+    #[test]
+    fn invalid_collections_and_flags_are_configuration_errors() {
+        with_python(|py| {
             let hosts = Field::new(
                 "url_policy",
                 "user_url_allowed_hosts",

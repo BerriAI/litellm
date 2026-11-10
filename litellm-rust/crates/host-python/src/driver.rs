@@ -112,7 +112,7 @@ enum Setup<E> {
 /// The route's public exception for a native failure. When classification itself fails,
 /// that failure is raised with the native error's text as its `__context__`.
 fn classified<H: PythonBinding>(py: Python<'_>, binding: &H, error: ErrorOf<H>) -> PyErr {
-    let native = error.to_string();
+    let native = litellm_error::Report::new(&error).to_string();
     let classifier_error = match binding.map_error(py, error) {
         Ok(failure) => return failure.into(),
         Err(classifier_error) => classifier_error,
@@ -299,7 +299,7 @@ where
                     facts,
                 }))
                 .await?;
-                reply.send(());
+                reply.send(Ok(()));
                 Ok(())
             }
             HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
@@ -307,7 +307,7 @@ where
                     ExecutionEvent::ProviderResponseReceived { raw: &raw },
                 ))
                 .await?;
-                reply.send(());
+                reply.send(Ok(()));
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
@@ -399,8 +399,16 @@ where
             Ok(step) => step,
             Err(error) => return self.failure(error, FailureOrigin::Host).await,
         };
-        match self.settle(step).await {
-            Ok(response) => self.succeeded(response).await,
+        let response = match self.settle(step).await {
+            Ok(response) => response,
+            Err(error) => return self.failure(error, FailureOrigin::Host).await,
+        };
+        let delivered = {
+            let mut parts = self.parts();
+            Python::attach(|py| parts.binding.deliver_response(py, response.bind(py)))
+        };
+        match delivered {
+            Ok(()) => self.succeeded(response).await,
             Err(error) => self.failure(error, FailureOrigin::Host).await,
         }
     }

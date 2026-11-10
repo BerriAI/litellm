@@ -83,6 +83,7 @@ def embedding_spend_metadata(user_api_key_dict: UserAPIKeyAuth) -> dict[str, obj
 
     return {
         **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
+        **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(user_api_key_dict),
         "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
     }
 

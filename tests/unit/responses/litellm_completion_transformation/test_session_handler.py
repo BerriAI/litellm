@@ -7,6 +7,8 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import httpx
+import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
@@ -570,6 +572,33 @@ async def test_message_history_reconstructs_every_turn_of_the_session_in_order()
 
 
 @pytest.mark.asyncio
+async def test_message_history_skips_the_turns_the_provider_rejected():
+    session_id: Final = "5c5f9a3e-1c86-4c0e-9d7c-0a54b8a0f2f1"
+    answered_request_id: Final = "chatcmpl-1111"
+    rejected_request_id: Final = "chatcmpl-2222"
+    answered_turn: Final = {
+        **_spend_log(answered_request_id, session_id, "What is the weather in Paris?", "Checking."),
+        "status": "success",
+    }
+    rejected_turn: Final = {
+        **_spend_log(rejected_request_id, session_id, "Never mind. Just say hello", ""),
+        "status": "failure",
+        "response": {},
+    }
+    fake_prisma_client: Final = _FakePrismaClient(results=[[answered_turn, rejected_turn]])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client):
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            answered_request_id
+        )
+
+    assert [(message.get("role"), message.get("content")) for message in result["messages"]] == [
+        ("user", "What is the weather in Paris?"),
+        ("assistant", "Checking."),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_session_lookup_stops_retrying_once_the_budget_is_spent(
     instant_session_lookup_retries: None,
 ):
@@ -859,6 +888,57 @@ async def test_message_history_replays_real_key_named_tool_payloads() -> None:
     assert json.loads(tool_message["content"]) == function_output
 
 
+async def test_message_history_keeps_the_joined_name_of_a_stored_self_named_namespace_member() -> None:
+    request_id: Final = "chatcmpl-self-named-namespace"
+    responses_request_body: Final = {
+        "model": "anthropic/claude-sonnet-4-5",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "search",
+                "tools": [{"type": "function", "name": "search", "parameters": {"type": "object", "properties": {}}}],
+            }
+        ],
+        "input": [
+            {"role": "user", "content": "Search for the release notes."},
+            {"type": "function_call", "call_id": "call_1", "name": "search", "namespace": "search", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "release notes found"},
+        ],
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs",
+        return_value=True,
+    ):
+        proxy_server_request: Final = json.loads(
+            _get_proxy_server_request_for_spend_logs_payload(
+                metadata={},
+                litellm_params={"proxy_server_request": {"body": responses_request_body}},
+                kwargs={},
+            )
+        )
+
+    spend_log: Final = {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "session-self-named-namespace",
+        "proxy_server_request": proxy_server_request,
+        "response": _chat_completion_response(request_id, "Found them."),
+    }
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = [spend_log]
+        result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            request_id
+        )
+
+    assert [call["function"]["name"] for call in result["messages"][1]["tool_calls"]] == ["search__search"]
+
+
 def _turn_spend_log(
     turn_input: str | list[dict[str, str]], answer: str, compaction_blocks: list[dict[str, str]] | None = None
 ) -> dict[str, object]:
@@ -1054,6 +1134,131 @@ async def test_previous_response_history_starts_at_a_compaction_item_in_a_stored
     ]
 
 
+def _stored_response_turn(
+    request_id: str, call_type: str, status: str, output: list[dict[str, object]], prompt: str | None = None
+) -> dict[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": call_type,
+        "session_id": "session-with-reads",
+        "proxy_server_request": json.dumps({} if prompt is None else {"input": [{"role": "user", "content": prompt}]}),
+        "response": {"id": request_id, "object": "response", "status": status, "output": output},
+    }
+
+
+def _identified_output_message(item_id: str, text: str) -> dict[str, object]:
+    return {**_output_message(text), "id": item_id}
+
+
+def _replayed_roles_and_texts(session: ChatCompletionSession) -> list[tuple[object, object]]:
+    return [
+        (role, _text_of(content)) for role, content in (_role_and_content(message) for message in session["messages"])
+    ]
+
+
+@pytest.mark.asyncio
+async def test_reads_and_cancels_of_a_response_the_session_already_holds_replay_no_turns():
+    answer: Final = [_identified_output_message("msg_answer", "OK")]
+    spend_logs: Final = (
+        _stored_response_turn("resp_create", "aresponses", "completed", answer, prompt="Reply with OK"),
+        _stored_response_turn("resp_read", "aget_responses", "completed", answer),
+        _stored_response_turn("resp_streamed_read", "aget_responses", "completed", answer),
+        _stored_response_turn("resp_cancel", "acancel_responses", "completed", answer),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_create")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Reply with OK"), ("assistant", "OK")]
+
+
+@pytest.mark.asyncio
+async def test_a_polled_background_response_replays_its_finished_output_once():
+    answer: Final = [_identified_output_message("msg_answer", "One, two, three")]
+    spend_logs: Final = (
+        _stored_response_turn("resp_queued", "aresponses", "queued", [], prompt="Count to three"),
+        _stored_response_turn("resp_poll_running", "aget_responses", "in_progress", []),
+        _stored_response_turn("resp_poll_done", "aget_responses", "completed", answer),
+        _stored_response_turn("resp_poll_again", "aget_responses", "completed", answer),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_queued")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Count to three"), ("assistant", "One, two, three")]
+
+
+@pytest.mark.asyncio
+async def test_a_background_response_that_grows_between_polls_replays_each_output_item_once():
+    first: Final = _identified_output_message("msg_first", "One")
+    second: Final = _identified_output_message("msg_second", "Two")
+    spend_logs: Final = (
+        _stored_response_turn("resp_queued", "aresponses", "queued", [], prompt="Count to two"),
+        _stored_response_turn("resp_poll_partial", "aget_responses", "in_progress", [first]),
+        _stored_response_turn("resp_poll_done", "aget_responses", "completed", [first, second]),
+        _stored_response_turn("resp_poll_again", "aget_responses", "completed", [first, second]),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_queued")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Count to two"), ("assistant", "One"), ("assistant", "Two")]
+
+
+@pytest.mark.asyncio
+async def test_an_item_a_poll_caught_half_written_replays_its_finished_text_once():
+    spend_logs: Final = (
+        _stored_response_turn("resp_queued", "aresponses", "queued", [], prompt="Count to three"),
+        _stored_response_turn(
+            "resp_poll_partial", "aget_responses", "in_progress", [_identified_output_message("msg_answer", "One, t")]
+        ),
+        _stored_response_turn(
+            "resp_poll_done",
+            "aget_responses",
+            "completed",
+            [
+                _identified_output_message("msg_answer", "One, two, three"),
+                _identified_output_message("msg_more", "Done"),
+            ],
+        ),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_queued")
+
+    assert _replayed_roles_and_texts(session) == [
+        ("user", "Count to three"),
+        ("assistant", "One, two, three"),
+        ("assistant", "Done"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_polled_output_item_without_an_id_still_replays_in_order():
+    spend_logs: Final = (
+        _stored_response_turn("resp_queued", "aresponses", "queued", [], prompt="Count to two"),
+        _stored_response_turn(
+            "resp_poll_done",
+            "aget_responses",
+            "completed",
+            [_output_message("One"), _identified_output_message("msg_two", "Two")],
+        ),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_queued")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Count to two"), ("assistant", "One"), ("assistant", "Two")]
+
+
+@pytest.mark.asyncio
+async def test_a_read_that_ends_before_its_streamed_create_replays_the_answer_once_after_the_prompt():
+    answer: Final = [_identified_output_message("msg_answer", "OK")]
+    spend_logs: Final = (
+        _stored_response_turn("resp_read_mid_stream", "aget_responses", "completed", answer),
+        _stored_response_turn("resp_create", "aresponses", "completed", answer, prompt="Say OK"),
+    )
+
+    session: Final = await _history_from_stored_turns(spend_logs, "resp_create")
+
+    assert _replayed_roles_and_texts(session) == [("user", "Say OK"), ("assistant", "OK")]
+
+
 def _tool_call_ids(message: object) -> tuple[str, ...]:
     tool_calls: Final = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
     return tuple(call["id"] if isinstance(call, dict) else call.id for call in tool_calls or ())
@@ -1218,3 +1423,69 @@ async def test_session_lookup_follows_the_owner_across_keys_and_keeps_ownerless_
 
     assert await _history_request_ids(sqlite_db, "alice-new-key") == ["alice-old-key", "alice-new-key"]
     assert await _history_request_ids(sqlite_db, "ownerless-2") == ["ownerless-2"]
+
+
+GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
+LONG_SIGNATURE: Final = "Ab+/" * 200
+
+
+def _gemini_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
+            ],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
+        },
+    )
+
+
+def _stored_function_call_turn(response_id: str) -> dict:
+    return {
+        "request_id": response_id,
+        "call_type": "aresponses",
+        "session_id": "gemini-session",
+        "proxy_server_request": {"input": "What is the weather in Paris?", "model": "gemini-short-ids"},
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": '{"city": "Paris"}',
+                    "status": "completed",
+                    "provider_specific_fields": {"thought_signature": LONG_SIGNATURE},
+                }
+            ],
+        },
+    }
+
+
+@pytest.mark.parametrize("short_ids", [False, True])
+async def test_previous_response_replays_a_thought_signature_kept_out_of_the_id_only_with_short_ids(
+    short_ids: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-gemini-turn-1"
+    )
+    stored: Final = _StoredSpendLogs((_stored_function_call_turn(response_id),))
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored)), respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        await litellm.aresponses(
+            model="gemini/gemini-3.5-flash",
+            input=[{"type": "function_call_output", "call_id": "call_1", "output": '{"temp_c": 21}'}],
+            previous_response_id=response_id,
+            api_key="test-gemini-key",
+            **({"thought_signature_in_tool_call_id": False} if short_ids else {}),
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    model_turns: Final = [turn for turn in sent_body["contents"] if turn["role"] == "model"]
+    model_parts: Final = list(chain.from_iterable(turn["parts"] for turn in model_turns))
+    assert len(model_parts) == 1
+    assert (model_parts[0]["thoughtSignature"] == LONG_SIGNATURE) is short_ids

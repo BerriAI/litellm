@@ -1,4 +1,5 @@
 import moment from "moment";
+import type { ParseKeys } from "i18next";
 import { keepPreviousData, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, PaginationState, SortingState } from "@tanstack/react-table";
 import { uiSpendLogsCall } from "../../networking";
@@ -38,22 +39,22 @@ export const LOG_FILTER_IDS = {
   SEARCH: "search",
 } as const;
 
-export const LOG_FILTER_LABELS: Record<string, string> = {
-  [LOG_FILTER_IDS.TEAM_ID]: "Team ID",
-  [LOG_FILTER_IDS.SPAN_TYPE]: "Span Type",
-  [LOG_FILTER_IDS.STATUS]: "Status",
-  [LOG_FILTER_IDS.CACHE_STATUS]: "Cache",
-  [LOG_FILTER_IDS.CREDENTIAL]: "Credential",
-  [LOG_FILTER_IDS.KEY_ALIAS]: "Key Alias",
-  [LOG_FILTER_IDS.USER_ID]: "User ID",
-  [LOG_FILTER_IDS.END_USER]: "End User",
-  [LOG_FILTER_IDS.ERROR_CODE]: "Error Code",
-  [LOG_FILTER_IDS.ERROR_MESSAGE]: "Error Message",
-  [LOG_FILTER_IDS.KEY_HASH]: "Key Hash",
-  [LOG_FILTER_IDS.SESSION_ID]: "Session ID",
-  [LOG_FILTER_IDS.MODEL_ID]: "Model",
-  [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
-  [LOG_FILTER_IDS.SEARCH]: "Search",
+export const LOG_FILTER_LABELS: Record<string, ParseKeys> = {
+  [LOG_FILTER_IDS.TEAM_ID]: "logs.request.filters.teamId",
+  [LOG_FILTER_IDS.SPAN_TYPE]: "logs.request.filters.spanType",
+  [LOG_FILTER_IDS.STATUS]: "logs.request.filters.status",
+  [LOG_FILTER_IDS.CACHE_STATUS]: "logs.request.filters.cache",
+  [LOG_FILTER_IDS.CREDENTIAL]: "logs.request.filters.credential",
+  [LOG_FILTER_IDS.KEY_ALIAS]: "logs.request.filters.keyAlias",
+  [LOG_FILTER_IDS.USER_ID]: "logs.request.filters.userId",
+  [LOG_FILTER_IDS.END_USER]: "logs.request.filters.endUser",
+  [LOG_FILTER_IDS.ERROR_CODE]: "logs.request.filters.errorCode",
+  [LOG_FILTER_IDS.ERROR_MESSAGE]: "logs.request.filters.errorMessage",
+  [LOG_FILTER_IDS.KEY_HASH]: "logs.request.filters.keyHash",
+  [LOG_FILTER_IDS.SESSION_ID]: "logs.request.filters.sessionId",
+  [LOG_FILTER_IDS.MODEL_ID]: "logs.request.filters.model",
+  [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "logs.request.filters.publicModelOrSearchTool",
+  [LOG_FILTER_IDS.SEARCH]: "logs.request.filters.search",
 };
 
 export interface LogsWindow {
