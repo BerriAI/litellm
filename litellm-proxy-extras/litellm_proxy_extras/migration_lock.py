@@ -67,7 +67,11 @@ def _coordination_failure(database_url: str, exc: "psycopg.Error", *, connecting
         port: Final = parsed_url.port
     except ValueError:
         return prefix + f"P1001: Can't reach database server. {detail}"
-    host: Final = parsed_url.hostname or "localhost"
+    host: Final = (
+        next((value for key, value in parse_qsl(parsed_url.query) if key == "host"), None)
+        or parsed_url.hostname
+        or "localhost"
+    )
     return prefix + f"P1001: Can't reach database server at `{host}:{port or 5432}`. {detail}"
 
 

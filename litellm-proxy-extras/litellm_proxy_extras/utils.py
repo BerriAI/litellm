@@ -97,6 +97,7 @@ LIBPQ_URL_PARAMS: Final = frozenset(
         "gssencmode",
         "krbsrvname",
         "target_session_attrs",
+        "host",
     }
 )
 

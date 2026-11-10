@@ -26,6 +26,7 @@ from litellm_proxy_extras.request_log_indexes import (
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
 from psycopg import sql
 from psycopg.abc import Params, QueryNoTemplate
+from psycopg.conninfo import make_conninfo
 from psycopg.rows import class_row
 
 pytestmark = pytest.mark.timeout(900)
@@ -432,6 +433,31 @@ def test_an_invalid_index_of_the_managed_name_on_a_plain_table_is_rebuilt(scratc
     assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: False}
 
     assert ensure_request_log_indexes(scratch_database, "public") is True
+
+    assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: True}
+
+
+def _close_a_second_after_a_build_waits_on_it(database_url: str, pin: "psycopg.Connection[tuple[object, ...]]") -> None:
+    deadline: Final = time.monotonic() + 60
+    with psycopg.connect(database_url, autocommit=True) as watcher:
+        while time.monotonic() < deadline and not watcher.execute(
+            "SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'virtualxid'"
+        ).fetchone():
+            time.sleep(0.01)
+    time.sleep(1)
+    pin.close()
+
+
+@requires_db
+def test_a_lock_timeout_the_database_url_sets_does_not_cancel_the_online_build(scratch_database: str) -> None:
+    with_lock_timeout: Final = make_conninfo(scratch_database, options="-c lock_timeout=200")
+    pin: Final = _pin_a_snapshot_on(scratch_database, "LiteLLM_SpendLogs")
+    release_the_pin: Final = threading.Thread(target=_close_a_second_after_a_build_waits_on_it, args=(scratch_database, pin))
+    release_the_pin.start()
+    try:
+        assert ensure_request_log_indexes(with_lock_timeout, "public") is True
+    finally:
+        release_the_pin.join()
 
     assert _index_validity(scratch_database, "litellm_call_id_idx") == {CALL_ID_INDEX: True}
 
