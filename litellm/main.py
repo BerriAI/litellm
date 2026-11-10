@@ -821,6 +821,16 @@ async def acompletion(
             prompt_version=kwargs.get("prompt_version", None),
             request_kwargs=kwargs,
         )
+        #########################################################
+        # if the chat completion logging hook removed all tools,
+        # set tools to None
+        # eg. in certain cases when users send vector stores as tools
+        # we don't want the tools to go to the upstream llm
+        # relevant issue: https://github.com/BerriAI/litellm/issues/11404
+        #########################################################
+        if tools is not None and len(tools) == 0:
+            tools = None
+
     #########################################################
     #########################################################
 
@@ -5600,15 +5610,9 @@ def completion(
         raise ValueError("model param not passed in.")
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
-    tools, tool_choice, parallel_tool_calls = (
-        (None, None, None)
-        if tools == []
-        else (
-            validate_and_fix_openai_tools(tools=tools),
-            validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model),
-            parallel_tool_calls,
-        )
-    )
+    tools = validate_and_fix_openai_tools(tools=tools)
+    # validate tool_choice
+    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
