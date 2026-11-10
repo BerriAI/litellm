@@ -16110,6 +16110,13 @@ async def _routed_count_deployment(
         return None
 
 
+def _with_router_timeout(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    router_timeout: Final = None if llm_router is None else llm_router.timeout
+    if router_timeout is None or litellm_params.get("timeout") is not None:
+        return litellm_params
+    return {**litellm_params, "timeout": router_timeout}
+
+
 async def _count_request_tokens(
     request: TokenCountRequest,
     routed: Mapping[str, object] | None,
@@ -16134,8 +16141,8 @@ async def _count_request_tokens(
         litellm_model_name = deployment.get("litellm_params", {}).get("model")
         deployment = {  # rebind-ok: merge the named credential into a copy
             **deployment,
-            "litellm_params": with_named_credential(
-                _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
+            "litellm_params": _with_router_timeout(
+                with_named_credential(_LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})))
             ),
         }
         # remove the custom_llm_provider_prefix in the litellm_model_name

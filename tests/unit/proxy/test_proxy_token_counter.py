@@ -5038,19 +5038,32 @@ async def test_call_endpoint_counts_a_prompt_for_a_model_without_a_deployment_as
     [("anthropic/claude-sonnet-5-5", ""), ("azure_ai/claude-sonnet-5-5", ""), ("openai/gpt-5.6", "/v1")],
     ids=["anthropic", "azure_ai", "openai"],
 )
-async def test_call_endpoint_gives_up_on_a_stalled_count_api_after_the_deployment_timeout(
-    model: str, path: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("timeout_setting", ["deployment", "router_settings"])
+async def test_call_endpoint_answers_a_timeout_when_a_stalled_count_api_outlasts_the_configured_timeout(
+    model: str, path: str, timeout_setting: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with socket.create_server(("127.0.0.1", 0)) as never_answers:
         port: Final = never_answers.getsockname()[1]
-        _route_to_one_deployment(
-            {"model": model, "api_key": "test-key", "api_base": f"http://127.0.0.1:{port}{path}", "timeout": 0.5},
-            monkeypatch,
+        litellm_params: Final[dict[str, JsonValue]] = {
+            "model": model,
+            "api_key": "test-key",
+            "api_base": f"http://127.0.0.1:{port}{path}",
+        }
+        deployment: Final[dict[str, JsonValue]] = {
+            "model_name": "provider-counted",
+            "litellm_params": {**litellm_params, "timeout": 0.5} if timeout_setting == "deployment" else litellm_params,
+        }
+        monkeypatch.setattr(
+            litellm.proxy.proxy_server,
+            "llm_router",
+            Router(model_list=[deployment], timeout=0.5 if timeout_setting == "router_settings" else None),
         )
 
-        with pytest.raises(ProxyException):
+        with pytest.raises(ProxyException) as error:
             async with asyncio.timeout(10):
                 await token_counter(request=_FOX_AS_PROMPT, call_endpoint=True)
+
+    assert error.value.code == "408"
 
 
 @pytest.mark.asyncio
