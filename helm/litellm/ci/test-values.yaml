@@ -1,4 +1,4 @@
-# Values for the CircleCI helm_chart_testing job: a monolith install on a
+# Values for the local chart smoke test: a monolith install on a
 # kind cluster from the image built by the pipeline (image.repository / tag /
 # pullPolicy are passed with --set), backed by the throwaway PostgreSQL in
 # ci/postgres.yaml so the migrations Job and the proxy have a database.

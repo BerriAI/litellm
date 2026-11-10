@@ -1,4 +1,4 @@
-# Throwaway PostgreSQL for the CircleCI helm_chart_testing job. Applied with
+# Throwaway PostgreSQL for the local chart smoke test. Applied with
 # kubectl before `helm install`; the chart itself ships no database.
 apiVersion: v1
 kind: Secret

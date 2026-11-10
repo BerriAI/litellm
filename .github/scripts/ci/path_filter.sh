@@ -6,10 +6,12 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 run_full() {
   echo "path-filter[$category]: running job ($1)"
+  echo "decision=run"
+  [ -z "${GITHUB_OUTPUT:-}" ] || echo "decision=run" >> "$GITHUB_OUTPUT"
   exit 0
 }
 
-[ -n "${CIRCLE_PULL_REQUEST:-}" ] || run_full "not a pull request"
+[ "${GITHUB_EVENT_NAME:-}" = pull_request ] || run_full "not a pull request"
 
 candidate_bases="${PATH_FILTER_BASE_BRANCH:-main}"
 merge_base=""
@@ -36,5 +38,6 @@ if [ "$decision" = run ]; then
   run_full "$category-relevant changes detected"
 fi
 
-echo "path-filter[$category]: only unrelated changes detected; halting job as successful"
-circleci-agent step halt
+echo "path-filter[$category]: only unrelated changes detected"
+echo "decision=skip"
+[ -z "${GITHUB_OUTPUT:-}" ] || echo "decision=skip" >> "$GITHUB_OUTPUT"

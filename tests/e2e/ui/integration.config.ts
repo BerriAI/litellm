@@ -2,9 +2,6 @@ import { defineConfig, devices } from "@playwright/test";
 import * as path from "path";
 import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 
-if (process.env.GITHUB_ACTIONS === "true")
-  throw new Error("Integration contracts are owned by CircleCI");
-
 export default defineConfig({
   testDir: "./tests/integrationCritical",
   testMatch: "*.spec.ts",

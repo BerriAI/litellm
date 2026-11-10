@@ -28,7 +28,7 @@ on:
       - ".github/actions/cache-cargo-build/**"
       - ".github/scripts/detect_changes.sh"
       - ".github/scripts/uv_sync_with_retries.sh"
-      - ".circleci/scripts/classify_changes.sh"
+      - ".github/scripts/ci/classify_changes.sh"
 
 permissions:
   contents: read

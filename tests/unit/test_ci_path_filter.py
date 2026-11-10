@@ -1,6 +1,6 @@
-"""Regression tests for CircleCI change-based job gating.
+"""Regression tests for change-based job gating.
 
-`.circleci/scripts/classify_changes.sh` is the pure decision function behind
+`.github/scripts/ci/classify_changes.sh` is the pure decision function behind
 `path_filter.sh`: given the list of files a PR changed (on stdin) and a job
 category, it prints `run` or `skip`. The gating contract we lock in here:
 
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPTS_DIR = Path(__file__).resolve().parents[2] / ".circleci" / "scripts"
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / ".github" / "scripts" / "ci"
 SCRIPT = SCRIPTS_DIR / "classify_changes.sh"
 PATH_FILTER = SCRIPTS_DIR / "path_filter.sh"
 
@@ -56,7 +56,7 @@ CI = [".github/workflows/test-unit.yml"]
         ("mcp-dependencies", ["litellm-proxy-extras/pyproject.toml"], "run"),
         ("mcp-dependencies", ["scripts/check_mcp_sdk_install.py"], "run"),
         ("mcp-dependencies", [".github/workflows/test-mcp-dependency-resolution.yml"], "run"),
-        ("mcp-dependencies", [".circleci/scripts/classify_changes.sh"], "run"),
+        ("mcp-dependencies", [".github/scripts/ci/classify_changes.sh"], "run"),
         ("mcp-dependencies", ["litellm/llms/openai/chat/gpt_transformation.py"], "skip"),
         ("mcp-dependencies", DOCS + CLIENT, "skip"),
         ("windows-release", ["litellm-rust/crates/inference/src/lib.rs"], "run"),
@@ -65,7 +65,7 @@ CI = [".github/workflows/test-unit.yml"]
         ("windows-release", ["pyproject.toml"], "run"),
         ("windows-release", ["uv.lock"], "run"),
         ("windows-release", ["tests/windows_tests/check_windows_wheel_install.py"], "run"),
-        ("windows-release", [".circleci/config.yml"], "run"),
+        ("windows-release", [".github/scripts/ci/classify_changes.sh"], "run"),
         ("windows-release", ["litellm/main.py"], "skip"),
         ("windows-release", ["tests/unit/test_utils.py"], "skip"),
         ("windows-release", ["ui/litellm-dashboard/src/App.tsx"], "skip"),
@@ -126,7 +126,7 @@ def test_classify_decisions(category: str, changed: list[str], expected: str) ->
         (".github/workflows/test-unit.yml", "run"),
         ("tests/integration/run.py", "run"),
         ("uv.lock", "run"),
-        (".circleci/config.yml", "skip"),
+        (".github/workflows/test-integration.yml", "skip"),
         ("litellm/router.py", "skip"),
         ("docs/my-website/redis.md", "skip"),
     ),
@@ -158,7 +158,7 @@ def test_markdown_under_dot_github_is_still_docs() -> None:
 
 
 def test_ui_and_client_diverge_on_a_backend_only_change() -> None:
-    """`client` gates CircleCI's dashboard end-to-end jobs, which drive a real
+    """`client` gates the dashboard end-to-end jobs, which drive a real
     proxy and so must run on backend changes. `ui` gates the dashboard build and
     its unit tests, which cannot see the backend at all."""
     assert classify("client", BACKEND) == "run"
@@ -202,16 +202,9 @@ def _pr_repo(tmp_path: Path, feature_files: dict[str, str]) -> Path:
 
 
 def _run_path_filter(work: Path, tmp_path: Path, category: str, scripts_dir: Path, is_pr: bool = True):
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    stub = bin_dir / "circleci-agent"
-    stub.write_text("#!/usr/bin/env bash\necho \"[stub] circleci-agent $*\"\nexit 0\n")
-    stub.chmod(0o755)
     env = dict(os.environ)
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
-    env.pop("CIRCLE_PULL_REQUEST", None)
-    if is_pr:
-        env["CIRCLE_PULL_REQUEST"] = "https://github.com/x/y/pull/1"
+    env["GITHUB_EVENT_NAME"] = "pull_request" if is_pr else "push"
+    env["GITHUB_OUTPUT"] = str(tmp_path / "output")
     return subprocess.run(
         ["bash", str(scripts_dir / "path_filter.sh"), category],
         cwd=work,
@@ -221,11 +214,12 @@ def _run_path_filter(work: Path, tmp_path: Path, category: str, scripts_dir: Pat
     )
 
 
-def test_path_filter_halts_docs_only_pr(tmp_path: Path) -> None:
+def test_path_filter_skips_docs_only_pr(tmp_path: Path) -> None:
     work = _pr_repo(tmp_path, {"README.md": "# docs\n"})
     result = _run_path_filter(work, tmp_path, "backend", SCRIPTS_DIR)
     assert result.returncode == 0
-    assert "circleci-agent step halt" in result.stdout
+    assert "decision=skip" in result.stdout
+    assert (tmp_path / "output").read_text() == "decision=skip\n"
 
 
 def test_path_filter_runs_backend_pr(tmp_path: Path) -> None:

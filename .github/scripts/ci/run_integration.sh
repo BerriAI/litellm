@@ -30,7 +30,7 @@ egress_cgroup=litellm-integration
 cleanup() {
   original_status=$?
   trap - EXIT INT TERM
-  sudo .venv/bin/python .circleci/scripts/stop_integration_processes.py \
+  sudo .venv/bin/python .github/scripts/ci/stop_integration_processes.py \
     "$integration_identity" "$(id -u)" "$proxy_pid" "$peer_pid" "$upstream_pid" \
     > "$results/process-cleanup.txt" 2>&1 || original_status=1
   for owned_pid in "$peer_pid" "$proxy_pid" "$upstream_pid"; do
@@ -84,7 +84,7 @@ if [ "$suite" = browser ]; then
   export LITELLM_UI_PATH="$PWD/ui/litellm-dashboard/out"
   test -f "$LITELLM_UI_PATH/index.html"
 fi
-export INTEGRATION_SEED="$(.venv/bin/python -c 'import hashlib,os; print(int(hashlib.sha256(((os.environ.get("CIRCLE_SHA1") or os.environ.get("GITHUB_SHA") or "local") + (os.environ.get("CIRCLE_WORKFLOW_ID") or os.environ.get("GITHUB_RUN_ID") or "local")).encode()).hexdigest()[:8],16))')"
+export INTEGRATION_SEED="$(.venv/bin/python -c 'import hashlib,os; print(int(hashlib.sha256(((os.environ.get("GITHUB_SHA") or "local") + (os.environ.get("GITHUB_RUN_ID") or "local")).encode()).hexdigest()[:8],16))')"
 export INTEGRATION_ORDER_SEED="$INTEGRATION_SEED"
 
 uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma > "$results/prisma-generate.log" 2>&1
@@ -93,7 +93,7 @@ export INTEGRATION_PROXY_DATABASE_URL=""
 export INTEGRATION_PROXY_READ_REPLICA_URL=""
 export INTEGRATION_ROUTING=""
 if [ "$mode" = replica ] || [ "$mode" = parity ]; then
-  .venv/bin/python .circleci/scripts/prepare_replica_roles.py > "$results/prepare-replica-roles.log" 2>&1
+  .venv/bin/python .github/scripts/ci/prepare_replica_roles.py > "$results/prepare-replica-roles.log" 2>&1
   export INTEGRATION_PROXY_DATABASE_URL="postgresql://litellm_writer:litellm-writer@127.0.0.1:5432/circle_test"
   export INTEGRATION_PROXY_READ_REPLICA_URL="postgresql://litellm_reader:litellm-reader@127.0.0.1:5432/circle_test"
 fi
@@ -202,7 +202,7 @@ start_proxy() {
 if [ "$isolated_workers" = false ]; then
   start_proxy 4000 proxy.log
   proxy_pid="$launched_pid"
-  .venv/bin/python .circleci/scripts/wait_integration_services.py
+  .venv/bin/python .github/scripts/ci/wait_integration_services.py
   curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
     -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
     -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
@@ -210,7 +210,7 @@ if [ "$isolated_workers" = false ]; then
     export INTEGRATION_PEER_URL=http://127.0.0.1:4001
     start_proxy 4001 peer.log
     peer_pid="$launched_pid"
-    .venv/bin/python .circleci/scripts/wait_integration_services.py
+    .venv/bin/python .github/scripts/ci/wait_integration_services.py
   fi
 fi
 
@@ -233,14 +233,13 @@ if [ "$suite" = browser ]; then
     E2E_UI_BASE_URL="$E2E_UI_BASE_URL" E2E_UI_ARTIFACT_DIR="$E2E_UI_ARTIFACT_DIR" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" CI=true \
     node tests/e2e/ui/node_modules/@playwright/test/cli.js test --config tests/e2e/ui/integration.config.ts
-  .venv/bin/python .circleci/scripts/verify_integration_browser.py "$results/browser-results.json"
+  .venv/bin/python .github/scripts/ci/verify_integration_browser.py "$results/browser-results.json"
   exit 0
 fi
 
 shard_arguments=()
-if [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
-  .venv/bin/python tests/integration/run.py "$suite" --list \
-    | circleci tests split --split-by=timings --timings-type=filename > "$results/node-files.txt"
+if [ -n "${INTEGRATION_SHARD_FILES:-}" ]; then
+  cp "$INTEGRATION_SHARD_FILES" "$results/node-files.txt"
   shard_arguments=(--shard-files "$results/node-files.txt")
 fi
 
@@ -265,7 +264,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   "${license_env[@]}" \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
-  INTEGRATION_CASE_SHARDS="${CIRCLE_NODE_TOTAL:-1}" INTEGRATION_CASE_SHARD_INDEX="${CIRCLE_NODE_INDEX:-0}" \
+  INTEGRATION_CASE_SHARDS="${INTEGRATION_CASE_SHARDS:-1}" INTEGRATION_CASE_SHARD_INDEX="${INTEGRATION_CASE_SHARD_INDEX:-0}" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
   INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \

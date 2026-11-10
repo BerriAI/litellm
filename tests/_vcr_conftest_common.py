@@ -102,7 +102,7 @@ def reset_vcr_diag_dir() -> None:
                 pass
 
 
-# CircleCI truncates a step's retrievable output to the last ~400 KB. The
+# CI truncates a step's retrievable output to the last ~400 KB. The
 # diagnostic log is emitted right *before* the final pytest summary line but
 # *after* the VCR CLASSIFICATION SUMMARY, so an unbounded dump (the body/key
 # matchers log one block per *episode comparison*, even on an eventual HIT)
