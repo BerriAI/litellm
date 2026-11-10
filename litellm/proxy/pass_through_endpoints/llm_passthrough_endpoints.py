@@ -2599,11 +2599,18 @@ def _with_vertex_body_labels(
 
 
 def _with_vertex_labels_header(
-    allowed_fields: tuple[str, ...], headers: Mapping[str, str], litellm_params: Mapping[str, object]
-) -> Mapping[str, str]:
-    labels_header: Final = vertex_partner_labels_header(allowed_fields, None, headers, litellm_params)
-    unlabelled: Final = {name: value for name, value in headers.items() if not is_vertex_labels_header(name)}
-    return unlabelled if labels_header is None else {**unlabelled, VERTEX_LABELS_HEADER: labels_header}
+    allowed_fields: tuple[str, ...],
+    headers: Mapping[str, str],
+    body: Mapping[str, object] | None,
+    litellm_params: Mapping[str, object],
+) -> UpstreamRequest:
+    caller_labels: Final = body.get("labels") if body is not None else None
+    labels_header: Final = vertex_partner_labels_header(allowed_fields, caller_labels, headers, litellm_params)
+    unlabelled_headers: Final = {name: value for name, value in headers.items() if not is_vertex_labels_header(name)}
+    unlabelled_body: Final = None if body is None else {key: value for key, value in body.items() if key != "labels"}
+    if labels_header is None:
+        return unlabelled_headers, unlabelled_body
+    return {**unlabelled_headers, VERTEX_LABELS_HEADER: labels_header}, unlabelled_body
 
 
 def _with_vertex_request_labels(
@@ -2615,10 +2622,10 @@ def _with_vertex_request_labels(
     allowed_fields: Final = vertex_request_label_fields()
     if not allowed_fields:
         return headers, body
+    if vertex_method in _VERTEX_HEADER_LABELLED_METHODS:
+        return _with_vertex_labels_header(allowed_fields, headers, body, litellm_params)
     if body is not None and (vertex_method in _VERTEX_BODY_LABELLED_METHODS or "labels" in body):
         return headers, _with_vertex_body_labels(allowed_fields, body, litellm_params)
-    if vertex_method in _VERTEX_HEADER_LABELLED_METHODS:
-        return _with_vertex_labels_header(allowed_fields, headers, litellm_params), body
     return headers, body
 
 

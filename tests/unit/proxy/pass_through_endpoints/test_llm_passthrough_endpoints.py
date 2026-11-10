@@ -543,6 +543,31 @@ def test_vertex_claude_pass_through_replaces_a_forged_labels_header(
 
 
 @pytest.mark.usefixtures("search_team_caller")
+def test_vertex_claude_pass_through_moves_body_labels_into_the_labels_header(
+    vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", list(_VERTEX_LABEL_FIELDS))
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_DEPLOYMENT_PATH}").mock(
+        return_value=httpx.Response(200, json=_VERTEX_CLAUDE_REPLY)
+    )
+
+    response: Final = vertex_proxy.post(
+        f"/vertex_ai/{_VERTEX_DEPLOYMENT_PATH}",
+        json={**_VERTEX_CLAUDE_BODY, "labels": _VERTEX_FORGED_LABELS},
+        headers={"x-litellm-api-key": "sk-caller"},
+    )
+
+    assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
+    outbound: Final = upstream.calls.last.request
+    sent_headers: Final = outbound.headers.get_list("x-vertex-ai-labels")
+    assert len(sent_headers) == 1
+    assert list(json.loads(base64.b64decode(sent_headers[0])).items()) == list(
+        {**_VERTEX_IDENTITY_LABELS, "env": "prod", "app": "chat", **_VERTEX_SPEND_LOGS_LABELS}.items()
+    )
+    assert json.loads(outbound.content) == _VERTEX_CLAUDE_BODY
+
+
+@pytest.mark.usefixtures("search_team_caller")
 def test_vertex_claude_pass_through_forwards_the_callers_labels_header_with_the_setting_off(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter"
 ) -> None:
