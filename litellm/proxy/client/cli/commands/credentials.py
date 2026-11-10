@@ -215,19 +215,17 @@ def _poll_until_settled(
     client: CredentialsManagementClient,
     credential_name: str,
     flow_handle: str,
-    interval: int,
+    first_interval: int,
     expires_at: float,
     clock: PollClock,
 ) -> UserConnectionPollResponse:
-    if clock.now() + interval >= expires_at:
-        return UserConnectionPollResponse(status="expired")
-    clock.sleep(interval)
-    poll: Final = client.poll_user_connection(credential_name, flow_handle)
-    if poll.status in ("pending", "slow_down"):
-        return _poll_until_settled(
-            client, credential_name, flow_handle, _next_poll_interval(poll, interval), expires_at, clock
-        )
-    return poll
+    interval = first_interval  # rebind-ok: GitHub can ask for a longer wait on any poll
+    while clock.now() + interval < expires_at:
+        clock.sleep(interval)
+        if (poll := client.poll_user_connection(credential_name, flow_handle)).status not in ("pending", "slow_down"):
+            return poll
+        interval = _next_poll_interval(poll, interval)
+    return UserConnectionPollResponse(status="expired")
 
 
 def connect_user_credential(
