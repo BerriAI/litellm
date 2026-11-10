@@ -1911,12 +1911,11 @@ def _s3_media_frame_check(
     user_api_key_dict: UserAPIKeyAuth,
     general_settings: Mapping[str, object],
     managed_files: object,
-    llm_router: Router | None,
 ) -> ResponsesWsFrameCheck:
     async def refusal(params: Mapping[str, object], /) -> str | None:
         try:
             await refuse_s3_media_the_key_may_not_read(
-                {**params, "model": admitted_model}, user_api_key_dict, general_settings, managed_files, llm_router
+                {**params, "model": admitted_model}, user_api_key_dict, general_settings, managed_files
             )
         except HTTPException as refused:
             return str(refused.detail)
@@ -2028,7 +2027,6 @@ async def _responses_websocket_session(
             user_api_key_dict,
             general_settings,
             proxy_logging_obj.get_proxy_hook("managed_files"),
-            llm_router,
         ),
         **_routing_hints_from_first_ws_frame(first_message),
     )

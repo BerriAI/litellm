@@ -31,18 +31,15 @@ from litellm.litellm_core_utils.url_utils import (
     validate_url,
 )
 from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
-from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
 from litellm.types.router import (
     CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
     Deployment,
-    DeploymentTypedDict,
     server_owned_wif_fields_present,
 )
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
@@ -238,47 +235,6 @@ def _allow_model_level_clientside_configurable_parameters(
         param=param,
         request_body_value=request_body_value,
         configurable_clientside_auth_params=model_info.configurable_clientside_auth_params,
-    )
-
-
-_CLIENT_AWS_IDENTITY_PARAMS: Final = ("aws_role_name", "aws_web_identity_token", "aws_profile_name")
-
-
-def _sends_a_value(body: Mapping[str, object], param: str) -> bool:
-    value: Final = body.get(param)
-    return isinstance(value, str) and bool(value)
-
-
-def _client_aws_fields(body: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: body[key] for key in AWS_AUTH_PARAM_KEYS if _sends_a_value(body, key)}
-
-
-def _identity_choosing_params(client_fields: Mapping[str, object], deployment: DeploymentTypedDict) -> tuple[str, ...]:
-    return BaseAWSLLM.identity_choosing_params(
-        AwsAuthParams.model_validate({**deployment["litellm_params"], **client_fields})
-    )
-
-
-def deployment_admits_a_client_aws_identity(body: Mapping[str, object], llm_router: Router | None) -> bool:
-    model: Final = body.get("model")
-    if not isinstance(model, str) or llm_router is None:
-        return False
-    admitted: Final = frozenset(
-        param
-        for param in _CLIENT_AWS_IDENTITY_PARAMS
-        if _sends_a_value(body, param)
-        and _allow_model_level_clientside_configurable_parameters(
-            model=model, param=param, request_body_value=body[param], llm_router=llm_router
-        )
-    )
-    deployments: Final = llm_router.get_model_list(model_name=model) or ()
-    client_fields: Final = _client_aws_fields(body)
-    return (
-        bool(admitted)
-        and bool(deployments)
-        and all(
-            not admitted.isdisjoint(_identity_choosing_params(client_fields, deployment)) for deployment in deployments
-        )
     )
 
 
