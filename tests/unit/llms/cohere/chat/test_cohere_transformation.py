@@ -923,6 +923,10 @@ def _object_schema(properties: Mapping[str, object], **extra: object) -> Mapping
     return {"type": "object", "properties": properties, "required": list(properties), **extra}
 
 
+def _nested_schema(levels: int, leaf: Mapping[str, object]) -> Mapping[str, object]:
+    return functools.reduce(lambda inner, _: _object_schema({"child": inner}), range(levels), leaf)
+
+
 LOW_THINKING: Final = {"type": "enabled", "token_budget": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}
 
 
@@ -1125,6 +1129,16 @@ UNSUPPORTED_COHERE_V2_PARAMS: Final = [
         },
         id="schema-min-items-inside-any-of",
     ),
+    pytest.param(
+        JSON_SCHEMA_MODEL,
+        {"response_format": _json_schema_format(_nested_schema(64, {"type": "integer", "minimum": 0}))},
+        id="schema-minimum-at-the-deepest-checked-level",
+    ),
+    pytest.param(
+        JSON_SCHEMA_MODEL,
+        {"response_format": _json_schema_format(_nested_schema(65, {"type": "integer"}))},
+        id="schema-nested-past-the-check",
+    ),
 ]
 
 
@@ -1212,6 +1226,7 @@ def test_cohere_v2_tool_choice_without_tools_is_left_out(respx_mock: respx.MockR
             _object_schema({"email": {"anyOf": [{"type": "string", "format": "email"}, {"type": "null"}]}}),
             id="nullable-format",
         ),
+        pytest.param(_nested_schema(64, {"type": "integer"}), id="nested-to-the-deepest-checked-level"),
     ],
 )
 def test_cohere_v2_json_schema_cohere_accepts_reaches_cohere_unchanged(
@@ -1220,18 +1235,6 @@ def test_cohere_v2_json_schema_cohere_accepts_reaches_cohere_unchanged(
     body: Final = _cohere_v2_request_body(respx_mock, JSON_SCHEMA_MODEL, {"response_format": _json_schema_format(schema)})
 
     assert body["response_format"] == {"type": "json_object", "json_schema": schema}
-
-
-@pytest.mark.usefixtures("_cohere_httpx_transport")
-@pytest.mark.respx(assert_all_called=True)
-def test_cohere_v2_json_schema_nested_past_the_check_reaches_cohere_unchanged(respx_mock: respx.MockRouter) -> None:
-    schema: Final = functools.reduce(
-        lambda inner, _: _object_schema({"child": inner}), range(400), {"type": "integer", "minimum": 0}
-    )
-
-    body: Final = _cohere_v2_request_body(respx_mock, JSON_SCHEMA_MODEL, {"response_format": _json_schema_format(schema)})
-
-    assert json.dumps(body["response_format"]) == json.dumps({"type": "json_object", "json_schema": schema})
 
 
 def test_cohere_v2_tool_choice_400_shortens_a_long_value() -> None:

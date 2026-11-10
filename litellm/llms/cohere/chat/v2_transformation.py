@@ -211,17 +211,22 @@ def _pattern_cohere_rejects(pattern: object) -> bool:
     return anchored or any(syntax in pattern for syntax in _PATTERN_SYNTAX_COHERE_REJECTS)
 
 
-def _schema_feature_cohere_rejects(schema: object, depth: int = 0) -> str | None:
+def _schema_rejection(schema: object, depth: int = 0) -> str | None:
     fields: Final = as_str_mapping(schema)
-    if fields is None or depth > _SCHEMA_DEPTH_CHECKED:
+    if fields is None:
         return None
+    if depth > _SCHEMA_DEPTH_CHECKED:
+        return (
+            "LiteLLM does not check a Cohere response_format schema "
+            f"nested more than {_SCHEMA_DEPTH_CHECKED} levels deep."
+        )
     keyword: Final = next((key for key in fields if key in _SCHEMA_KEYWORDS_COHERE_REJECTS), None)
     if keyword is not None:
-        return f"'{keyword}'"
+        return f"Cohere's response_format schema does not support '{keyword}'."
     if _pattern_cohere_rejects(fields.get("pattern")):
-        return "a pattern with ^, $, or a lookaround"
-    nested: Final = (_schema_feature_cohere_rejects(subschema, depth + 1) for subschema in _subschemas(fields))
-    return next((feature for feature in nested if feature is not None), None)
+        return "Cohere's response_format schema does not support a pattern with ^, $, or a lookaround."
+    nested: Final = (_schema_rejection(subschema, depth + 1) for subschema in _subschemas(fields))
+    return next((reason for reason in nested if reason is not None), None)
 
 
 def _rejection(
@@ -245,9 +250,9 @@ def _rejection(
         case "response_format" if _beside_tools_on_rejecting_model(optional_params, model_ids):
             return f"Cohere model {model} does not take response_format beside tools or documents."
         case "response_format" if (
-            feature := _schema_feature_cohere_rejects((as_str_mapping(value) or _NOTHING).get("json_schema"))
+            schema_rejection := _schema_rejection((as_str_mapping(value) or _NOTHING).get("json_schema"))
         ) is not None:
-            return f"Cohere's response_format schema does not support {feature}."
+            return schema_rejection
         case _:
             return None
 
