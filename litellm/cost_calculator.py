@@ -8,7 +8,7 @@ from datetime import datetime
 from functools import lru_cache
 from itertools import accumulate
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, cast
 
 from httpx import Response
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -24,7 +24,12 @@ from litellm.constants import (
     REALTIME_METERED_USAGE_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, billed_usage_cost
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    billed_usage_cost,
+    require_attributes,
+)
 from litellm.litellm_core_utils.cost_discount import resolve_cost_discount
 from litellm.litellm_core_utils.decisions_pricing import (
     decisions_pricing_fields,
@@ -97,9 +102,6 @@ from litellm.llms.openai.cost_calculation import (
 )
 from litellm.llms.openai.cost_calculation import (
     video_output_cost_per_second,
-)
-from litellm.llms.openai.transcriptions.gpt_transformation import (
-    OpenAIGPTAudioTranscriptionConfig,
 )
 from litellm.llms.perplexity.cost_calculator import (
     cost_per_token as perplexity_cost_per_token,
@@ -376,38 +378,15 @@ def _transcription_uses_token_pricing(
     return (prompt_tokens_val > 0) or (completion_tokens_val > 0)
 
 
-def _bills_transcription_usage_duration(pricing_model: str | None, custom_llm_provider: str | None) -> bool:
-    if pricing_model is None or custom_llm_provider is None:
-        return False
-    transcription_info: Final = _lookup_model_info_or_none(pricing_model, custom_llm_provider)
-    transcription_metadata: Final = (
-        as_str_mapping(transcription_info.get("provider_specific_entry")) if transcription_info is not None else None
-    )
-    return transcription_metadata is not None and transcription_metadata.get("transcription_usage_duration") == 1
-
-
-def _transcription_duration_for_cost(
-    completion_response: object, pricing_model: str | None, model: str | None, custom_llm_provider: str | None
-) -> float:
+def _transcription_duration_for_cost(completion_response: object) -> float:
+    billed_duration: Final = _get_transcription_usage_duration(completion_response)
+    if billed_duration is not None and billed_duration > 0:
+        return billed_duration
     hidden_params: Final = as_str_mapping(attribute_or_none(completion_response, "_hidden_params")) or {}
     measured_duration: Final = normalized_audio_duration_seconds(
         hidden_params.get("audio_transcription_duration", attribute_or_none(completion_response, "duration"))
     )
-    if measured_duration is not None and measured_duration > 0:
-        return measured_duration
-    provider_duration: Final = _get_transcription_usage_duration(completion_response)
-    if (
-        provider_duration is not None
-        and provider_duration > 0
-        and any(_bills_transcription_usage_duration(name, custom_llm_provider) for name in (pricing_model, model))
-    ):
-        return provider_duration
-    if model is None or custom_llm_provider != LlmProviders.OPENAI.value:
-        return 0.0
-    transcription_config: Final = ProviderConfigManager.get_provider_audio_transcription_config(
-        model=model.removeprefix(f"{LlmProviders.OPENAI.value}/"), provider=LlmProviders.OPENAI
-    )
-    return (provider_duration or 0.0) if isinstance(transcription_config, OpenAIGPTAudioTranscriptionConfig) else 0.0
+    return measured_duration if measured_duration is not None and measured_duration > 0 else 0.0
 
 
 OCRPricingField = Literal["ocr_cost_per_page", "ocr_cost_per_credit", "annotation_cost_per_page"]
@@ -1188,6 +1167,10 @@ def _model_contains_known_llm_provider(model: str) -> bool:
     return _provider_prefix in LlmProvidersSet
 
 
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
 def _get_response_model(completion_response: object) -> str | None:
     """
     Extract the model name from a completion response object.
@@ -1219,7 +1202,7 @@ _GEMINI_TRAFFIC_TYPE_TO_SERVICE_TIER: Final[dict] = {
 }
 
 
-def _map_traffic_type_to_service_tier(traffic_type: str | None) -> str | None:
+def _map_traffic_type_to_service_tier(traffic_type: object) -> str | None:
     """
     Map a Gemini usageMetadata.trafficType value to a LiteLLM service_tier string.
 
@@ -1273,11 +1256,13 @@ def _served_service_tier(completion_response: object, usage_object: Usage | None
     usage_tier: Final = _extract_service_tier(usage_object)
     if isinstance(usage_tier, str):
         return usage_tier
-    hidden_params: Final = getattr(completion_response, "_hidden_params", None)
+    hidden_params: Final[object] = getattr(completion_response, "_hidden_params", None)
     if hidden_params is None:
         return None
-    provider_specific: Final = hidden_params.get("provider_specific_fields") or {}
-    raw_traffic_type: Final = provider_specific.get("traffic_type")
+    provider_specific: Final[object] = (
+        require_attributes(hidden_params, _SupportsGet, "get").get("provider_specific_fields") or {}
+    )
+    raw_traffic_type: Final = require_attributes(provider_specific, _SupportsGet, "get").get("traffic_type")
     if not raw_traffic_type:
         return None
     return _map_traffic_type_to_service_tier(raw_traffic_type) or "default"
@@ -1341,8 +1326,16 @@ def get_usage_object(
         return None
 
 
+class _DumpedUsageFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _dumped_usage_fields(usage_model: BaseModel) -> Mapping[str, object]:
+    return usage_model.model_dump()
+
+
 def _usage_from_model(usage_model: BaseModel) -> Usage:
-    return Usage(**usage_model.model_dump())
+    return Usage(**_DumpedUsageFields(**_dumped_usage_fields(usage_model)))
 
 
 def _decisions_prompt_tokens_details(usage: DecisionsUsage | OpenAIDecisionUsage) -> PromptTokensDetailsWrapper:
@@ -2113,9 +2106,7 @@ def completion_cost(
                         prompt,
                     )
                 elif call_type in _TRANSCRIPTION_CALL_TYPES:
-                    audio_transcription_file_duration = _transcription_duration_for_cost(
-                        completion_response, model, requested_model, custom_llm_provider
-                    )
+                    audio_transcription_file_duration = _transcription_duration_for_cost(completion_response)
                 elif call_type in _RERANK_CALL_TYPES:
                     if completion_response is not None and isinstance(completion_response, RerankResponse):
                         meta_obj = completion_response.meta

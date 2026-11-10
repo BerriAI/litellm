@@ -4,7 +4,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, query_raw_rows
 
 
 class _UserId(BaseModel):
@@ -63,7 +63,8 @@ async def sorted_user_ids(
         LIMIT $9 OFFSET $10
     """
     rows: Final = _USER_IDS.validate_python(
-        await prisma_client.db.query_raw(
+        await query_raw_rows(
+            prisma_client.db,
             sql,
             role or None,
             ids if user_ids else None,

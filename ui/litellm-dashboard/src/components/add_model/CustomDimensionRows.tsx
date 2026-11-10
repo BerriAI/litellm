@@ -9,9 +9,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import type { CustomDimensionRow } from "./custom_dimensions";
 
+const MATCH_FIELDS = ["keywords", "patterns"] as const;
+
 const SCORING_MODES = [
-  { value: "binary", label: "Binary" },
-  { value: "match_count", label: "Match count" },
+  { value: "binary", labelKey: "addModel.customDimensionRows.scoringModes.binary" },
+  { value: "match_count", labelKey: "addModel.customDimensionRows.scoringModes.matchCount" },
 ] as const;
 
 interface Props {
@@ -87,7 +89,7 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
             />
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {(["keywords", "patterns"] as const).map((field) => (
+            {MATCH_FIELDS.map((field) => (
               <div key={field} className="min-w-0 space-y-1">
                 <Label htmlFor={`${row.id}-${field}`}>
                   {field === "keywords"
@@ -109,7 +111,7 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
           <div className="space-y-1">
             <Label htmlFor={`${row.id}-scoring`}>{t("addModel.customDimensionRows.scoring")}</Label>
             <Select
-              items={SCORING_MODES}
+              items={SCORING_MODES.map((mode) => ({ value: mode.value, label: t(mode.labelKey) }))}
               value={row.scoring_mode ?? "binary"}
               onValueChange={(mode) => {
                 if (mode === "binary" || mode === "match_count") update(row.id, { scoring_mode: mode });
@@ -121,7 +123,7 @@ export default function CustomDimensionRows({ rows, disabled, onChange, onWeight
               <SelectContent>
                 {SCORING_MODES.map((mode) => (
                   <SelectItem key={mode.value} value={mode.value}>
-                    {mode.label}
+                    {t(mode.labelKey)}
                   </SelectItem>
                 ))}
               </SelectContent>

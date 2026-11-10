@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import {
   AutoRouterKind,
@@ -7,6 +8,7 @@ import {
 } from "@/components/add_model/auto_router_strategies";
 import { normalizeTierModels } from "@/components/add_model/complexity_router_tiers";
 import { Team } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import { type ModelActor, canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
 
 export type { AutoRouterKind };
@@ -55,19 +57,21 @@ const asStringArray = (value: unknown): string[] =>
 
 const dedupe = (models: string[]): string[] => Array.from(new Set(models));
 
-const COMPLEXITY_TYPE_LABELS: Record<string, string> = {
-  llm: "LLM Classifier",
-  jev: "OSS Classifier",
-  oss_classifier: "OSS Classifier",
-  capability: "Capability",
-  llm_v2: "Fuse v2",
-  heuristic_first: "Heuristic first",
-  hybrid: "Hybrid",
-  custom: "Custom classifier",
+const COMPLEXITY_TYPE_LABELS: Record<string, ParseKeys> = {
+  llm: "modelsAndEndpoints.autoRouterRows.types.llm",
+  jev: "modelsAndEndpoints.autoRouterRows.types.oss",
+  oss_classifier: "modelsAndEndpoints.autoRouterRows.types.oss",
+  capability: "modelsAndEndpoints.autoRouterRows.types.capability",
+  llm_v2: "modelsAndEndpoints.autoRouterRows.types.fuseV2",
+  heuristic_first: "modelsAndEndpoints.autoRouterRows.types.heuristicFirst",
+  hybrid: "modelsAndEndpoints.autoRouterRows.types.hybrid",
+  custom: "modelsAndEndpoints.autoRouterRows.types.custom",
 };
 
 export const complexityTypeLabel = (config: Record<string, unknown>): string =>
-  (typeof config.classifier_type === "string" && COMPLEXITY_TYPE_LABELS[config.classifier_type]) || "Heuristic";
+  typeof config.classifier_type === "string" && Object.hasOwn(COMPLEXITY_TYPE_LABELS, config.classifier_type)
+    ? i18n.t(COMPLEXITY_TYPE_LABELS[config.classifier_type])
+    : i18n.t("modelsAndEndpoints.autoRouterRows.types.heuristic");
 
 interface Presentation {
   typeLabel: string;
@@ -83,6 +87,14 @@ const configManaged = (label: string, config: Record<string, unknown>): Presenta
 
 /** How each strategy renders itself, given its own config object. */
 const PRESENTERS: Record<AutoRouterKind, (config: Record<string, unknown>) => Presentation> = {
+  switchyard: (config) => ({
+    typeLabel: "Switchyard",
+    targets: dedupe(
+      [asRecord(config.models).capable, asRecord(config.models).efficient].filter(
+        (model): model is string => typeof model === "string",
+      ),
+    ),
+  }),
   complexity: (config) => ({
     typeLabel: complexityTypeLabel(config),
     targets: dedupe(Object.values(asRecord(config.tiers)).flatMap(normalizeTierModels)),
@@ -93,10 +105,10 @@ const PRESENTERS: Record<AutoRouterKind, (config: Record<string, unknown>) => Pr
         .map((route) => asRecord(route).name)
         .filter((name): name is string => typeof name === "string" && name.length > 0),
     );
-    return { typeLabel: "Semantic", targets: routes };
+    return { typeLabel: i18n.t("modelsAndEndpoints.autoRouterRows.types.semantic"), targets: routes };
   },
-  adaptive: (config) => configManaged("Adaptive", config),
-  quality: (config) => configManaged("Quality", config),
+  adaptive: (config) => configManaged(i18n.t("modelsAndEndpoints.autoRouterRows.types.adaptive"), config),
+  quality: (config) => configManaged(i18n.t("modelsAndEndpoints.autoRouterRows.types.quality"), config),
 };
 
 export const toAutoRouterRow = (
@@ -127,7 +139,8 @@ export const toAutoRouterRow = (
     canDelete: canDelete && mayActOnRow,
     editBlockedReason,
     createdAt: info.created_at ?? undefined,
-    defaultModel: (params[strategy.defaultModelKey] as string | null | undefined) ?? null,
+    defaultModel:
+      strategy.kind === "switchyard" ? null : (params[strategy.defaultModelKey] as string | null | undefined) ?? null,
     deployment,
     ...PRESENTERS[strategy.kind](asRecord(params[strategy.configKey])),
   };

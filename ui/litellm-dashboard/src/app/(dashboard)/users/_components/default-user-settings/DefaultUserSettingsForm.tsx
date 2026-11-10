@@ -29,6 +29,8 @@ import {
   type DefaultUserSettingsSubmitValues,
 } from "./schema";
 
+const DEFAULT_TEAM_ROLE = "user";
+
 const NO_RESET = "never";
 
 const BUDGET_DURATION_OPTIONS: readonly { value: string; labelKey: ParseKeys }[] = [
@@ -162,7 +164,11 @@ const TeamsField = ({ control }: { control: SettingsControl }) => {
               label={t("users.defaultSettings.teams.role")}
             >
               {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                <Select items={teamRoleItems} value={value} onValueChange={(selected) => onChange(selected ?? "user")}>
+                <Select
+                  items={teamRoleItems}
+                  value={value}
+                  onValueChange={(selected) => onChange(selected ?? DEFAULT_TEAM_ROLE)}
+                >
                   <SelectTrigger
                     id={id}
                     className="w-full"

@@ -7,6 +7,17 @@ from pydantic import ConfigDict, Field
 from litellm.models.skill_submission import SubmissionOperation, SubmissionStatus
 from litellm.types.llms.base import LiteLLMBaseModel
 
+SkillSortField: TypeAlias = Literal[
+    "name",
+    "download_count",
+    "updated_at",
+    "created_at",
+    "created_by",
+    "published_by",
+    "approved_by",
+    "security_scan_passed",
+]
+
 
 class SkillHubSkill(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
@@ -16,6 +27,11 @@ class SkillHubSkill(LiteLLMBaseModel):
     description: str | None = None
     version: str | None = None
     updated_at: datetime | None = None
+    created_at: datetime | None = None
+    created_by: str | None = None
+    approved_by: str | None = None
+    published_by: str | None = None
+    security_scan_passed: bool = False
     visibility: Literal["public", "private"]
     source: Mapping[str, str]
     download_url: str | None = None
@@ -23,12 +39,11 @@ class SkillHubSkill(LiteLLMBaseModel):
     domain: str | None = None
     namespace: str | None = None
     keywords: tuple[str, ...] | None = None
-    download_count: int | None = Field(
-        None, description="Gateway ZIP downloads, included in proxy-admin catalog listings"
-    )
+    download_count: int | None = Field(None, description="Gateway ZIP downloads, including repeat downloads")
 
 
 class SkillHubList(LiteLLMBaseModel):
+    tags: tuple[str, ...] = ()
     model_config = ConfigDict(frozen=True)
 
     skills: tuple[SkillHubSkill, ...]

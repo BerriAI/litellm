@@ -46,6 +46,24 @@ def call(**kwargs: object) -> NativeCall:
 
 
 @pytest.mark.parametrize(
+    ("model", "provider", "expected"),
+    (
+        ("openai/gpt-luna-latest", None, True),
+        ("gpt-luna-latest", "openai", True),
+        ("gemini/gemini-pro-latest", None, False),
+        ("gpt-luna-latest", None, True),
+        ("anthropic/claude-opus-latest", None, True),
+        ("moonshot/kimi-latest", None, True),
+        ("kimi-latest", None, False),
+        ("claude-opus-latest", "anthropic", True),
+        ("", None, False),
+    ),
+)
+def test_floating_alias_requires_python(model: str, provider: str | None, expected: bool) -> None:
+    assert detectors.latest_alias(call(model=model, custom_llm_provider=provider)) is expected
+
+
+@pytest.mark.parametrize(
     ("model", "provider", "tools", "expected"),
     (
         ("deepseek/test-model", None, [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE}], True),
@@ -93,7 +111,7 @@ def _wrap_nested_level(value: object, depth: int) -> object:
         (detectors.prompt_management, {"model": "litellm_agent/gpt-5"}, True),
         (detectors.prompt_management, {"model": "gpt-5"}, False),
         (detectors.caller_client, {"client": object()}, True),
-        (detectors.caller_client, {"shared_session": object()}, True),
+        (detectors.caller_client, {"shared_session": object()}, False),
         (detectors.caller_client, {"client": None, "shared_session": None}, False),
         (detectors.caller_client, {}, False),
         (detectors.extra_body, {"extra_body": {"stream": True}}, True),
@@ -332,6 +350,14 @@ def test_global_settings_are_detected(
 def test_stream_cost_injection_needs_a_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
     assert not messages_detectors.stream_cost_injection(call())
+
+
+def test_stream_cost_injection_reads_the_request_header_the_proxy_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", False)
+    opted_in: Final = {"proxy_server_request": {"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}}}
+    assert messages_detectors.stream_cost_injection(call(stream=True, **opted_in))
+    assert not messages_detectors.stream_cost_injection(call(**opted_in))
+    assert not messages_detectors.stream_cost_injection(call(stream=True, proxy_server_request={"headers": {}}))
 
 
 def test_foundry_beta_row_reads_the_api_base_the_anthropic_handler_reads(monkeypatch: pytest.MonkeyPatch) -> None:

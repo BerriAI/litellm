@@ -309,7 +309,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                       <MountedFormField label={t("addModel.addModelForm.mode")} name="mode" className="mb-1">
                         {(control) => (
                           <Select
-                            items={TEST_MODES}
+                            items={TEST_MODES.map((mode) => ({ value: mode.value, label: t(mode.labelKey) }))}
                             value={(control.value as string | undefined) ?? null}
                             onValueChange={(value: string | null) => {
                               control.onChange(value);
@@ -326,7 +326,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                             <SelectContent>
                               {TEST_MODES.map((mode) => (
                                 <SelectItem key={mode.value} value={mode.value}>
-                                  {mode.label}
+                                  {t(mode.labelKey)}
                                 </SelectItem>
                               ))}
                             </SelectContent>

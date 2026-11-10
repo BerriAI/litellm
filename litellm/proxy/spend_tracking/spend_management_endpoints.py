@@ -2,7 +2,7 @@
 import collections
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
@@ -53,6 +53,7 @@ from litellm.proxy.auth.authorization_dependencies import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.openai_error_payload import error_status_code, openai_error_param, openai_error_type
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, drop_committed_spend
 from litellm.proxy.spend_tracking.session_page import (
     AGENT_CALL_TYPE_SQL,
     MCP_CALL_TYPES_SQL,
@@ -74,12 +75,10 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, query_raw_within_statement_timeout
+from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.verification_token_repository import (
-    VerificationTokenRepository,
-)
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
 if TYPE_CHECKING:
@@ -292,22 +291,20 @@ class _TeamTable(Protocol):
     async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
 
 
-class _VerificationTokenTable(Protocol):
-    """The subset of the Prisma verification token table API this module uses."""
-
-    async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
-
-
 def _spend_logs_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_SpendLogs"]:
     return SpendLogsRepository(prisma_client).table
 
 
+_LOCK_ALL_TEAMS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_TeamTable" WHERE TRUE ORDER BY team_id COLLATE "C" FOR UPDATE'
+)
+_LOCK_ALL_KEYS_SQL: Final = (
+    'SELECT 1 AS locked FROM "LiteLLM_VerificationToken" WHERE TRUE ORDER BY token COLLATE "C" FOR UPDATE'
+)
+
+
 def _team_table(prisma_client: PrismaClient) -> _TeamTable:
     return TeamRepository(prisma_client).table
-
-
-def _verification_token_table(prisma_client: PrismaClient) -> _VerificationTokenTable:
-    return VerificationTokenRepository(prisma_client).table
 
 
 def _spend_logs_daily_summary_sql(
@@ -3600,6 +3597,50 @@ async def view_spend_logs(
         )
 
 
+class _EntityIdRow(TypedDict):
+    id: ReadOnly[str]
+
+
+_COMMITTED_DROP_PAGE_SIZE: Final = 1000
+_CommittedDropEntity: TypeAlias = Literal["key", "team"]
+_COMMITTED_DROP_PAGE_QUERIES: Final[Mapping[_CommittedDropEntity, str]] = MappingProxyType(
+    {
+        "key": 'SELECT token AS id FROM "LiteLLM_VerificationToken" WHERE token > $1 ORDER BY token LIMIT $2',
+        "team": 'SELECT team_id AS id FROM "LiteLLM_TeamTable" WHERE team_id > $1 ORDER BY team_id LIMIT $2',
+    }
+)
+_COMMITTED_DROP_COUNTERS: Final[Mapping[_CommittedDropEntity, Callable[[str], str]]] = MappingProxyType(
+    {"key": key_counter, "team": team_counter}
+)
+
+
+async def _drop_committed_spend_page(
+    prisma_client: PrismaClient, entity: _CommittedDropEntity, after_id: str
+) -> str | None:
+    from litellm.proxy.proxy_server import spend_counter_store
+
+    rows: Final[Sequence[_EntityIdRow]] = await _query_raw(
+        prisma_client, _COMMITTED_DROP_PAGE_QUERIES[entity], after_id, _COMMITTED_DROP_PAGE_SIZE
+    )
+    counter_of: Final = _COMMITTED_DROP_COUNTERS[entity]
+    await drop_committed_spend(spend_counter_store, tuple(counter_of(row["id"]) for row in rows))
+    return rows[-1]["id"] if len(rows) == _COMMITTED_DROP_PAGE_SIZE else None
+
+
+async def _drop_committed_spend_pages(prisma_client: PrismaClient, entity: _CommittedDropEntity) -> None:
+    after_id: str | None = ""  # rebind-ok: the keyset cursor moves one page at a time
+    while after_id is not None:
+        after_id = await _drop_committed_spend_page(prisma_client, entity, after_id)
+
+
+async def _drop_all_key_and_team_committed_spend(prisma_client: PrismaClient) -> None:
+    try:
+        await _drop_committed_spend_pages(prisma_client, "key")
+        await _drop_committed_spend_pages(prisma_client, "team")
+    except Exception as e:  # noqa: BLE001  # the reset already committed; a kept twin lasts until charges stop for its TTL
+        verbose_proxy_logger.warning("committed spend drop after a global reset failed: %s", e)
+
+
 @router.post(
     "/global/spend/reset",
     tags=["Budget & Spend Tracking"],
@@ -3626,8 +3667,13 @@ async def global_spend_reset():
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    await _verification_token_table(prisma_client).update_many(data={"spend": 0.0}, where={})
-    await _team_table(prisma_client).update_many(data={"spend": 0.0}, where={})
+    async with prisma_client.tx() as transaction:
+        _ = await transaction.query_raw(_LOCK_ALL_TEAMS_SQL)
+        _ = await transaction.litellm_teamtable.update_many(data={"spend": 0.0}, where={})
+        _ = await transaction.query_raw(_LOCK_ALL_KEYS_SQL)
+        _ = await transaction.litellm_verificationtoken.update_many(data={"spend": 0.0}, where={})
+    if committed_spend_tracked():
+        await _drop_all_key_and_team_committed_spend(prisma_client)
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",

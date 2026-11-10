@@ -50,6 +50,7 @@ import {
   isPositiveWholePtuCount,
   ptuWindowIsOrdered,
 } from "../utils/ptuValidation";
+import { codeSamples } from "@/i18n/untranslated/codeSamples";
 
 interface PtuEditField {
   name: string;
@@ -746,8 +747,8 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                   name="cache_control"
                   label={
                     <>
-                      {CACHE_CONTROL_LABEL}
-                      <Hint text={CACHE_CONTROL_TOOLTIP} />
+                      {t(CACHE_CONTROL_LABEL)}
+                      <Hint text={t(CACHE_CONTROL_TOOLTIP)} />
                     </>
                   }
                   orientation="horizontal"
@@ -811,7 +812,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                     <Textarea
                       {...control}
                       rows={4}
-                      placeholder={'{"gpt-4": 100, "claude-v1": 200}'}
+                      placeholder={codeSamples.models.perModelLimitsJson}
                       defaultValue={JSON.stringify(modelData.model_info, null, 2)}
                     />
                   )}
@@ -841,7 +842,7 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                       aria-label={t("modelInfoEditForm.fields.litellmParams.label")}
                       value={(value as string) ?? ""}
                       rows={4}
-                      placeholder={'{\n  "drop_params": true\n}'}
+                      placeholder={codeSamples.models.litellmParamsJson}
                     />
                   )}
                 </FormField>
