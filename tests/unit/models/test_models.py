@@ -14,6 +14,7 @@ from litellm.models.budget import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
     LiteLLM_TeamMemberTable,
+    budget_table_reset_at,
 )
 from litellm.models.config import LiteLLM_Config
 from litellm.models.credentials import CreateCredentialItem, CredentialItem
@@ -690,3 +691,12 @@ class TestAutoRouterSession:
 
     def test_a_partial_comparison_against_one_baseline_keeps_its_label(self) -> None:
         assert self._row({"anthropic/claude-opus-5": 3}, estimated_turns=1).baseline_model == "anthropic/claude-opus-5"
+
+
+def test_budget_table_reset_at_is_known_only_on_the_full_row():
+    reset_at = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    full_row = LiteLLM_BudgetTableFull(max_budget=1.0, budget_reset_at=reset_at, created_at=reset_at)
+
+    assert budget_table_reset_at(full_row) == reset_at
+    assert budget_table_reset_at(LiteLLM_BudgetTable(max_budget=1.0)) is None
+    assert budget_table_reset_at(None) is None

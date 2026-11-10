@@ -70,3 +70,10 @@ class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
     budget_id: str | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+def budget_table_reset_at(budget_table: LiteLLM_BudgetTable | None) -> datetime | None:
+    """The budget's next reset, known only when the row was loaded with it."""
+    if isinstance(budget_table, LiteLLM_BudgetTableFull):
+        return budget_table.budget_reset_at
+    return None

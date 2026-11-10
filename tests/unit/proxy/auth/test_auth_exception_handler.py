@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -38,7 +39,12 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler, _as_proxy_exception
+from litellm.proxy.auth import auth_exception_handler
+from litellm.proxy.auth.auth_exception_handler import (
+    UserAPIKeyAuthExceptionHandler,
+    _as_proxy_exception,
+    budget_retry_after_seconds,
+)
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 
 
@@ -1312,3 +1318,47 @@ def test_auth_failure_error_body_carries_a_json_null_param(auth_failure: Excepti
 
     assert body["error"]["type"] == ProxyErrorTypes.auth_error.value
     assert body["error"]["param"] is None
+
+
+FIXED_NOW: Final = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    "budget_reset_at, expected",
+    [
+        (FIXED_NOW + timedelta(seconds=90.4), 91),
+        (FIXED_NOW + timedelta(seconds=60), 60),
+        (FIXED_NOW - timedelta(seconds=5), 1),
+        (datetime(2026, 11, 2, 12, 0, 30), 30),
+    ],
+)
+def test_budget_retry_after_seconds(budget_reset_at: datetime, expected: int):
+    assert budget_retry_after_seconds(budget_reset_at, FIXED_NOW) == expected
+
+
+@pytest.mark.parametrize(
+    "budget_reset_at, expected_header",
+    [
+        (FIXED_NOW + timedelta(days=1), "86400"),
+        (FIXED_NOW - timedelta(minutes=1), "1"),
+        (None, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_handle_authentication_error_budget_exceeded_retry_after(
+    monkeypatch: pytest.MonkeyPatch, budget_reset_at: datetime | None, expected_header: str | None
+):
+    monkeypatch.setattr(auth_exception_handler, "_utc_now", lambda: FIXED_NOW)
+    handler = UserAPIKeyAuthExceptionHandler()
+    budget_error = litellm.BudgetExceededError(
+        message="Budget exceeded",
+        current_cost=100,
+        max_budget=100,
+        budget_reset_at=budget_reset_at,
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await handler.handle_authentication_error(budget_error, MagicMock(), {}, "/test", None, "test-key")
+
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+    assert exc_info.value.headers.get("retry-after") == expected_header

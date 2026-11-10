@@ -53,6 +53,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
     extract_provider_resource_id_from_unified_id,
     is_base64_encoded_unified_id,
 )
+from litellm.models.budget import budget_table_reset_at
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
@@ -147,7 +148,7 @@ from litellm.proxy.guardrails.tool_name_extraction import (
     extract_request_tool_names,
 )
 from litellm.proxy.route_llm_request import route_request
-from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_reset_at, get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.redis.stores.spend_counters import (
@@ -1462,6 +1463,7 @@ async def common_checks(
                     message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
                     entity_type=Litellm_EntityType.USER.value,
                     entity_id=user_object.user_id,
+                    budget_reset_at=user_object.budget_reset_at,
                 )
 
         # Each scope reads a distinct counter key with no cross-scope ordering
@@ -1998,6 +2000,7 @@ async def check_end_user_budget(
             message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_spend}, Budget={end_user_budget}",
             entity_type=Litellm_EntityType.END_USER.value,
             entity_id=end_user_obj.user_id,
+            budget_reset_at=budget_table_reset_at(end_user_obj.litellm_budget_table),
         )
 
 
@@ -6797,6 +6800,7 @@ async def virtual_key_max_budget_check(
                 message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
                 entity_type=Litellm_EntityType.KEY.value,
                 entity_id=valid_token.token,
+                budget_reset_at=valid_token.budget_reset_at,
             )
 
 
@@ -6844,6 +6848,7 @@ async def _virtual_key_multi_budget_check(
                 ),
                 entity_type=Litellm_EntityType.KEY.value,
                 entity_id=valid_token.token,
+                budget_reset_at=get_budget_window_reset_at(window),  # pyright: ignore[reportUnknownArgumentType]  # key budget_limits rows are untyped dicts
             )
 
 
@@ -7182,6 +7187,11 @@ async def _check_team_member_budget(
                     message=f"Budget has been exceeded! User={valid_token.user_id} in Team={team_object.team_id} Current cost: {team_member_spend}, Max budget: {team_member_budget}",
                     entity_type=Litellm_EntityType.TEAM_MEMBER.value,
                     entity_id=f"{valid_token.user_id}:{team_object.team_id}",
+                    budget_reset_at=budget_table_reset_at(
+                        member_budget_row
+                        if member_budget_row is not None and member_budget_row.max_budget is not None
+                        else team_default_budget
+                    ),
                 )
 
 
@@ -7297,6 +7307,7 @@ async def team_max_budget_check(
                 message=f"Budget has been exceeded! Team={team_object.team_id} Current cost: {spend}, Max budget: {team_object.max_budget}",
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,
+                budget_reset_at=team_object.budget_reset_at,
             )
 
 
@@ -7340,6 +7351,7 @@ async def _team_multi_budget_check(
                 ),
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,
+                budget_reset_at=get_budget_window_reset_at(window),
             )
 
 
@@ -7469,6 +7481,7 @@ async def _project_max_budget_check(
             message=f"Budget has been exceeded! Project={project_object.project_id} Current cost: {project_spend}, Max budget: {max_budget}",
             entity_type=Litellm_EntityType.PROJECT.value,
             entity_id=project_object.project_id,
+            budget_reset_at=budget_table_reset_at(project_object.litellm_budget_table),
         )
 
 
@@ -7677,6 +7690,7 @@ async def organization_max_budget_check(
             message=f"Budget has been exceeded! Organization={org_id} Current cost: {org_spend}, Max budget: {org_max_budget}",
             entity_type=Litellm_EntityType.ORGANIZATION.value,
             entity_id=org_id,
+            budget_reset_at=budget_table_reset_at(org_table.litellm_budget_table),
         )
 
 
@@ -7749,6 +7763,7 @@ async def tag_max_budget_check_for_tags(
                 message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
                 entity_type=Litellm_EntityType.TAG.value,
                 entity_id=tag_name,
+                budget_reset_at=budget_table_reset_at(tag_object.litellm_budget_table),
             )
 
 
