@@ -7,7 +7,6 @@ from typing import Final
 import litellm
 from litellm.anthropic_beta_headers_manager import is_foundry_api_base
 from litellm.litellm_core_utils.core_helpers import (
-    drops_unsupported_params,
     proxy_request_headers,
     stream_cost_injection_requested,
 )
@@ -45,13 +44,6 @@ def anthropic_workload_identity(request: NativeCall) -> bool:
 def tool_custom_field(request: NativeCall) -> bool:
     tools: Final = optional_sequence(request.resolved.get("tools")) or ()
     return any("custom" in (optional_mapping(tool) or {}) for tool in tools)
-
-
-def strict_tools_retry(request: NativeCall) -> bool:
-    tools: Final = optional_sequence(request.resolved.get("tools")) or ()
-    return drops_unsupported_params(request.resolved.get("drop_params")) and any(
-        (optional_mapping(tool) or {}).get("strict") is True for tool in tools
-    )
 
 
 def stream_cost_injection(request: NativeCall) -> bool:

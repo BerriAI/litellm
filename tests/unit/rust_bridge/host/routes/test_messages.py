@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -43,7 +44,34 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "reasoning_auto_summary": True,
         "additional_drop_params": ("metadata.user_id",),
         "request_timeout": 1800.0,
+        "drops_unsupported_params": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("global_drop_params", "kwargs", "drop_params", "drops_unsupported_params"),
+    [
+        pytest.param(True, {}, True, True, id="global-true"),
+        pytest.param(1, {}, True, False, id="global-truthy-non-bool"),
+        pytest.param(False, {"drop_params": "True"}, True, True, id="kwarg-flag-string"),
+        pytest.param(False, {"drop_params": 1}, True, True, id="kwarg-one"),
+        pytest.param(False, {"drop_params": "maybe"}, False, False, id="kwarg-not-a-flag"),
+        pytest.param(False, {}, False, False, id="unset"),
+    ],
+)
+def test_strict_tools_retry_reads_drop_params_as_the_python_retry_check_does(
+    monkeypatch: pytest.MonkeyPatch,
+    global_drop_params: object,
+    kwargs: Mapping[str, object],
+    drop_params: bool,
+    drops_unsupported_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    projected: Final = messages_host.settings(kwargs)
+
+    assert projected["drop_params"] is drop_params
+    assert projected["drops_unsupported_params"] is drops_unsupported_params
 
 
 @pytest.mark.parametrize(

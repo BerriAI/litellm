@@ -21,9 +21,10 @@ use crate::{
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
         get_auth_header, has_advisor_tool, has_anthropic_credential,
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_tool_search_used, merge_beta_headers, optionally_handle_anthropic_oauth,
-        requires_native_compaction_beta, strip_advisor_blocks, strip_encrypted_reasoning_blocks,
-        strip_thinking_blocks_from_anthropic_messages_request,
+        is_claude_strict_tools_rejection, is_tool_search_used, merge_beta_headers,
+        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
+        strip_encrypted_reasoning_blocks, strip_thinking_blocks_from_anthropic_messages_request,
+        tools_without_strict,
     },
     base_llm::{
         auth::AuthScheme,
@@ -136,10 +137,16 @@ pub fn should_retry_anthropic_messages_on_http_error(
     status: u16,
     error_text: &str,
     request_body: &Value,
-    _context: &MessagesTransformContext,
+    context: &MessagesTransformContext,
 ) -> bool {
     if status != 400 {
         return false;
+    }
+    let drops_rejected_strict_tools = context.drops_unsupported_params
+        && is_claude_strict_tools_rejection(status, error_text)
+        && tools_without_strict(request_body.get("tools")).is_some();
+    if drops_rejected_strict_tools {
+        return true;
     }
     let caller_asked_for_this_error =
         anthropic_request_errors_on_thinking_binding_mismatch(request_body)
@@ -152,16 +159,25 @@ pub fn transform_anthropic_messages_request_on_http_error(
     error_text: &str,
     request_body: Value,
 ) -> RetriedRequest {
-    if status == 400 && is_anthropic_invalid_thinking_block_error(error_text) {
-        return RetriedRequest {
-            reasons: vec![RetryReason::ThinkingSignature],
-            body: strip_thinking_blocks_from_anthropic_messages_request(request_body),
-        };
+    let mut reasons = Vec::new();
+    let mut body = if status == 400 && is_anthropic_invalid_thinking_block_error(error_text) {
+        reasons.push(RetryReason::ThinkingSignature);
+        strip_thinking_blocks_from_anthropic_messages_request(request_body)
+    } else {
+        request_body
+    };
+    let without_strict = if is_claude_strict_tools_rejection(status, error_text) {
+        tools_without_strict(body.get("tools"))
+    } else {
+        None
+    };
+    if let (Some(without_strict), Value::Object(fields)) = (without_strict, &mut body) {
+        reasons.push(RetryReason::StrictTools {
+            dropped: without_strict.dropped_count,
+        });
+        fields.insert("tools".to_owned(), Value::Array(without_strict.tools));
     }
-    RetriedRequest {
-        reasons: Vec::new(),
-        body: request_body,
-    }
+    RetriedRequest { reasons, body }
 }
 
 pub fn retry_anthropic_messages_after_http_error(
@@ -927,6 +943,7 @@ mod tests {
                         keeps_display_updates: false,
                     },
                     drop_params: true,
+                    drops_unsupported_params: false,
                 }
             );
             return;
@@ -1457,6 +1474,61 @@ mod tests {
                     }
                 };
                 retried != case["retried"].as_bool().unwrap() || transformed != expected
+            })
+            .map(|case| case["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(mismatched, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn the_strict_tools_retry_matches_the_cases_shared_with_python() {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/anthropic_messages_http_error_retry.json"
+        )))
+        .unwrap();
+        let replay = &fixture["http_error_retry"];
+        let table = &fixture["strict_tools_retry"];
+        let cases = table["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        let mismatched: Vec<&str> = cases
+            .iter()
+            .filter(|case| {
+                let mut body = replay["request"].clone();
+                body["thinking"] = case["thinking"].clone();
+                body["tools"] = table["tools"].clone();
+                let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
+                let error_text = case["error_text"].as_str().unwrap();
+                let context = MessagesTransformContext {
+                    drops_unsupported_params: case["drops_unsupported_params"].as_bool().unwrap(),
+                    ..MessagesTransformContext::default()
+                };
+                let mut reasons = Vec::new();
+                let mut expected = if case["stripped"].as_bool().unwrap() {
+                    reasons.push(RetryReason::ThinkingSignature);
+                    replay["stripped_request"].clone()
+                } else {
+                    body.clone()
+                };
+                expected["tools"] = if case["strict_dropped"].as_bool().unwrap() {
+                    reasons.push(RetryReason::StrictTools {
+                        dropped: usize::try_from(table["dropped"].as_u64().unwrap()).unwrap(),
+                    });
+                    table["tools_without_strict"].clone()
+                } else {
+                    table["tools"].clone()
+                };
+                let retried = should_retry_anthropic_messages_on_http_error(
+                    status, error_text, &body, &context,
+                );
+                let transformed =
+                    transform_anthropic_messages_request_on_http_error(status, error_text, body);
+                retried != case["retried"].as_bool().unwrap()
+                    || transformed
+                        != RetriedRequest {
+                            reasons,
+                            body: expected,
+                        }
             })
             .map(|case| case["name"].as_str().unwrap())
             .collect();

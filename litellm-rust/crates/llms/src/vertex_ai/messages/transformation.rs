@@ -712,6 +712,7 @@ mod tests {
                     ..ThinkingContext::default()
                 },
                 drop_params: false,
+                drops_unsupported_params: false,
             },
         );
         assert_eq!(body["system"], json!("be terse"));
@@ -729,6 +730,7 @@ mod tests {
                 ..ThinkingContext::default()
             },
             drop_params: false,
+            drops_unsupported_params: false,
         }
     }
 

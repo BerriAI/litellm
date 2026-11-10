@@ -132,8 +132,10 @@ async fn provider_call(
         MessagesRequest { model, ..body },
         shaping.settings.reasoning_auto_summary,
     )?;
-    let transform_context =
-        MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params);
+    let transform_context = MessagesTransformContext {
+        drops_unsupported_params: shaping.settings.drops_unsupported_params,
+        ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
+    };
     let without_listed =
         without_additional_drop_params(sanitized, &shaping.settings.additional_drop_params)?;
     let trimmed = requested_optional_params(without_listed, provider, &transform_context)?;

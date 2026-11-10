@@ -154,7 +154,6 @@ _ASYNC_FEATURES: Final[detectors.Detectors] = MappingProxyType(
         Feature.FOUNDRY_BETA_ROW: route_detectors.foundry_beta_row,
         Feature.WEBSEARCH_INTERCEPTION: route_detectors.websearch_interception,
         Feature.MESSAGES_INTERCEPTOR: route_detectors.intercepted,
-        Feature.STRICT_TOOLS_RETRY: route_detectors.strict_tools_retry,
     }
 )
 

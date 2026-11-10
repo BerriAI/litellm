@@ -614,27 +614,24 @@ async def test_replayed_thinking_is_served_natively_under_the_shipped_rules(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "kwargs",
+    ("kwargs", "global_drop_params"),
     (
-        pytest.param({"tools": [STRICT_TOOL]}, id="drop-params-unset"),
-        pytest.param({"drop_params": False, "tools": [STRICT_TOOL]}, id="drop-params-off"),
-        pytest.param(
-            {"drop_params": True, "tools": [{"name": "a", "input_schema": {"type": "object"}}]}, id="no-strict"
-        ),
+        pytest.param({"drop_params": True, "tools": [STRICT_TOOL]}, False, id="drop-params-kwarg"),
+        pytest.param({"tools": [STRICT_TOOL]}, True, id="drop-params-global"),
+        pytest.param({"tools": [STRICT_TOOL]}, False, id="drop-params-unset"),
     ),
 )
-async def test_strict_tools_stay_native_unless_python_could_drop_strict(
-    monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object]
+async def test_strict_tools_are_served_natively_under_the_shipped_rules(
+    monkeypatch: pytest.MonkeyPatch, kwargs: Mapping[str, object], global_drop_params: bool
 ) -> None:
-    rules: Final[Rules] = (
-        RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY, features=frozenset({Feature.STRICT_TOOLS_RETRY})),
-        RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),
-    )
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "cache", None)
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
     native_result: Final = response()
-    monkeypatch.setattr(litellm, "drop_params", False)
 
     async def python(*call_args: object, **python_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: stub
-        pytest.fail("Python cannot drop strict here")
+        pytest.fail("strict tools stay on the native path")
 
     async def native(request: NativeCall) -> AnthropicMessagesResponse:
         return native_result
@@ -645,7 +642,7 @@ async def test_strict_tools_stay_native_unless_python_could_drop_strict(
         python=python,
         binding=amessages_binding(native),
         native=lambda hook, request, call_args, native_kwargs: hook(request),
-        rules=rules,
+        rules=RULES,
     )
 
     assert served is native_result
@@ -667,12 +664,6 @@ ASYNC_ONLY_FEATURES: Final = (
         {"model": "deepseek/deepseek-v4-flash", "tools": [ADVISOR_TOOL]},
         {},
         id="messages-interceptor",
-    ),
-    pytest.param(
-        Feature.STRICT_TOOLS_RETRY, {"drop_params": True, "tools": [STRICT_TOOL]}, {}, id="strict-tools-retry"
-    ),
-    pytest.param(
-        Feature.STRICT_TOOLS_RETRY, {"tools": [STRICT_TOOL]}, {"drop_params": True}, id="strict-tools-retry-global"
     ),
 )
 

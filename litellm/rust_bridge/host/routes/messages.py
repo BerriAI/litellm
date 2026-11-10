@@ -15,7 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils import exception_mapping_utils
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
@@ -71,6 +71,7 @@ class MessagesSettings:
     reasoning_auto_summary: bool
     additional_drop_params: Sequence[str]
     request_timeout: float | None
+    drops_unsupported_params: bool
 
 
 def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
@@ -392,5 +393,6 @@ def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
             reasoning_auto_summary=is_reasoning_auto_summary_enabled(),
             additional_drop_params=handler.additional_drop_paths(kwargs),
             request_timeout=get_configured_request_timeout(),
+            drops_unsupported_params=drops_unsupported_params(kwargs.get("drop_params")),
         )
     )

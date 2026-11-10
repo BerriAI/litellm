@@ -4292,6 +4292,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "data-url",
+ "fancy-regex 0.19.2",
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",

@@ -1,4 +1,7 @@
+use std::sync::LazyLock;
+
 use crate::base_llm::messages::context::MessagesModelCapabilities;
+use fancy_regex::Regex;
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
 
@@ -704,6 +707,57 @@ pub fn strip_thinking_blocks_from_anthropic_messages_request(request_body: Value
     }
     body.shift_remove("thinking");
     Value::Object(body)
+}
+
+static CLAUDE_STRICT_TOOLS_REJECTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"Too many strict tools \(\d+\)",
+        r"|Schemas contains too many (?:optional parameters|parameters with union types)",
+        r"|[Cc]ompiled grammar (?:is too large|size)",
+        r"|tools\.\d+\.custom(?:\.strict)?: ",
+        r"|Grammar compilation timed out",
+    ))
+    .expect("valid regex")
+});
+
+pub fn is_claude_strict_tools_rejection(status: u16, error_text: &str) -> bool {
+    status == 400
+        && CLAUDE_STRICT_TOOLS_REJECTION
+            .is_match(error_text)
+            .unwrap_or(false)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolsWithoutStrict {
+    pub tools: Vec<Value>,
+    pub dropped_count: usize,
+}
+
+pub fn tools_without_strict(tools: Option<&Value>) -> Option<ToolsWithoutStrict> {
+    let tools = tools?.as_array()?;
+    if !tools.iter().all(Value::is_object) {
+        return None;
+    }
+    let dropped_count = tools
+        .iter()
+        .filter(|tool| tool.get("strict") == Some(&Value::Bool(true)))
+        .count();
+    if dropped_count == 0 {
+        return None;
+    }
+    Some(ToolsWithoutStrict {
+        tools: tools
+            .iter()
+            .cloned()
+            .map(|mut tool| {
+                if let Value::Object(fields) = &mut tool {
+                    fields.shift_remove("strict");
+                }
+                tool
+            })
+            .collect(),
+        dropped_count,
+    })
 }
 
 #[cfg(test)]
@@ -2140,5 +2194,56 @@ mod tests {
             .map(String::as_str)
             .collect();
         assert_eq!(keys, ["model", "messages", "max_tokens"]);
+    }
+
+    fn shared_table(table: &str) -> Vec<Value> {
+        let fixture: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/anthropic_messages_http_error_retry.json"
+        )))
+        .unwrap();
+        fixture[table].as_array().unwrap().clone()
+    }
+
+    #[test]
+    fn strict_tools_rejections_match_the_cases_shared_with_python() {
+        let cases = shared_table("claude_strict_tools_rejection");
+        assert!(!cases.is_empty());
+        let mismatched: Vec<&str> = cases
+            .iter()
+            .filter(|case| {
+                let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
+                is_claude_strict_tools_rejection(status, case["error_text"].as_str().unwrap())
+                    != case["expected"].as_bool().unwrap()
+            })
+            .map(|case| case["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(mismatched, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn tools_without_strict_matches_the_cases_shared_with_python() {
+        let cases = shared_table("tools_without_strict");
+        assert!(!cases.is_empty());
+        let mismatched: Vec<&str> = cases
+            .iter()
+            .filter(|case| {
+                let expected = case["expected"]
+                    .as_object()
+                    .map(|expected| ToolsWithoutStrict {
+                        tools: expected["tools"].as_array().unwrap().clone(),
+                        dropped_count: usize::try_from(expected["dropped_count"].as_u64().unwrap())
+                            .unwrap(),
+                    });
+                tools_without_strict(Some(&case["tools"])) != expected
+            })
+            .map(|case| case["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(mismatched, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn absent_tools_have_no_strict_to_drop() {
+        assert_eq!(tools_without_strict(None), None);
     }
 }
