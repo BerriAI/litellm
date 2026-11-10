@@ -75,6 +75,26 @@ async def test_google_ai_studio_count_tokens_forwards_system_and_tools() -> None
 
 
 @pytest.mark.asyncio
+async def test_google_ai_studio_count_tokens_sends_an_entry_without_parts_as_the_caller_wrote_it() -> None:
+    peer: Final = _GeminiCountTokensPeer()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
+    contents: Final = [{"role": "user"}, {"role": "user", "parts": [{"text": "hello"}]}]
+
+    with patch.object(gemini_count_tokens_handler, "get_async_httpx_client", return_value=client):
+        result: Final = await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=None,
+            contents=contents,
+            deployment={"litellm_params": {"api_key": "test-key", "api_base": "https://count-tokens.test"}},
+            request_model="gemini/gemini-2.5-flash",
+        )
+
+    assert result is not None
+    assert result.total_tokens == 11
+    assert peer.request_body == {"contents": contents}
+
+
+@pytest.mark.asyncio
 async def test_google_ai_studio_count_tokens_rejects_image_system_without_request() -> None:
     peer: Final = _GeminiCountTokensPeer()
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(peer))
