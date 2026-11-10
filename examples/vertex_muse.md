@@ -20,8 +20,6 @@ response = litellm.responses(
     max_output_tokens=4096,
     reasoning={"effort": "high"},
     store=False,
-    input_cost_per_token=float(os.environ["VERTEX_MUSE_INPUT_COST_PER_TOKEN"]),
-    output_cost_per_token=float(os.environ["VERTEX_MUSE_OUTPUT_COST_PER_TOKEN"]),
 )
 print(response.output_text)
 ```
@@ -37,8 +35,20 @@ The catalog includes Google's documented input limits and capabilities. Google
 does not list an output limit for Wonder or Spark on the linked model cards, so
 those limits remain unspecified. Ember's documented output limit is included.
 
-Google's linked pricing page did not list Muse token prices when checked on
-November 9, 2026. The Vertex entries therefore leave prices unspecified.
-Configure the input and output rates from your Google Cloud agreement, in USD
-per token, as shown above. Configure cache rates too if your agreement bills
-cached tokens separately. Meta's direct API prices are not used as Vertex rates.
+Google Marketplace publishes these default USD prices per million tokens, checked
+November 9, 2026. The catalog includes uncached input, cache reads and output.
+Ember uses the higher rates when input exceeds 200,000 tokens.
+
+| Model | Input | Cached input | Output |
+| --- | --- | --- | --- |
+| Muse Wonder 1.0 | 4.00 | 0.20 | 20.00 |
+| Muse Ember 1.0, up to 200,000 input tokens | 0.10 | 0.004 | 0.50 |
+| Muse Ember 1.0, above 200,000 input tokens | 0.30 | 0.012 | 1.50 |
+| Muse Spark 1.3 | 1.25 | 0.15 | 4.25 |
+
+Sources are Google's Marketplace listings for
+[Wonder](https://console.cloud.google.com/marketplace/product/meta/muse-wonder-1-0),
+[Ember](https://console.cloud.google.com/marketplace/product/meta/muse-ember-1-0)
+and [Spark](https://console.cloud.google.com/marketplace/product/meta/muse-spark-1-3).
+These are list prices before offer discounts. Override the catalog rates when
+your Google Cloud agreement supplies different prices.
