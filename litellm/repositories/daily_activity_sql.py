@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from itertools import count, islice
 from types import MappingProxyType
@@ -108,7 +108,10 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
             else ()
         ),
         *(
-            (f"{_customer_team_expression(scope)} = ANY(${team_index}::text[])",)
+            (
+                f"api_key IN (SELECT api_key FROM ({_customer_key_teams_sql(scope)}) customer_keys "
+                f"WHERE team_id = ANY(${team_index}::text[]))",
+            )
             if scope.table is DailyActivityTable.CUSTOMER and scope.team_ids is not None
             else ()
         ),
@@ -125,37 +128,64 @@ def build_where_clause(scope: DailyActivityScope, *, start_index: int = 1) -> tu
     return " AND ".join(conditions), params
 
 
-def _customer_team_expression(scope: DailyActivityScope) -> str:
+def _customer_key_teams_sql(scope: DailyActivityScope) -> str:
     table: Final = PRISMA_TO_PG_TABLE[scope.table]
+    where_clause, _ = build_where_clause(replace(scope, team_ids=None))
     direct: Final = (
-        "(SELECT ARRAY[current_key.team_id] FROM ("
+        "SELECT current_key.token, current_key.team_id FROM ("
         'SELECT token, team_id, 0 AS priority, NULL::timestamp AS deleted_at FROM "LiteLLM_VerificationToken" '
         "UNION ALL "
         'SELECT token, team_id, 1 AS priority, deleted_at FROM "LiteLLM_DeletedVerificationToken"'
-        f') current_key WHERE current_key.token = "{table}".api_key '
-        "ORDER BY priority, deleted_at DESC LIMIT 1)"
+        ") current_key WHERE current_key.token = scoped_keys.api_key "
+        "ORDER BY priority, deleted_at DESC LIMIT 1"
     )
-    digest_keys: Final = f'ARRAY["{table}".api_key]'
-    active_digest: Final = ACTIVE_TOKEN_DIGEST_SQL.replace("$1", digest_keys)
-    deleted_digest: Final = DELETED_TOKEN_DIGEST_SQL.replace("$1", digest_keys)
-    recovered: Final = f'''CASE WHEN "{table}".api_key ~ '^[0-9a-f]{{64}}$' THEN COALESCE(
-            (SELECT ARRAY[team_id] FROM ({active_digest}) recovered_active LIMIT 1),
-            (SELECT ARRAY[team_id] FROM ({deleted_digest}) recovered_deleted LIMIT 1)) END'''
-    return f"COALESCE(NULLIF((COALESCE({direct}, {recovered}))[1], ''), 'Unassigned')"
+    active_digest: Final = ACTIVE_TOKEN_DIGEST_SQL.replace("$1", "ARRAY(SELECT api_key FROM missing)")
+    deleted_digest: Final = DELETED_TOKEN_DIGEST_SQL.replace("$1", "ARRAY(SELECT api_key FROM still_missing)")
+    return f'''WITH scoped_keys AS MATERIALIZED (
+            SELECT DISTINCT api_key FROM "{table}" WHERE {where_clause}
+        ), direct AS MATERIALIZED (
+            SELECT scoped_keys.api_key, current_key.token, current_key.team_id
+            FROM scoped_keys LEFT JOIN LATERAL ({direct}) current_key ON TRUE
+        ), missing AS MATERIALIZED (
+            SELECT api_key FROM direct WHERE token IS NULL AND api_key ~ '^[0-9a-f]{{64}}$'
+        ), active_recovered AS MATERIALIZED (
+            SELECT * FROM ({active_digest}) recovered WHERE EXISTS (SELECT 1 FROM missing)
+        ), still_missing AS MATERIALIZED (
+            SELECT api_key FROM missing WHERE NOT EXISTS (
+                SELECT 1 FROM active_recovered WHERE digest = missing.api_key
+            )
+        ), deleted_recovered AS MATERIALIZED (
+            SELECT * FROM ({deleted_digest}) recovered WHERE EXISTS (SELECT 1 FROM still_missing)
+        )
+        SELECT direct.api_key, COALESCE(NULLIF(
+            CASE WHEN direct.token IS NOT NULL THEN direct.team_id
+            ELSE COALESCE(active_recovered.team_id, deleted_recovered.team_id) END, ''), 'Unassigned') AS team_id
+        FROM direct LEFT JOIN active_recovered ON direct.api_key = active_recovered.digest
+        LEFT JOIN deleted_recovered ON direct.api_key = deleted_recovered.digest'''
 
 
 def build_customer_team_rollup_sql(scope: DailyActivityScope, *, row_ids: tuple[str, ...] | None = None) -> SqlQuery:
-    where_clause, params = build_where_clause(scope)
-    team: Final = _customer_team_expression(scope)
-    rows_filter: Final = f" AND id = ANY(${len(params) + 1}::text[])" if row_ids is not None else ""
+    where_clause, params = build_where_clause(replace(scope, team_ids=None))
+    team_filter: Final = (
+        f" AND customer_keys.team_id = ANY(${len(params) + 1}::text[])" if scope.team_ids is not None else ""
+    )
+    rows_filter: Final = (
+        f" AND id = ANY(${len(params) + int(scope.team_ids is not None) + 1}::text[])" if row_ids is not None else ""
+    )
     return SqlQuery(
-        sql=f'''SELECT date, NULL::text AS api_key, customer_team_id AS team_id,
+        sql=f'''WITH customer_keys AS MATERIALIZED ({_customer_key_teams_sql(scope)})
+            SELECT date, NULL::text AS api_key, customer_team_id AS team_id,
             (SELECT team_alias FROM "LiteLLM_TeamTable" WHERE team_id = scoped.customer_team_id) AS team_alias,
             {_rollup_metric_select(scope.table)}
-            FROM (SELECT *, {team} AS customer_team_id FROM "{PRISMA_TO_PG_TABLE[scope.table]}"
-                WHERE {where_clause}{rows_filter}) scoped
+            FROM (SELECT daily.*, customer_keys.team_id AS customer_team_id
+                FROM "{PRISMA_TO_PG_TABLE[scope.table]}" daily JOIN customer_keys USING (api_key)
+                WHERE {where_clause}{team_filter}{rows_filter}) scoped
             GROUP BY date, customer_team_id''',
-        params=(*params, *((list(row_ids),) if row_ids is not None else ())),
+        params=(
+            *params,
+            *((list(scope.team_ids),) if scope.team_ids is not None else ()),
+            *((list(row_ids),) if row_ids is not None else ()),
+        ),
     )
 
 
