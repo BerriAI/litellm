@@ -1860,6 +1860,35 @@ class CustomerBase(LiteLLMPydanticObjectBase):
     blocked: bool = False
 
 
+_CUSTOMER_BUDGET_FIELDS: Final = frozenset(
+    (
+        "tpm_limit",
+        "rpm_limit",
+        "budget_duration",
+        "soft_budget",
+        "max_parallel_requests",
+        "model_max_budget",
+        "model_tpm_limit",
+        "model_rpm_limit",
+    )
+)
+
+
+def reject_unknown_customer_fields(request: type[BaseModel], values: object) -> object:
+    if not isinstance(values, dict):
+        return values
+    unknown: Final = tuple(sorted(str(key) for key in values if key not in request.model_fields))  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # raw request body
+    if not unknown:
+        return values
+    on_budget: Final = tuple(field for field in unknown if field in _CUSTOMER_BUDGET_FIELDS)
+    hint: Final = (
+        f" {', '.join(on_budget)}: these live on the customer's budget object, update it with /budget/update."
+        if on_budget
+        else ""
+    )
+    raise ValueError(f"Unknown fields: {', '.join(unknown)}.{hint}")
+
+
 class NewCustomerRequest(BudgetNewRequest):
     """
     Create a new customer, allocate a budget to them
@@ -1876,6 +1905,11 @@ class NewCustomerRequest(BudgetNewRequest):
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
     models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unknown_fields(cls, values: object) -> object:
+        return reject_unknown_customer_fields(cls, values)
 
     @model_validator(mode="before")
     @classmethod
@@ -1903,6 +1937,11 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
     models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_unknown_fields(cls, values: object) -> object:
+        return reject_unknown_customer_fields(cls, values)
 
 
 class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
