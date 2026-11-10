@@ -14,36 +14,35 @@ from __future__ import annotations
 import contextlib
 import contextvars
 from collections.abc import Mapping, MutableMapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.dual_cache import DualCache
-from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
 from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.internal_call_metadata import (
     IO_TOKEN_RESERVATION_KEYS,
-    ITPM_CACHE_KEY,
+    ITPM_COUNTER_KEY,
     ITPM_RESERVED_KEY,
-    OTPM_CACHE_KEY,
+    OTPM_COUNTER_KEY,
     OTPM_RESERVED_KEY,
 )
 from litellm.litellm_core_utils.token_counter import deployment_openai_model, offload_token_count
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
-from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
-from litellm.types.router import RouterCacheEnum, RouterErrors
+from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, RouterUsage, UsageCounter
+from litellm.types.router import RouterErrors
 from litellm.utils import get_utc_datetime
 
 _MODEL_INFO_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_STASHED_COUNTER: Final[TypeAdapter[UsageCounter]] = TypeAdapter(UsageCounter)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -144,16 +143,17 @@ def _without_io_token_limit_keys(section: object) -> object:
     return {key: value for key, value in section.items() if key not in _IO_TOKEN_LIMIT_KEYS}
 
 
-def _get_cache_keys(deployment: dict, current_minute: str) -> tuple[str, str] | None:
-    model_id: Final = deployment.get("model_info", {}).get("id")
-    deployment_name: Final = deployment.get("litellm_params", {}).get("model")
+def _get_counters(deployment: dict, current_minute: str) -> tuple[UsageCounter, UsageCounter] | None:
+    model_id: Final[object] = deployment.get("model_info", {}).get("id")
+    deployment_name: Final[object] = deployment.get("litellm_params", {}).get("model")
     # Without both a deployment id and model name the key would collapse to a
     # shared "None:None" bucket across misconfigured deployments, so bail out.
     if model_id is None or deployment_name is None:
         return None
-    itpm_key = RouterCacheEnum.ITPM.value.format(id=model_id, model=deployment_name, current_minute=current_minute)
-    otpm_key = RouterCacheEnum.OTPM.value.format(id=model_id, model=deployment_name, current_minute=current_minute)
-    return itpm_key, otpm_key
+    return (
+        UsageCounter("global_router", f"{model_id}", f"{deployment_name}", current_minute, "itpm"),
+        UsageCounter("global_router", f"{model_id}", f"{deployment_name}", current_minute, "otpm"),
+    )
 
 
 def _served_model(deployment: object) -> str:
@@ -354,14 +354,15 @@ def _resolve_reconcile_usage_tokens(
 
 
 def _reservation(
-    itpm_reserved: int, otpm_reserved: int, itpm_cache_key: str | None, otpm_cache_key: str | None
+    itpm_reserved: int, otpm_reserved: int, itpm: UsageCounter | None, otpm: UsageCounter | None
 ) -> Mapping[str, object]:
+    """The reservation as plain fields, which survive the copies logging makes of the request metadata."""
     return MappingProxyType(
         {
             ITPM_RESERVED_KEY: itpm_reserved,
             OTPM_RESERVED_KEY: otpm_reserved,
-            ITPM_CACHE_KEY: itpm_cache_key,
-            OTPM_CACHE_KEY: otpm_cache_key,
+            ITPM_COUNTER_KEY: None if itpm is None else asdict(itpm),
+            OTPM_COUNTER_KEY: None if otpm is None else asdict(otpm),
         }
     )
 
@@ -372,29 +373,40 @@ def _stash_reservation_in_metadata(request: _IoTokenRateLimitRequest | None, res
         metadata.update(reservation)
 
 
-def _key_for_this_minute(reserved_key: str) -> str:
-    counter, _, _ = reserved_key.rpartition(":")
-    return f"{counter}:{get_utc_datetime().strftime('%H-%M')}"
+def _this_minute(counter: UsageCounter) -> UsageCounter:
+    return replace(counter, window=get_utc_datetime().strftime("%H-%M"))
+
+
+_Reservation = tuple[int, int, UsageCounter | None, UsageCounter | None]
 
 
 def _reconcile_increments(
-    reservation: tuple[int, int, str | None, str | None], billable_input: int, completion_tokens: int
-) -> tuple[tuple[str, int], ...]:
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = reservation
-    deltas: Final = ((itpm_key, billable_input - itpm_reserved), (otpm_key, completion_tokens - otpm_reserved))
+    reservation: _Reservation, billable_input: int, completion_tokens: int
+) -> tuple[tuple[UsageCounter, int], ...]:
+    itpm_reserved, otpm_reserved, itpm, otpm = reservation
+    deltas: Final = ((itpm, billable_input - itpm_reserved), (otpm, completion_tokens - otpm_reserved))
     return tuple(
-        (key if delta < 0 else _key_for_this_minute(key), delta) for key, delta in deltas if key is not None and delta
+        (counter if delta < 0 else _this_minute(counter), delta)
+        for counter, delta in deltas
+        if counter is not None and delta
     )
 
 
-def _extract_reservation(reservation: Mapping[str, int | str | None]) -> tuple[int, int, str | None, str | None]:
-    itpm_cache_key: Final = reservation.get(ITPM_CACHE_KEY)
-    otpm_cache_key: Final = reservation.get(OTPM_CACHE_KEY)
+def _stashed_counter(value: object) -> UsageCounter | None:
+    if value is None:
+        return None
+    try:
+        return _STASHED_COUNTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _extract_reservation(reservation: Mapping[str, object]) -> _Reservation:
     return (
-        int(reservation.get(ITPM_RESERVED_KEY, 0) or 0),
-        int(reservation.get(OTPM_RESERVED_KEY, 0) or 0),
-        itpm_cache_key if isinstance(itpm_cache_key, str) else None,
-        otpm_cache_key if isinstance(otpm_cache_key, str) else None,
+        int(reservation.get(ITPM_RESERVED_KEY, 0) or 0),  # pyright: ignore[reportArgumentType]  # the int the router stashed
+        int(reservation.get(OTPM_RESERVED_KEY, 0) or 0),  # pyright: ignore[reportArgumentType]  # see above
+        _stashed_counter(reservation.get(ITPM_COUNTER_KEY)),
+        _stashed_counter(reservation.get(OTPM_COUNTER_KEY)),
     )
 
 
@@ -421,7 +433,7 @@ def _reservation_channels(kwargs: Mapping[str, object] | None) -> tuple[object, 
     return top_level + from_params + from_logging_object
 
 
-def _read_reservation_from_kwargs(kwargs: Mapping[str, object] | None) -> tuple[int, int, str | None, str | None]:
+def _read_reservation_from_kwargs(kwargs: Mapping[str, object] | None) -> _Reservation:
     for channel_dict in _reservation_channels(kwargs):
         if isinstance(channel_dict, dict) and ITPM_RESERVED_KEY in channel_dict:
             return _extract_reservation(channel_dict)
@@ -476,8 +488,8 @@ def _rate_limit_error(limit_label: str, limit: int, current: float) -> litellm.R
 
 @with_service_target(ROUTER_USAGE_TARGET)
 def _sync_increment_with_rollback(
-    dual_cache: DualCache,
-    key: str,
+    usage: RouterUsage,
+    counter: UsageCounter,
     value: int,
     limit: int | None,
     *,
@@ -485,24 +497,16 @@ def _sync_increment_with_rollback(
 ) -> None:
     if value <= 0 or limit is None:
         return
-    current: Final = dual_cache.increment_cache(
-        key=key,
-        value=value,
-        ttl=RoutingArgsTTL,
-    )
+    current: Final = usage.increment_sync(counter, value, RoutingArgsTTL)
     if current is not None and current > limit:
-        dual_cache.increment_cache(
-            key=key,
-            value=-value,
-            ttl=RoutingArgsTTL,
-        )
+        usage.increment_sync(counter, -value, RoutingArgsTTL)
         raise _rate_limit_error(limit_label, limit, current)
 
 
 @with_service_target(ROUTER_USAGE_TARGET)
 async def _increment_with_rollback(
-    dual_cache: DualCache,
-    key: str,
+    usage: RouterUsage,
+    counter: UsageCounter,
     value: int,
     limit: int | None,
     *,
@@ -511,25 +515,15 @@ async def _increment_with_rollback(
 ) -> None:
     if value <= 0 or limit is None:
         return
-    current: Final = await dual_cache.async_increment_cache(
-        key=key,
-        value=value,
-        ttl=RoutingArgsTTL,
-        parent_otel_span=parent_otel_span,
-    )
+    current: Final = await usage.increment(counter, value, RoutingArgsTTL)
     if current is not None and current > limit:
-        await dual_cache.async_increment_cache(
-            key=key,
-            value=-value,
-            ttl=RoutingArgsTTL,
-            parent_otel_span=parent_otel_span,
-        )
+        await usage.increment(counter, -value, RoutingArgsTTL)
         raise _rate_limit_error(limit_label, limit, current)
 
 
 @with_service_target(ROUTER_USAGE_TARGET)
 def io_token_pre_call_check(
-    dual_cache: DualCache,
+    usage: RouterUsage,
     deployment: dict,
 ) -> dict | None:
     itpm_limit, otpm_limit = get_deployment_io_token_limits(deployment)
@@ -546,10 +540,10 @@ def io_token_pre_call_check(
 
     dt: Final = get_utc_datetime()
     current_minute: Final = dt.strftime("%H-%M")
-    cache_keys: Final = _get_cache_keys(deployment, current_minute)
-    if cache_keys is None:
+    counters: Final = _get_counters(deployment, current_minute)
+    if counters is None:
         return deployment
-    itpm_key, otpm_key = cache_keys
+    itpm_counter, otpm_counter = counters
 
     itpm_reserved = 0
     otpm_reserved = 0
@@ -557,8 +551,8 @@ def io_token_pre_call_check(
     if itpm_limit is not None:
         itpm_reserved = _reservation_value(estimated_input, itpm_limit)
         _sync_increment_with_rollback(
-            dual_cache,
-            itpm_key,
+            usage,
+            itpm_counter,
             itpm_reserved,
             itpm_limit,
             limit_label="ITPM",
@@ -568,19 +562,15 @@ def io_token_pre_call_check(
         otpm_reserved = otpm_to_reserve
         try:
             _sync_increment_with_rollback(
-                dual_cache,
-                otpm_key,
+                usage,
+                otpm_counter,
                 otpm_reserved,
                 otpm_limit,
                 limit_label="OTPM",
             )
         except Exception:
             if itpm_reserved > 0:
-                dual_cache.increment_cache(
-                    key=itpm_key,
-                    value=-itpm_reserved,
-                    ttl=RoutingArgsTTL,
-                )
+                usage.increment_sync(itpm_counter, -itpm_reserved, RoutingArgsTTL)
             raise
 
     _stash_reservation_in_metadata(
@@ -588,8 +578,8 @@ def io_token_pre_call_check(
         _reservation(
             itpm_reserved,
             otpm_reserved,
-            itpm_key if itpm_limit is not None else None,
-            otpm_key if otpm_limit is not None else None,
+            itpm_counter if itpm_limit is not None else None,
+            otpm_counter if otpm_limit is not None else None,
         ),
     )
     return deployment
@@ -597,7 +587,7 @@ def io_token_pre_call_check(
 
 @with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_pre_call_check(
-    dual_cache: DualCache,
+    usage: RouterUsage,
     deployment: dict,
     parent_otel_span: Span | None = None,
 ) -> dict | None:
@@ -610,7 +600,7 @@ async def async_io_token_pre_call_check(
     if request is not None and request.opens_responses_socket:
         _stash_reservation_in_metadata(
             request,
-            await async_admit_io_token_turn(dual_cache, deployment, get_utc_datetime(), parent_otel_span),
+            await async_admit_io_token_turn(usage, deployment, get_utc_datetime(), parent_otel_span),
         )
         return deployment
     _model, served_model = _tokenizer_and_served_models(deployment)
@@ -621,10 +611,10 @@ async def async_io_token_pre_call_check(
 
     dt: Final = get_utc_datetime()
     current_minute: Final = dt.strftime("%H-%M")
-    cache_keys: Final = _get_cache_keys(deployment, current_minute)
-    if cache_keys is None:
+    counters: Final = _get_counters(deployment, current_minute)
+    if counters is None:
         return deployment
-    itpm_key, otpm_key = cache_keys
+    itpm_counter, otpm_counter = counters
 
     itpm_reserved = 0
     otpm_reserved = 0
@@ -632,8 +622,8 @@ async def async_io_token_pre_call_check(
     if itpm_limit is not None:
         itpm_reserved = _reservation_value(estimated_input, itpm_limit)
         await _increment_with_rollback(
-            dual_cache,
-            itpm_key,
+            usage,
+            itpm_counter,
             itpm_reserved,
             itpm_limit,
             parent_otel_span=parent_otel_span,
@@ -644,8 +634,8 @@ async def async_io_token_pre_call_check(
         otpm_reserved = otpm_to_reserve
         try:
             await _increment_with_rollback(
-                dual_cache,
-                otpm_key,
+                usage,
+                otpm_counter,
                 otpm_reserved,
                 otpm_limit,
                 parent_otel_span=parent_otel_span,
@@ -656,12 +646,7 @@ async def async_io_token_pre_call_check(
             # release the ITPM reservation already made, or it stays inflated
             # until the TTL expires.
             if itpm_reserved > 0:
-                await dual_cache.async_increment_cache(
-                    key=itpm_key,
-                    value=-itpm_reserved,
-                    ttl=RoutingArgsTTL,
-                    parent_otel_span=parent_otel_span,
-                )
+                await usage.increment(itpm_counter, -itpm_reserved, RoutingArgsTTL)
             raise
 
     _stash_reservation_in_metadata(
@@ -669,42 +654,26 @@ async def async_io_token_pre_call_check(
         _reservation(
             itpm_reserved,
             otpm_reserved,
-            itpm_key if itpm_limit is not None else None,
-            otpm_key if otpm_limit is not None else None,
+            itpm_counter if itpm_limit is not None else None,
+            otpm_counter if otpm_limit is not None else None,
         ),
     )
     return deployment
 
 
-async def _async_redis_usage(redis_cache: RedisCache | None, key: str, parent_otel_span: Span | None) -> int | None:
-    if redis_cache is None:
-        return None
-    with contextlib.suppress(RedisCircuitBreakerOpenError):
-        return await redis_cache.async_get_cache(key=key, parent_otel_span=parent_otel_span)
-    return None
-
-
-@with_service_target(ROUTER_USAGE_TARGET)
-async def _async_shared_usage(dual_cache: DualCache, key: str, parent_otel_span: Span | None) -> int | None:
-    shared: Final = await _async_redis_usage(dual_cache.redis_cache, key, parent_otel_span)
-    if shared is not None:
-        return shared
-    return await dual_cache.async_get_cache(key=key, local_only=True)
-
-
 async def _raise_if_at_limit(
-    dual_cache: DualCache, key: str, limit: int | None, limit_label: str, parent_otel_span: Span | None
+    usage: RouterUsage, counter: UsageCounter, limit: int | None, limit_label: str, parent_otel_span: Span | None
 ) -> None:
     if limit is None:
         return
-    usage: Final = await _async_shared_usage(dual_cache, key, parent_otel_span)
-    if usage is not None and usage >= limit:
-        raise _rate_limit_error(limit_label, limit, usage)
+    count: Final = await usage.shared_or_local(counter)
+    if count is not None and count >= limit:
+        raise _rate_limit_error(limit_label, limit, count)
 
 
 @with_service_target(ROUTER_USAGE_TARGET)
 async def async_admit_io_token_turn(
-    dual_cache: DualCache,
+    usage: RouterUsage,
     deployment: Mapping[str, object],
     now: datetime,
     parent_otel_span: Span | None = None,
@@ -713,36 +682,36 @@ async def async_admit_io_token_turn(
     itpm_limit, otpm_limit = get_deployment_io_token_limits(configured)
     if itpm_limit is None and otpm_limit is None:
         return MappingProxyType({})
-    cache_keys: Final = _get_cache_keys(configured, now.strftime("%H-%M"))
-    if cache_keys is None:
+    counters: Final = _get_counters(configured, now.strftime("%H-%M"))
+    if counters is None:
         return MappingProxyType({})
-    itpm_key, otpm_key = cache_keys
-    await _raise_if_at_limit(dual_cache, itpm_key, itpm_limit, "ITPM", parent_otel_span)
-    await _raise_if_at_limit(dual_cache, otpm_key, otpm_limit, "OTPM", parent_otel_span)
+    itpm_counter, otpm_counter = counters
+    await _raise_if_at_limit(usage, itpm_counter, itpm_limit, "ITPM", parent_otel_span)
+    await _raise_if_at_limit(usage, otpm_counter, otpm_limit, "OTPM", parent_otel_span)
     return _reservation(
-        0, 0, itpm_key if itpm_limit is not None else None, otpm_key if otpm_limit is not None else None
+        0, 0, itpm_counter if itpm_limit is not None else None, otpm_counter if otpm_limit is not None else None
     )
 
 
 @with_service_target(ROUTER_USAGE_TARGET)
 def io_token_reconcile_success(
-    dual_cache: DualCache,
+    usage: RouterUsage,
     kwargs: Mapping[str, object] | None,
     response_obj: object,
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     response: Final[object] = response_obj
     reservation: Final = _read_reservation_from_kwargs(request_kwargs)
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = reservation
-    if itpm_key is None and otpm_key is None:
+    itpm_reserved, otpm_reserved, itpm_counter, otpm_counter = reservation
+    if itpm_counter is None and otpm_counter is None:
         return
 
     billable_input, completion_tokens, usage_resolved = _resolve_reconcile_usage_tokens(request_kwargs, response)
 
     try:
         if usage_resolved:
-            for key, delta in _reconcile_increments(reservation, billable_input, completion_tokens):
-                dual_cache.increment_cache(key=key, value=delta, ttl=RoutingArgsTTL)
+            for counter, delta in _reconcile_increments(reservation, billable_input, completion_tokens):
+                usage.increment_sync(counter, delta, RoutingArgsTTL)
         else:
             verbose_router_logger.debug(
                 "[IO TOKEN LIMIT] usage missing; keeping reservation (itpm_reserved=%s, otpm_reserved=%s)",
@@ -764,7 +733,7 @@ def io_token_reconcile_success(
 
 @with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_reconcile_success(
-    dual_cache: DualCache,
+    usage: RouterUsage,
     kwargs: Mapping[str, object] | None,
     response_obj: object,
     *,
@@ -773,8 +742,8 @@ async def async_io_token_reconcile_success(
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
     response: Final[object] = response_obj
     reservation: Final = _read_reservation_from_kwargs(request_kwargs)
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = reservation
-    if itpm_key is None and otpm_key is None:
+    itpm_reserved, otpm_reserved, itpm_counter, otpm_counter = reservation
+    if itpm_counter is None and otpm_counter is None:
         return
 
     billable_input, completion_tokens, usage_resolved = _resolve_reconcile_usage_tokens(request_kwargs, response)
@@ -785,10 +754,8 @@ async def async_io_token_reconcile_success(
     # event can't re-process it.
     try:
         if usage_resolved:
-            for key, delta in _reconcile_increments(reservation, billable_input, completion_tokens):
-                await dual_cache.async_increment_cache(
-                    key=key, value=delta, ttl=RoutingArgsTTL, parent_otel_span=parent_otel_span
-                )
+            for counter, delta in _reconcile_increments(reservation, billable_input, completion_tokens):
+                await usage.increment(counter, delta, RoutingArgsTTL)
         else:
             verbose_router_logger.debug(
                 "[IO TOKEN LIMIT] usage missing; keeping reservation (itpm_reserved=%s, otpm_reserved=%s)",
@@ -810,30 +777,22 @@ async def async_io_token_reconcile_success(
 
 @with_service_target(ROUTER_USAGE_TARGET)
 def io_token_refund_failure(
-    dual_cache: DualCache,
+    usage: RouterUsage,
     kwargs: Mapping[str, object] | None,
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
-    if itpm_key is None and otpm_key is None:
+    itpm_reserved, otpm_reserved, itpm_counter, otpm_counter = _read_reservation_from_kwargs(request_kwargs)
+    if itpm_counter is None and otpm_counter is None:
         return
-    if itpm_key is not None and itpm_reserved > 0:
-        dual_cache.increment_cache(
-            key=itpm_key,
-            value=-itpm_reserved,
-            ttl=RoutingArgsTTL,
-        )
-    if otpm_key is not None and otpm_reserved > 0:
-        dual_cache.increment_cache(
-            key=otpm_key,
-            value=-otpm_reserved,
-            ttl=RoutingArgsTTL,
-        )
+    if itpm_counter is not None and itpm_reserved > 0:
+        usage.increment_sync(itpm_counter, -itpm_reserved, RoutingArgsTTL)
+    if otpm_counter is not None and otpm_reserved > 0:
+        usage.increment_sync(otpm_counter, -otpm_reserved, RoutingArgsTTL)
     _clear_reservation_from_kwargs(request_kwargs)
     verbose_router_logger.debug("[IO TOKEN LIMIT] refunded ITPM=%s OTPM=%s", itpm_reserved, otpm_reserved)
 
 
-def refund_stale_reservation_before_retry(dual_cache: DualCache, kwargs: Mapping[str, object] | None) -> None:
+def refund_stale_reservation_before_retry(usage: RouterUsage, kwargs: Mapping[str, object] | None) -> None:
     """
     Synchronously refund and clear any reservation a previous deployment
     attempt stashed in ``kwargs``, before it's overwritten for the next
@@ -857,34 +816,24 @@ def refund_stale_reservation_before_retry(dual_cache: DualCache, kwargs: Mapping
     """
     if not kwargs:
         return
-    io_token_refund_failure(dual_cache, kwargs)
+    io_token_refund_failure(usage, kwargs)
 
 
 @with_service_target(ROUTER_USAGE_TARGET)
 async def async_io_token_refund_failure(
-    dual_cache: DualCache,
+    usage: RouterUsage,
     kwargs: Mapping[str, object] | None,
     *,
     parent_otel_span: Span | None = None,
 ) -> None:
     request_kwargs: Final[Mapping[str, object] | None] = kwargs
-    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(request_kwargs)
-    if itpm_key is None and otpm_key is None:
+    itpm_reserved, otpm_reserved, itpm_counter, otpm_counter = _read_reservation_from_kwargs(request_kwargs)
+    if itpm_counter is None and otpm_counter is None:
         return
-    if itpm_key is not None and itpm_reserved > 0:
-        await dual_cache.async_increment_cache(
-            key=itpm_key,
-            value=-itpm_reserved,
-            ttl=RoutingArgsTTL,
-            parent_otel_span=parent_otel_span,
-        )
-    if otpm_key is not None and otpm_reserved > 0:
-        await dual_cache.async_increment_cache(
-            key=otpm_key,
-            value=-otpm_reserved,
-            ttl=RoutingArgsTTL,
-            parent_otel_span=parent_otel_span,
-        )
+    if itpm_counter is not None and itpm_reserved > 0:
+        await usage.increment(itpm_counter, -itpm_reserved, RoutingArgsTTL)
+    if otpm_counter is not None and otpm_reserved > 0:
+        await usage.increment(otpm_counter, -otpm_reserved, RoutingArgsTTL)
     _clear_reservation_from_kwargs(request_kwargs)
     verbose_router_logger.debug("[IO TOKEN LIMIT] refunded ITPM=%s OTPM=%s", itpm_reserved, otpm_reserved)
 

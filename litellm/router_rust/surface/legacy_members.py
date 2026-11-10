@@ -421,7 +421,7 @@ class RustLegacyMembers(RustRegistryMembers, RustOptionalChecks):
         except Exception:
             with contextlib.suppress(Exception):
                 await async_io_token_refund_failure(
-                    self._cache, kwargs, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
+                    self._usage, kwargs, parent_otel_span=get_parent_otel_span_from_kwargs(kwargs)
                 )
             raise
         await self.increment_deployment_usage_for_response(response=response, request_kwargs=kwargs)

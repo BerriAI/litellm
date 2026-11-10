@@ -1291,6 +1291,10 @@ class _EndpointPort:
         return self._core._cache  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
     @property
+    def router_usage(self) -> RouterUsage:
+        return self._core._usage  # pyright: ignore[reportPrivateUsage]  # see the class docstring
+
+    @property
     def selectors(self) -> StrategySelectors:
         return self._core._selectors  # pyright: ignore[reportPrivateUsage]  # see the class docstring
 
@@ -5100,7 +5104,7 @@ class _Driver:
                 # logging object (shared across attempts, it logs only the first failure).
                 with contextlib.suppress(Exception):
                     await async_io_token_refund_failure(
-                        self._core._cache,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
+                        self._core._usage,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
                         call.kwargs,  # pyright: ignore[reportArgumentType]  # the call's kwargs dict
                         parent_otel_span=get_parent_otel_span_from_kwargs(call.kwargs),
                     )

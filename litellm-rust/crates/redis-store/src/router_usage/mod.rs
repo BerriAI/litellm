@@ -219,28 +219,21 @@ impl RouterUsage {
         if local.is_some_and(|local| local.as_f64() >= limit.as_f64()) {
             return Ok(local);
         }
-        let Some(client) = self.usage.redis().client() else {
-            return Ok(local);
-        };
-        let key = counter.key();
-        match client.send(commands::get::<Vec<u8>>(&key)).await {
-            Err(RedisError::BreakerOpen) => Ok(local),
-            Err(error) => {
-                redis_failure!(
-                    &error,
-                    "litellm.caching.caching: get() - Got exception from REDIS"
-                );
-                Ok(None)
-            }
-            Ok(raw) => Ok(raw
-                .as_deref()
-                .map(codec::decode)
-                .transpose()
-                .unwrap_or_else(|error| {
-                    tracing::warn!(%error, key, "a usage counter did not decode");
-                    None
-                })),
-        }
+        Ok(match self.shared(counter).await {
+            Shared::Unasked => local,
+            Shared::Failed => None,
+            Shared::Read(count) => count,
+        })
+    }
+
+    /// The io-token check's usage: what every pod counted in Redis, else this router's memory
+    /// count when Redis has none, is absent, refuses or fails.
+    pub async fn shared_or_local(&self, counter: &Counter) -> Result<Option<Number>, Error> {
+        let local = self.get_local(counter)?;
+        Ok(match self.shared(counter).await {
+            Shared::Read(Some(count)) => Some(count),
+            Shared::Unasked | Shared::Failed | Shared::Read(None) => local,
+        })
     }
 
     pub fn flush_local_counters(&self) -> Result<(), Error> {
@@ -252,6 +245,40 @@ impl RouterUsage {
     pub fn snapshot(&self) -> Result<Vec<(String, Number)>, Error> {
         Ok(self.usage.memory().entries()?)
     }
+
+    /// `redis_cache.get_cache` of one counter, which `RedisCache` answers with `None` on a failure
+    /// and its breaker refuses.
+    async fn shared(&self, counter: &Counter) -> Shared {
+        let Some(client) = self.usage.redis().client() else {
+            return Shared::Unasked;
+        };
+        let key = counter.key();
+        match client.send(commands::get::<Vec<u8>>(&key)).await {
+            Err(RedisError::BreakerOpen) => Shared::Unasked,
+            Err(error) => {
+                redis_failure!(
+                    &error,
+                    "litellm.caching.caching: get() - Got exception from REDIS"
+                );
+                Shared::Failed
+            }
+            Ok(raw) => match raw.as_deref().map(codec::decode).transpose() {
+                Ok(count) => Shared::Read(count),
+                Err(error) => {
+                    tracing::warn!(%error, key, "a usage counter did not decode");
+                    Shared::Failed
+                }
+            },
+        }
+    }
+}
+
+/// What one counter's Redis read came back with.
+enum Shared {
+    /// No Redis, or its breaker refused the read.
+    Unasked,
+    Failed,
+    Read(Option<Number>),
 }
 
 fn keys(counters: &[Counter]) -> Vec<String> {

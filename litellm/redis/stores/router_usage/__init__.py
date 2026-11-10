@@ -66,6 +66,7 @@ class RouterUsage(Protocol):
     def set_local(self, counter: UsageCounter, value: float) -> None: ...
     async def current(self, counter: UsageCounter, limit: float) -> float | None: ...
     def current_sync(self, counter: UsageCounter, limit: float) -> float | None: ...
+    async def shared_or_local(self, counter: UsageCounter) -> float | None: ...
     def snapshot(self) -> Mapping[str, float]: ...
 
 
@@ -196,6 +197,14 @@ class RouterUsageStore:
     @with_service_target(ROUTER_USAGE_TARGET)
     def current_sync(self, counter: UsageCounter, limit: float) -> float | None:
         return self._handle.current_sync(counter, limit)
+
+    @with_service_target(ROUTER_USAGE_TARGET)
+    async def shared_or_local(self, counter: UsageCounter) -> float | None:
+        """What every pod counted in Redis, else this router's memory count when Redis has none, is absent, refuses
+        or fails."""
+        if not self.has_redis:
+            return self._handle.get_local(counter)
+        return await self._handle.shared_or_local(counter)
 
     def snapshot(self) -> Mapping[str, float]:
         return self._handle.snapshot()

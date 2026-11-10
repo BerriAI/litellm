@@ -301,6 +301,18 @@ impl NativeRouterUsage {
         })
     }
 
+    fn shared_or_local<'py>(
+        &self,
+        py: Python<'py>,
+        counter: PyCounter,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let store = self.0.clone();
+        let counter = Counter::from(counter);
+        redis_async(py, "async_get_cache", kind_error, async move {
+            Ok(store.shared_or_local(&counter).await?.map(PyNumber))
+        })
+    }
+
     fn current_sync(
         &self,
         py: Python<'_>,

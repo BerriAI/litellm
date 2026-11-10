@@ -306,7 +306,7 @@ class OptionalChecks:
                 )
                 self.router_budget_logger = callback
             elif name == "enforce_model_rate_limits":
-                callback = ModelRateLimitingCheck(usage=self._usage, dual_cache=self._cache)
+                callback = ModelRateLimitingCheck(usage=self._usage)
             if callback is None:
                 continue
             if self.optional_callbacks is not None and any(

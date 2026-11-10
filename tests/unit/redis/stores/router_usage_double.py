@@ -100,6 +100,12 @@ class FakeUsageHandle:
     def current(self, counter: UsageCounter, limit: float) -> asyncio.Future[float | None]:
         return _done(self.current_sync(counter, limit))
 
+    def shared_or_local(self, counter: UsageCounter) -> asyncio.Future[float | None]:
+        self.calls.append(("shared_or_local", (counter,)))
+        redis: Final = self._reachable()
+        shared: Final = None if redis is None else redis.get(counter)
+        return _done(self.local.get(counter) if shared is None else shared)
+
     def _read(self, counters: Sequence[UsageCounter]) -> list[float | None]:
         redis: Final = self._reachable()
         return [self.local.get(c, None if redis is None else redis.get(c)) for c in counters]

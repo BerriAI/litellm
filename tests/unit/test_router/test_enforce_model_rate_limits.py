@@ -14,7 +14,6 @@ import pytest
 
 import litellm
 from litellm import Router
-from litellm.caching.dual_cache import DualCache
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import CounterIncrement, CounterKind, RouterUsage, RouterUsageStore, UsageCounter
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
@@ -38,7 +37,7 @@ def _memory_usage() -> RouterUsageStore:
 def _check(
     usage: RouterUsage | None = None, clock: Callable[[], datetime] = get_utc_datetime
 ) -> ModelRateLimitingCheck:
-    return ModelRateLimitingCheck(usage=usage or _memory_usage(), dual_cache=DualCache(), clock=clock)
+    return ModelRateLimitingCheck(usage=usage or _memory_usage(), clock=clock)
 
 
 def _counter(deployment: dict, kind: CounterKind, window: str) -> UsageCounter:

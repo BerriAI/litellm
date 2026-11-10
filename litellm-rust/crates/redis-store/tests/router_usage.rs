@@ -658,3 +658,64 @@ async fn a_failed_deployment_pipeline_keeps_the_memory_counts_as_integers() {
         [Some(Number::Int(5)), Some(Number::Int(1))]
     );
 }
+
+// The io-token check stashes a counter's fields and the store spells the key, so the key must stay
+// main's RouterCacheEnum.ITPM / OTPM spelling
+#[rstest]
+#[case::itpm(Kind::Itpm, "global_router:dep-1:bedrock/claude:itpm:12-34")]
+#[case::otpm(Kind::Otpm, "global_router:dep-1:bedrock/claude:otpm:12-34")]
+#[tokio::test]
+async fn io_token_counters_increment_under_mains_keys(#[case] kind: Kind, #[case] key: &str) {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let raw = connect(&deployment);
+    let store = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+    let counter = Counter {
+        scope: Scope::GlobalRouter,
+        deployment_id: "dep-1".to_owned(),
+        model: Some("bedrock/claude".to_owned()),
+        window: "12-34".to_owned(),
+        kind,
+    };
+
+    store
+        .increment(&counter, Number::Int(8), COUNTER_TTL)
+        .await
+        .unwrap();
+
+    let written: Option<String> = raw.send(commands::get(key)).await.unwrap();
+    assert_eq!(written, Some("8".to_owned()));
+}
+
+#[rstest]
+#[tokio::test]
+async fn shared_usage_prefers_what_every_pod_counted_and_falls_back_to_memory() {
+    let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
+    let raw = connect(&deployment);
+    let store = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+    let [rpm, tpd] = deployment_usage();
+    for case in [&rpm, &tpd] {
+        store
+            .increment_local(&increment(&case.counter, Number::Int(2), COUNTER_TTL))
+            .unwrap();
+    }
+    raw.send(commands::incr_by_float(
+        rpm.key,
+        Amount::Float(9.0),
+        Some(Expiry::Refresh(COUNTER_TTL)),
+    ))
+    .await
+    .unwrap();
+
+    let counted = store.shared_or_local(&rpm.counter).await.unwrap();
+    let absent = store.shared_or_local(&tpd.counter).await.unwrap();
+    deployment.stop().await.unwrap();
+    let failed = store.shared_or_local(&rpm.counter).await.unwrap();
+
+    assert_eq!(counted, Some(Number::Int(9)));
+    assert_eq!(
+        absent,
+        Some(Number::Int(2)),
+        "Redis has no count, so memory answers"
+    );
+    assert_eq!(failed, Some(Number::Int(2)));
+}

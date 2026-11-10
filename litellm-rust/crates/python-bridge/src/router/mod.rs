@@ -385,22 +385,6 @@ impl RouterCoreHandle {
             .collect()
     }
 
-    /// The key deployment `id` serving litellm `model` counts `metric` (`tpm`, `rpm`, `itpm` or
-    /// `otpm`) under in `minute` (`HH-MM`), as the usage store spells it.
-    fn usage_key(&self, id: &str, model: &str, metric: &str, minute: &str) -> PyResult<String> {
-        let kind: Kind = metric
-            .parse()
-            .map_err(|_| PyValueError::new_err(format!("`{metric}` is not a usage metric")))?;
-        Ok(Counter {
-            scope: Scope::GlobalRouter,
-            deployment_id: id.to_owned(),
-            model: Some(model.to_owned()),
-            window: minute.to_owned(),
-            kind,
-        }
-        .key())
-    }
-
     /// Keep the providers `other`'s build resolved for the deployments this router serves too.
     fn adopt_providers(&self, other: &Self) {
         self.router.adopt_providers(&other.router);

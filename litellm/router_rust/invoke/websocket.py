@@ -64,7 +64,7 @@ async def admit_deployment_turn(
     io_token_admission: Final[Mapping[str, object]] = (
         MappingProxyType({})
         if rate_limit_check is None
-        else await async_admit_io_token_turn(rate_limit_check.dual_cache, deployment, get_utc_datetime())  # pyright: ignore[reportArgumentType]  # the configured deployment dict
+        else await async_admit_io_token_turn(rate_limit_check.usage, deployment, get_utc_datetime())  # pyright: ignore[reportArgumentType]  # the configured deployment dict
     )
     budget_limiter: Final[object] = _budget_limiter(core)
     if budget_limiter is not None:

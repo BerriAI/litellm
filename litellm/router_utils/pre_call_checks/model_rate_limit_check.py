@@ -22,7 +22,6 @@ from pydantic import BaseModel, ConfigDict
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
-from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET, CounterIncrement, RouterUsage, UsageCounter
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
@@ -138,11 +137,8 @@ class ModelRateLimitingCheck(CustomLogger):
     this check actively enforces those limits across ALL routing strategies.
     """
 
-    def __init__(
-        self, usage: RouterUsage, dual_cache: DualCache, clock: Callable[[], datetime] = get_utc_datetime
-    ) -> None:
+    def __init__(self, usage: RouterUsage, clock: Callable[[], datetime] = get_utc_datetime) -> None:
         self.usage = usage
-        self.dual_cache = dual_cache
         self.clock = clock
         # model_ids already warned about itpm/otpm + tpm/rpm on the same deployment,
         # so the warning is logged once per deployment rather than per request.
@@ -200,7 +196,7 @@ class ModelRateLimitingCheck(CustomLogger):
     def _refund_io_token_reservation_if_any(self) -> None:
         request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
         if request_kwargs is not None:
-            io_token_refund_failure(self.dual_cache, request_kwargs)
+            io_token_refund_failure(self.usage, request_kwargs)
 
     async def _async_refund_io_token_reservation_if_any(
         self,
@@ -209,7 +205,7 @@ class ModelRateLimitingCheck(CustomLogger):
         request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
         if request_kwargs is not None:
             await async_io_token_refund_failure(
-                self.dual_cache,
+                self.usage,
                 request_kwargs,
                 parent_otel_span=parent_otel_span,
             )
@@ -280,7 +276,7 @@ class ModelRateLimitingCheck(CustomLogger):
             if deployment_has_io_token_limits(deployment):
                 self._warn_io_token_and_tpm_rpm_coexist_once(deployment)
                 io_token_pre_call_check(
-                    self.dual_cache,
+                    self.usage,
                     deployment,
                 )
                 io_reservation_made = True
@@ -364,7 +360,7 @@ class ModelRateLimitingCheck(CustomLogger):
             if deployment_has_io_token_limits(deployment):
                 self._warn_io_token_and_tpm_rpm_coexist_once(deployment)
                 await async_io_token_pre_call_check(
-                    self.dual_cache,
+                    self.usage,
                     deployment,
                     parent_otel_span=parent_otel_span,
                 )
@@ -453,7 +449,7 @@ class ModelRateLimitingCheck(CustomLogger):
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             await async_io_token_reconcile_success(
-                self.dual_cache,
+                self.usage,
                 kwargs,
                 response_obj,
                 parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
@@ -500,7 +496,7 @@ class ModelRateLimitingCheck(CustomLogger):
         # Never fail the primary logging pipeline over an io-token refund error.
         with contextlib.suppress(Exception):
             await async_io_token_refund_failure(
-                self.dual_cache,
+                self.usage,
                 kwargs,
                 parent_otel_span=get_parent_otel_span_from_kwargs(kwargs),
             )
@@ -513,7 +509,7 @@ class ModelRateLimitingCheck(CustomLogger):
         """
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
-            io_token_reconcile_success(self.dual_cache, kwargs, response_obj)
+            io_token_reconcile_success(self.usage, kwargs, response_obj)
 
             if standard_logging_object is None:
                 return
@@ -545,6 +541,6 @@ class ModelRateLimitingCheck(CustomLogger):
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         with contextlib.suppress(Exception):
             io_token_refund_failure(
-                self.dual_cache,
+                self.usage,
                 kwargs,
             )
