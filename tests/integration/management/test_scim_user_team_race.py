@@ -9,7 +9,7 @@ import httpx
 import psycopg
 import pytest
 from integration._support.client import Gateway, eventually
-from integration._support.database import write_rows
+from integration._support.database import read_rows, write_rows
 from integration._support.scim import (
     PATCH_OP_SCHEMA,
     TAKE_USER_ROW_LOCK_SQL,
@@ -24,6 +24,8 @@ pytestmark: Final = pytest.mark.shares_worker_state
 
 SCIM_CORE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:User"
 SET_EMAIL_SQL: Final = 'UPDATE "LiteLLM_UserTable" SET user_email = %s WHERE user_id = %s'
+PROFILE_NAME: Final = "Race"
+USER_ALIAS_SQL: Final = 'SELECT user_alias FROM "LiteLLM_UserTable" WHERE user_id = %s'
 APPEND_TEAM_SQL: Final = 'UPDATE "LiteLLM_UserTable" SET teams = array_append(teams, %s) WHERE user_id = %s'
 
 
@@ -34,7 +36,7 @@ def _put_profile(candidate: Gateway, user: str, email: str) -> httpx.Response:
         {
             "schemas": [SCIM_CORE_USER_SCHEMA],
             "userName": user,
-            "name": {"givenName": "Race", "familyName": "Profile"},
+            "name": {"givenName": PROFILE_NAME, "familyName": "Profile"},
             "emails": [{"value": email, "primary": True}],
             "active": True,
         },
@@ -45,7 +47,7 @@ def _patch_display_name(candidate: Gateway, user: str, email: str) -> httpx.Resp
     return candidate.request(
         "PATCH",
         f"/scim/v2/Users/{user}",
-        {"schemas": [PATCH_OP_SCHEMA], "Operations": [{"op": "replace", "path": "displayName", "value": email}]},
+        {"schemas": [PATCH_OP_SCHEMA], "Operations": [{"op": "replace", "path": "displayName", "value": PROFILE_NAME}]},
     )
 
 
@@ -56,6 +58,7 @@ def _post_existing_email(candidate: Gateway, user: str, email: str) -> httpx.Res
         {
             "schemas": [SCIM_CORE_USER_SCHEMA],
             "userName": f"integration-scim-{uuid.uuid4().hex}",
+            "name": {"givenName": PROFILE_NAME, "familyName": "Profile"},
             "emails": [{"value": email, "primary": True}],
             "active": True,
         },
@@ -86,10 +89,11 @@ def test_a_scim_user_write_keeps_a_team_a_group_push_added_after_the_write_read_
         with _held_user_row(user) as holder:
             pending: Final = pool.submit(write, gateway, user, email)
             eventually(
-                lambda: waiters_on_rows_locked_by(holder.info.backend_pid), lambda waiting: waiting == 1, seconds=30
+                lambda: waiters_on_rows_locked_by(holder.info.backend_pid), lambda waiting: waiting >= 1, seconds=30
             )
             holder.execute(APPEND_TEAM_SQL, (team, user))
         response: Final = pending.result()
 
         assert response.status_code == status, response.text
         assert users_referencing(team) == frozenset({user})
+        assert read_rows(USER_ALIAS_SQL, (user,)) == [{"user_alias": PROFILE_NAME}]

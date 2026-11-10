@@ -975,7 +975,7 @@ async def test_handle_existing_user_by_email_keeps_record_team_order(mocker: Moc
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=None),
     )
-    mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable into the helper
+    membership: Final = mocker.patch(  # test-quality-ok: roster helpers are module-level, not injectable
         "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
         AsyncMock(),
     )
@@ -992,6 +992,11 @@ async def test_handle_existing_user_by_email_keeps_record_team_order(mocker: Moc
         ),
     )
 
+    membership.assert_awaited_once_with(
+        user_id="same-id",
+        existing_teams=["team-zeta", "team-alpha", "team-kappa"],
+        new_teams=["team-zeta", "team-kappa", "team-mu", "team-beta"],
+    )
     assert user_rows.user.teams == ["team-zeta", "team-alpha", "team-kappa"]
 
 
@@ -1625,13 +1630,19 @@ async def test_update_user_put_keeps_the_record_order_of_teams_the_user_already_
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
         AsyncMock(return_value=scim_user),
     )
-    mocker.patch(  # test-quality-ok: roster writes are module-level, not injectable
+    patch_membership: Final = mocker.patch(  # test-quality-ok: roster writes are module-level, not injectable
         "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
         AsyncMock(),
     )
 
     await update_user(user_id="order-user", user=scim_user)
 
+    patch_membership.assert_awaited_once_with(
+        user_id="order-user",
+        teams_ids_to_add_user_to=["team-mu", "team-beta"],
+        teams_ids_to_remove_user_from=["team-alpha"],
+        raise_on_error=True,
+    )
     update_data: Final = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]
     assert "teams" not in update_data
 
