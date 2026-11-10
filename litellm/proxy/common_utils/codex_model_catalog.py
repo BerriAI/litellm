@@ -44,7 +44,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
-from packaging.version import Version
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
@@ -59,6 +58,7 @@ from litellm.proxy.common_utils.codex_model_translation import (
     no_priced_deployment_lacks_tier,
     tier_price_keys,
 )
+from litellm.proxy.common_utils.codex_version import codex_version_at_least
 from litellm.types.llms.base_model import LiteLLMBaseModel
 
 if TYPE_CHECKING:
@@ -77,6 +77,7 @@ CODEX_BEDROCK_MODELS_PATHS: Final[Mapping[CodexBedrockEndpoint, Path]] = Mapping
     }
 )
 CODEX_CATALOG_BYTE_LIMIT: Final = 1024 * 1024
+_FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT: Final = "0.166.0-alpha.1"
 CODEX_CHAT_MODES: Final = frozenset({"chat", "responses"})
 
 _BODY_PREFIX: Final = '{"models":['
@@ -179,9 +180,10 @@ def bundled_codex_models() -> Mapping[str, CodexStockModel]:
 
 def _with_minimal_client_version(model: CodexStockModel, built_from: str | tuple[int, ...] | None) -> CodexStockModel:
     source_minimum: Final = built_from if not isinstance(built_from, tuple) else ".".join(map(str, built_from))
-    minimum: Final = max(
-        (version for version in (CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION, source_minimum) if version is not None),
-        key=Version,
+    minimum: Final = (
+        source_minimum
+        if codex_version_at_least(source_minimum, CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION)
+        else CODEX_BEDROCK_MODELS_MINIMAL_CLIENT_VERSION
     )
     return model.model_copy(update={"minimal_client_version": minimum})
 
@@ -396,10 +398,7 @@ def _readable_by(stock_model: CodexStockModel, client_version: str | None) -> bo
     minimum: Final = stock_model.minimal_client_version
     if minimum is None or client_version is None:
         return True
-    try:
-        return Version(client_version) >= Version(minimum if isinstance(minimum, str) else ".".join(map(str, minimum)))
-    except ValueError:
-        return False
+    return codex_version_at_least(client_version, minimum if isinstance(minimum, str) else ".".join(map(str, minimum)))
 
 
 def _tier_fields(stock_model: CodexStockModel, tiers: tuple[CodexServiceTier, ...]) -> Mapping[str, object]:
@@ -601,6 +600,16 @@ class CodexCatalogBody:
     left_out: tuple[str, ...]
 
 
+def codex_catalog_byte_limit(client_version: str | None) -> int | None:
+    """None, no limit, for a Codex that reads a catalog of any size since https://github.com/openai/codex/pull/56525.
+    An older Codex, or one sending no version, drops a catalog over 1 MiB. 0.165.0 still has the limit."""
+    return (
+        None
+        if codex_version_at_least(client_version, _FIRST_CODEX_WITHOUT_CATALOG_BYTE_LIMIT)
+        else CODEX_CATALOG_BYTE_LIMIT
+    )
+
+
 def codex_models_response_json(
     rows: Sequence[CodexCatalogRow],
     *,
@@ -659,7 +668,7 @@ def merged_codex_catalog(
     *,
     stock: Mapping[str, CodexStockModel] | None = None,
     instructions: str | None = None,
-    byte_limit: int = CODEX_CATALOG_BYTE_LIMIT,
+    byte_limit: int | None = CODEX_CATALOG_BYTE_LIMIT,
     client_version: str | None = None,
 ) -> str | None:
     try:
@@ -673,7 +682,7 @@ def merged_codex_catalog(
     entries: Final = _entries(added, stock, instructions, first_priority, _NATIVE_ALIAS_DEFAULTS, client_version)
     added_models: Final = tuple(_entry_json(entry) for entry in entries)
     serialized: Final = tuple(_compact_json(model) for model in added_models)
-    budget: Final = byte_limit - len(_compact_json({**top, "models": upstream}))
+    budget: Final = None if byte_limit is None else byte_limit - len(_compact_json({**top, "models": upstream}))
     kept: Final = tuple(sorted(_kept_positions(entries, serialized, budget)))
     if len(kept) < len(entries):
         verbose_proxy_logger.warning(
@@ -819,17 +828,19 @@ def codex_model_list_body(
 ) -> str:
     """The `/v1/models?client_version=...` body, logging the models Codex's byte limit left out. `stock` and
     `instructions` are the requesting Codex release's catalog and prompt, the bundled ones when None."""
+    byte_limit: Final = codex_catalog_byte_limit(client_version)
     body: Final = codex_models_response_json(
         codex_catalog_rows(rows, entries, llm_router, team_id, label_entries),
         stock=stock,
         instructions=instructions,
+        byte_limit=byte_limit,
         client_version=client_version,
     )
     if body.left_out:
         verbose_proxy_logger.warning(
             "Codex model catalog cut at %d bytes, left out: %s. Models offering a service tier are kept first, "
             "then model_list order; list the models Codex users need first in model_list",
-            CODEX_CATALOG_BYTE_LIMIT,
+            byte_limit,
             ", ".join(body.left_out),
         )
     return body.json
