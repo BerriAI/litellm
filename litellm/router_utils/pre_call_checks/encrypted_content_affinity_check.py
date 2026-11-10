@@ -41,7 +41,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache, lru_cache, partial
 from time import monotonic
-from typing import TYPE_CHECKING, Final, Optional, cast
+from typing import TYPE_CHECKING, Final, Optional, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -72,6 +72,7 @@ if TYPE_CHECKING:
     from litellm.router_api import RoutingContext
 
 _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 _HEADERS_ADAPTER: Final = TypeAdapter(Mapping[object, object])
 _ACCOUNT_SCOPE_HEADERS: Final = frozenset({"openai-organization", "openai-project", "cookie"})
 _SINGLE_VENDOR_PROVIDERS: Final = frozenset({LlmProviders.OPENAI.value})
@@ -550,15 +551,15 @@ class EncryptedContentAffinityCheck(CustomLogger):
     # Request routing  (pre-call filter)
     # ------------------------------------------------------------------
 
-    async def _routing_tags_reject(
-        self, model: str, pinned: Sequence[Mapping[str, object]], request_kwargs: Mapping[str, object]
-    ) -> bool:
-        """Whether the router's tag filter would reject every deployment in ``pinned`` for this request, so an
-        explicit routing tag outranks the pin."""
+    async def _tag_routable(
+        self, model: str, pinned: Sequence[_DeploymentT], request_kwargs: Mapping[str, object]
+    ) -> tuple[_DeploymentT, ...]:
+        """The deployments in ``pinned`` the router's tag filter keeps for this request, none when it rejects
+        them all, so an explicit routing tag outranks the pin."""
         if self.ctx is None:
-            return False
+            return tuple(pinned)
         try:
-            await get_deployments_for_tag(
+            kept: Final = await get_deployments_for_tag(
                 ctx=self.ctx,
                 model=model,
                 healthy_deployments=pinned,  # pyright: ignore[reportArgumentType]  # deployment dicts
@@ -567,8 +568,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 request_deployments=self.ctx.registry().deployments(model) or pinned,  # pyright: ignore[reportArgumentType]  # deployment dicts
             )
         except ValueError:
-            return True
-        return False
+            return ()
+        kept_identities: Final = frozenset(map(id, kept))
+        return tuple(deployment for deployment in pinned if id(deployment) in kept_identities)
 
     async def async_filter_deployments(
         self,
@@ -653,7 +655,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
             healthy_deployments=untried_candidates,
             model_id=model_id,
         )
-        if deployment is not None and not await self._routing_tags_reject(model, (deployment,), typed_request_kwargs):
+        if deployment is not None and await self._tag_routable(model, (deployment,), typed_request_kwargs):
             verbose_router_logger.debug(
                 "EncryptedContentAffinityCheck: pinning -> deployment=%s",
                 model_id,
@@ -674,23 +676,26 @@ class EncryptedContentAffinityCheck(CustomLogger):
             healthy_deployments=untried_candidates,
             model_id=model_id,
         )
-        if boundary_matches and not await self._routing_tags_reject(model, boundary_matches, typed_request_kwargs):
+        routable_peers: Final = (
+            await self._tag_routable(model, boundary_matches, typed_request_kwargs) if boundary_matches else ()
+        )
+        if routable_peers:
             verbose_router_logger.debug(
                 "EncryptedContentAffinityCheck: model_id=%s cannot serve this turn; "
                 "pinning to %d deployment(s) on same encryption boundary",
                 model_id,
-                len(boundary_matches),
+                len(routable_peers),
             )
             request_kwargs["_encrypted_content_affinity_pinned"] = True
             self.strip_reasoning_the_targets_cannot_decrypt(
                 self.ctx,
                 request_input,
                 anthropic_messages,
-                boundary_matches,
+                routable_peers,
                 unmarked_origin=model_id,
                 clock=self._clock,
             )
-            return boundary_matches
+            return list(routable_peers)
 
         # The origin cannot serve this turn and no peer shares its encryption boundary, so its
         # encrypted reasoning can never decrypt here. Strip it, keep the readable history, and dispatch
