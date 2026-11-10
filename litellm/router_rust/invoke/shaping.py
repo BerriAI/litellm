@@ -32,7 +32,7 @@ from litellm.litellm_core_utils.core_helpers import without
 from litellm.litellm_core_utils.get_litellm_params import SUPPLEMENTAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, inferred_provider
 from litellm.litellm_core_utils.request_timeout_resolver import get_service_tier_timeout
-from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin
+from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, metadata_defaults_under_request
 from litellm.litellm_core_utils.tool_fields import TOOL_FIELDS, drop_policy
 from litellm.responses.retrieve_stream_query import requests_streamed_retrieval, without_retrieve_stream_defaults
 from litellm.router_api import deployment_id as generate_deployment_id
@@ -359,14 +359,15 @@ def update_kwargs_with_default_litellm_params(
     metadata_variable_name: str,
 ) -> None:
     """``_update_kwargs_with_default_litellm_params``: unset non-None defaults fill the request;
-    the default metadata is merged over the request's."""
+    the default metadata fills the keys the request leaves unset, the router's caching groups excepted."""
     defaults: Final = dict(without_retrieve_stream_defaults(shaping.default_litellm_params, kwargs))
     metadata_defaults: Final = defaults.pop("metadata", {}) or {}  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
     for key, value in defaults.items():
         if value is None:
             continue
         kwargs.setdefault(key, value)
-    metadata_bucket(kwargs, metadata_variable_name).update(as_dict(metadata_defaults))  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
+    bucket: Final = metadata_bucket(kwargs, metadata_variable_name)
+    bucket.update(metadata_defaults_under_request(defaults=as_dict(metadata_defaults), request_metadata=bucket))  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
 
 
 # --- clientside credentials -------------------------------------------------------------------
