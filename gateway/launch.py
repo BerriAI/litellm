@@ -75,7 +75,7 @@ def _serve(argv: Sequence[str]) -> None:
     uvicorn_main(tuple(argv), prog_name="uvicorn")
 
 
-def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+def configure_database() -> None:
     from litellm.proxy.db.db_url_settings import DatabaseURLSettings
     from litellm.proxy.db.pgbouncer import PgBouncerError, PgBouncerSettings, export_pooled_database_url
 
@@ -86,6 +86,10 @@ def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -
         sys.exit(f"LiteLLM gateway: in-container pgbouncer could not start: {pooled_url.reason}")
     if pooled_url is not None:
         export_pooled_database_url(pooled_url)
+
+
+def main(argv: Sequence[str], serve: Callable[[Sequence[str]], None] = _serve) -> None:
+    configure_database()
     serve(uvicorn_argv(argv, os.environ))
 
 
