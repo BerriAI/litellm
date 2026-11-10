@@ -1920,14 +1920,14 @@ def _hook_rewriting_the_batch_id_to(batch_id: str) -> Callable[..., LiteLLMBatch
 
 @pytest.mark.asyncio
 async def test_retrieve__provider_sync_keeps_the_endpoint_the_batch_was_created_for(retrieve_harness):
-    stored = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": "/v1/embeddings"})
-    provider_batch = make_batch(id="batch-raw-xyz", status="in_progress")
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": "/v1/embeddings"})
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress")
     retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
     retrieve_harness.router.aretrieve_batch.return_value = provider_batch
     retrieve_harness.logging.post_call_success_hook.side_effect = _hook_rewriting_the_batch_id_to("batch-unified-blob")
 
     with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
-        resp = await call_retrieve(retrieve_harness, "batch-unified-blob")
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
 
     assert (resp.endpoint, resp.status) == ("/v1/embeddings", "in_progress")
     assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
@@ -1938,15 +1938,15 @@ async def test_retrieve__provider_sync_keeps_the_endpoint_the_batch_was_created_
 
 @pytest.mark.asyncio
 async def test_retrieve__a_saved_batch_without_an_endpoint_keeps_the_providers(retrieve_harness):
-    stored = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": ""})
-    provider_batch = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(update={"endpoint": ""})
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
         update={"endpoint": "/v1/embeddings"}
     )
     retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
     retrieve_harness.router.aretrieve_batch.return_value = provider_batch
 
     with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
-        resp = await call_retrieve(retrieve_harness, "batch-unified-blob")
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
 
     assert resp.endpoint == "/v1/embeddings"
     assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
@@ -1954,17 +1954,17 @@ async def test_retrieve__a_saved_batch_without_an_endpoint_keeps_the_providers(r
 
 @pytest.mark.asyncio
 async def test_retrieve__an_embeddings_endpoint_from_the_provider_corrects_a_saved_chat_endpoint(retrieve_harness):
-    stored = make_batch(id="batch-unified-blob", status="validating").model_copy(
+    stored: Final = make_batch(id="batch-unified-blob", status="validating").model_copy(
         update={"endpoint": "/v1/chat/completions"}
     )
-    provider_batch = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="in_progress").model_copy(
         update={"endpoint": "/v1/embeddings"}
     )
     retrieve_harness.get_batch_from_db.return_value = (MagicMock(status="validating"), stored)
     retrieve_harness.router.aretrieve_batch.return_value = provider_batch
 
     with patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID):
-        resp = await call_retrieve(retrieve_harness, "batch-unified-blob")
+        resp: Final = await call_retrieve(retrieve_harness, "batch-unified-blob")
 
     assert resp.endpoint == "/v1/embeddings"
     assert retrieve_harness.update_batch_in_db.call_args.kwargs["response"].endpoint == "/v1/embeddings"
@@ -2740,9 +2740,9 @@ async def test_cancel__db_write_receives_caller_auth(cancel_harness):
 
 @pytest.mark.asyncio
 async def test_cancel__keeps_the_endpoint_the_batch_was_created_for(cancel_harness):
-    stored_row = MagicMock(status="in_progress")
-    stored = make_batch(id="batch-unified-blob", status="in_progress").model_copy(update={"endpoint": "/v1/embeddings"})
-    provider_batch = make_batch(id="batch-raw-xyz", status="cancelling")
+    stored_row: Final = MagicMock(status="in_progress")
+    stored: Final = make_batch(id="batch-unified-blob", status="in_progress").model_copy(update={"endpoint": "/v1/embeddings"})
+    provider_batch: Final = make_batch(id="batch-raw-xyz", status="cancelling")
     cancel_harness.router.acancel_batch.return_value = provider_batch
     cancel_harness.logging.post_call_success_hook.side_effect = _hook_rewriting_the_batch_id_to("batch-unified-blob")
 
@@ -2750,10 +2750,10 @@ async def test_cancel__keeps_the_endpoint_the_batch_was_created_for(cancel_harne
         patch.object(endpoints, "is_base64_encoded_unified_file_id", return_value=UNIFIED_BATCH_ID),
         patch.object(endpoints, "get_batch_from_database", AsyncMock(return_value=(stored_row, stored))),
     ):
-        resp = await call_cancel(cancel_harness, "batch-unified-blob")
+        resp: Final = await call_cancel(cancel_harness, "batch-unified-blob")
 
     assert (resp.endpoint, resp.status) == ("/v1/embeddings", "cancelling")
-    written = cancel_harness.update_batch_in_db.call_args.kwargs
+    written: Final = cancel_harness.update_batch_in_db.call_args.kwargs
     assert (written["response"].endpoint, written["db_batch_object"]) == ("/v1/embeddings", stored_row)
     assert cancel_harness.logging.post_call_success_hook.call_args.kwargs["response"].endpoint == "/v1/embeddings"
     assert (provider_batch.id, provider_batch.endpoint) == ("batch-unified-blob", "/v1/embeddings")
