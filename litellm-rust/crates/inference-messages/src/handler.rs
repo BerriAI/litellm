@@ -18,7 +18,7 @@ use litellm_llms::base_llm::{
     messages::{
         context::MessagesTransformContext,
         streaming::{self, ByteStream, StreamDecoder},
-        transformation::BaseMessagesConfig,
+        transformation::{BaseMessagesConfig, FederatedEnvironment},
     },
 };
 use litellm_llms_types::formats::messages::{
@@ -29,7 +29,7 @@ use litellm_tracing::ByteChunk;
 use serde_json::{Map, Value};
 
 use super::{
-    Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute,
+    Error, MessagesBody, MessagesCall, MessagesCallResponse, MessagesRoute, WorkloadIdentity,
     common_utils::{MessagesProvider, merge_messages_header_sources, string_headers},
     constants::{MESSAGES_HTTP_ERROR_ATTEMPTS, MESSAGES_TIMEOUT_SECS},
     route::Messages,
@@ -105,6 +105,7 @@ pub(super) async fn execute(
     let caller_keyed = caller_keyed(route).is_some();
     let request = provider_call(
         &route.auth,
+        route.workload_identity.as_deref(),
         provider,
         model,
         call,
@@ -162,6 +163,7 @@ fn execution_facts(
 
 async fn provider_call(
     auth: &AuthServices,
+    workload_identity: Option<&dyn WorkloadIdentity>,
     provider: MessagesProvider,
     model: String,
     call: MessagesCall,
@@ -203,14 +205,30 @@ async fn provider_call(
         extra_headers.unwrap_or_default(),
         scoped,
     ])))?;
-    let validated = config.validate_environment(
+    let validated = match config.validate_federated_environment(
         forwarded,
         api_key.as_deref(),
         &trimmed.model,
         &trimmed.params,
         &connection_params,
         &env_lookup,
-    )?;
+    )? {
+        FederatedEnvironment::Validated(validated) => validated,
+        FederatedEnvironment::Unauthenticated {
+            headers,
+            missing,
+            federate,
+        } => match workload_identity {
+            Some(identity) => match identity
+                .token(&connection_params, api_base.as_deref())
+                .await?
+            {
+                Some(token) => federate(headers, token),
+                None => return Err(missing.into()),
+            },
+            None => return Err(missing.into()),
+        },
+    };
 
     let tool_custom_field = config.tool_custom_field(&trimmed.model);
     let body = config.request_body(
@@ -699,6 +717,14 @@ mod tests {
         call: MessagesCall,
         secrets: &(dyn Lookup + Send + Sync),
     ) -> Result<ProviderCall, Error> {
+        provider_call_federating(call, secrets, None).await
+    }
+
+    async fn provider_call_federating(
+        call: MessagesCall,
+        secrets: &(dyn Lookup + Send + Sync),
+        workload_identity: Option<&dyn WorkloadIdentity>,
+    ) -> Result<ProviderCall, Error> {
         let provider = resolve_llm_provider(
             &call.body.model,
             call.custom_llm_provider.as_deref(),
@@ -711,6 +737,7 @@ mod tests {
         let context = CallContext::new(&interceptors, litellm_inference::CallOptions::default());
         provider_call(
             &AuthServices::default(),
+            workload_identity,
             config,
             model,
             call,
@@ -902,6 +929,178 @@ mod tests {
             panic!("a call without credentials fails");
         };
         assert!(error.is_missing_credential(), "{error:?}");
+    }
+
+    struct ScriptedIdentity {
+        minted: Result<Option<&'static str>, ()>,
+        asked: std::sync::Mutex<Vec<(Option<Value>, Option<String>)>>,
+    }
+
+    impl ScriptedIdentity {
+        fn new(minted: Result<Option<&'static str>, ()>) -> Self {
+            Self {
+                minted,
+                asked: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn asked(&self) -> Vec<(Option<Value>, Option<String>)> {
+            self.asked.lock().unwrap().clone()
+        }
+    }
+
+    impl WorkloadIdentity for ScriptedIdentity {
+        fn token<'a>(
+            &'a self,
+            litellm_params: &'a litellm_router_types::LitellmParams,
+            api_base: Option<&'a str>,
+        ) -> futures_util::future::BoxFuture<'a, Result<Option<SecretValue>, litellm_auth::Error>>
+        {
+            self.asked.lock().unwrap().push((
+                litellm_params
+                    .extra
+                    .get("anthropic_federation_rule_id")
+                    .cloned(),
+                api_base.map(str::to_owned),
+            ));
+            let minted = self.minted;
+            Box::pin(async move {
+                minted
+                    .map(|token| token.map(SecretValue::new))
+                    .map_err(|()| litellm_auth::Error::InvalidHeader)
+            })
+        }
+    }
+
+    fn federated_call(
+        shaping: MessagesShaping,
+        api_key: Option<&str>,
+        extra_headers: Option<Value>,
+    ) -> MessagesCall {
+        MessagesCall {
+            body: body(
+                json!({"model": "claude-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            ),
+            api_key: api_key.map(str::to_owned),
+            api_base: Some("https://anthropic.test".into()),
+            custom_llm_provider: Some("anthropic".into()),
+            litellm_params: crate::litellm_params(
+                serde_json::from_value(
+                    json!({"model": "claude-test", "anthropic_federation_rule_id": "fdrl_1"}),
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            extra_headers: extra_headers.map(|headers| serde_json::from_value(headers).unwrap()),
+            provider_specific_header: None,
+            timeout: None,
+            shaping,
+        }
+    }
+
+    fn sent_headers<'a>(call: &'a ProviderCall, names: &[&str]) -> Vec<(&'a str, &'a str)> {
+        call.wire
+            .headers
+            .iter()
+            .filter(|(name, _)| names.contains(&name.as_str()))
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect()
+    }
+
+    #[rstest]
+    #[case::alone(None, &[("anthropic-beta", "oauth-2025-04-20"), ("authorization", "Bearer sk-ant-oat01-minted")])]
+    #[case::beside_a_caller_beta(
+        Some(json!({"anthropic-beta": "files-api-2025-04-14"})),
+        &[("anthropic-beta", "files-api-2025-04-14,oauth-2025-04-20"), ("authorization", "Bearer sk-ant-oat01-minted")]
+    )]
+    #[tokio::test]
+    async fn a_minted_federation_token_is_sent_as_an_oauth_bearer(
+        shaping: MessagesShaping,
+        #[case] extra_headers: Option<Value>,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let identity = ScriptedIdentity::new(Ok(Some("sk-ant-oat01-minted")));
+        let call = provider_call_federating(
+            federated_call(shaping, None, extra_headers),
+            &|_: &str| None,
+            Some(&identity),
+        )
+        .await
+        .unwrap();
+        let mut sent = sent_headers(
+            &call,
+            &[
+                "anthropic-beta",
+                "authorization",
+                "x-api-key",
+                "anthropic-dangerous-direct-browser-access",
+            ],
+        );
+        sent.sort_unstable();
+        assert_eq!(
+            (sent.as_slice(), identity.asked()),
+            (
+                expected,
+                vec![(Some(json!("fdrl_1")), Some("https://anthropic.test".into()))]
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::static_key(Some("sk-static"), None, &[("x-api-key", "sk-static")])]
+    #[case::caller_credential(
+        None,
+        Some(json!({"x-api-key": "sk-caller"})),
+        &[("x-api-key", "sk-caller")]
+    )]
+    #[tokio::test]
+    async fn a_configured_credential_is_never_federated(
+        shaping: MessagesShaping,
+        #[case] api_key: Option<&str>,
+        #[case] extra_headers: Option<Value>,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let identity = ScriptedIdentity::new(Ok(Some("sk-ant-oat01-minted")));
+        let call = provider_call_federating(
+            federated_call(shaping, api_key, extra_headers),
+            &|_: &str| None,
+            Some(&identity),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                sent_headers(&call, &["authorization", "x-api-key"]),
+                identity.asked()
+            ),
+            (expected.to_vec(), Vec::new())
+        );
+    }
+
+    #[rstest]
+    #[case::nothing_minted(Ok(None), true)]
+    #[case::minting_failed(Err(()), false)]
+    #[tokio::test]
+    async fn an_unminted_federation_token_fails_the_call(
+        shaping: MessagesShaping,
+        #[case] minted: Result<Option<&'static str>, ()>,
+        #[case] missing_credential: bool,
+    ) {
+        let identity = ScriptedIdentity::new(minted);
+        let Err(error) = provider_call_federating(
+            federated_call(shaping, None, None),
+            &|_: &str| None,
+            Some(&identity),
+        )
+        .await
+        else {
+            panic!("a call without a minted token fails");
+        };
+        assert_eq!(
+            error.is_missing_credential(),
+            missing_credential,
+            "{error:?}"
+        );
     }
 
     #[rstest]

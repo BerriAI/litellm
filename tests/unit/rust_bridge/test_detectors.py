@@ -369,20 +369,6 @@ def test_openai_workload_identity_applies_only_without_a_static_key(monkeypatch:
     assert not responses_detectors.openai_workload_identity(call())
 
 
-def test_anthropic_workload_identity_applies_only_without_a_static_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in (
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_FEDERATION_RULE_ID",
-        "ANTHROPIC_ORGANIZATION_ID",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    federation: Final = {"anthropic_federation_rule_id": "rule-1", "anthropic_organization_id": "org-1"}
-    assert messages_detectors.anthropic_workload_identity(call(**federation))
-    assert not messages_detectors.anthropic_workload_identity(call(**federation, api_key="sk-ant-static"))
-    assert not messages_detectors.anthropic_workload_identity(call(anthropic_federation_rule_id="rule-1"))
-
-
 class _Logger(CustomLogger):
     pass
 

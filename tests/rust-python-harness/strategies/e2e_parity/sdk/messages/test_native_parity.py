@@ -39,6 +39,7 @@ from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # a primed entry must land before the measured call reads it
 )
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.llms.base_llm.auth.token_exchange import default_token_exchange_engine
 from litellm.messages import dispatch
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.rust_bridge import catalog
@@ -1090,6 +1091,76 @@ CACHE_CASES: Final = (
     Case("cache_sync", sync=True, upstream=(_ok(), _ok()), cache=Cache),
 )
 
+FEDERATION_ENV: Final[Mapping[str, str]] = MappingProxyType(
+    {"ANTHROPIC_IDENTITY_TOKEN": "eyJ.parity-identity.jwt", "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS": "127.0.0.1"}
+)
+FEDERATION_IDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"anthropic_federation_rule_id": "fdrl_parity", "anthropic_organization_id": "org-parity"}
+)
+MINTED: Final = ResponseSpec(
+    body={"access_token": "sk-ant-oat01-parity-minted", "token_type": "Bearer", "expires_in": 3600}
+)
+
+WORKLOAD_IDENTITY_CASES: Final = (
+    Case(
+        "workload_identity_from_params",
+        _kw(api_key=None, **FEDERATION_IDS),
+        upstream=(MINTED, _ok()),
+        env=FEDERATION_ENV,
+    ),
+    Case(
+        "workload_identity_from_environment",
+        _kw(api_key=None),
+        upstream=(MINTED, _ok()),
+        env=MappingProxyType(
+            {**FEDERATION_ENV, "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_env", "ANTHROPIC_ORGANIZATION_ID": "org-env"}
+        ),
+    ),
+    Case(
+        "workload_identity_with_workspace_and_caller_beta",
+        _kw(
+            api_key=None,
+            anthropic_federation_workspace_id="wrkspc_parity",
+            anthropic_service_account_id="svac_parity",
+            extra_headers={"anthropic-beta": "files-api-2025-04-14", "x-trace-id": "trace-1"},
+            **FEDERATION_IDS,
+        ),
+        upstream=(MINTED, _ok()),
+        env=FEDERATION_ENV,
+    ),
+    Case(
+        "workload_identity_streamed",
+        _kw(api_key=None, stream=True, **FEDERATION_IDS),
+        upstream=(MINTED, _stream(TEXT_STREAM)),
+        env=FEDERATION_ENV,
+    ),
+    Case(
+        "workload_identity_exchange_denied",
+        _kw(api_key=None, **FEDERATION_IDS),
+        upstream=(_failure(401, "authentication_error", "invalid assertion"),),
+        env=FEDERATION_ENV,
+    ),
+    Case(
+        "workload_identity_untrusted_exchange_host",
+        _kw(api_key=None, **FEDERATION_IDS),
+        upstream=(),
+        env=MappingProxyType({"ANTHROPIC_IDENTITY_TOKEN": "eyJ.parity-identity.jwt"}),
+    ),
+    Case(
+        "workload_identity_requested_without_ids",
+        _kw(api_key=None, anthropic_identity_token="oidc/env/ANTHROPIC_IDENTITY_TOKEN"),
+        upstream=(),
+        env=FEDERATION_ENV,
+    ),
+    Case(
+        "workload_identity_disabled",
+        _kw(api_key=None, anthropic_disable_workload_identity_federation=True, **FEDERATION_IDS),
+        upstream=(),
+        env=FEDERATION_ENV,
+    ),
+    Case("workload_identity_shadowed_by_a_static_key", _kw(**FEDERATION_IDS), env=FEDERATION_ENV),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *PROMPT_CACHING_CASES,
@@ -1102,6 +1173,7 @@ CASES: Final = (
     *THINKING_RETRY_CASES,
     *FALLBACK_CASES,
     *CACHE_CASES,
+    *WORKLOAD_IDENTITY_CASES,
 )
 
 
@@ -1154,6 +1226,12 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         *env,
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "ANTHROPIC_ORGANIZATION_ID",
+        "ANTHROPIC_IDENTITY_TOKEN",
+        "ANTHROPIC_IDENTITY_TOKEN_FILE",
+        "ANTHROPIC_IDENTITY_SOURCE",
+        "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS",
         "LITELLM_REASONING_AUTO_SUMMARY",
         "LITELLM_RUST",
     )
@@ -1183,6 +1261,16 @@ def _cache(cache: Callable[[], Cache] | None) -> Generator[None]:
         yield
         return
     with rebound(litellm, "cache", cache()):
+        yield
+
+
+@contextmanager
+def _fresh_token_exchange() -> Generator[None]:
+    # The federation token cache and its on-disk store would hand the second leg the first leg's token.
+    with (
+        rebound(default_token_exchange_engine, "_entries", {}),
+        rebound(default_token_exchange_engine, "_shared_store", None),
+    ):
         yield
 
 
@@ -1363,7 +1451,13 @@ async def _prime(case: Case, server: RecordingServer, recorder: RecordingLogger,
 
 
 async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None) -> Leg:
-    with isolated_callback_registries(), _environment(case.env), _settings(case.settings), _cache(case.cache):
+    with (
+        isolated_callback_registries(),
+        _environment(case.env),
+        _settings(case.settings),
+        _cache(case.cache),
+        _fresh_token_exchange(),
+    ):
         for spec in case.upstream:
             server.enqueue(replace(spec))
         request_count: Final = len(server.requests)
