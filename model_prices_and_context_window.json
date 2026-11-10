@@ -3965,6 +3965,7 @@
         "supports_vision": true,
         "supports_output_config": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 4096
     },
     "azure_ai/claude-opus-4-7": {
@@ -3997,6 +3998,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 2048
     },
     "azure_ai/claude-fable-5": {
@@ -4031,6 +4033,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": false,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-fable-5-1": {
@@ -4065,6 +4068,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": false,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 512,
         "deprecation_date": "2027-12-05",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/concepts/model-lifecycle-retirement"
@@ -4136,6 +4140,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 512
     },
     "azure_ai/claude-opus-5-5": {
@@ -4171,6 +4176,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
     },
@@ -4208,6 +4214,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-5": {
@@ -4267,6 +4274,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
+        "supports_web_search": true,
         "prompt_cache_min_tokens": 1024
     },
     "azure_ai/claude-sonnet-4-6": {
@@ -72516,6 +72524,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-mini": {
+        "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 8.25e-08,
@@ -72537,6 +72546,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-5.4-nano": {
+        "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 2.2e-08,
@@ -73140,6 +73150,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-mini": {
+        "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 8.25e-08,
@@ -73161,6 +73172,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-5.4-nano": {
+        "default_reasoning_effort": "none",
         "deprecation_date": "2027-09-21",
         "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "cache_read_input_token_cost": 2.2e-08,
@@ -76633,6 +76645,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "supports_forced_tool_use": false,
+        "supports_web_search": true,
         "thinking_always_on": true,
         "prompt_cache_min_tokens": 512,
         "source": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01"
@@ -78204,6 +78217,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_max_reasoning_effort": true,
         "supports_forced_tool_use": true,
+        "supports_web_search": true,
         "thinking_always_on": false,
         "prompt_cache_min_tokens": 512,
         "source": "https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide"
@@ -78910,6 +78924,7 @@
         "prompt_cache_min_tokens": 4096.0,
         "rpm": 2000.0,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -78970,6 +78985,7 @@
         "prompt_cache_min_tokens": 6144.0,
         "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -79029,6 +79045,7 @@
         "prompt_cache_min_tokens": 6144.0,
         "regional_endpoint_uplift_multiplier": 1.1,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -79270,6 +79287,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "baseten/meta-models/muse-spark-open": {
@@ -88127,6 +88145,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "azure_ai/claude-mythos-5-2-fast": {
@@ -88162,6 +88181,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "azure_ai/claude-fable-5-2": {
@@ -88193,6 +88213,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "azure_ai/claude-fable-5-2-fast": {
@@ -88224,6 +88245,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
+        "supports_web_search": true,
         "thinking_always_on": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-mythos-5-2": {
