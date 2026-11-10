@@ -9,7 +9,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -76,7 +75,7 @@ class ResponsesSessionHandler:
     async def get_chat_completion_message_history_for_previous_response_id(
         previous_response_id: str,
         item_cache_control: bool = False,
-        replays_empty_user_turns: bool = False,
+        empty_user_turn_text: str | None = None,
     ) -> ChatCompletionSession:
         """
         Return the chat completion message history for a previous response id
@@ -113,7 +112,7 @@ class ResponsesSessionHandler:
                     proxy_server_request_dict=proxy_server_request_dict,
                     chat_completion_message_history=chat_completion_message_history,
                     item_cache_control=item_cache_control,
-                    replays_empty_user_turns=replays_empty_user_turns,
+                    empty_user_turn_text=empty_user_turn_text,
                 )
             )
 
@@ -146,7 +145,7 @@ class ResponsesSessionHandler:
             | Message
         ],
         item_cache_control: bool = False,
-        replays_empty_user_turns: bool = False,
+        empty_user_turn_text: str | None = None,
     ):
         """
         Extend the chat completion message history with the spend log payload
@@ -191,9 +190,9 @@ class ResponsesSessionHandler:
                     (*chat_completion_message_history, *input_before_blank_tail),
                     item_cache_control,
                     partial(_stored_turn_fills_empty_user_turns, spend_log),
-                    text=EMPTY_TEXT_PLACEHOLDER,
+                    text=empty_user_turn_text,
                 )
-                if replays_empty_user_turns and output_messages
+                if empty_user_turn_text is not None and output_messages
                 else ()
             )
             chat_completion_message_history.extend(input_before_blank_tail if restored_turn else stored_input)

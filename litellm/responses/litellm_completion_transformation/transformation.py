@@ -51,7 +51,11 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.prompt_templates.factory import is_empty_user_message
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    EMPTY_TEXT_PLACEHOLDER,
+    continues_empty_user_turns,
+    is_empty_user_message,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -368,6 +372,10 @@ def restored_empty_user_turn(
     if not messages or message_field(messages[-1], "role") != "assistant" or not route_fills_empty_user_turns():
         return ()
     return (_empty_user_turn(last_input_item if keeps_cache_mark else None, text),)
+
+
+def empty_user_turn_replay_text(user_continue_message: object) -> str:
+    return "" if continues_empty_user_turns(user_continue_message) else EMPTY_TEXT_PLACEHOLDER
 
 
 def without_blank_user_tail(messages: Sequence[SessionMessage]) -> Sequence[SessionMessage]:
@@ -1083,7 +1091,11 @@ class LiteLLMCompletionResponsesConfig:
         lookup: Final = session_lookup or partial(
             ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id,
             item_cache_control=keeps_item_marks,
-            replays_empty_user_turns=request_input is not None,
+            empty_user_turn_text=(
+                None
+                if request_input is None
+                else empty_user_turn_replay_text(request_kwargs.get("user_continue_message"))
+            ),
         )
         chat_completion_session: Final = (
             await lookup(previous_response_id)

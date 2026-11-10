@@ -295,7 +295,10 @@ def _stored_converse_turn(request_id: str, input_items: object, reply: str) -> M
 
 
 async def _sent_converse_messages(
-    stored: tuple[Mapping[str, object], ...], input_items: object, previous_response_id: str
+    stored: tuple[Mapping[str, object], ...],
+    input_items: object,
+    previous_response_id: str,
+    continue_settings: Mapping[str, object],
 ) -> object:
     provider: Final = _RecordingAnthropicHandler(_CONVERSE_REPLY)
     client: Final = AsyncHTTPHandler()
@@ -310,6 +313,7 @@ async def _sent_converse_messages(
             input=input_items,
             previous_response_id=previous_response_id,
             client=client,
+            **continue_settings,
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
@@ -317,15 +321,31 @@ async def _sent_converse_messages(
 
 
 @pytest.mark.asyncio
-async def test_converse_turn_after_a_lone_null_user_item_resends_the_messages_that_follow_up_sent():
-    null_user_item: Final = [{"role": "user", "content": None}]
+@pytest.mark.parametrize(
+    ("modify_params", "continue_settings"),
+    [(False, {}), (True, {}), (False, {"user_continue_message": {"role": "user", "content": "Go on."}})],
+    ids=["no_continue_setting", "modify_params", "user_continue_message"],
+)
+@pytest.mark.parametrize(
+    "blank_input", [[{"role": "user", "content": None}], "   "], ids=["null_user_item", "whitespace_string"]
+)
+async def test_converse_turn_after_a_blank_user_turn_resends_the_messages_that_follow_up_sent(
+    monkeypatch: pytest.MonkeyPatch,
+    modify_params: bool,
+    continue_settings: Mapping[str, object],
+    blank_input: object,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
     first_turn: Final = _stored_converse_turn("chatcmpl-turn-one", "What is 2+2?", "Four.")
 
-    follow_up_messages: Final = await _sent_converse_messages((first_turn,), null_user_item, "chatcmpl-turn-one")
+    follow_up_messages: Final = await _sent_converse_messages(
+        (first_turn,), blank_input, "chatcmpl-turn-one", continue_settings
+    )
     next_turn_messages: Final = await _sent_converse_messages(
-        (first_turn, _stored_converse_turn("chatcmpl-turn-two", null_user_item, "Eight.")),
+        (first_turn, _stored_converse_turn("chatcmpl-turn-two", blank_input, "Eight.")),
         [{"role": "user", "content": "Double it."}],
         "chatcmpl-turn-two",
+        continue_settings,
     )
 
     assert isinstance(follow_up_messages, list) and isinstance(next_turn_messages, list)

@@ -842,7 +842,7 @@ async def test_a_stored_follow_up_whose_lone_user_item_had_no_content_replays_wh
     ):
         result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             "chatcmpl-follow-up",
-            replays_empty_user_turns=True,
+            empty_user_turn_text=EMPTY_TEXT_PLACEHOLDER,
         )
 
     assert _replayed_turns(result) == expected
@@ -866,7 +866,7 @@ async def _replay_of_a_blank_follow_up(
     ):
         result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             "chatcmpl-follow-up",
-            replays_empty_user_turns=True,
+            empty_user_turn_text=EMPTY_TEXT_PLACEHOLDER,
         )
     return _replayed_turns(result)
 
@@ -919,7 +919,7 @@ async def test_a_failed_stored_turn_replays_no_empty_user_turn() -> None:
     ):
         result: Final = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
             "chatcmpl-follow-up",
-            replays_empty_user_turns=True,
+            empty_user_turn_text=EMPTY_TEXT_PLACEHOLDER,
         )
 
     assert _replayed_turns(result) == [
