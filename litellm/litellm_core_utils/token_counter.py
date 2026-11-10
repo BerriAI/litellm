@@ -1046,10 +1046,12 @@ def _count_messages(
             message,
             use_default_image_token_count,
             default_token_count,
-            # Reasoning from earlier assistant turns never reaches the model: the
-            # Anthropic API strips it from context and does not bill it, and the
-            # OpenAI-compatible chat transforms drop it before the request leaves.
-            # Only the latest assistant turn's reasoning is carried (tool-use loops).
+            # Thinking blocks on earlier assistant turns never reach the model: the
+            # Anthropic API strips them from context and does not bill them (only the
+            # latest assistant turn's thinking survives a tool-use loop). This covers
+            # only thinking/redacted_thinking content blocks; reasoning_content strings
+            # still count on every turn, because OpenAI-compatible providers may keep
+            # them in the prompt (e.g. Fireworks with reasoning_history="preserved").
             counts_reasoning=_message_role(message) != "assistant" or index == last_assistant_index,
         )
         for index, message in enumerate(messages)
@@ -1068,8 +1070,6 @@ def _count_message_fields(
     for key, value in message.items():
         if value is None:
             pass
-        elif key == "reasoning_content" and not counts_reasoning:
-            continue
         elif key in ("tool_calls", "function_call"):
             num_tokens += _count_function_call_tokens(key, value, message, params.count_function)
         elif isinstance(value, str):

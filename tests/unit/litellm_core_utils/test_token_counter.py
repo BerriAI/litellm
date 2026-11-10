@@ -4004,7 +4004,10 @@ def test_token_counter_skips_thinking_blocks_of_earlier_assistant_turns():
     assert with_thinking > token_counter(model="gpt-4o", messages=without_any)
 
 
-def test_token_counter_skips_reasoning_content_of_earlier_assistant_turns():
+def test_token_counter_keeps_reasoning_content_strings_on_every_turn():
+    """OpenAI-compatible providers may keep reasoning_content in the prompt (e.g.
+    Fireworks reasoning_history="preserved"), so string reasoning still counts on
+    earlier turns; only Anthropic thinking blocks carry the stripped-by-API guarantee."""
     messages = [
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello", "reasoning_content": _PREVIOUS_TURN_THINKING},
@@ -4014,10 +4017,7 @@ def test_token_counter_skips_reasoning_content_of_earlier_assistant_turns():
     stripped = [dict(m) for m in messages]
     del stripped[1]["reasoning_content"]
 
-    assert token_counter(model="gpt-4o", messages=messages) == token_counter(model="gpt-4o", messages=stripped)
-    assert token_counter(model="gpt-4o", messages=messages) > token_counter(
-        model="gpt-4o", messages=[dict(m, reasoning_content=None) if "reasoning_content" in m else m for m in messages]
-    )
+    assert token_counter(model="gpt-4o", messages=messages) > token_counter(model="gpt-4o", messages=stripped)
 
 
 def test_token_counter_keeps_thinking_when_the_only_assistant_turn_is_last():
