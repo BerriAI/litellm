@@ -6221,6 +6221,7 @@ async def test_speech_gemini_tts_routes_to_configured_api_base(
         "input": "hello from litellm",
         "voice": "Kore",
         "api_key": "fake-gemini-key",
+        "extra_headers": {"x-gateway-key": "gateway-secret"},
         endpoint_param: GEMINI_GATEWAY_BASE,
     }
 
@@ -6228,6 +6229,7 @@ async def test_speech_gemini_tts_routes_to_configured_api_base(
 
     assert gateway_route.call_count == 1
     assert gateway_route.calls.last.request.headers["x-goog-api-key"] == "fake-gemini-key"
+    assert gateway_route.calls.last.request.headers["x-gateway-key"] == "gateway-secret"
     assert b"pcm-audio-bytes" in response.content
 
 
@@ -6261,6 +6263,34 @@ def test_speech_gemini_tts_without_a_timeout_waits_as_long_as_the_same_chat_comp
     assert speech_call.request.extensions["timeout"] == chat_call.request.extensions["timeout"]
 
 
+async def test_speech_gemini_tts_behind_the_router_waits_as_long_as_the_same_chat_completion(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(url__regex=GEMINI_DEFAULT_GENERATE_CONTENT_URL).mock(
+        return_value=httpx.Response(200, json=_gemini_tts_generate_content_response())
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini-tts",
+                "litellm_params": {"model": f"gemini/{GEMINI_TTS_MODEL}", "api_key": "fake-gemini-key"},
+            }
+        ]
+    )
+
+    await router.aspeech(model="gemini-tts", input="hello", voice="Kore")
+    await router.acompletion(
+        model="gemini-tts",
+        messages=[{"role": "user", "content": "hello"}],
+        modalities=["audio"],
+        audio={"voice": "Kore", "format": "pcm16"},
+    )
+
+    speech_call, chat_call = route.calls
+    assert speech_call.request.extensions["timeout"] == chat_call.request.extensions["timeout"]
+
+
 @pytest.mark.parametrize(
     ("first_controls", "second_controls", "expected_upstream_calls"),
     [
@@ -6268,6 +6298,8 @@ def test_speech_gemini_tts_without_a_timeout_waits_as_long_as_the_same_chat_comp
         ({}, {"cache": {"no-cache": True}}, 2),
         ({"cache": {"no-store": True}}, {}, 2),
         ({}, {"caching": False}, 2),
+        ({}, {"caching": "yes"}, 2),
+        ({}, {"caching": 0}, 2),
     ],
 )
 def test_speech_gemini_tts_honors_the_request_cache_controls(
@@ -6294,8 +6326,11 @@ def test_speech_gemini_tts_honors_the_request_cache_controls(
     assert route.call_count == expected_upstream_calls
 
 
-@pytest.mark.parametrize("malformed_controls", [{"caching": "yes"}, {"caching": 1}, {"cache": {1: True}}])
-def test_speech_gemini_tts_without_a_cache_ignores_malformed_cache_controls(
+@pytest.mark.parametrize(
+    "malformed_controls",
+    [{"caching": "yes"}, {"caching": 1}, {"cache": {1: True}}, {"extra_headers": {"x-gateway-key": 5}}],
+)
+def test_speech_gemini_tts_without_a_cache_ignores_malformed_controls(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
     malformed_controls: Mapping[str, object],

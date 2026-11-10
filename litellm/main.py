@@ -174,6 +174,7 @@ from litellm.types.utils import (
     AgenticLoopParams,
     BaseUrlRoutingHint,
     CacheControlsHint,
+    DeploymentHeadersHint,
     ModelResponseStream,
     ProviderRoutingHints,
     RawRequestTypedDict,
@@ -4362,6 +4363,7 @@ _REQUEST_KWARGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _BASE_URL_HINT: Final = TypeAdapter(BaseUrlRoutingHint)
 _CACHE_CONTROLS_HINT: Final = TypeAdapter(CacheControlsHint)
+_DEPLOYMENT_HEADERS_HINT: Final = TypeAdapter(DeploymentHeadersHint)
 _OPAQUE_VALUE_ADAPTER: Final = TypeAdapter(object)
 
 
@@ -9237,6 +9239,7 @@ def speech(
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
+                extra_headers=_DEPLOYMENT_HEADERS_HINT.validate_python(kwargs).get("extra_headers"),
                 timeout=timeout,
                 cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
             )
@@ -9291,6 +9294,7 @@ def speech(
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            extra_headers=_DEPLOYMENT_HEADERS_HINT.validate_python(kwargs).get("extra_headers"),
             timeout=timeout,
             cache_controls=_CACHE_CONTROLS_HINT.validate_python(kwargs),
         )
