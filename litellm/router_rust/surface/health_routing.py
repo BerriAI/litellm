@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from litellm.router_config import RouterConfig
     from litellm.types.router import Deployment, DeploymentTypedDict
 
-HEALTH_STATE_KEY: Final = DeploymentHealthCache.CACHE_KEY
 # The failover flags the Python core keeps as plain router attributes, with their defaults.
 FAILOVER_FLAGS: Final = ("enable_weighted_failover", "fallback_on_unsupported_params")
 
@@ -149,7 +148,6 @@ async def fully_unhealthy_model_names(
 
 __all__ = [
     "FAILOVER_FLAGS",
-    "HEALTH_STATE_KEY",
     "HealthRouting",
     "all_blocked",
     "failover_document",

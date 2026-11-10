@@ -26,12 +26,14 @@ _REPO: Final = Path(__file__).resolve().parents[2]
 _REDIS_PRODUCER_ROOTS: Final = ("litellm", "enterprise")
 # The cache implementations and facades: they emit the service events, their callers declare the family.
 _CACHE_LAYER_DIRS: Final = ("litellm/caching",)
-# Helpers that act on a cache handed in by the declaring caller, or forward to the response-cache facade.
+# Helpers that act on a cache handed in by the declaring caller, forward to the response-cache facade, or call a
+# ``litellm.redis.stores`` store, which declares its own family.
 _CACHE_PARAMETER_HELPERS: Final = frozenset(
     {
         "litellm/llms/anthropic/prompt_cache_prediction.py",
         "litellm/proxy/common_utils/cache_coordinator.py",
         "litellm/proxy/common_utils/user_api_key_cache.py",
+        "litellm/router_rust/routing_stores.py",
         "litellm/router_utils/routing_prefetch.py",
         "litellm/utils.py",
     }

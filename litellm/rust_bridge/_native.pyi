@@ -890,20 +890,43 @@ class _PreRouteStep(_Step):
     fallback_depth: int
     retry: int
 
-# One RouterCache op against the router's DualCache. `key` is set for every op but `batch_get`,
-# and `increment_usage`, which set `keys`; `value` is the JSON to store (`set`), the amount
-# (`increment`) or one amount per key (`increment_usage`); `ttl` is in seconds; `local` reads or
-# writes this worker's in-memory tier only. Outcomes: get -> the JSON value or None; batch_get ->
-# one JSON value or None per key, in order; increment -> the new int or float; set, delete and
-# increment_usage -> None.
+# One deployment's per-minute usage counters: `model` is the model its usage is counted under,
+# `minute` is `HH-MM` in UTC.
+class _UsageWindow(TypedDict):
+    deployment_id: str
+    model: str
+    minute: str
+
+# One RouterCache op, answered from the router's stores. It names the state it touches, never a
+# Redis key. Fields by op: cooldowns (`ids`) -> one stored cooldown or None per id; put_cooldown
+# (`id`, `cooldown`, `ttl`) -> None; increment_allowed_fails (`id`, `suffix`, `ttl`) -> the new
+# count; add_usage (`window`, `tokens`, `requests`) -> None; add_request (`window`) -> None;
+# usage (`window`) -> [tokens, requests], each a number or None; health_states -> each checked
+# deployment's `{is_healthy: bool, timestamp: float}` by id, or None; outcomes (`id`) -> this
+# worker's [successes, fails] of the current minute; count_success (`id`) and count_failure (`id`)
+# -> None. `ttl` is in seconds.
 class _CacheStep(_Step):
     kind: Literal["cache"]
-    op: Literal["get", "set", "increment", "increment_usage", "batch_get", "delete"]
-    key: str | None
-    keys: list[str] | None
-    value: JsonValue
-    ttl: float | None
-    local: bool
+    op: Literal[
+        "cooldowns",
+        "put_cooldown",
+        "increment_allowed_fails",
+        "add_usage",
+        "add_request",
+        "usage",
+        "health_states",
+        "outcomes",
+        "count_success",
+        "count_failure",
+    ]
+    ids: NotRequired[list[str]]
+    id: NotRequired[str]
+    cooldown: NotRequired[JsonValue]
+    suffix: NotRequired[str | None]
+    ttl: NotRequired[float]
+    window: NotRequired[_UsageWindow]
+    tokens: NotRequired[int | float]
+    requests: NotRequired[int | float]
 
 # One lookup of a model-info query (router-core `ModelInfoLookup`): its `lookup` name and that
 # lookup's arguments, answered as the lookup documents.
@@ -1012,10 +1035,15 @@ class _ReportedStep(_Step):
     # The cooldown applied, in seconds; None when the deployment was not cooled down.
     cooldown_time: float | None
 
-# The end of a `RouterCoreHandle.report_success` or `count_success`.
+# The end of a `RouterCoreHandle.report_success`.
 class _CountedStep(_Step):
     kind: Literal["done"]
     key: str
+
+# The end of a `RouterCoreHandle.count_success`.
+class _SuccessCountedStep(_Step):
+    kind: Literal["done"]
+    counted: bool
 
 # One `os.environ/` reference a `secrets` step asks for: a top-level param (`key`), or an
 # env-only `dataSources[source].parameters[key]` (`env_only`).
@@ -1084,7 +1112,7 @@ _HealthySteps = _SelectStep | _PreRouteStep | _CacheStep | _HealthyStep | _Faile
 _BuildSteps = _SecretsStep | _BuildStep | _BuiltStep | _FailedStep
 _ModelInfoSteps = _ModelInfoStep | _ModelInfoDoneStep | _FailedStep
 _FailureReportSteps = _CacheStep | _ReportedStep | _FailedStep
-_SuccessReportSteps = _CacheStep | _CountedStep | _FailedStep
+_SuccessReportSteps = _CacheStep | _CountedStep | _SuccessCountedStep | _FailedStep
 
 class _AttemptSucceeded(TypedDict):
     ok: Literal[True]
@@ -1181,12 +1209,10 @@ class RouterCoreHandle:
         tracks_usage: bool | None = None,
         callbacks: Mapping[str, bool] | None = None,
     ) -> RouterCall[_SuccessReportSteps]: ...
-    # Count a success against any id, driven like `report_failure`; `done` carries `key`.
+    # Count a success against any id, driven like `report_failure`; `done` carries `counted`.
     def count_success(
         self, id: str, callbacks: Mapping[str, bool] | None = None
     ) -> RouterCall[_SuccessReportSteps]: ...
-    # [(id, tpm_key, rpm_key)] for this minute, or None for a group with no deployment.
-    def usage_keys(self, model_group: str) -> list[tuple[str, str, str]] | None: ...
     # Every deployment as a `model_list` entry, in config order.
     def deployments(self) -> list[dict[str, JsonValue]]: ...
     def deployments_from(self, start: int) -> list[dict[str, JsonValue]]: ...
