@@ -19,6 +19,7 @@ from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS,
     RELEASE_BY_TAG_URL,
     LatestReleaseInfo,
+    LatestReleaseNotesUnreadable,
     LatestReleaseUnavailable,
     _default_cache,
     _default_client,
@@ -384,7 +385,7 @@ def _minor_line(**overrides: httpx.Response | Exception) -> _ByUrl:
     )
 
 
-async def _info(client: _ByUrl) -> LatestReleaseInfo | LatestReleaseUnavailable:
+async def _info(client: _ByUrl) -> LatestReleaseInfo | LatestReleaseUnavailable | LatestReleaseNotesUnreadable:
     return await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
 
 
@@ -489,6 +490,16 @@ class TestLatestReleaseInfoEndpoint:
         response = http_client.get("/get/latest_release_info")
         assert response.status_code == 200
         assert response.json() is None
+
+    def test_responds_502_instead_of_zero_counts_when_no_release_note_entry_is_countable(self, http_client):
+        uncountable: Final = _github_response(payload=_release("v1.102.0", "## Changes\n\n1. Reworked the router\n"))
+        client: Final = _minor_release(**{_tag_url("v1.102.0"): uncountable})
+        _override_dependencies(client, _fresh_cache(), LitellmUserRoles.PROXY_ADMIN)
+        assert http_client.get("/get/latest_release_info").json() is None
+        responses: Final = [http_client.get("/get/latest_release_info") for _ in range(2)]
+        assert [response.status_code for response in responses] == [502, 502]
+        assert "v1.102.0" in responses[0].json()["detail"]
+        assert len(client.calls) == 2
 
     @pytest.mark.parametrize("name", ["LITELLM_DISABLE_LATEST_RELEASE_CHECK", "LITELLM_OFFLINE_MODE"])
     @pytest.mark.parametrize(

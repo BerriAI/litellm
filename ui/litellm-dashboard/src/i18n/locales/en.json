@@ -8208,7 +8208,6 @@
       "upgrade": {
         "title": "LiteLLM v{{version}} is available",
         "description": "{{summary}}. Your current version is v{{current}}",
-        "descriptionWithoutCounts": "Your current version is v{{current}}",
         "link": "View release notes"
       },
       "announcement": {

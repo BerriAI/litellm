@@ -6080,6 +6080,8 @@ export interface paths {
          *     Never waits on the changelog or GitHub. It answers from the cache and, when the cache is empty or expired, returns
          *     null and fetches after the response is sent, so a later call returns the release. It also returns null while the
          *     changelog or GitHub can't be reached, so the dashboard upgrade notice simply doesn't render.
+         *     Responds 502 when the release notes were fetched but none of their entries could be counted, rather than reporting
+         *     zero changes.
          *     Set LITELLM_DISABLE_LATEST_RELEASE_CHECK=true to return null without making any outbound request.
          */
         get: operations["latest_release_info_get_latest_release_info_get"];
@@ -63070,6 +63072,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LatestReleaseInfo"] | null;
                 };
+            };
+            /** @description The newest release's notes list no changes in a format this proxy can count */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
