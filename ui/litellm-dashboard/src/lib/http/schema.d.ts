@@ -30972,6 +30972,11 @@ export interface components {
              */
             completion_model?: string | null;
             /**
+             * Configurable Clientside Auth Params
+             * @description Allow only these client-supplied credential or callback parameters for every model. Names allow any value. api_base mappings restrict values using the same matching rules as per-deployment configuration.
+             */
+            configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            /**
              * Control Plane Url
              * @description Global Control Plane: URL of the control plane whose admin UI manages this instance. Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate against it cross-origin, and restricts the SSO return_to origin to that URL. No state is shared with the control plane
              */

@@ -4557,6 +4557,40 @@ class TestObservabilityCallbackBans:
         )
 
 
+@pytest.mark.parametrize("container", [None, "metadata", "litellm_metadata", "extra_body"])
+@pytest.mark.parametrize("model", ["group-a", "group-b"])
+def test_proxy_wide_allowlist_admits_only_the_named_observability_param(container: str | None, model: str) -> None:
+    settings: Final = {"configurable_clientside_auth_params": ["langfuse_environment"]}
+    controls: Final = {"langfuse_environment": "test"}
+    request: Final = {"model": model, **({container: controls} if container else controls)}
+    assert is_request_body_safe(request_body=request, general_settings=settings, llm_router=None, model=model) is True
+    for field in ("api_base", "langfuse_host", "aws_web_identity_token"):
+        forbidden: Final = {**controls, field: "https://unlisted.example"}
+        mixed: Final = {"model": model, **({container: forbidden} if container else forbidden)}
+        with pytest.raises(ValueError, match=field):
+            is_request_body_safe(request_body=mixed, general_settings=settings, llm_router=None, model=model)
+
+
+def test_proxy_wide_allowlist_keeps_api_base_value_restrictions() -> None:
+    settings: Final = {"configurable_clientside_auth_params": [{"api_base": r"^https://allowed\.example/v1$"}]}
+    assert (
+        is_request_body_safe(
+            request_body={"api_base": "https://allowed.example/v1"},
+            general_settings=settings,
+            llm_router=None,
+            model="group",
+        )
+        is True
+    )
+    with pytest.raises(ValueError, match="api_base"):
+        is_request_body_safe(
+            request_body={"api_base": "https://unlisted.example/v1"},
+            general_settings=settings,
+            llm_router=None,
+            model="group",
+        )
+
+
 def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
     """Greptile P1: ``_check_banned_params`` previously ``return``-ed when a
     deployment's ``configurable_clientside_auth_params`` permitted one
