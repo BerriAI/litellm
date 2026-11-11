@@ -2613,6 +2613,21 @@ def _rewrite_vertex_live_setup_model(text_data: str, setup_model_rewriter: Calla
     return json.dumps({**message, "setup": {**setup, "model": rewritten_model}})
 
 
+VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON: Final = "Rejected Request: binary messages must be UTF-8 encoded JSON"
+
+
+def _rewrite_vertex_live_binary_setup_model(
+    bytes_data: bytes, setup_model_rewriter: Callable[[str], str] | None
+) -> bytes | None:
+    if setup_model_rewriter is None:
+        return bytes_data
+    try:
+        text_data: Final = bytes_data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return _rewrite_vertex_live_setup_model(text_data, setup_model_rewriter).encode("utf-8")
+
+
 def _resolved_vertex_live_setup(
     setup_data: Mapping[str, object], setup_model_rewriter: Callable[[str], str] | None
 ) -> Mapping[str, object]:
@@ -3042,6 +3057,28 @@ async def _relay_client_frame(
     return verdict
 
 
+_UNDECODABLE_BINARY_CLIENT_FRAME: Final = _RefuseClientFrame(
+    refusal=WebsocketFrameModelRefused(
+        message=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON, error_type="invalid_request_error"
+    )
+)
+
+
+async def _relay_client_binary_frame(
+    websocket: WebSocket,
+    upstream_ws: ClientConnection,
+    bytes_data: bytes,
+    setup_model_rewriter: Callable[[str], str] | None,
+    gate: WebsocketFrameModelGate | None,
+    ledger: _WebsocketTurnLedger,
+) -> _ForwardClientFrame | _RefuseClientFrame:
+    rewritten_bytes: Final = _rewrite_vertex_live_binary_setup_model(bytes_data, setup_model_rewriter)
+    if rewritten_bytes is None:
+        await websocket.close(code=CloseCode.POLICY_VIOLATION, reason=VERTEX_LIVE_UNDECODABLE_BINARY_CLOSE_REASON)
+        return _UNDECODABLE_BINARY_CLIENT_FRAME
+    return await _relay_client_frame(websocket, upstream_ws, bytes_data, rewritten_bytes, gate, ledger)
+
+
 _EXPLICIT_SUCCESS_KWARGS: Final = frozenset({"logging_obj", "passthrough_logging_payload", "custom_llm_provider"})
 WALKOUT_TURN_DRAIN_SECONDS: Final = 600.0
 
@@ -3409,8 +3446,13 @@ async def websocket_passthrough_request(
                             metered_total += _metered_client_text(meter, text_data)
                         elif bytes_data is not None:
                             if isinstance(
-                                await _relay_client_frame(
-                                    websocket, upstream_ws, bytes_data, bytes_data, client_frame_model_gate, ledger
+                                await _relay_client_binary_frame(
+                                    websocket,
+                                    upstream_ws,
+                                    bytes_data,
+                                    setup_model_rewriter,
+                                    client_frame_model_gate,
+                                    ledger,
                                 ),
                                 _RefuseClientFrame,
                             ):

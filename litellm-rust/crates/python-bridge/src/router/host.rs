@@ -717,6 +717,8 @@ pub(crate) fn deployment_record(deployment: &Deployment) -> Value {
     deployment.record()
 }
 
+const RANDOMNESS_MODULE: &str = "litellm.rust_bridge.host.randomness";
+
 /// The process's `random` module: a Python router draws its shuffle and retry jitter there, so
 /// a seeded process picks the same deployments on either core. The bare module functions share
 /// one generator, so these calls interleave with every other draw the process makes.
@@ -725,7 +727,9 @@ pub(crate) struct PythonRandomness;
 impl Randomness for PythonRandomness {
     fn next_f64(&self) -> f64 {
         Python::attach(|py| -> PyResult<f64> {
-            py.import("random")?.call_method0("random")?.extract()
+            py.import(RANDOMNESS_MODULE)?
+                .call_method0("next_float")?
+                .extract()
         })
         .unwrap_or_else(|_| ThreadRandomness.next_f64())
     }
@@ -733,8 +737,8 @@ impl Randomness for PythonRandomness {
     fn index_below(&self, len: usize) -> usize {
         // `random.choice` is `seq[self._randbelow(len(seq))]`, and so is `randrange(len)`.
         Python::attach(|py| -> PyResult<usize> {
-            py.import("random")?
-                .call_method1("randrange", (len,))?
+            py.import(RANDOMNESS_MODULE)?
+                .call_method1("index_below", (len,))?
                 .extract()
         })
         .unwrap_or_else(|_| ThreadRandomness.index_below(len))
