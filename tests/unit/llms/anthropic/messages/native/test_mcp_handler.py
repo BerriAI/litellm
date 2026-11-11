@@ -286,9 +286,7 @@ async def test_anthropic_messages_with_mcp_hands_execution_the_requests_served_t
     ]
 
     process = AsyncMock(return_value=(served, {"read_wiki_structure": "deepwiki"}))
-    execute = AsyncMock(
-        return_value=[{"tool_call_id": "toolu_1", "result": "ok", "name": "read_wiki_structure"}]
-    )
+    execute = AsyncMock(return_value=[{"tool_call_id": "toolu_1", "result": "ok", "name": "read_wiki_structure"}])
     responses = [
         {
             "stop_reason": "tool_use",
@@ -482,3 +480,41 @@ async def test_anthropic_messages_with_mcp_loads_a_filtered_routes_beta_map_off_
 @pytest.mark.asyncio
 async def test_anthropic_messages_with_mcp_never_loads_the_beta_map_for_first_party_anthropic():
     assert await _mcp_safeguards_turn_recording_beta_map_loads("anthropic", "claude-sonnet-4-6") == ()
+
+
+def test_build_tool_result_message_marks_is_error_results():
+    """
+    Regression test (#49359): a tool result flagged is_error by the MCP gateway
+    must reach Anthropic as is_error=True so the model reacts to the failure.
+
+    Given: tool results where one carries is_error=True (MCP CallToolResult.isError
+           or an execution exception path in execute_tool_calls)
+    When:  _build_tool_result_message renders them
+    Then:  Only the flagged result gets is_error; the success stays clean.
+    """
+    message = _build_tool_result_message(
+        [
+            {"tool_call_id": "call_ok", "result": "9 sections", "name": "read_wiki"},
+            {"tool_call_id": "call_bad", "result": "Error executing tool: boom", "name": "read_wiki", "is_error": True},
+        ]
+    )
+
+    assert message["role"] == "user"
+    assert message["content"][0] == {"type": "tool_result", "tool_use_id": "call_ok", "content": "9 sections"}
+    assert message["content"][1] == {
+        "type": "tool_result",
+        "tool_use_id": "call_bad",
+        "content": "Error executing tool: boom",
+        "is_error": True,
+    }
+
+
+def test_build_tool_result_message_omits_is_error_for_successes():
+    """
+    Successful tool results must not carry is_error at all (Anthropic treats
+    is_error: false the same, but omitting keeps the payload minimal and the
+    chat-completions bridge unaffected).
+    """
+    message = _build_tool_result_message([{"tool_call_id": "call_1", "result": "5", "name": "add", "is_error": False}])
+
+    assert message["content"][0] == {"type": "tool_result", "tool_use_id": "call_1", "content": "5"}

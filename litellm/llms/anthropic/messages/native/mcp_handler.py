@@ -48,17 +48,20 @@ def _get_stop_reason(response: AnthropicMessagesResponse) -> str | None:
 
 def _build_tool_result_message(tool_results: Sequence[Mapping[str, object]]) -> AnthropicMessagesUserMessageParam:
     """Turn executed tool results into the user message Anthropic expects."""
-    return AnthropicMessagesUserMessageParam(
-        role="user",
-        content=[
-            AnthropicMessagesToolResultParam(
-                type="tool_result",
-                tool_use_id=str(result.get("tool_call_id") or ""),
-                content=str(result.get("result") or ""),
-            )
-            for result in tool_results
-        ],
-    )
+    content: list[AnthropicMessagesToolResultParam] = []
+    for result in tool_results:
+        tool_result = AnthropicMessagesToolResultParam(
+            type="tool_result",
+            tool_use_id=str(result.get("tool_call_id") or ""),
+            content=str(result.get("result") or ""),
+        )
+        if result.get("is_error"):
+            # Propagate MCP failures (CallToolResult.isError or an execution
+            # exception) so Anthropic's native error-handling triggers instead
+            # of reading the failure string as a successful tool return (#49359).
+            tool_result["is_error"] = True
+        content.append(tool_result)
+    return AnthropicMessagesUserMessageParam(role="user", content=content)
 
 
 async def anthropic_messages_with_mcp(

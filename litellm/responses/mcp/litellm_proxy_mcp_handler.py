@@ -9,7 +9,7 @@ from openai.types.chat import ChatCompletionToolParam
 from openai.types.responses.function_tool_param import FunctionToolParam
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import TypedDict as ExtraItemsTypedDict
-from typing_extensions import Unpack
+from typing_extensions import NotRequired, Unpack
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -75,6 +75,12 @@ class MCPToolResult(TypedDict):
     tool_call_id: str | None
     result: str
     name: str | None
+    # True when the MCP server returned CallToolResult.isError or execution
+    # raised (guardrail block, HTTP failure, unexpected exception). Anthropic
+    # native MCP consumers pass is_error=True on the tool_result block so the
+    # model can react to the failure instead of reading it as a success (#49359).
+    # Optional via NotRequired (PEP 655) so the three original keys stay required.
+    is_error: NotRequired[bool]
 
 
 class _AresponsesOptions(ExtraItemsTypedDict, total=False, extra_items=object):
@@ -1092,13 +1098,16 @@ class LiteLLM_Proxy_MCP_Handler:
 
                 # Format result for inclusion in response
                 result_text = LiteLLM_Proxy_MCP_Handler._parse_mcp_result(result)
-                tool_results.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "result": result_text,
-                        "name": tool_name,
-                    }
-                )
+                tool_result: MCPToolResult = {
+                    "tool_call_id": tool_call_id,
+                    "result": result_text,
+                    "name": tool_name,
+                }
+                # mcp>=2.3.0 names the flag is_error (constructor alias isError);
+                # accept both so older SDK versions keep working.
+                if getattr(result, "is_error", False) or getattr(result, "isError", False):
+                    tool_result["is_error"] = True
+                tool_results.append(tool_result)
 
             except BlockedPiiEntityError as e:
                 await LiteLLM_Proxy_MCP_Handler._log_mcp_tool_failure(
@@ -1116,6 +1125,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         "tool_call_id": tool_call_id,
                         "result": error_message,
                         "name": tool_name,
+                        "is_error": True,
                     }
                 )
             except GuardrailRaisedException as e:
@@ -1136,6 +1146,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         "tool_call_id": tool_call_id,
                         "result": error_message,
                         "name": tool_name,
+                        "is_error": True,
                     }
                 )
             except HTTPException as e:
@@ -1154,6 +1165,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         "tool_call_id": tool_call_id,
                         "result": error_message,
                         "name": tool_name,
+                        "is_error": True,
                     }
                 )
             except Exception as e:
@@ -1169,6 +1181,7 @@ class LiteLLM_Proxy_MCP_Handler:
                         "tool_call_id": tool_call_id,
                         "result": f"Error executing tool: {e}",
                         "name": tool_name,
+                        "is_error": True,
                     }
                 )
 

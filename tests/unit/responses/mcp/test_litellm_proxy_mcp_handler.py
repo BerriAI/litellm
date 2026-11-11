@@ -51,7 +51,14 @@ class _DummyMCPResult:
 
 def _setup_mcp_call_environment(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Patch MCP globals so _execute_tool_calls can run in tests."""
-    proxy_module = types.SimpleNamespace(proxy_logging_obj=object(), prisma_client=None)
+    proxy_logging_obj = MagicMock()
+
+    async def _passthrough_post_mcp_call_hook(response, **_):
+        return response
+
+    proxy_logging_obj.post_mcp_call_hook = AsyncMock(side_effect=_passthrough_post_mcp_call_hook)
+    proxy_logging_obj.post_call_failure_hook = AsyncMock()
+    proxy_module = types.SimpleNamespace(proxy_logging_obj=proxy_logging_obj, prisma_client=None)
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_module)
 
     fake_manager = types.SimpleNamespace(
@@ -148,9 +155,7 @@ def test_chat_follow_up_answers_only_tool_calls_in_its_assistant_turn():
                 "message": {
                     "role": "assistant",
                     "content": None,
-                    "tool_calls": [
-                        {"id": call_id, "type": "function", "function": {"name": "foo", "arguments": "{}"}}
-                    ],
+                    "tool_calls": [{"id": call_id, "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
                 },
                 "finish_reason": "tool_calls",
             }
@@ -756,7 +761,9 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
         user_api_key_auth=None,
     )
 
-    assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "name": tool_name}]
+    # The mocked async_post_mcp_tool_call_hook returns a result flagged is_error=True,
+    # so the gateway must propagate that flag (#49359) alongside the redacted text.
+    assert results == [{"tool_call_id": "call-1", "result": "[REDACTED]", "name": tool_name, "is_error": True}]
     assert logging_obj.async_success_handler.await_args.kwargs["result"].content[0].text == "[REDACTED]"
     assert logging_obj.async_success_handler.await_args.kwargs["result"].structured_content is None
 
@@ -2305,3 +2312,105 @@ async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(m
     assert scoped.object_permission is not None
     assert scoped.object_permission.mcp_servers == ["srv-1"]
     assert scoped.object_permission.mcp_tool_permissions == {"srv-1": ["add"]}
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_propagates_mcp_is_error_flag(monkeypatch):
+    """
+    Regression test (#49359): CallToolResult.isError=True must surface as
+    is_error=True on the MCPToolResult so Anthropic's native MCP loop can mark
+    the tool_result block as failed.
+    """
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    call_tool_mock.return_value = CallToolResult(
+        content=[TextContent(type="text", text="Database connection refused")],
+        isError=True,
+    )
+    tool_name = "read_wiki_structure"
+    tool_calls = [{"id": "call-err", "function": {"name": tool_name, "arguments": "{}"}}]
+
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert results == [
+        {
+            "tool_call_id": "call-err",
+            "result": "Database connection refused",
+            "name": tool_name,
+            "is_error": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_success_has_no_is_error(monkeypatch):
+    """A successful CallToolResult must not carry the is_error key at all."""
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    call_tool_mock.return_value = CallToolResult(
+        content=[TextContent(type="text", text="9 sections")],
+        isError=False,
+    )
+    tool_name = "read_wiki_structure"
+    tool_calls = [{"id": "call-ok", "function": {"name": tool_name, "arguments": "{}"}}]
+
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert results == [
+        {
+            "tool_call_id": "call-ok",
+            "result": "9 sections",
+            "name": tool_name,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_marks_exception_results_as_error(monkeypatch):
+    """An unexpected exception in tool execution must set is_error=True."""
+    call_tool_mock = _setup_mcp_call_environment(monkeypatch)
+    call_tool_mock.side_effect = RuntimeError("boom")
+    tool_name = "read_wiki_structure"
+    tool_calls = [{"id": "call-boom", "function": {"name": tool_name, "arguments": "{}"}}]
+
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=tool_calls,
+        user_api_key_auth=None,
+    )
+
+    assert results == [
+        {
+            "tool_call_id": "call-boom",
+            "result": "Error executing tool: boom",
+            "name": tool_name,
+            "is_error": True,
+        }
+    ]
+
+
+def test_mcp_tool_result_keeps_original_keys_required_statically():
+    """
+    PEP 655 negative control (#49359 review): ``is_error`` is the only optional
+    key; ``tool_call_id``, ``result``, and ``name`` must stay required, so a
+    bare ``{"is_error": True}`` literal is rejected at type-check time. This
+    pins the static contract the runtime tests cannot see.
+    """
+    from typing_extensions import assert_type
+
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
+
+    # The three original keys keep Required status: total=False was reverted.
+    assert not MCPToolResult.__required_keys__ < {"tool_call_id", "result", "name"}
+    assert MCPToolResult.__required_keys__ == {"tool_call_id", "result", "name"}
+    assert MCPToolResult.__optional_keys__ == {"is_error"}
+
+    # Runtime shape of a full result is unchanged.
+    full: MCPToolResult = {"tool_call_id": "call-1", "result": "ok", "name": "echo"}
+    assert_type(full, MCPToolResult)
