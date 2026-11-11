@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
 
 BATCH_CREATE_HIDDEN_PARAM: Final = "batch_create"
+BATCH_CREATE_PROVIDER_HIDDEN_PARAM: Final = "batch_create_provider"
 LITELLM_EXECUTED_BATCH_ID_PREFIX: Final = "litellm_batch_"
 EXPLICIT_CREDENTIAL_KEYS: Final = frozenset({"api_key", "api_base", "litellm_credential_name"})
 
@@ -659,7 +660,7 @@ def get_team_provider_credentials(
     custom_llm_provider: str,
     *,
     include_accessible_deployments: bool = True,
-) -> dict | None:
+) -> dict[str, object] | None:
     """
     Resolve upstream credentials for a provider-scoped file operation
     (e.g. GET /v1/files), which doesn't pin a model.

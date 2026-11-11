@@ -5,7 +5,7 @@ import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import get_format
 from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
+    BATCH_CREATE_PROVIDER_HIDDEN_PARAM,
     TeamProviderDeployment,
     convert_b64_uid_to_unified_uid,
     encode_file_id_with_model,
@@ -5854,8 +5855,10 @@ def _created_batch(batch_id: str, hidden_params: Mapping[str, object]) -> "LiteL
     return batch
 
 
-def _provider_batch_cancel_route(status_code: int) -> respx.Route:
-    return respx.post(f"{_OPENAI_API_BASE}/batches/{RAW_PROVIDER_BATCH_ID}/cancel").respond(
+def _provider_batch_cancel_route(
+    status_code: int, batch_id: str = RAW_PROVIDER_BATCH_ID, api_base: str = _OPENAI_API_BASE
+) -> respx.Route:
+    return respx.post(f"{api_base}/batches/{batch_id}/cancel").respond(
         status_code,
         json=(
             {
@@ -5873,14 +5876,22 @@ def _provider_batch_cancel_route(status_code: int) -> respx.Route:
     )
 
 
+_BATCH_CREATE_REQUEST: Final = MappingProxyType(
+    {"input_file_id": "file-input789", "endpoint": "/v1/chat/completions", "completion_window": "24h"}
+)
+
+
 async def _create_batch_through_hook(
-    llm_router: object, batch_id: str, hidden_params: Mapping[str, object]
+    llm_router: object,
+    batch_id: str,
+    hidden_params: Mapping[str, object],
+    request: Mapping[str, object] = _BATCH_CREATE_REQUEST,
 ) -> object:
     import litellm.proxy.proxy_server as proxy_server_module
 
     with patch.object(proxy_server_module, "llm_router", llm_router):
         return await _managed_files_whose_batch_writes_fail().async_post_call_success_hook(
-            data={"input_file_id": "file-input789", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+            data=dict(request),
             user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a"),
             response=_created_batch(batch_id, hidden_params),
         )
@@ -5911,6 +5922,78 @@ async def test_post_call_batch_create_cancels_the_provider_batch_when_its_row_ca
     assert (exc_info.value.code, exc_info.value.message) == (
         "500",
         "LiteLLM could not save the batch, so it cancelled it at the provider. Retry the request.",
+    )
+
+
+_DOWNSTREAM_ENCODED_BATCH_ID: Final = encode_file_id_with_model(
+    RAW_PROVIDER_BATCH_ID, "model-only-the-downstream-proxy-knows", id_type="batch"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
+@respx.mock
+async def test_post_call_batch_create_cancels_a_downstream_encoded_batch_on_the_deployment_that_created_it():
+    from litellm.proxy._types import ProxyException
+
+    cancel_route: Final = _provider_batch_cancel_route(200, batch_id=_DOWNSTREAM_ENCODED_BATCH_ID)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _create_batch_through_hook(
+            _two_deployment_batch_router(),
+            _DOWNSTREAM_ENCODED_BATCH_ID,
+            {"unified_file_id": "managed-input-file", "model_id": _BATCH_DEPLOYMENT_ID},
+        )
+
+    assert cancel_route.call_count == 1
+    assert cancel_route.calls.last.request.headers["authorization"] == "Bearer sk-test-key"
+    assert exc_info.value.message == (
+        "LiteLLM could not save the batch, so it cancelled it at the provider. Retry the request."
+    )
+
+
+def _team_openai_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "team-a-openai",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-team-key", "api_base": _OTHER_API_BASE},
+                "model_info": {"id": "team-a-openai-deployment", "team_id": "team_a"},
+            },
+        ],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
+@pytest.mark.parametrize(
+    ("llm_router", "request_credentials", "api_base", "authorization"),
+    [
+        (None, {"api_key": "sk-request-key", "api_base": _OPENAI_API_BASE}, _OPENAI_API_BASE, "Bearer sk-request-key"),
+        (_team_openai_router(), {}, _OTHER_API_BASE, "Bearer sk-team-key"),
+    ],
+    ids=["request-credentials", "team-deployment-credentials"],
+)
+@respx.mock
+async def test_post_call_batch_create_cancels_a_provider_only_batch_with_the_credentials_it_was_created_with(
+    llm_router: Router | None, request_credentials: Mapping[str, str], api_base: str, authorization: str
+):
+    from litellm.proxy._types import ProxyException
+
+    cancel_route: Final = _provider_batch_cancel_route(200, api_base=api_base)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _create_batch_through_hook(
+            llm_router,
+            RAW_PROVIDER_BATCH_ID,
+            {BATCH_CREATE_PROVIDER_HIDDEN_PARAM: "openai"},
+            {**_BATCH_CREATE_REQUEST, **request_credentials},
+        )
+
+    assert cancel_route.call_count == 1
+    assert cancel_route.calls.last.request.headers["authorization"] == authorization
+    assert exc_info.value.message == (
+        "LiteLLM could not save the batch, so it cancelled it at the provider. Retry the request."
     )
 
 

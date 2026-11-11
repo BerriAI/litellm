@@ -164,6 +164,7 @@ class Harness:
     router: MagicMock
     logging: MagicMock
     creds_resolver: MagicMock
+    upstream: respx.MockRouter
     upstream_files_route: respx.Route
 
     @property
@@ -278,6 +279,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
             router=router,
             logging=logging,
             creds_resolver=creds_resolver,
+            upstream=upstream,
             upstream_files_route=upstream_files_route,
         )
         yield h
@@ -1395,6 +1397,34 @@ async def test_create__registers_ownership_for_creator(harness, openai_env_creds
     resp = await call_create(harness, user=TEAM_A_KEY)
 
     assert_ownership_registered_for_team_a(prisma_client, resp.id)
+
+
+@pytest.mark.asyncio
+async def test_create__provider_fallback_cancels_the_provider_batch_when_its_row_cannot_be_saved(
+    harness, openai_env_creds, monkeypatch
+):
+    from prisma.errors import DataError
+
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    set_body(harness, {"input_file_id": "file-plain", "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    prisma_client = install_managed_files_hook(harness)
+    prisma_client.db.litellm_managedobjecttable.upsert.side_effect = DataError(
+        data={"user_facing_error": {"message": "simulated DB write failure"}}
+    )
+    cancel_route = harness.upstream.post("https://api.openai.com/v1/batches/batch-provider-id/cancel").respond(
+        200, json=make_batch(status="cancelling").model_dump()
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await call_create(harness, user=TEAM_A_KEY)
+
+    assert cancel_route.call_count == 1
+    assert cancel_route.calls.last.request.headers["authorization"] == "Bearer sk-env-openai"
+    assert (exc.value.code, exc.value.message) == (
+        "500",
+        "LiteLLM could not save the batch, so it cancelled it at the provider. Retry the request.",
+    )
 
 
 @pytest.mark.asyncio

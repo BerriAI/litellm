@@ -32,12 +32,13 @@ from fastapi import HTTPException
 from openai import APIConnectionError, AsyncOpenAI
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, Unpack
+from typing_extensions import ReadOnly, Unpack, assert_never
 
 import litellm
 from litellm import Router, verbose_logger
 from litellm._internal_context import internal_sub_call, post_response_phase, with_service_target
 from litellm._uuid import uuid
+from litellm.batches.main import acancel_batch
 from litellm.caching.caching import DualCache
 from litellm.constants import (
     BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS,
@@ -78,16 +79,19 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
+    BATCH_CREATE_PROVIDER_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
     TeamProviderDeployment,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
     decode_model_from_file_id,
     ensure_batch_response_managed_file_ids,
+    explicit_request_credentials,
     get_batch_id_from_unified_batch_id,
     get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
     get_original_file_id,
+    get_team_provider_credentials,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
     normalize_mime_type_for_provider,
@@ -251,35 +255,119 @@ _UNSAVED_BATCH_NOT_CANCELLED_MESSAGE: Final = (
 )
 
 
-def _provider_batch_route(llm_router: Router, batch_id: str, model_id: str | None) -> tuple[str, str] | None:
+@dataclass(frozen=True, slots=True)
+class _DeploymentBatch:
+    llm_router: Router
+    deployment_id: str
+    provider_batch_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderBatch:
+    custom_llm_provider: str
+    provider_batch_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class _UnroutableBatch:
+    provider_batch_id: str
+
+
+_UnsavedBatch = _DeploymentBatch | _ProviderBatch | _UnroutableBatch
+
+
+def _deployment_batch(llm_router: Router, batch_id: str, model_id: str | None) -> _DeploymentBatch | None:
     encoded_model: Final = decode_model_from_file_id(batch_id)
-    if encoded_model is None:
-        return None if model_id is None else (model_id, batch_id)
-    deployment: Final = llm_router.registry().credentials(encoded_model, form="deployment")
-    deployment_id: Final = None if deployment is None else deployment.model_info.id
-    return None if deployment_id is None else (deployment_id, get_original_file_id(batch_id))
+    deployment: Final = (
+        None if encoded_model is None else llm_router.registry().credentials(encoded_model, form="deployment")
+    )
+    if deployment is not None and deployment.model_info.id is not None:
+        return _DeploymentBatch(llm_router, deployment.model_info.id, get_original_file_id(batch_id))
+    return None if model_id is None else _DeploymentBatch(llm_router, model_id, batch_id)
 
 
-async def _cancel_provider_batch(llm_router: Router, deployment_id: str, provider_batch_id: str) -> str | None:
+def _unsaved_batch(
+    llm_router: Router | None, batch_id: str, model_id: str | None, custom_llm_provider: str | None
+) -> _UnsavedBatch:
+    deployment_batch: Final = None if llm_router is None else _deployment_batch(llm_router, batch_id, model_id)
+    if deployment_batch is not None:
+        return deployment_batch
+    return _UnroutableBatch(batch_id) if custom_llm_provider is None else _ProviderBatch(custom_llm_provider, batch_id)
+
+
+def _unsaved_batch_owner(batch: _UnsavedBatch) -> str:
+    match batch:
+        case _DeploymentBatch():
+            return f"deployment {sanitize_for_log(batch.deployment_id)}"
+        case _ProviderBatch():
+            return f"provider {sanitize_for_log(batch.custom_llm_provider)}"
+        case _UnroutableBatch():
+            return "an unknown deployment"
+        case _:
+            assert_never(batch)
+
+
+def _provider_credentials(
+    llm_router: Router | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    custom_llm_provider: str,
+    data: Mapping[str, object],
+) -> Mapping[str, object]:
+    team_credentials: Final = get_team_provider_credentials(llm_router, user_api_key_dict, custom_llm_provider) or {}
+    return MappingProxyType(
+        {
+            **{key: value for key, value in team_credentials.items() if key != "custom_llm_provider"},
+            **explicit_request_credentials(data),
+        }
+    )
+
+
+async def _cancel_unsaved_batch(
+    batch: _UnsavedBatch, llm_router: Router | None, user_api_key_dict: UserAPIKeyAuth, data: Mapping[str, object]
+) -> str | None:
     try:
-        await llm_router.acancel_batch(model=deployment_id, batch_id=provider_batch_id)
+        match batch:
+            case _DeploymentBatch():
+                await batch.llm_router.acancel_batch(model=batch.deployment_id, batch_id=batch.provider_batch_id)
+            case _ProviderBatch():
+                await acancel_batch(
+                    batch_id=batch.provider_batch_id,
+                    model=None,
+                    custom_llm_provider=batch.custom_llm_provider,
+                    metadata=None,
+                    extra_headers=None,
+                    extra_body=None,
+                    **_provider_credentials(llm_router, user_api_key_dict, batch.custom_llm_provider, data),
+                )
+            case _UnroutableBatch():
+                return "no deployment or provider to send the cancel to"
+            case _:
+                assert_never(batch)
     except Exception as error:
         return str(error)
     return None
 
 
-async def _unsaved_batch_error(batch_id: str, model_id: str | None, error: Exception) -> ProxyException:
+async def _unsaved_batch_error(
+    provider_batch_id: str,
+    response_hidden_params: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    data: Mapping[str, object],
+    error: Exception,
+) -> ProxyException:
     llm_router: Final = _proxy_llm_router()
-    route: Final = None if llm_router is None else _provider_batch_route(llm_router, batch_id, model_id)
-    cancel_failure: Final = (
-        "no deployment to send the cancel to"
-        if llm_router is None or route is None
-        else await _cancel_provider_batch(llm_router, *route)
+    model_id: Final = response_hidden_params.get("model_id")
+    custom_llm_provider: Final = response_hidden_params.get(BATCH_CREATE_PROVIDER_HIDDEN_PARAM)
+    batch: Final = _unsaved_batch(
+        llm_router,
+        provider_batch_id,
+        model_id if isinstance(model_id, str) else None,
+        custom_llm_provider if isinstance(custom_llm_provider, str) else None,
     )
-    deployment_id, provider_batch_id = route or (model_id, batch_id)
+    cancel_failure: Final = await _cancel_unsaved_batch(batch, llm_router, user_api_key_dict, data)
     verbose_logger.error(
-        f"LiteLLM could not save batch {sanitize_for_log(provider_batch_id)} of deployment "
-        f"{sanitize_for_log(deployment_id)} after the provider created it: {sanitize_for_log(error)}. "
+        f"LiteLLM could not save batch {sanitize_for_log(batch.provider_batch_id)} of {_unsaved_batch_owner(batch)} "
+        f"after the provider created it: {sanitize_for_log(error)}. "
         + (
             "It cancelled the batch at the provider."
             if cancel_failure is None
@@ -2448,7 +2536,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 return response
             response_hidden_params: Final = cast(dict[str, object], getattr(response, HIDDEN_PARAMS_ATTR))
             is_batch_create: Final = response_hidden_params.get(BATCH_CREATE_HIDDEN_PARAM) is True
-            request_tags: Final = request_tags_from_request_data(data)
+            request_data: Final = cast(Mapping[str, object], data)
+            request_tags: Final = request_tags_from_request_data(request_data)
             if not is_batch_create:
                 await self._store_batch(request_tags, user_api_key_dict, response, response_hidden_params)
                 return response
@@ -2458,7 +2547,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             try:
                 await self._store_batch(request_tags, user_api_key_dict, response, response_hidden_params)
             except Exception as error:
-                raise await _unsaved_batch_error(provider_batch_id, model_id, error) from error
+                raise await _unsaved_batch_error(
+                    provider_batch_id, response_hidden_params, user_api_key_dict, request_data, error
+                ) from error
 
             prom_logger = self._get_prometheus_logger()
             if prom_logger:

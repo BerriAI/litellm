@@ -49,6 +49,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     BATCH_CREATE_HIDDEN_PARAM,
+    BATCH_CREATE_PROVIDER_HIDDEN_PARAM,
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     add_deployment_model_info,
     apply_team_provider_credentials,
@@ -523,13 +524,14 @@ async def create_batch(
                 )
                 _raise_not_found_when_openai_fallback_unservable(
                     requested_provider=requested_provider,
-                    data=cast(dict, _create_batch_data),  # cast-ok: TypedDict is a dict at runtime
+                    data=_create_batch_data,
                     not_found_message=f"No such File object: {input_file_id}",
                 )
                 response = await litellm.acreate_batch(
                     custom_llm_provider=custom_llm_provider,
                     **_create_batch_data,
                 )
+                set_hidden_param(response, BATCH_CREATE_PROVIDER_HIDDEN_PARAM, custom_llm_provider)
 
         set_hidden_param(response, BATCH_CREATE_HIDDEN_PARAM, True)
 
