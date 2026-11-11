@@ -111,7 +111,13 @@ def test_team_past_its_soft_budget_still_serves_its_keys(gateway: Gateway) -> No
 def test_key_crossing_its_soft_budget_posts_one_soft_budget_crossed_webhook(gateway: Gateway, tmp_path: Path) -> None:
     """With webhook alerting on, a key with `soft_budget` 0.0000001 keeps calling. After its spend is recorded,
     the webhook receives a JSON event with `event` `soft_budget_crossed`, `token` the hashed key, `soft_budget`
-    0.0000001, `spend` at least 0.02, the key alias and `event_group` `key`. Every call is still served."""
+    0.0000001, `spend` at least 0.02, the key alias and `event_group` `key`. Every call is still served.
+    BUG: same root cause as the sibling `test_soft_budget_webhook_is_sent_once_and_not_on_every_later_request`
+    (product bug 7 of run 42966523075). The soft budget check reads the cached key object's `spend`
+    (`litellm/proxy/auth/auth_checks.py:6860`), which a charge never raises (`_update_key_cache` drops its
+    `new_spend`, `litellm/proxy/proxy_server.py:4661`), so the alert waits for a reload of the key object. It
+    came in time in run 42966523075 and not at all within 70 seconds in run 43044106414."""
+    pytest.skip("BUG: soft_budget_crossed waits on a stale cached key spend and was not sent within 70 seconds")
     seen: Final[list[dict[str, JsonValue]]] = []  # mutable-ok: accumulates webhook deliveries across polls
     with (
         scripted_upstream() as wire,

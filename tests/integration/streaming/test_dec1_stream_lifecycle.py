@@ -61,7 +61,11 @@ def test_headers_and_first_chunk_arrive_while_the_provider_is_still_streaming(ga
     frames: Final = text_frames(f"chatcmpl-{marker()}", ("early ", "late"))
     with scripted(gateway, lambda request: sse(frames, gate_after_first=gate)) as rig:
         with rig.gateway.client.stream(
-            "POST", "/v1/chat/completions", json=rig.chat_body(), headers={"Authorization": f"Bearer {rig.key}"}, timeout=30
+            "POST",
+            "/v1/chat/completions",
+            json=rig.chat_body(),
+            headers={"Authorization": f"Bearer {rig.key}"},
+            timeout=30,
         ) as response:
             assert response.status_code == 200
             assert response.headers["x-litellm-call-id"]
@@ -203,19 +207,27 @@ def test_failed_stream_is_not_cached(gateway: Gateway) -> None:
         assert len(calls) == 2
 
 
-def test_stream_then_non_stream_of_the_same_request_share_one_cache_entry(gateway: Gateway) -> None:
-    """A prompt is first answered as a stream, then requested again with `stream: false`. The second
-    caller gets a JSON `chat.completion` with the same text and the provider is not called again.
-    UNVERIFIED: assumes `stream` is not part of the cache key (`litellm/caching/caching.py`
-    `get_cache_key`); if it is, the provider is called twice and this documents the difference."""
+def test_stream_then_non_stream_of_the_same_request_do_not_share_a_cache_entry(gateway: Gateway) -> None:
+    """A prompt is first answered as a stream, then requested again with `stream: false`. The second caller
+    gets the provider's JSON answer, not the streamed text, and the provider is called again: `stream` is an
+    OpenAI chat parameter, so its value is part of the cache key (`Cache.get_cache_key`,
+    `litellm/caching/caching.py:428`, over `ModelParamHelper.get_all_llm_api_params`). A third request that
+    streams again is served the stored stream without a provider call, which proves the first entry exists and
+    the miss came from the key. Pinned current behaviour: a rewrite that drops `stream` from the key would
+    start serving one mode's answer to the other."""
     prompt: Final = f"dec1 cross mode cache {marker()}"
     identity: Final = f"chatcmpl-{marker()}"
-    with scripted(gateway, serving(text_frames(identity, ("shared ", "entry")), json_body=completion_json(identity, "from provider"))) as rig:
+    with scripted(
+        gateway,
+        serving(text_frames(identity, ("shared ", "entry")), json_body=completion_json(identity, "from provider")),
+    ) as rig:
         assert rig.chat(prompt).status_code == 200
         rig.spend_rows(1)
         second: Final = rig.chat(prompt, stream=False)
-        assert second.json()["choices"][0]["message"]["content"] == "shared entry"
-        assert len(rig.upstream_bodies()) == 1
+        assert second.json()["choices"][0]["message"]["content"] == "from provider"
+        rig.spend_rows(2)
+        assert content_of(chunks_of(rig.chat(prompt).text)) == "shared entry"
+        assert [body.get("stream") is True for body in rig.upstream_bodies()] == [True, False]
 
 
 def test_mock_response_deployment_streams_its_text_without_calling_a_provider(gateway: Gateway) -> None:
@@ -243,7 +255,9 @@ def test_fallback_before_the_first_chunk_streams_the_fallback_answer_under_the_f
         scripted(gateway, lambda request: failing) as primary,
         scripted(gateway, lambda request: sse(text_frames(f"chatcmpl-{marker()}", ("from ", "fallback")))) as fallback,
     ):
-        response: Final = primary.post("/v1/chat/completions", primary.chat_body(fallbacks=[fallback.model]), key=gateway.key)
+        response: Final = primary.post(
+            "/v1/chat/completions", primary.chat_body(fallbacks=[fallback.model]), key=gateway.key
+        )
         assert response.status_code == 200, response.text
         chunks: Final = chunks_of(response.text)
         assert content_of(chunks) == "from fallback"
@@ -257,7 +271,8 @@ def test_fallback_stream_is_billed_once_against_the_deployment_that_answered(gat
     and its price (0.019). Any `failure` row for the first attempt carries no spend."""
     failing: Final = Reply(status=500, body=b'{"error": {"message": "primary down", "type": "server_error"}}')
     with (
-        gateway.scenario() as scenario, scripted(gateway, lambda request: failing) as primary,
+        gateway.scenario() as scenario,
+        scripted(gateway, lambda request: failing) as primary,
         scripted(
             gateway,
             lambda request: sse(text_frames(f"chatcmpl-{marker()}", ("paid ", "once"))),
@@ -306,7 +321,11 @@ def test_caller_disconnect_mid_stream_still_records_the_partial_call(gateway: Ga
         output_cost_per_token=0.002,
     ) as rig:
         with rig.gateway.client.stream(
-            "POST", "/v1/chat/completions", json=rig.chat_body(), headers={"Authorization": f"Bearer {rig.key}"}, timeout=30
+            "POST",
+            "/v1/chat/completions",
+            json=rig.chat_body(),
+            headers={"Authorization": f"Bearer {rig.key}"},
+            timeout=30,
         ) as response:
             assert response.status_code == 200
             next(line for line in response.iter_lines() if line.startswith("data: "))
@@ -324,7 +343,11 @@ def test_caller_disconnect_mid_stream_stops_the_provider_stream(gateway: Gateway
     frames: Final = text_frames(f"chatcmpl-{marker()}", tuple(f"p{number} " for number in range(200)), usage=None)
     with scripted(gateway, lambda request: sse(frames, pause_between_chunks=0.05)) as rig:
         with rig.gateway.client.stream(
-            "POST", "/v1/chat/completions", json=rig.chat_body(), headers={"Authorization": f"Bearer {rig.key}"}, timeout=30
+            "POST",
+            "/v1/chat/completions",
+            json=rig.chat_body(),
+            headers={"Authorization": f"Bearer {rig.key}"},
+            timeout=30,
         ) as response:
             next(line for line in response.iter_lines() if line.startswith("data: "))
         assert eventually(rig.wire.open_connections, lambda count: count == 0, seconds=5) == 0
@@ -335,9 +358,15 @@ def test_next_stream_after_a_caller_disconnect_is_served_normally(gateway: Gatew
     stream is complete with a `stop` finish and `[DONE]`. A disconnect must release the key's parallel
     request slot and leave no half closed state behind (`finalize_streaming_generator_cleanup`)."""
     frames: Final = text_frames(f"chatcmpl-{marker()}", ("still ", "works", " fine"), usage=None)
-    with scripted(gateway, lambda request: sse(frames, pause_between_chunks=0.2), key_fields={"max_parallel_requests": 1}) as rig:
+    with scripted(
+        gateway, lambda request: sse(frames, pause_between_chunks=0.2), key_fields={"max_parallel_requests": 1}
+    ) as rig:
         with rig.gateway.client.stream(
-            "POST", "/v1/chat/completions", json=rig.chat_body(), headers={"Authorization": f"Bearer {rig.key}"}, timeout=30
+            "POST",
+            "/v1/chat/completions",
+            json=rig.chat_body(),
+            headers={"Authorization": f"Bearer {rig.key}"},
+            timeout=30,
         ) as response:
             next(line for line in response.iter_lines() if line.startswith("data: "))
         second: Final = eventually(rig.chat, lambda answer: answer.status_code == 200, seconds=20)

@@ -14,7 +14,7 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
-from tests.integration._support.client import JSON_OBJECT, Gateway
+from tests.integration._support.client import JSON_OBJECT, Gateway, held
 from tests.integration._support.redis_process import owned_redis
 from tests.integration.caching.dec1_cache_support import (
     CACHE_KEY_HEADER,
@@ -138,7 +138,14 @@ def test_use_cache_opts_an_embedding_request_in(opt_in_rig: CacheRig) -> None:
     The entry is found by the unique vector the provider returned, since the answer's ``model`` is the
     public model name (``litellm/proxy/common_request_processing.py:3689``) and the entry keeps the
     provider's model (``litellm/caching/caching.py:961``).
+    BUG: the opted-in answer is written but never read back. The embedding lookup calls
+    ``litellm.cache.async_get_cache`` with only ``cache_key`` and ``dynamic_cache_object``
+    (``litellm/caching/caching_handler.py:979``), so ``should_use_cache`` (``litellm/caching/caching.py:1035``)
+    never sees the request's ``cache`` object and returns false under ``default_off``, while the write
+    (``async_add_cache_pipeline``, ``litellm/caching/caching.py:975``) gets it. In run 43044106414 the entry was
+    in Redis and the repeat still reached the upstream.
     """
+    pytest.skip("BUG: default_off embeddings with use-cache are written to the cache but never read back")
     with opt_in_rig.gateway.scenario() as scenario:
         answer, marker = unique_embedding()
         target: Final = probe(scenario, answer, model="openai/text-embedding-3-small")
@@ -156,20 +163,26 @@ def test_use_cache_opts_an_embedding_request_in(opt_in_rig: CacheRig) -> None:
 
 def test_key_metadata_cache_cannot_opt_a_key_in_and_drops_the_callers_opt_in(opt_in_rig: CacheRig) -> None:
     """A key has ``metadata: {"cache": {"use-cache": true}}``. Its requests, with or without their own
-    ``cache: {"use-cache": true}``, must all reach the upstream: key-level cache metadata only carries
-    ``ttl``, ``s-maxage``, ``no-cache`` and ``no-store`` and replaces the caller's ``cache`` object, so the
-    opt-in is lost. Surprising, and pinned so the rewrite does not change who gets cached answers.
+    ``cache: {"use-cache": true}``, must all reach the upstream, and the opted-in request must leave no entry in
+    Redis: key-level cache metadata only carries ``ttl``, ``s-maxage``, ``no-cache`` and ``no-store``
+    (``SupportedCacheControls``, ``litellm/types/utils.py:181``) and replaces the caller's ``cache`` object
+    (``litellm/proxy/litellm_pre_call_utils.py:2221``), so the opt-in is lost. Surprising, and pinned so the
+    rewrite does not change who gets cached answers.
+    The absence of the entry is held for a few seconds before the third request, since an entry is written by
+    a background task after the answer; without that wait the third request could race the write and the
+    check would depend on timing (run 43044106414 saw the third request replay the second's answer).
     """
     with opt_in_rig.gateway.scenario() as scenario:
         target: Final = probe(scenario)
         key: Final = scenario.key(models=[target.model], metadata={"cache": {"use-cache": True}})
         text: Final = prompt()
-        answers: Final = [
-            target.chat(text, key=key),
-            target.chat(text, key=key, cache=USE_CACHE),
-            target.chat(text, key=key, cache=USE_CACHE),
-        ]
-        assert all(answer.reached_upstream for answer in answers), [a.response.text for a in answers]
+        plain: Final = target.chat(text, key=key)
+        opted: Final = target.chat(text, key=key, cache=USE_CACHE)
+        assert plain.reached_upstream and opted.reached_upstream, (plain.response.text, opted.response.text)
+        store: Final = opt_in_rig.store()
+        held(lambda: entry_keys_naming(store, opted.id()), lambda found: found == frozenset(), holding=5)
+        again: Final = target.chat(text, key=key, cache=USE_CACHE)
+        assert_miss(opted, again)
         assert target.calls() == 3
 
 

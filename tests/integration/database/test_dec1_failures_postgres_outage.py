@@ -420,21 +420,23 @@ def test_an_unknown_key_is_401_again_after_the_outage(rig: Rig) -> None:
 
 def test_repeated_outages_each_recover_and_lose_no_spend(rig: Rig) -> None:
     """Postgres goes down and comes back three times in a row, and a cached key is served one chat completion
-    during each outage. After the last recovery the key must have exactly one spend row per served response
+    during each outage. After the last recovery each key must have exactly one spend row per served response
     and the proxy must still be the same process.
-    The key is used once more before each outage: the auth cache holds a key for 60 seconds
-    (litellm/proxy/proxy_server.py:2360), and three flip and recovery cycles take longer than that, so a key
-    warmed only once is no longer cached by the second outage."""
+    Each outage uses a new key, served once just before it goes down. The auth cache holds a key for 60 seconds
+    from the moment it was read from the database (litellm/proxy/proxy_server.py:2360), and a hit does not
+    renew that time (the key object is never written back after a charge, litellm/proxy/proxy_server.py:4661),
+    so reusing one key let it expire mid outage once the cycles added up (run 43044106414 got a 503
+    `no_db_connection`). A key first used right before its outage is read from the database at that moment."""
     workers_before: Final = rig.owned.worker_pids()
     with rig.proxy.scenario() as scenario:
-        key: Final = scenario.key()
-        collected: Final[list[str]] = []
+        served: Final[list[tuple[str, str]]] = []  # mutable-ok: one (key, response id) per outage
         for _ in range(3):
+            key = scenario.key()
             assert chat(rig.proxy, key=key).status_code == 200
             with database_down(rig):
                 _await_disconnected(rig)
-                collected.extend(served_ids([chat(rig.proxy, key=key)]))
-        rows: Final = spend_rows(rig.proxy, key, 6)
-        landed: Final = [string_value(row["request_id"]) for row in rows]
-        assert all(landed.count(identity) == 1 for identity in collected), landed
+                served.extend((key, identity) for identity in served_ids([chat(rig.proxy, key=key)]))
+        for key, identity in served:
+            landed = [string_value(row["request_id"]) for row in spend_rows(rig.proxy, key, 2)]
+            assert len(landed) == 2 and landed.count(identity) == 1, landed
         assert rig.owned.worker_pids() == workers_before

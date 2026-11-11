@@ -4,7 +4,8 @@ Two owned proxies boot from the same config, with `num_retries: 0`, `cooldown_ti
 and `redis_port` that point at one Redis started for this file. A cooldown is written to Redis under the key
 `deployment:<deployment id>:cooldown` with a time to live of the cooldown length, and its value is a JSON
 object with `exception_received`, `status_code`, `timestamp` and `cooldown_time`. Every instance reads that
-key before it picks a deployment, so a deployment one instance cooled down gets no traffic from the other.
+key before it picks a deployment (Redis is asked again for a key that missed at most every 10 seconds), so a
+deployment one instance cooled down gets no traffic from the other.
 Without this, each instance in a fleet has to burn its own failed request before it stops calling a broken
 deployment.
 
@@ -15,6 +16,7 @@ deployment is always picked until it is in cooldown.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -39,6 +41,7 @@ pytestmark: Final = [pytest.mark.timeout(300), pytest.mark.shares_worker_state]
 
 COOLDOWN_SECONDS: Final = 45
 DEPLOYMENT_COOLDOWN_SECONDS: Final = 7
+REDIS_READ_THROTTLE_SECONDS: Final = 11  # DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS (10) plus a margin
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,13 +127,20 @@ def test_a_cooldown_is_written_to_redis_with_the_status_the_router_cooldown_time
 def test_a_deployment_cooled_down_by_one_instance_gets_no_traffic_from_the_other(fleet: Fleet) -> None:
     """The first instance gets a 429 from the weighted deployment of group `redis-peer`.
 
-    Once the cooldown key is in Redis, five requests sent to the second instance must all return 200 from the
-    healthy sibling, and the failing upstream must have received exactly one request in total. The second
-    instance never saw the failure itself; it only read the shared cooldown.
+    Once the cooldown key is in Redis and the second instance's Redis read throttle has passed, five requests
+    sent to the second instance must all return 200 from the healthy sibling, and the failing upstream must
+    have received exactly one request in total. The second instance never saw the failure itself; it only read
+    the shared cooldown.
+    The router reads cooldowns through `DualCache.async_batch_get_cache`, which asks Redis for a key that missed
+    in memory at most once every `DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS` (10, `litellm/constants.py:162`,
+    `litellm/caching/dual_cache.py:311`). A miss the second instance recorded shortly before the cooldown landed
+    therefore hides it for up to 10 seconds (run 43044106414 sent the first request to the failing deployment),
+    so the test waits that window out before asking the second instance.
     """
     response: Final = chat(fleet.first, "redis-peer")
     assert response.status_code == 429, response.text
     eventually(lambda: fleet.cooldown("dec1-status-429-redispeer")[0], lambda value: value is not None, seconds=10)
+    time.sleep(REDIS_READ_THROTTLE_SECONDS)
     assert statuses(tuple(chat(fleet.second, "redis-peer") for _ in range(5))) == (200,) * 5
     assert fleet.upstream.count("status-429-redispeer") == 1
     assert fleet.upstream.count("ok-redispeer") == 5

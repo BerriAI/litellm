@@ -495,14 +495,16 @@ def test_service_callback_prometheus_system_exposes_service_latency_metrics(
     `litellm_postgres_` or `litellm_redis_` service series (PrometheusServicesLogger names them
     litellm_<service>_<type>). `prometheus_system` only registers the series in the process's Prometheus registry;
     /metrics is mounted by `PrometheusLogger._mount_metrics_endpoint`, which runs when `prometheus` is in the
-    callbacks (litellm/proxy/common_utils/callback_utils.py), so the rig lists it too."""
+    callbacks (litellm/proxy/common_utils/callback_utils.py), so the rig lists it too. It is a Starlette mount at
+    `/metrics` (litellm/integrations/prometheus.py:5183), so `GET /metrics` answers a redirect with an empty body
+    (run 43044106414 saw '' on every poll); the series are read from `/metrics/`, as the other metrics tests do."""
     with callback_rig(
         tmp_path_factory.mktemp("dec1-callbacks-service"),
         {"callbacks": [RECORDER, "prometheus"], "service_callback": ["prometheus_system"]},
     ) as rig:
         assert chat(rig, new_call_id(), model=CHAT).status_code == 200
         text: Final = eventually(
-            lambda: rig.proxy.request("GET", "/metrics").text,
+            lambda: rig.proxy.request("GET", "/metrics/").text,
             lambda body: "litellm_postgres_" in body or "litellm_redis_" in body,
             seconds=30,
         )
