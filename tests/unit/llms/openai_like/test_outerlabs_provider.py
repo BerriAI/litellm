@@ -121,11 +121,13 @@ _PRICE_BANDS: Final = {
     "outerlabs/gpt-6-luna": "above_272k_tokens",
     "outerlabs/gpt-6-sol": "above_272k_tokens",
     "outerlabs/gpt-6.1-sol": "above_272k_tokens",
+    "outerlabs/gpt-6.1-terra": "above_272k_tokens",
 }
 # Forced tool choice is refused upstream for these models
 _NO_FORCED_TOOL_CHOICE: Final = frozenset(
     {
         "outerlabs/claude-fable-5-1",
+        "outerlabs/claude-fable-5-2",
         "outerlabs/claude-opus-5-5",
         "outerlabs/claude-sonnet-5-5",
     }
@@ -133,7 +135,7 @@ _NO_FORCED_TOOL_CHOICE: Final = frozenset(
 
 
 def test_outerlabs_lists_every_model():
-    assert len(OUTERLABS_MODELS) == 16
+    assert len(OUTERLABS_MODELS) == 18
     assert set(_PRICE_BANDS) <= set(OUTERLABS_MODELS)
     assert _NO_FORCED_TOOL_CHOICE <= set(OUTERLABS_MODELS)
 
