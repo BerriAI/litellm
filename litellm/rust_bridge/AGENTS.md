@@ -49,7 +49,7 @@
 # The `LITELLM_RUST` switch
 
 - `decision` treats a blank or invalid `LITELLM_RUST` as unset and caches the parse by raw value. It runs inside SDK calls, so it never fails one over a switch and never validates per call
-- Strict validation belongs to startup. `litellm/proxy/rust_forward/mode.py` validates the same `RustSwitch` type and stops the CLI with one line naming the variable
+- It does not put the Rust gateway in front of Python. That is `LITELLM_RUST_FIRST`, which `litellm/proxy/rust_forward/mode.py` reads strictly at startup with this same `RustSwitch` type, stopping the CLI with one line naming the variable
 
 # Native extension
 

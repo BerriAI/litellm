@@ -329,7 +329,7 @@ class TestMain:
             ("false", ""),
             (
                 "true",
-                "LITELLM_RUST does not support a Unix socket on the public port, "
+                "LITELLM_RUST_FIRST does not support a Unix socket on the public port, "
                 "so Python serves the public port without Rust forwarding\n",
             ),
         ],
@@ -342,7 +342,7 @@ class TestMain:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        monkeypatch.setenv("LITELLM_RUST", rust)
+        monkeypatch.setenv("LITELLM_RUST_FIRST", rust)
         monkeypatch.delenv("_LITELLM_GATEWAY_SUPERVISED", raising=False)
         monkeypatch.delenv("LITELLM_PGBOUNCER_ENABLED", raising=False)
         served: Final[list[tuple[str, ...]]] = []
@@ -353,12 +353,12 @@ class TestMain:
     def test_an_invalid_rust_switch_stops_the_gateway_naming_the_variable(
         self, password_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("LITELLM_RUST", "maybe")
+        monkeypatch.setenv("LITELLM_RUST_FIRST", "maybe")
         monkeypatch.delenv("_LITELLM_GATEWAY_SUPERVISED", raising=False)
         served: Final[list[tuple[str, ...]]] = []
         with pytest.raises(SystemExit) as stopped:
             main(("--workers", "4"), serve=lambda argv: served.append(tuple(argv)))
-        assert str(stopped.value).startswith("LITELLM_RUST is invalid: ")
+        assert str(stopped.value).startswith("LITELLM_RUST_FIRST is invalid: ")
         assert served == []
 
     @pytest.mark.parametrize(
@@ -377,7 +377,7 @@ class TestMain:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        monkeypatch.setenv("LITELLM_RUST", "true")
+        monkeypatch.setenv("LITELLM_RUST_FIRST", "true")
         monkeypatch.delenv("_LITELLM_GATEWAY_SUPERVISED", raising=False)
         served: Final[list[tuple[str, ...]]] = []
         with pytest.raises(SystemExit) as stopped:

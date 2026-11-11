@@ -12,8 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm.proxy.server_listener import LOOPBACK_HOST, AssignedPort, InheritedFd, PrivateListener
-from litellm.rust_bridge.configuration import ENV_NAME, RustSwitch
+from litellm.rust_bridge.configuration import RustSwitch
 
+SWITCH_ENV: Final = "LITELLM_RUST_FIRST"
 SUPERVISED_ENV: Final = "_LITELLM_GATEWAY_SUPERVISED"
 RUST_HOP: Final = LOOPBACK_HOST
 
@@ -21,7 +22,7 @@ RUST_HOP: Final = LOOPBACK_HOST
 class _Switch(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    rust: RustSwitch = Field(None, validation_alias=ENV_NAME)
+    rust: RustSwitch = Field(None, validation_alias=SWITCH_ENV)
 
 
 class Mode(Enum):

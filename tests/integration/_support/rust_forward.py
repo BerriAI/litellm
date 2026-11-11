@@ -73,7 +73,7 @@ def forwarded_proxy(
     arguments: tuple[str, ...] = (),
     environment: Mapping[str, str] = MappingProxyType({}),
 ) -> Iterator[ForwardedProxy]:
-    """``entry_point`` on 0.0.0.0 with two workers, ``LITELLM_RUST=1`` and no database. It must exit 0 on SIGTERM."""
+    """``entry_point`` on 0.0.0.0 with two workers, ``LITELLM_RUST_FIRST=1`` and no database. It must exit 0 on SIGTERM."""
     proxy: Final = ForwardedProxy(allocate_port(), directory / f"{entry_point.name.lower()}.log")
     config_file: Final = directory / "config.yaml"
     config_file.write_text(json.dumps(config))
@@ -99,7 +99,7 @@ def forwarded_proxy(
             env={
                 **inherited,
                 "LITELLM_MASTER_KEY": MASTER_KEY,
-                "LITELLM_RUST": "true",
+                "LITELLM_RUST_FIRST": "true",
                 "STORE_MODEL_IN_DB": "False",
                 "PYTHON_DOTENV_DISABLED": "1",
                 **launch_environment,

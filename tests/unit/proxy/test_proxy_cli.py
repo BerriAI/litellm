@@ -4465,7 +4465,7 @@ class TestRustForwardServer:
                 for k, v in os.environ.items()
                 if k not in ("DATABASE_URL", "DIRECT_URL", "_LITELLM_GATEWAY_SUPERVISED")
             },
-            "LITELLM_RUST": "true",
+            "LITELLM_RUST_FIRST": "true",
         }
         with (
             patch.dict(os.environ, environ, clear=True),
@@ -4474,7 +4474,7 @@ class TestRustForwardServer:
         ):
             result: Final = CliRunner().invoke(run_server, ["--port", "45999", *argv])
         assert result.exit_code == 0, result.output
-        assert f"LITELLM_RUST {reason}" in result.output
+        assert f"LITELLM_RUST_FIRST {reason}" in result.output
         assert "so Python serves the public port without Rust forwarding" in result.output
         mock_uvicorn_run.assert_called_once()
         assert mock_uvicorn_run.call_args.kwargs.get("ssl_keyfile") == served_keyfile
@@ -4483,17 +4483,17 @@ class TestRustForwardServer:
     def test_an_invalid_rust_switch_stops_startup_with_one_line_naming_it(self) -> None:
         from click.testing import CliRunner
 
-        with patch.dict(os.environ, {"LITELLM_RUST": "sometimes"}):
+        with patch.dict(os.environ, {"LITELLM_RUST_FIRST": "sometimes"}):
             result: Final = CliRunner().invoke(run_server, ["--port", "45999"])
         lines: Final = result.output.splitlines()
         assert (result.exit_code, len(lines)) == (1, 1)
-        assert lines[0].startswith("Error: LITELLM_RUST is invalid: ")
+        assert lines[0].startswith("Error: LITELLM_RUST_FIRST is invalid: ")
 
     def test_a_metrics_port_on_the_public_port_is_refused_before_forwarding_starts(self) -> None:
         from click.testing import CliRunner
 
         with (
-            patch.dict(os.environ, {"LITELLM_RUST": "true"}),
+            patch.dict(os.environ, {"LITELLM_RUST_FIRST": "true"}),
             patch("litellm.proxy.rust_forward.supervisor.supervise") as supervise,
         ):
             result: Final = CliRunner().invoke(run_server, ["--port", "45999", "--prometheus_metrics_port", "45999"])

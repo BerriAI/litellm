@@ -30,14 +30,26 @@ from litellm.proxy.server_listener import AssignedPort, InheritedFd, PrivateList
     ],
 )
 def test_mode_is_resolved_from_environment(value: str | None, expected: RustForwardMode) -> None:
-    assert rust_forward_mode({} if value is None else {"LITELLM_RUST": value}) == expected
+    assert rust_forward_mode({} if value is None else {"LITELLM_RUST_FIRST": value}) == expected
+
+
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [
+        ({"LITELLM_RUST": "true"}, Mode.DISABLED),
+        ({"LITELLM_RUST": "enabled"}, Mode.DISABLED),
+        ({"LITELLM_RUST": "false", "LITELLM_RUST_FIRST": "true"}, Mode.SUPERVISOR),
+    ],
+)
+def test_forwarding_is_independent_of_the_sdk_rust_switch(environ: dict[str, str], expected: RustForwardMode) -> None:
+    assert rust_forward_mode(environ) == expected
 
 
 @pytest.mark.parametrize(
     ("environ", "invalid"),
     [
-        ({"LITELLM_RUST": "enabled"}, "LITELLM_RUST"),
-        ({"LITELLM_RUST": "2"}, "LITELLM_RUST"),
+        ({"LITELLM_RUST_FIRST": "enabled"}, "LITELLM_RUST_FIRST"),
+        ({"LITELLM_RUST_FIRST": "2"}, "LITELLM_RUST_FIRST"),
         ({SUPERVISED_ENV: '{"listener": {"fd": "seventeen"}, "trusted_proxies": "*"}'}, "fd"),
         ({SUPERVISED_ENV: '{"listener": {"fd": 17}, "trusted_proxies": 7}'}, "trusted_proxies"),
         ({SUPERVISED_ENV: '{"listener": {"fd": 17}}'}, "trusted_proxies"),
@@ -58,7 +70,7 @@ def test_invalid_forwarding_value_stops_startup_naming_it(environ: dict[str, str
     ],
 )
 def test_child_reads_back_exactly_what_the_supervisor_wrote(written: Supervised) -> None:
-    inherited: Final = {"LITELLM_RUST": "true", "FORWARDED_ALLOW_IPS": "10.9.9.9"}
+    inherited: Final = {"LITELLM_RUST_FIRST": "true", "FORWARDED_ALLOW_IPS": "10.9.9.9"}
     assert rust_forward_mode({**inherited, **supervised_environment(written)}) == written
 
 

@@ -10,7 +10,7 @@ A `Platform` answers these questions and nothing else. What the gateway binary i
 
 ## Windows
 
-Windows is supported for running the proxy locally from the CLI. Nobody deploys the proxy on Windows, but `LITELLM_RUST` is meant to become the default, and then this is the path every Windows laptop runs. Revisit the choices below before treating Windows as a deployment target
+Windows is supported for running the proxy locally from the CLI. Nobody deploys the proxy on Windows, but `LITELLM_RUST_FIRST` is meant to become the default, and then this is the path every Windows laptop runs. Revisit the choices below before treating Windows as a deployment target
 
 - Python gets an assigned loopback port (`server_listener.AssignedPort`) instead of an open socket, which uvicorn on Windows cannot serve. Another process can take that port before Python binds it, and the readiness probe would then accept it as Python. Python's failed bind still ends the run
 - Each child runs in its own process group, which can only be sent `CTRL_BREAK_EVENT`. Both relayed signals arrive as that, so a second Ctrl-C does not force Python's exit the way it does on POSIX

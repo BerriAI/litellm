@@ -38,7 +38,7 @@ POSIX_ONLY: Final = pytest.mark.skipif(sys.platform == "win32", reason="runs a P
 def test_only_plain_tcp_on_a_supported_server_can_be_forwarded(
     platform: Platform, server: PythonServer, refusal: str | None
 ) -> None:
-    expected: Final = "gateway" if refusal is None else StartupError(f"LITELLM_RUST {refusal}")
+    expected: Final = "gateway" if refusal is None else StartupError(f"LITELLM_RUST_FIRST {refusal}")
     assert startup_check(platform, server, "gateway") == expected
 
 
@@ -56,9 +56,10 @@ def test_a_refused_start_says_why_in_one_line_and_starts_nothing(
     refused: Final = supervise(
         server, ("python",), before_start=lambda: prepared.append(True), scripts_dir=str(tmp_path), platform=POSIX
     )
-    assert (refused, prepared) == (StartupError(f"LITELLM_RUST {refusal}"), [])
+    assert (refused, prepared) == (StartupError(f"LITELLM_RUST_FIRST {refusal}"), [])
     assert (
-        capsys.readouterr().err == f"LITELLM_RUST {refusal}, so Python serves the public port without Rust forwarding\n"
+        capsys.readouterr().err
+        == f"LITELLM_RUST_FIRST {refusal}, so Python serves the public port without Rust forwarding\n"
     )
 
 
