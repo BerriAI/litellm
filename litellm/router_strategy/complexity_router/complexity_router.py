@@ -4988,9 +4988,11 @@ class ComplexityRouter(CustomLogger):
             keyword_bumped_tier: Final = (
                 self._escalate_tier(override.tier) if escalation_keyword is not None else override.tier
             )
-            pre_stall_tier: Final = keyword_bumped_tier
-            escalated_tier: Final = self._escalate_tier(pre_stall_tier) if stall_reason is not None else pre_stall_tier
-            stall_escalated: Final = stall_reason is not None and escalated_tier != pre_stall_tier
+            keyword_pre_stall_tier: Final = keyword_bumped_tier
+            escalated_tier: Final = (
+                self._escalate_tier(keyword_pre_stall_tier) if stall_reason is not None else keyword_pre_stall_tier
+            )
+            keyword_stall_escalated: Final = stall_reason is not None and escalated_tier != keyword_pre_stall_tier
             keyword_escalated: Final = keyword_bumped_tier != override.tier
             routed_tier: Final = (
                 self._apply_plan_mode_floor(escalated_tier) if plan_floor is not None else escalated_tier
@@ -5026,8 +5028,8 @@ class ComplexityRouter(CustomLogger):
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
                     tier_litellm_params=keyword_tier_litellm_params,
-                    stall_escalation_reason=stall_reason if stall_escalated else None,
-                    stall_escalation_original_tier=pre_stall_tier if stall_escalated else None,
+                    stall_escalation_reason=stall_reason if keyword_stall_escalated else None,
+                    stall_escalation_original_tier=keyword_pre_stall_tier if keyword_stall_escalated else None,
                 ),
             )
 

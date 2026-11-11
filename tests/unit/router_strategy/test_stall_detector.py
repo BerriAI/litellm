@@ -185,7 +185,7 @@ class TestDetectStalledTask:
             *_anthropic_call("t3", "bash", {"cmd": "pytest"}, is_error=True),
         ]
         result: Final = detect_stalled_task(
-            messages,  # pyright: ignore[reportArgumentType]  # malformed messages testing
+            messages,
             window=6,
             repeat_threshold=3,
         )

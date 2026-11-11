@@ -47764,6 +47764,15 @@ export interface components {
             score?: number;
             /** Signals */
             signals?: string[];
+            /** Stall Escalated */
+            stall_escalated?: boolean;
+            /** Stall Escalation Original Tier */
+            stall_escalation_original_tier?: string;
+            /**
+             * Stall Escalation Reason
+             * @enum {string}
+             */
+            stall_escalation_reason?: "repeated_tool_call" | "repeated_tool_error";
             /** Switchyard Algorithm */
             switchyard_algorithm?: string;
             /** Switchyard Evidence */

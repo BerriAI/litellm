@@ -22,6 +22,8 @@ from typing import Final, Literal, NamedTuple, TypeAlias
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+
 StallDetectionReason: TypeAlias = Literal[
     "repeated_tool_call",
     "repeated_tool_error",
@@ -55,9 +57,10 @@ def _tool_call_signature(name: str, raw_arguments: object) -> tuple[str, str]:
         return name, str(arguments)
 
 
-def _iter_tool_result_error_pairs(messages: Sequence[Mapping[str, object]]) -> Iterator[tuple[str, bool]]:
-    for msg in messages:
-        if not isinstance(msg, Mapping):
+def _iter_tool_result_error_pairs(messages: Sequence[object]) -> Iterator[tuple[str, bool]]:
+    for raw_msg in messages:
+        msg = as_str_mapping(raw_msg)
+        if msg is None:
             continue
         content = msg.get("content")
         if msg.get("role") != "user" or not isinstance(content, list):
@@ -69,10 +72,11 @@ def _iter_tool_result_error_pairs(messages: Sequence[Mapping[str, object]]) -> I
                     yield call_id, bool(part.get("is_error", False))
 
 
-def _iter_tool_call_events_newest_first(messages: Sequence[Mapping[str, object]]) -> Iterator[_ToolCallEvent]:
+def _iter_tool_call_events_newest_first(messages: Sequence[object]) -> Iterator[_ToolCallEvent]:
     error_by_call_id: Final = dict(_iter_tool_result_error_pairs(messages))
-    for msg in reversed(messages):
-        if not isinstance(msg, Mapping):
+    for raw_msg in reversed(messages):
+        msg = as_str_mapping(raw_msg)
+        if msg is None:
             continue
         if msg.get("role") != "assistant":
             continue
@@ -102,7 +106,7 @@ def _iter_tool_call_events_newest_first(messages: Sequence[Mapping[str, object]]
 
 
 def detect_stalled_task(
-    messages: Sequence[Mapping[str, object]] | None,
+    messages: Sequence[object] | None,
     *,
     window: int,
     repeat_threshold: int,
