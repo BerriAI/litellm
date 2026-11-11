@@ -39,6 +39,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler, _as_proxy_exception
+from litellm.proxy.auth.auth_utils import pre_db_read_auth_checks
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 
 
@@ -1033,6 +1034,35 @@ async def test_a_dict_shaped_x_forwarded_for_cannot_forge_fields_on_the_auth_fai
         assert str(line["logger"]).startswith("auth_exception_handler.py:")
         assert line["requester_ip"] == forwarded_for
         assert "injected" not in line
+
+
+@pytest.mark.asyncio
+async def test_a_dict_shaped_x_forwarded_for_cannot_forge_fields_on_the_ip_not_allowed_json_log(
+    proxy_json_log_lines: Callable[[], tuple[dict[str, object], ...]],
+) -> None:
+    request: Final = _http_request(headers={"x-forwarded-for": "{'injected':'xff-403','error':'forged-by-xff'}"})
+    with (
+        patch("litellm.proxy.auth.auth_exception_handler.seed_request_identity"),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allowed_ips": ["127.0.0.1"], "use_x_forwarded_for": True, "allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(HTTPException) as not_allowed:
+            await pre_db_read_auth_checks(request=request, request_data={}, route="/v1/chat/completions")
+        with pytest.raises(ProxyException):
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                not_allowed.value, request, {}, "/v1/chat/completions", None, "sk-bad-key"
+            )
+
+    (line,) = (line for line in proxy_json_log_lines() if "not allowed" in str(line["message"]))
+    assert "injected" not in line
+    assert line.get("error") != "forged-by-xff"
 
 
 @pytest.mark.asyncio

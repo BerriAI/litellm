@@ -1815,12 +1815,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 if self.litellm_request_debug:
                     verbose_logger.warning(  # .warning ensures this shows up in all environments
                         "POST Request Sent from LiteLLM",
-                        extra={"api_base": {masked_api_base}, **masked_headers},
+                        extra={"api_base": masked_api_base, "headers": masked_headers},
                     )
                 else:
                     verbose_logger.debug(
                         "POST Request Sent from LiteLLM",
-                        extra={"api_base": {masked_api_base}, **masked_headers},
+                        extra={"api_base": masked_api_base, "headers": masked_headers},
                     )
             else:
                 headers = additional_args.get("headers", {})

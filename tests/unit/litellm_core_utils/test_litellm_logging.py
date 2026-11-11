@@ -13,6 +13,7 @@ import traceback
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as datetime_standard_logging, datetime as datetime_unit_test, datetime as dt_object
 from importlib.machinery import ModuleSpec
+from io import StringIO
 from types import MappingProxyType, ModuleType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,7 +28,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._internal_context import in_post_response_phase
-from litellm._logging import session_id_var, trace_id_var, verbose_logger
+from litellm._logging import JsonFormatter, session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -8770,6 +8771,29 @@ def test_debugging_log_with_json_logs_tolerates_missing_headers(logging_obj, mon
         )
 
     assert "https://api.openai.com/v1" in warning.call_args.kwargs["extra"]["api_base"]
+
+
+def test_debugging_log_keeps_client_header_names_out_of_the_line_fields(logging_obj, monkeypatch):
+    monkeypatch.setattr(litellm, "json_logs", True)
+    logging_obj.litellm_request_debug = True
+    stream: Final = StringIO()
+    handler: Final = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    verbose_logger.addHandler(handler)
+    try:
+        logging_obj._print_llm_call_debugging_log(
+            api_base="https://api.openai.com/v1",
+            headers={"component": "forged", "message": "forged", "litellm_call_id": "someone-elses-call"},
+            additional_args={},
+        )
+    finally:
+        verbose_logger.removeHandler(handler)
+
+    (line,) = (json.loads(text) for text in stream.getvalue().splitlines())
+    assert line["component"] == verbose_logger.name
+    assert line["message"] == "POST Request Sent from LiteLLM"
+    assert "litellm_call_id" not in line
+    assert line["headers"]["component"] == "forged"
 
 
 def _streaming_logging_obj_with_callbacks(callbacks: list[CustomLogger]):

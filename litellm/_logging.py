@@ -11,7 +11,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType
+from types import FrameType, MappingProxyType
 from typing import Final, TextIO
 from urllib.parse import unquote
 
@@ -758,6 +758,30 @@ def _try_parse_json_message(message: str) -> dict[str, object] | None:
     return parsed
 
 
+_DICT_REPR_TOKEN: Final = re.compile(r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|[{}]""")
+_BRACE_DEPTH_STEP: Final = MappingProxyType({"{": 1, "}": -1})
+
+
+def _with_running_depth(previous: tuple[int, int], token: tuple[int, int]) -> tuple[int, int]:
+    return token[0], previous[1] + token[1]
+
+
+def _dict_repr_end(message: str, start: int) -> int | None:
+    steps: Final = (
+        (token.end(), _BRACE_DEPTH_STEP.get(token.group(), 0)) for token in _DICT_REPR_TOKEN.finditer(message, start)
+    )
+    depths: Final = itertools.accumulate(steps, _with_running_depth)
+    return next((end for end, depth in depths if depth == 0), None)
+
+
+def _literal_dict(text: str) -> dict[str, object] | None:
+    try:
+        parsed: Final[object] = _DECODED_LOG_PAYLOAD.validate_python(ast.literal_eval(text))
+    except (ValueError, SyntaxError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) and parsed else None
+
+
 def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
     """
     Try to find and parse a Python dict repr (e.g. str(d) or repr(d)) embedded in
@@ -765,30 +789,16 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
     "get_available_deployment for model: X, Selected deployment: {'model_name': '...', ...} for model: X"
     Uses ast.literal_eval for safe parsing. Returns the parsed dict or None.
     """
-    if not message or not isinstance(message, str) or "{" not in message:
-        return None
-    i = 0
-    while i < len(message):
-        start = message.find("{", i)
-        if start == -1:
-            break
-        depth = 0
-        for j in range(start, len(message)):
-            c = message[j]
-            if c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0:
-                    substr = message[start : j + 1]
-                    try:
-                        result: object = _DECODED_LOG_PAYLOAD.validate_python(ast.literal_eval(substr))
-                        if isinstance(result, dict) and len(result) > 0:
-                            return result
-                    except (ValueError, SyntaxError, TypeError):
-                        pass
-                    break
-        i = start + 1
+    start = message.find("{")  # rebind-ok: advances past each brace group
+    while start != -1:
+        end = _dict_repr_end(message, start)
+        if end is None:
+            start = message.find("{", start + 1)
+            continue
+        parsed = _literal_dict(message[start:end])
+        if parsed is not None:
+            return parsed
+        start = message.find("{", end)
     return None
 
 
@@ -802,7 +812,7 @@ def _get_standard_record_attrs() -> frozenset:
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
 _NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
 
-_UNPROMOTABLE_MESSAGE_KEYS: Final = frozenset(("trace_id", "session_id", "stacktrace"))
+_UNPROMOTABLE_MESSAGE_KEYS: Final = frozenset(("trace_id", "session_id", "litellm_call_id", "stacktrace"))
 
 
 def _parsed_message_fields(message: str) -> Mapping[str, object]:

@@ -241,6 +241,34 @@ def test_json_formatter_parses_embedded_python_dict_repr():
     assert obj["model_info"]["db_model"] is False
 
 
+@pytest.mark.parametrize(
+    ("message", "expected_error"),
+    [
+        pytest.param(
+            "400: {'error': \"Invalid model name passed in model=}{'error':'forged','injected':1}. Call\"}",
+            "Invalid model name passed in model=}{'error':'forged','injected':1}. Call",
+            id="braces_inside_a_quoted_value",
+        ),
+        pytest.param(
+            "kwargs {'start': <object>, 'content': \"}{'error':'forged','injected':1}\"} then {'error': 'real'}",
+            "real",
+            id="non_literal_group_is_skipped_whole",
+        ),
+    ],
+)
+def test_json_formatter_never_opens_a_dict_from_text_quoted_inside_a_repr(message: str, expected_error: str) -> None:
+    obj: Final = json.loads(JsonFormatter().format(_make_record(logging.ERROR, message)))
+    assert obj["error"] == expected_error
+    assert "injected" not in obj
+
+
+def test_json_formatter_never_takes_litellm_call_id_from_message_text() -> None:
+    record: Final = _make_record(
+        logging.CRITICAL, "guardrail failed for litellm_call_id={'litellm_call_id': 'someone-elses-call'}"
+    )
+    assert "litellm_call_id" not in json.loads(JsonFormatter().format(record))
+
+
 def test_json_formatter_output_stays_parseable_when_a_secret_is_redacted():
     """Redaction must collapse the value only, never the surrounding JSON member.
 
