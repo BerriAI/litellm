@@ -1,3 +1,4 @@
+import type { ParseKeys } from "i18next";
 import { keepTerminology, type Term } from "@/lib/terminology";
 import { insultsCompliancePrompts } from "./insultsCompliancePrompts";
 import { financialCompliancePrompts } from "./financialCompliancePrompts";
@@ -19,6 +20,7 @@ export interface ComplianceCategory {
   name: string;
   icon: string;
   description: string;
+  descriptionKey?: ParseKeys;
   prompts: CompliancePrompt[];
 }
 
@@ -28,6 +30,134 @@ export interface ComplianceFramework {
   description: string;
   categories: ComplianceCategory[];
 }
+
+export const COMPLIANCE_FRAMEWORK_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
+  "EU AI Act": "compliancePrompts.frameworks.euAiAct",
+  GDPR: "compliancePrompts.frameworks.gdpr",
+  "Airline Brand Protection": "compliancePrompts.frameworks.airlineBrandProtection",
+  "Topic Blocking": "compliancePrompts.frameworks.topicBlocking",
+  "Canadian PII (PIPEDA)": "compliancePrompts.frameworks.canadianPiiPipeda",
+  "Canadian PII (FIPPA)": "compliancePrompts.frameworks.canadianPiiFippa",
+  "Code Execution Safety": "compliancePrompts.frameworks.codeExecutionSafety",
+  "Claims Assistant": "compliancePrompts.frameworks.claimsAssistant",
+};
+
+export const COMPLIANCE_CATEGORY_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
+  "Subliminal or Manipulative Techniques": "compliancePrompts.categories.subliminalTechniques.name",
+  "Exploiting Vulnerabilities": "compliancePrompts.categories.exploitingVulnerabilities.name",
+  "Social Scoring & Classification": "compliancePrompts.categories.socialScoring.name",
+  "Risk Assessment for Predicting Criminality": "compliancePrompts.categories.criminalityRiskAssessment.name",
+  "Facial Image Scraping for Databases": "compliancePrompts.categories.facialImageScraping.name",
+  "Emotion Recognition in Workplace & Education": "compliancePrompts.categories.emotionRecognition.name",
+  "Biometric Categorisation of Sensitive Traits": "compliancePrompts.categories.biometricCategorisation.name",
+  "Right to Erasure": "compliancePrompts.categories.rightToErasure.name",
+  "Consent & Lawful Basis": "compliancePrompts.categories.consentLawfulBasis.name",
+  "Data Minimisation": "compliancePrompts.categories.dataMinimisation.name",
+  "Automated Decision-Making": "compliancePrompts.categories.automatedDecisionMaking.name",
+  "Destination Intent": "compliancePrompts.categories.destinationIntent.name",
+  "Competitor Comparison": "compliancePrompts.categories.competitorComparison.name",
+  "Ambiguous Entity": "compliancePrompts.categories.ambiguousEntity.name",
+  "Insults & Personal Attacks": "compliancePrompts.categories.insultsAndPersonalAttacks.name",
+  "Financial Advice": "compliancePrompts.categories.financialAdvice.name",
+  "Direct Execution Request": "compliancePrompts.categories.directExecutionRequest.name",
+  "Filesystem Access": "compliancePrompts.categories.filesystemAccess.name",
+  "Network Access": "compliancePrompts.categories.networkAccess.name",
+  "Shelling Out / Subprocess": "compliancePrompts.categories.shellingOutSubprocess.name",
+  "Dynamic Eval / Runtime Execution": "compliancePrompts.categories.dynamicEvalRuntimeExecution.name",
+  "Sandbox Escape / Privilege Escalation": "compliancePrompts.categories.sandboxEscapePrivilegeEscalation.name",
+  "Social Engineering Execution": "compliancePrompts.categories.socialEngineeringExecution.name",
+  "Static Analysis Allowed": "compliancePrompts.categories.staticAnalysisAllowed.name",
+  "Code Generation Without Running": "compliancePrompts.categories.codeGenerationWithoutRunning.name",
+  "Ambiguous Runtime Claim": "compliancePrompts.categories.ambiguousRuntimeClaim.name",
+  "Requires Runtime Action": "compliancePrompts.categories.requiresRuntimeAction.name",
+  "Social Insurance Number (SIN)": "compliancePrompts.categories.socialInsuranceNumber.name",
+  "Ontario Health Insurance (OHIP)": "compliancePrompts.categories.ontarioHealthInsurance.name",
+  "Ontario Driver's Licence": "compliancePrompts.categories.ontarioDriversLicence.name",
+  "Canadian Passport": "compliancePrompts.categories.canadianPassport.name",
+  "IRCC Immigration Documents": "compliancePrompts.categories.irccImmigrationDocuments.name",
+  "Canadian Bank Account": "compliancePrompts.categories.canadianBankAccount.name",
+  "Canadian Postal Code": "compliancePrompts.categories.canadianPostalCode.name",
+  "UofT Student/Employee Number": "compliancePrompts.categories.uoftStudentEmployeeNumber.name",
+  "UTORid Login": "compliancePrompts.categories.utoridLogin.name",
+  "TCard Campus ID": "compliancePrompts.categories.tcardCampusId.name",
+  "Claim Submission Help": "compliancePrompts.categories.claimSubmissionHelp.name",
+  "Document Quality & Extraction": "compliancePrompts.categories.documentQualityAndExtraction.name",
+  "Coverage & Process Questions": "compliancePrompts.categories.coverageAndProcessQuestions.name",
+  "Ambiguous Inputs (Needs Clarification)": "compliancePrompts.categories.ambiguousInputs.name",
+  "Unauthorized PHI / Account Access": "compliancePrompts.categories.unauthorizedPhiAccountAccess.name",
+  "Fraud, Fabrication, or Misrepresentation": "compliancePrompts.categories.fraudFabricationOrMisrepresentation.name",
+  "Code Optimization / Upcoding Requests": "compliancePrompts.categories.codeOptimizationUpcodingRequests.name",
+  "Prompt Injection / Policy Override": "compliancePrompts.categories.promptInjectionPolicyOverride.name",
+  "Bulk Data Requests / Enumeration": "compliancePrompts.categories.bulkDataRequestsEnumeration.name",
+  "Medical Advice & Triage (Out of Scope)": "compliancePrompts.categories.medicalAdviceTriage.name",
+  "Self-Harm / Crisis": "compliancePrompts.categories.selfHarmCrisis.name",
+  "Malicious / Phishing / Credential Theft": "compliancePrompts.categories.maliciousPhishingCredentialTheft.name",
+  "Legit but Sensitive (Allowed)": "compliancePrompts.categories.legitButSensitive.name",
+  "Bypass Verification Attempts": "compliancePrompts.categories.bypassVerificationAttempts.name",
+  "Potentially Non-Covered Services (Education)": "compliancePrompts.categories.potentiallyNonCoveredServices.name",
+  "Resubmission & Corrections (Legit)": "compliancePrompts.categories.resubmissionAndCorrections.name",
+  "Privacy-Safe Submission Guidance": "compliancePrompts.categories.privacySafeSubmissionGuidance.name",
+};
+
+const CATEGORY_DESCRIPTION_KEYS: Readonly<Record<string, ParseKeys>> = {
+  "Subliminal or Manipulative Techniques": "compliancePrompts.categories.subliminalTechniques.description",
+  "Exploiting Vulnerabilities": "compliancePrompts.categories.exploitingVulnerabilities.description",
+  "Social Scoring & Classification": "compliancePrompts.categories.socialScoring.description",
+  "Risk Assessment for Predicting Criminality": "compliancePrompts.categories.criminalityRiskAssessment.description",
+  "Facial Image Scraping for Databases": "compliancePrompts.categories.facialImageScraping.description",
+  "Emotion Recognition in Workplace & Education": "compliancePrompts.categories.emotionRecognition.description",
+  "Biometric Categorisation of Sensitive Traits": "compliancePrompts.categories.biometricCategorisation.description",
+  "Right to Erasure": "compliancePrompts.categories.rightToErasure.description",
+  "Consent & Lawful Basis": "compliancePrompts.categories.consentLawfulBasis.description",
+  "Data Minimisation": "compliancePrompts.categories.dataMinimisation.description",
+  "Automated Decision-Making": "compliancePrompts.categories.automatedDecisionMaking.description",
+  "Destination Intent": "compliancePrompts.categories.destinationIntent.description",
+  "Competitor Comparison": "compliancePrompts.categories.competitorComparison.description",
+  "Ambiguous Entity": "compliancePrompts.categories.ambiguousEntity.description",
+  "Insults & Personal Attacks": "compliancePrompts.categories.insultsAndPersonalAttacks.description",
+  "Financial Advice": "compliancePrompts.categories.financialAdvice.description",
+  "Direct Execution Request": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Filesystem Access": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Network Access": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Shelling Out / Subprocess": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Dynamic Eval / Runtime Execution": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Sandbox Escape / Privilege Escalation": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Social Engineering Execution": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Static Analysis Allowed": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Code Generation Without Running": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Ambiguous Runtime Claim": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Requires Runtime Action": "compliancePrompts.sharedDescriptions.codeExecutionSafety",
+  "Social Insurance Number (SIN)": "compliancePrompts.categories.socialInsuranceNumber.description",
+  "Ontario Health Insurance (OHIP)": "compliancePrompts.categories.ontarioHealthInsurance.description",
+  "Ontario Driver's Licence": "compliancePrompts.categories.ontarioDriversLicence.description",
+  "Canadian Passport": "compliancePrompts.categories.canadianPassport.description",
+  "IRCC Immigration Documents": "compliancePrompts.categories.irccImmigrationDocuments.description",
+  "Canadian Bank Account": "compliancePrompts.categories.canadianBankAccount.description",
+  "Canadian Postal Code": "compliancePrompts.categories.canadianPostalCode.description",
+  "UofT Student/Employee Number": "compliancePrompts.categories.uoftStudentEmployeeNumber.description",
+  "UTORid Login": "compliancePrompts.categories.utoridLogin.description",
+  "TCard Campus ID": "compliancePrompts.categories.tcardCampusId.description",
+  "Claim Submission Help": "compliancePrompts.categories.claimSubmissionHelp.description",
+  "Document Quality & Extraction": "compliancePrompts.categories.documentQualityAndExtraction.description",
+  "Coverage & Process Questions": "compliancePrompts.categories.coverageAndProcessQuestions.description",
+  "Ambiguous Inputs (Needs Clarification)": "compliancePrompts.categories.ambiguousInputs.description",
+  "Unauthorized PHI / Account Access": "compliancePrompts.categories.unauthorizedPhiAccountAccess.description",
+  "Fraud, Fabrication, or Misrepresentation":
+    "compliancePrompts.categories.fraudFabricationOrMisrepresentation.description",
+  "Code Optimization / Upcoding Requests": "compliancePrompts.categories.codeOptimizationUpcodingRequests.description",
+  "Prompt Injection / Policy Override": "compliancePrompts.categories.promptInjectionPolicyOverride.description",
+  "Bulk Data Requests / Enumeration": "compliancePrompts.categories.bulkDataRequestsEnumeration.description",
+  "Medical Advice & Triage (Out of Scope)": "compliancePrompts.categories.medicalAdviceTriage.description",
+  "Self-Harm / Crisis": "compliancePrompts.categories.selfHarmCrisis.description",
+  "Malicious / Phishing / Credential Theft":
+    "compliancePrompts.categories.maliciousPhishingCredentialTheft.description",
+  "Legit but Sensitive (Allowed)": "compliancePrompts.categories.legitButSensitive.description",
+  "Bypass Verification Attempts": "compliancePrompts.categories.bypassVerificationAttempts.description",
+  "Potentially Non-Covered Services (Education)":
+    "compliancePrompts.categories.potentiallyNonCoveredServices.description",
+  "Resubmission & Corrections (Legit)": "compliancePrompts.categories.resubmissionAndCorrections.description",
+  "Privacy-Safe Submission Guidance": "compliancePrompts.categories.privacySafeSubmissionGuidance.description",
+};
 
 const createPrompt = (
   id: string,
@@ -585,6 +715,9 @@ export function getFrameworks(term: Term = keepTerminology): ComplianceFramework
         name: prompt.category,
         icon: prompt.categoryIcon,
         description: prompt.categoryDescription,
+        descriptionKey: Object.hasOwn(CATEGORY_DESCRIPTION_KEYS, prompt.category)
+          ? CATEGORY_DESCRIPTION_KEYS[prompt.category]
+          : undefined,
         prompts: [],
       });
     }

@@ -3,15 +3,27 @@ Functions for sending Email Alerts
 """
 
 import os
-from typing import Final
+from collections.abc import Awaitable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.integrations.slack_alerting import WebhookEvent
 
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
 LITELLM_SUPPORT_CONTACT: Final = "support@berri.ai"
+
+
+def _query_raw_rows(
+    client: "PrismaClient", query: str, *args: object
+) -> Awaitable[Sequence[Mapping[str, object]] | None]:
+    from litellm.proxy.utils import query_raw_rows
+
+    return query_raw_rows(client.db, query, *args)
 
 
 async def get_all_team_member_emails(team_id: str | None = None) -> list:
@@ -51,17 +63,18 @@ async def get_all_team_member_emails(team_id: str | None = None) -> list:
         WHERE user_id = ANY($1::TEXT[]);
     """
 
-    _result: Final = await prisma_client.db.query_raw(sql_query, _team_member_user_ids)
+    _result: Final = await _query_raw_rows(prisma_client, sql_query, _team_member_user_ids)
 
     verbose_logger.debug("Email Alerting: Got all Emails for team, emails=%s", _result)
 
     if _result is None:
         return []
 
-    emails: Final = []
-    for user in _result:
-        if user and isinstance(user, dict) and user.get("user_email", None) is not None:
-            emails.append(user.get("user_email"))
+    emails: Final = [
+        user.get("user_email")
+        for user in _result
+        if user and isinstance(user, dict) and user.get("user_email", None) is not None
+    ]
     return emails
 
 

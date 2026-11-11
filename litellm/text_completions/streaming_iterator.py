@@ -1,5 +1,7 @@
 from typing import Final
 
+from litellm.constants import VLLM_CHOICE_FIELDS
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
 from litellm.types.utils import Choices, ModelResponse, ModelResponseStream, TextChoices, TextCompletionResponse
 
@@ -30,23 +32,27 @@ class TextCompletionStreamWrapper:
     def __aiter__(self):
         return self
 
-    def convert_to_text_completion_object(self, chunk: ModelResponse | ModelResponseStream):
+    def convert_to_text_completion_object(self, chunk: ModelResponse | ModelResponseStream) -> TextCompletionResponse:
         try:
             response: Final = TextCompletionResponse()
             response["id"] = chunk.get("id", None)
             response["object"] = "text_completion"
             response["created"] = chunk.get("created", None)
             response["model"] = chunk.get("model", None)
-            text_choices: Final = TextChoices()
             if isinstance(chunk, Choices):  # chunk should always be of type StreamingChoices
                 raise Exception
 
             if chunk["choices"]:
-                delta: Final = chunk["choices"][0]["delta"]
+                chat_choice: Final = chunk["choices"][0]
+                choice_fields: Final = decoded_json_object(
+                    {field: chat_choice[field] for field in VLLM_CHOICE_FIELDS if field in chat_choice}
+                )
+                text_choices: Final = TextChoices(index=0, **choice_fields)
+                delta: Final = chat_choice["delta"]
                 text_choices["text"] = delta["content"]
                 text_choices["reasoning_content"] = delta.get("reasoning_content")
-                text_choices["index"] = chunk["choices"][0]["index"]
-                text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]
+                text_choices["index"] = chat_choice["index"]
+                text_choices["finish_reason"] = chat_choice["finish_reason"]
                 response["choices"] = [text_choices]
             else:
                 response["choices"] = []
