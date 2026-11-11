@@ -1218,6 +1218,7 @@ async def find_mcp_proxy_tool(
             context=context,
             allowed_mcp_servers=allowed_mcp_servers,
             prefetched_oauth_creds=prefetched_oauth_creds,
+            use_tool_list_cache=False,
         )
         return next((tool for tool in page.tools if mcp_proxy_tool_id(tool) == tool_id), None)
 

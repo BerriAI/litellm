@@ -849,6 +849,7 @@ async def get_filtered_server_tools(
     params: PaginatedRequestParams | None = None,
     record_listing: bool = False,
     listing_updates: ExitStack | None = None,
+    use_tool_list_cache: bool = True,
 ) -> tuple[ListToolsResult, ServerOutcome]:
     from mcp.types import ListToolsResult
 
@@ -893,6 +894,7 @@ async def get_filtered_server_tools(
                     proxy_logging_obj=proxy_logging_obj,
                     catalog_auth_header=catalog_auth_header,
                     record_listing=False,
+                    use_tool_list_cache=use_tool_list_cache,
                 )
             )
         else:
@@ -910,6 +912,7 @@ async def get_filtered_server_tools(
                 catalog_auth_header=catalog_auth_header,
                 record_listing=False,
                 listing_updates=listing_updates,
+                use_tool_list_cache=use_tool_list_cache,
             )
         tools: Final = page.tools
         filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -1350,16 +1353,18 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         clock: Callable[[], float],
         adapter: TypeAdapter[_DiscoveryPage],
         max_entry_kb: int = 64,
+        storable: Callable[[_DiscoveryPage], bool] | None = None,
     ) -> None:
         self._ttl = ttl
         self._clock = clock
         self._adapter = adapter
+        self._storable = storable
         self._entries = InMemoryCache(
             max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=max_entry_kb, clock=clock
         )
         self._pending: dict[_DiscoveryKey, asyncio.Task[_DiscoveryPage]] = {}
         self._waiters: dict[asyncio.Task[_DiscoveryPage], int] = {}  # mutable-ok: constant-time waiter accounting
-        self._oversized_server_ids: set[str] = set()  # mutable-ok: one warning per server
+        self._oversized_server_ids: frozenset[str] = frozenset()
 
     def _entry_keys(self, server_id: str) -> tuple[str, ...]:
         prefix: Final = f"[{json.dumps(server_id)},"
@@ -1371,8 +1376,13 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
     def holds(self, server_id: str) -> bool:
         return bool(self._entry_keys(server_id))
 
+    def clear(self) -> None:
+        self._entries.flush_cache()
+        self._pending.clear()
+        self._oversized_server_ids = frozenset()
+
     def invalidate(self, server_id: str) -> None:
-        self._oversized_server_ids.discard(server_id)
+        self._oversized_server_ids = self._oversized_server_ids - {server_id}
         for entry_key in self._entry_keys(server_id):
             self._entries.delete_cache(entry_key)
         for key in tuple(self._pending):
@@ -1436,7 +1446,7 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
     def keep(self, key: _DiscoveryKey, items: _DiscoveryPage, *, capped: bool = True) -> None:
         declared: Final = items.ttl_ms / 1000
         ttl: Final = min(self._ttl, declared) if capped else declared
-        if ttl <= 0:
+        if ttl <= 0 or (self._storable is not None and not self._storable(items)):
             return
         entry: Final = _DISCOVERY_ENTRY.dump_json((self._clock() + ttl, self._adapter.dump_json(items)))
         if self._entries.check_value_size(entry):
@@ -1445,7 +1455,7 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         server_id: Final = key[0]
         if server_id in self._oversized_server_ids:
             return
-        self._oversized_server_ids.add(server_id)
+        self._oversized_server_ids = self._oversized_server_ids | {server_id}
         verbose_logger.warning(
             "MCP server %s returned a %s KB listing, above the %s KB cache entry limit. It is fetched on every request",
             server_id,

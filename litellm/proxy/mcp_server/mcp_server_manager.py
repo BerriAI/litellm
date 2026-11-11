@@ -1903,12 +1903,16 @@ def _mcp_discovery_cache_ttl() -> float:
 _TOOL_LIST_ENTRY_LIMIT_KB: Final = 1024
 
 
-def _mcp_tools_list_cache_ttl() -> float | None:
+def _is_whole_tool_listing(page: ListToolsResult) -> bool:
+    return not page.next_cursor
+
+
+def _mcp_tools_list_cache_ttl() -> int | None:
     raw: Final = os.environ.get("LITELLM_MCP_TOOLS_LIST_CACHE_TTL")
     if raw is None:
         return None
     try:
-        ttl: Final = float(raw)
+        ttl: Final = int(raw)
     except ValueError:
         verbose_logger.warning("Invalid LITELLM_MCP_TOOLS_LIST_CACHE_TTL; ignoring it")
         return None
@@ -2064,7 +2068,11 @@ class MCPServerManager:
             discovery_ttl, discovery_clock, TypeAdapter(ListResourceTemplatesResult)
         )
         self._tool_discovery_cache = _DiscoveryCache[ListToolsResult](
-            discovery_ttl, discovery_clock, TypeAdapter(ListToolsResult), max_entry_kb=_TOOL_LIST_ENTRY_LIMIT_KB
+            discovery_ttl,
+            discovery_clock,
+            TypeAdapter(ListToolsResult),
+            max_entry_kb=_TOOL_LIST_ENTRY_LIMIT_KB,
+            storable=_is_whole_tool_listing,
         )
         self._list_caching_enabled = discovery_ttl > 0
         self._tools_list_cache_ttl = _mcp_tools_list_cache_ttl()
@@ -2594,8 +2602,7 @@ class MCPServerManager:
             mcp_aliases: Optional dictionary mapping aliases to server names from litellm_settings
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
-        self._upstream_initialize_instructions_by_server_id.clear()
-        self._upstream_initialize_instructions_probed_at.clear()
+        self.clear_initialize_instructions()
 
         # Track which aliases have been used to ensure only first occurrence is used
         used_aliases: Final = set()
@@ -4463,6 +4470,7 @@ class MCPServerManager:
         *,
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
         record_listing: bool = False,
+        use_tool_list_cache: bool = True,
     ) -> list[MCPTool]:
         result: Final = await self.get_tools_page(
             server=server,
@@ -4476,6 +4484,7 @@ class MCPServerManager:
             proxy_logging_obj=proxy_logging_obj,
             catalog_auth_header=catalog_auth_header,
             record_listing=record_listing,
+            use_tool_list_cache=use_tool_list_cache,
         )
         return result.tools
 
@@ -4497,6 +4506,7 @@ class MCPServerManager:
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
         record_listing: bool = False,
         listing_updates: ExitStack | None = None,
+        use_tool_list_cache: bool = True,
     ) -> ListToolsResult:
         from litellm.proxy.mcp_server.tool_registry import (
             global_mcp_tool_registry,
@@ -4618,31 +4628,23 @@ class MCPServerManager:
                     tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
                 )
             else:
-
-                async def cache_key() -> _DiscoveryKey:
-                    return self._discovery_key(
+                page: Final = await self._list_upstream_tools(
+                    server,
+                    client,
+                    params,
+                    partial(
+                        self._tool_cache_key,
+                        client,
                         server,
                         user_api_key_auth,
                         mcp_auth_header,
                         extra_headers,
                         stdio_env,
                         subject_token,
-                        await client.discovery_auth_fingerprint(),
-                        raw_headers=raw_headers,
-                        page_cursor=None if params is None else (params.cursor,),
-                    )
-
-                page: Final = await self._list_upstream_tools(
-                    server,
-                    cache_key,
-                    partial(self._fetch_tools_with_timeout, client, server.name)
-                    if params is None
-                    else partial(
-                        retry_upstream_rate_limit,
-                        partial(self._fetch_tools_page_with_timeout, client, server, params),
-                        server.name,
-                        deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+                        raw_headers,
+                        params,
                     ),
+                    use_cache=use_tool_list_cache,
                 )
                 tools = page.tools
                 self._remember_upstream_initialize_instructions(server, client)
@@ -4703,24 +4705,67 @@ class MCPServerManager:
             )
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
-    def _admin_tools_list_ttl(self, server: MCPServer) -> float | None:
+    def _admin_tools_list_ttl(self, server: MCPServer) -> int | None:
         if not self._list_caching_enabled:
             return None
         per_server: Final = server.tools_list_cache_ttl_seconds
-        return self._tools_list_cache_ttl if per_server is None else float(per_server)
+        return self._tools_list_cache_ttl if per_server is None else per_server
+
+    async def _tool_cache_key(
+        self,
+        client: MCPClient,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | dict[str, str] | None,
+        extra_headers: dict[str, str] | None,
+        stdio_env: dict[str, str] | None,
+        subject_token: str | None,
+        raw_headers: Mapping[str, str] | None,
+        params: PaginatedRequestParams | None,
+    ) -> _DiscoveryKey:
+        return self._discovery_key(
+            server,
+            user_api_key_auth,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token,
+            await client.discovery_auth_fingerprint(),
+            raw_headers=raw_headers,
+            page_cursor=None if params is None else (params.cursor,),
+        )
+
+    def _tools_fetch(
+        self, client: MCPClient, server: MCPServer, params: PaginatedRequestParams | None
+    ) -> Callable[[], Awaitable[ListToolsResult]]:
+        if params is None:
+            return partial(self._fetch_tools_with_timeout, client, server.name)
+        return partial(
+            retry_upstream_rate_limit,
+            partial(self._fetch_tools_page_with_timeout, client, server, params),
+            server.name,
+            deadline_seconds=MCP_TOOL_LISTING_TIMEOUT,
+        )
 
     async def _list_upstream_tools(
         self,
         server: MCPServer,
+        client: MCPClient,
+        params: PaginatedRequestParams | None,
         cache_key: Callable[[], Awaitable[_DiscoveryKey]],
-        fetch: Callable[[], Awaitable[ListToolsResult]],
+        *,
+        use_cache: bool,
     ) -> ListToolsResult:
+        fetch: Final = self._tools_fetch(client, server, params)
+        if not use_cache or (params is not None and params.cursor is not None):
+            return await fetch()
         admin_ttl: Final = self._admin_tools_list_ttl(server)
         if admin_ttl is None:
             return await self._list_tools_for_upstream_ttl(server, cache_key, fetch)
 
         async def fetch_with_admin_ttl() -> ListToolsResult:
-            return (await fetch()).model_copy(update={"ttl_ms": int(admin_ttl * 1000)})
+            page: Final = await fetch()
+            return page if page.next_cursor else page.model_copy(update={"ttl_ms": admin_ttl * 1000})
 
         if admin_ttl <= 0:
             return await fetch_with_admin_ttl()
@@ -4735,13 +4780,14 @@ class MCPServerManager:
         if self._tool_discovery_cache.holds(server.server_id):
             return await self._tool_discovery_cache.get(await cache_key(), fetch)
         page: Final = await fetch()
-        if self._list_caching_enabled and page.ttl_ms > 0:
+        if self._list_caching_enabled and page.ttl_ms > 0 and not page.next_cursor:
             self._tool_discovery_cache.keep(await cache_key(), page)
         return page
 
     def clear_initialize_instructions(self) -> None:
         self._upstream_initialize_instructions_by_server_id.clear()
         self._upstream_initialize_instructions_probed_at.clear()
+        self._tool_discovery_cache.clear()
 
     def invalidate_discovery_lists(self, server_id: str) -> None:
         self._upstream_initialize_instructions_by_server_id.pop(server_id, None)
@@ -6207,6 +6253,7 @@ class MCPServerManager:
                 dict(catalog_auth_header) if isinstance(catalog_auth_header, Mapping) else catalog_auth_header
             ),
             record_listing=False,
+            use_tool_list_cache=False,
         )
         selected: Final = tuple(tool for tool in upstream if tool.name == name)
         scan: Final = await scan_tool_descriptions(

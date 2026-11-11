@@ -13,11 +13,11 @@ from mcp.types import (
 from mcp.types import Tool as MCPTool
 
 from litellm.mcp_client.tools import (
-    list_tools_result_with_pagination,
     _get_function_arguments,
     _normalize_mcp_input_schema,
     call_mcp_tool,
     call_openai_tool,
+    list_tools_result_with_pagination,
     list_tools_with_pagination,
     load_mcp_tools,
     transform_mcp_tool_to_anthropic_tool,
