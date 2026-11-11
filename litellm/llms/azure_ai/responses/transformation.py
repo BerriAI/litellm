@@ -7,20 +7,19 @@ from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     api_key_header_for_base,
+    foundry_project_root,
     get_azure_ai_auth_headers,
+    with_foundry_project_scope,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-_PROJECT_PATH_PREFIX: Final = ("api", "projects")
 _RESPONSES_PATH: Final = ("openai", "v1", "responses")
 
 
 def _responses_url(api_base: str) -> str:
     base_url: Final = httpx.URL(api_base)
-    segments: Final = tuple(segment for segment in base_url.path.split("/") if segment)
-    project_root: Final = segments[:3] if segments[:2] == _PROJECT_PATH_PREFIX else ()
-    return str(base_url.copy_with(path="/" + "/".join((*project_root, *_RESPONSES_PATH)), query=None))
+    return str(base_url.copy_with(path="/" + "/".join((*foundry_project_root(base_url), *_RESPONSES_PATH)), query=None))
 
 
 class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
@@ -42,10 +41,13 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         params: Final = litellm_params or GenericLiteLLMParams()
+        api_base: Final = AzureFoundryModelInfo.get_api_base(params.api_base)
+        on_project: Final = api_base is not None and bool(foundry_project_root(httpx.URL(api_base)))
+        auth_params: Final = with_foundry_project_scope(params, api_base)
         auth_headers: Final = get_azure_ai_auth_headers(
             api_key=AzureFoundryModelInfo.get_api_key(params.api_key),
-            litellm_params=params.model_dump(),
-            api_key_header=api_key_header_for_base(AzureFoundryModelInfo.get_api_base(params.api_base)),
+            litellm_params=auth_params.model_dump(),
+            api_key_header="Authorization" if on_project else api_key_header_for_base(api_base),
         )
         return {
             **headers,

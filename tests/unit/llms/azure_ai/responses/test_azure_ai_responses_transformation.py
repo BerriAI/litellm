@@ -1,5 +1,6 @@
 import json
 from typing import Final
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -7,6 +8,7 @@ import respx
 
 import litellm
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.azure_ai.common_utils import AZURE_AI_AGENTS_SCOPE
 from litellm.llms.azure_ai.responses.transformation import AzureAIResponsesAPIConfig
 from litellm.responses.main import _will_bridge_to_chat_completions
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
@@ -15,6 +17,8 @@ from litellm.utils import ProviderConfigManager
 
 FOUNDRY_PROJECT_BASE = "https://res.services.ai.azure.com/api/projects/proj"
 FOUNDRY_RESPONSES_URL = f"{FOUNDRY_PROJECT_BASE}/openai/v1/responses"
+GATEWAY_PROJECT_BASE = "https://apim.example.com/foundry/api/projects/proj"
+GATEWAY_RESPONSES_URL = f"{GATEWAY_PROJECT_BASE}/openai/v1/responses"
 SERVERLESS_BASE = "https://endpoint.eastus.models.ai.azure.com"
 WEATHER_TOOL = {
     "type": "function",
@@ -80,7 +84,8 @@ def _chat_completion_payload(model: str) -> dict:
 
 @pytest.mark.parametrize("model", ["gpt-5.6-luna-20260710154139", "gpt-5.5-20260504143601", "DeepSeek-R1-0528", None])
 @pytest.mark.parametrize(
-    "api_base", [FOUNDRY_PROJECT_BASE, "https://res.services.ai.azure.com", "https://res.openai.azure.com"]
+    "api_base",
+    [FOUNDRY_PROJECT_BASE, GATEWAY_PROJECT_BASE, "https://res.services.ai.azure.com", "https://res.openai.azure.com"],
 )
 def test_azure_openai_v1_hosts_resolve_native_config(model, api_base):
     config = ProviderConfigManager.get_provider_responses_api_config(provider="azure_ai", model=model, api_base=api_base)
@@ -111,7 +116,9 @@ def test_non_openai_surfaces_keep_chat_bridge(model):
     assert config is None
 
 
-@pytest.mark.parametrize("api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (SERVERLESS_BASE, True)])
+@pytest.mark.parametrize(
+    "api_base,bridged", [(FOUNDRY_PROJECT_BASE, False), (GATEWAY_PROJECT_BASE, False), (SERVERLESS_BASE, True)]
+)
 def test_will_bridge_to_chat_completions_follows_host(api_base, bridged):
     assert _will_bridge_to_chat_completions("gpt-5.6-luna", "azure_ai", False, None, api_base) is bridged
 
@@ -161,19 +168,26 @@ def test_native_websocket_stays_off():
     assert AzureAIResponsesAPIConfig().supports_native_websocket() is False
 
 
-def test_validate_environment_sends_api_key_header():
+@pytest.mark.parametrize(
+    "api_base,expected_auth",
+    [
+        ("https://res.services.ai.azure.com", {"api-key": "secret"}),
+        (FOUNDRY_PROJECT_BASE, {"Authorization": "Bearer secret"}),
+    ],
+)
+def test_validate_environment_sends_the_api_key_the_way_the_endpoint_takes_it(api_base, expected_auth):
     headers = AzureAIResponsesAPIConfig().validate_environment(
         headers={"x-custom": "1"},
         model="gpt-5.6-luna",
-        litellm_params=GenericLiteLLMParams(api_key="secret", api_base=FOUNDRY_PROJECT_BASE),
+        litellm_params=GenericLiteLLMParams(api_key="secret", api_base=api_base),
     )
-    assert headers == {"x-custom": "1", "api-key": "secret", "Content-Type": "application/json"}
+    assert headers == {"x-custom": "1", **expected_auth, "Content-Type": "application/json"}
 
 
 def test_validate_environment_reads_api_key_from_env(monkeypatch):
     monkeypatch.setenv("AZURE_AI_API_KEY", "env-secret")
     headers = AzureAIResponsesAPIConfig().validate_environment(
-        headers={}, model="gpt-5.6-luna", litellm_params=GenericLiteLLMParams(api_base=FOUNDRY_PROJECT_BASE)
+        headers={}, model="gpt-5.6-luna", litellm_params=GenericLiteLLMParams(api_base="https://res.services.ai.azure.com")
     )
     assert headers["api-key"] == "env-secret"
 
@@ -193,6 +207,46 @@ def test_validate_environment_raises_without_credentials():
         AzureAIResponsesAPIConfig().validate_environment(
             headers={}, model="gpt-5.6-luna", litellm_params=GenericLiteLLMParams(api_base=FOUNDRY_PROJECT_BASE)
         )
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "configured_scope,env_scope,expected_scope",
+    [
+        (None, None, AZURE_AI_AGENTS_SCOPE),
+        ("api://custom-app/.default", None, "api://custom-app/.default"),
+        (None, "https://ai.azure.us/.default", "https://ai.azure.us/.default"),
+        ("api://custom-app/.default", "https://ai.azure.us/.default", "api://custom-app/.default"),
+    ],
+)
+async def test_aresponses_mints_the_service_principal_token_for_the_project_scope(
+    monkeypatch, configured_scope, env_scope, expected_scope
+):
+    if env_scope is None:
+        monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    else:
+        monkeypatch.setenv("AZURE_SCOPE", env_scope)
+    route = respx.post(url__regex=r".*/api/projects/proj/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id") as mock_entra_id:  # test-quality-ok: stubs the Entra token fetch to assert the scope a project entry requests and the bearer it sends
+        mock_entra_id.return_value = lambda: "project-sp-token"
+        await litellm.aresponses(
+            model="azure_ai/gpt-4.1",
+            input="What is 2+2?",
+            api_base=FOUNDRY_PROJECT_BASE,
+            tenant_id="tenant",
+            client_id="client",
+            client_secret="secret",
+            azure_scope=configured_scope,
+        )
+
+    mock_entra_id.assert_called_once_with(
+        tenant_id="tenant", client_id="client", client_secret="secret", scope=expected_scope
+    )
+    assert route.calls.last.request.headers["Authorization"] == "Bearer project-sp-token"
 
 
 NATIVE_RESPONSES_CASES = [
@@ -221,6 +275,7 @@ NATIVE_RESPONSES_CASES = [
         "https://res.openai.azure.com/openai/v1/responses",
         "gpt-5.6-sol",
     ),
+    ("azure_ai/gpt-5.6-sol", GATEWAY_PROJECT_BASE, GATEWAY_RESPONSES_URL, "gpt-5.6-sol"),
 ]
 
 
@@ -228,7 +283,10 @@ def _assert_native_responses_request(route, expected_url, expected_model):
     request = route.calls.last.request
     body = json.loads(request.content)
     assert f"{request.url.scheme}://{request.url.host}{request.url.path}" == expected_url
-    assert request.headers["api-key"] == "fake-key"
+    on_project: Final = expected_url in (FOUNDRY_RESPONSES_URL, GATEWAY_RESPONSES_URL)
+    assert request.headers.get("authorization" if on_project else "api-key") == (
+        "Bearer fake-key" if on_project else "fake-key"
+    )
     assert body["model"] == expected_model
     assert body["input"] == "What is the weather in SF?"
     assert "messages" not in body
@@ -291,6 +349,38 @@ async def test_router_aresponses_sends_bare_deployment_name(model, api_base, exp
     )
 
     _assert_native_responses_request(route, expected_url, expected_model)
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.parametrize(
+    "api_base,api_version,expected_url",
+    [
+        (GATEWAY_PROJECT_BASE, None, GATEWAY_RESPONSES_URL),
+        (
+            "https://res.cognitiveservices.azure.com/openai/v1",
+            "preview",
+            "https://res.cognitiveservices.azure.com/openai/v1/responses",
+        ),
+    ],
+)
+async def test_aresponses_keeps_previous_response_id_on_gateway_and_cognitiveservices_bases(api_base, api_version, expected_url):
+    route = respx.post(url__regex=r".*/openai/v1/responses(\?.*)?$").mock(
+        return_value=httpx.Response(200, json=_responses_payload("gpt-4.1"))
+    )
+
+    await litellm.aresponses(
+        model="azure_ai/gpt-4.1",
+        input="What was the codeword?",
+        previous_response_id="resp_earlier",
+        api_base=api_base,
+        api_version=api_version,
+        api_key="fake-key",
+    )
+
+    request = route.calls.last.request
+    assert f"{request.url.scheme}://{request.url.host}{request.url.path}" == expected_url
+    assert json.loads(request.content)["previous_response_id"] == "resp_earlier"
 
 
 @pytest.mark.asyncio
