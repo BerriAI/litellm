@@ -5871,6 +5871,7 @@ async def _count_deepseek_responses(
     monkeypatch: pytest.MonkeyPatch,
     deployment_options: Mapping[str, JsonValue],
     responses_options: Mapping[str, JsonValue] | None,
+    request_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> tuple[TokenCountResponse, dict[str, JsonValue]]:
     import litellm.proxy.proxy_server as proxy_server
 
@@ -5897,7 +5898,9 @@ async def _count_deepseek_responses(
     with respx.mock:
         route: Final = respx.post(_DEEPSEEK_COUNT_ROUTE).mock(return_value=httpx.Response(200, json={"input_tokens": 91}))
         result: Final = await count_request_tokens(
-            request=TokenCountRequest(model="deepseek-counted", messages=[{"role": "user", "content": "Say hi."}]),
+            request=TokenCountRequest.model_validate(
+                {"model": "deepseek-counted", "messages": [{"role": "user", "content": "Say hi."}], **request_options}
+            ),
             call_endpoint=True,
             responses_request=None
             if responses_options is None
@@ -5968,6 +5971,27 @@ async def test_chat_count_on_deepseek_counts_the_thinking_the_deployment_sets_un
     expected_options: Mapping[str, JsonValue],
 ) -> None:
     result, sent = await _count_deepseek_responses(monkeypatch, deployment_options, None)
+
+    assert (result.total_tokens, result.count_source) == (91, "provider")
+    assert {field: sent[field] for field in ("thinking", "output_config") if field in sent} == expected_options
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_options", "request_options", "expected_options"),
+    (
+        ({}, {"reasoning_effort": "none"}, {"thinking": {"type": "disabled"}}),
+        ({}, {"reasoning_effort": "max"}, {"thinking": {"type": "enabled"}, "output_config": {"effort": "max"}}),
+        ({"thinking": {"type": "disabled"}}, {"thinking": {"type": "enabled"}}, {"thinking": {"type": "enabled"}}),
+    ),
+)
+async def test_chat_count_on_deepseek_counts_the_thinking_the_request_sends_over_the_deployment_default(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_options: Mapping[str, JsonValue],
+    request_options: Mapping[str, JsonValue],
+    expected_options: Mapping[str, JsonValue],
+) -> None:
+    result, sent = await _count_deepseek_responses(monkeypatch, deployment_options, None, request_options)
 
     assert (result.total_tokens, result.count_source) == (91, "provider")
     assert {field: sent[field] for field in ("thinking", "output_config") if field in sent} == expected_options

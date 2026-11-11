@@ -9,8 +9,13 @@ import respx
 from pydantic import JsonValue
 
 import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.anthropic.common_utils import AnthropicError
-from litellm.llms.deepseek.count_tokens.token_counter import DeepSeekTokenCounter
+from litellm.llms.deepseek.count_tokens.token_counter import (
+    DEEPSEEK_COUNT_TIMEOUT_SECONDS,
+    DeepSeekTokenCounter,
+    MissingCountRoutes,
+)
 from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import TokenCountMessagesFormat, TokenCountResponse
@@ -40,13 +45,17 @@ async def _count(
     chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
     count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     messages: list[dict[str, JsonValue]] = _WEATHER_IN_SF,
+    missing_count_routes: MissingCountRoutes | None = None,
 ) -> tuple[TokenCountResponse | None, respx.Route]:
     with respx.mock:
         route: Final = respx.post(count_route).mock(
             return_value=reply if isinstance(reply, httpx.Response) else None,
             side_effect=None if isinstance(reply, httpx.Response) else reply,
         )
-        result: Final = await DeepSeekTokenCounter().count_tokens(
+        counter: Final = DeepSeekTokenCounter(
+            missing_count_routes=InMemoryCache() if missing_count_routes is None else missing_count_routes
+        )
+        result: Final = await counter.count_tokens(
             model_to_use="deepseek-v4-pro",
             messages=messages,
             contents=None,
@@ -102,6 +111,19 @@ async def test_count_waits_no_longer_than_the_deployment_timeout() -> None:
     )
 
     assert route.calls.last.request.extensions["timeout"] == {"connect": 7, "read": 7, "write": 7, "pool": 7}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deployment_timeout", ({}, {"timeout": 600}))
+async def test_count_waits_no_longer_than_the_count_cap_when_the_deployment_allows_longer(
+    deployment_timeout: Mapping[str, JsonValue],
+) -> None:
+    _, route = await _count(
+        httpx.Response(200, json={"input_tokens": 91}),
+        litellm_params={"api_key": "sk-deepseek-test", **deployment_timeout},
+    )
+
+    assert set(route.calls.last.request.extensions["timeout"].values()) == {DEEPSEEK_COUNT_TIMEOUT_SECONDS}
 
 
 @pytest.mark.asyncio
@@ -168,30 +190,49 @@ async def test_a_missing_count_route_leaves_the_count_to_the_estimate(status_cod
 
 
 @pytest.mark.asyncio
+async def test_a_missing_count_route_is_not_called_again_for_that_base() -> None:
+    missing_count_routes: Final = InMemoryCache()
+    gateway_messages_url: Final = DeepSeekAnthropicMessagesConfig().get_complete_url(
+        api_base="https://gateway.example/deepseek",
+        api_key=None,
+        model="deepseek-v4-pro",
+        optional_params={},
+        litellm_params={},
+    )
+
+    first, first_route = await _count(httpx.Response(404), missing_count_routes=missing_count_routes)
+    second, second_route = await _count(httpx.Response(404), missing_count_routes=missing_count_routes)
+    gateway, gateway_route = await _count(
+        httpx.Response(200, json={"input_tokens": 91}),
+        count_route=f"{gateway_messages_url}/count_tokens",
+        litellm_params={"api_key": "sk-deepseek-test", "api_base": "https://gateway.example/deepseek"},
+        missing_count_routes=missing_count_routes,
+    )
+
+    assert (first, first_route.call_count, second, second_route.call_count) == (None, 1, None, 0)
+    assert gateway_route.call_count == 1
+    assert gateway is not None and gateway.total_tokens == 91
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "reply",
     (
         httpx.Response(408, text="timed out"),
+        httpx.Response(422, json={"error": {"message": "Failed to deserialize the JSON body"}}),
         httpx.Response(429, json={"error": {"message": "Rate limit reached"}}),
         httpx.Response(500, text="internal error"),
         httpx.Response(503, text="overloaded"),
         httpx.ConnectError("connection refused"),
     ),
 )
-async def test_an_unavailable_count_route_leaves_the_count_to_the_estimate(reply: httpx.Response | Exception) -> None:
+async def test_a_count_route_that_cannot_count_leaves_the_count_to_the_estimate(
+    reply: httpx.Response | Exception,
+) -> None:
     result, route = await _count(reply)
 
     assert route.called
     assert result is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status_code", (401, 422))
-async def test_a_count_deepseek_refuses_answers_with_its_status(status_code: int) -> None:
-    result, _ = await _count(httpx.Response(status_code, json={"error": {"message": "refused"}}))
-
-    assert result is not None
-    assert (result.error, result.status_code, result.total_tokens) == (True, status_code, 0)
 
 
 @pytest.mark.asyncio

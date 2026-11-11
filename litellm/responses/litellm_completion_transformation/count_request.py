@@ -24,7 +24,7 @@ from litellm.responses.main import previous_response_client_ids
 from litellm.types.llms.openai import ResponseInputParam
 from litellm.utils import ProviderConfigManager
 
-_COUNTED_CHAT_PARAMS: Final = (
+COUNTED_CHAT_PARAMS: Final = (
     "thinking",
     "tool_choice",
     "parallel_tool_calls",
@@ -168,7 +168,7 @@ def counted_chat_params(
     inference_params: Final = {**deployment_params, **chat_body}
     sent: Final = {
         name: inference_params[name]
-        for name in _COUNTED_CHAT_PARAMS
+        for name in COUNTED_CHAT_PARAMS
         if inference_params.get(name) is not None and name not in policy.additional_drop_params
     }
     return _JSON_PARAMS.validate_python(

@@ -15266,6 +15266,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.litellm_completion_transformation.count_request import (
+    COUNTED_CHAT_PARAMS,
     ChatCountBridgeError,
     chat_count_request,
     counted_chat_params,
@@ -16294,7 +16295,12 @@ async def _count_request_tokens(
     chat_params: Final[Mapping[str, JsonValue]] = (
         chat_count.params
         if chat_count is not None
-        else counted_chat_params({}, deployment_defaults, (), drop_policy(count_litellm_params))
+        else counted_chat_params(
+            request.model_dump(include=set(COUNTED_CHAT_PARAMS), exclude_none=True),
+            deployment_defaults,
+            (),
+            drop_policy(count_litellm_params),
+        )
         if messages_format == "openai"
         else MappingProxyType({})
     )
