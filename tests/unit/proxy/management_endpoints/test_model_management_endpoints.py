@@ -8675,6 +8675,90 @@ async def test_team_model_rename_reads_the_models_from_the_db_once_for_both_name
 
 
 @pytest.mark.asyncio
+async def test_team_model_rename_judges_the_destination_by_the_team_wildcard_serving_it_now(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        _raise_if_team_update_leaves_projects_short,
+    )
+
+    prisma: Final = _media_team_db("video-gen-1", {})
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "model_name_media-team_team-wildcard",
+                "litellm_params": {"model": "runwayml/*"},
+                "model_info": {"id": "team-wildcard", "team_id": "media-team", "team_public_model_name": "video-*"},
+            },
+            {
+                "model_name": "model_name_media-team_team-row",
+                "litellm_params": dict(_TEAM_VERTEX),
+                "model_info": {"id": "team-row", "team_id": "media-team", "team_public_model_name": "clip-strict"},
+            },
+        ]
+    )
+    _use_db_backed_quota_proxy(monkeypatch, prisma, router)
+    existing: Final = router.registry().deployment("team-row")
+    assert existing is not None
+
+    with pytest.raises(ProxyException) as error:
+        await _raise_if_team_update_leaves_projects_short(
+            prisma_client=prisma,
+            general_settings=_PROJECT_QUOTA_SETTINGS,
+            existing=existing,
+            written_team_id="media-team",
+            written_name="video-gen-1",
+            incoming_params=None,
+            remaining_params=GenericLiteLLMParams(**_TEAM_VERTEX),
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("projects video-gen list 'video-gen-1' without a positive rpm and tpm quota")
+
+
+@pytest.mark.asyncio
+async def test_team_model_rename_judges_its_old_name_by_the_team_wildcard_that_takes_it_over(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        _raise_if_team_update_leaves_projects_short,
+    )
+
+    prisma: Final = _media_team_db("video-gen-1", {})
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "model_name_media-team_team-wildcard",
+                "litellm_params": dict(_TEAM_VERTEX, model="vertex_ai/*"),
+                "model_info": {"id": "team-wildcard", "team_id": "media-team", "team_public_model_name": "video-*"},
+            },
+            {
+                "model_name": "model_name_media-team_team-row",
+                "litellm_params": dict(_TEAM_RUNWAY_BY_PREFIX),
+                "model_info": {"id": "team-row", "team_id": "media-team", "team_public_model_name": "video-gen-1"},
+            },
+        ]
+    )
+    _use_db_backed_quota_proxy(monkeypatch, prisma, router)
+    existing: Final = router.registry().deployment("team-row")
+    assert existing is not None
+
+    with pytest.raises(ProxyException) as error:
+        await _raise_if_team_update_leaves_projects_short(
+            prisma_client=prisma,
+            general_settings=_PROJECT_QUOTA_SETTINGS,
+            existing=existing,
+            written_team_id="media-team",
+            written_name="clip-renamed",
+            incoming_params=None,
+            remaining_params=GenericLiteLLMParams(**_TEAM_RUNWAY_BY_PREFIX),
+        )
+
+    assert error.value.code == "400"
+    assert error.value.message.startswith("projects video-gen list 'video-gen-1' without a positive rpm and tpm quota")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "projects",
     [

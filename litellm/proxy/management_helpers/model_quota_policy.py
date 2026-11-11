@@ -205,25 +205,28 @@ def _is_team_deployment(deployment: Mapping[str, object]) -> bool:
     return is_str_keyed_mapping(model_info) and model_info.get("team_id") is not None
 
 
+def _route_of_deployments(deployments: Sequence[Mapping[str, object]]) -> ModelRoute:
+    shared: Final = tuple(deployment for deployment in deployments if not _is_team_deployment(deployment))
+    return ModelRoute(
+        providers=frozenset(
+            provider
+            for deployment in shared
+            if (provider := deployment_provider(deployment.get("litellm_params"))) is not None
+        ),
+        team_deployments=frozenset(
+            team_deployment(deployment.get("litellm_params"))
+            for deployment in deployments
+            if _is_team_deployment(deployment)
+        ),
+    )
+
+
 def router_model_routes(llm_router: "Router | None", team_id: str | None) -> RouteOf:
     if llm_router is None:
         return no_route
 
     def route_of(model: str) -> ModelRoute:
-        deployments: Final = _routed_deployments(llm_router, model, team_id)
-        shared: Final = tuple(deployment for deployment in deployments if not _is_team_deployment(deployment))
-        return ModelRoute(
-            providers=frozenset(
-                provider
-                for deployment in shared
-                if (provider := deployment_provider(deployment.get("litellm_params"))) is not None
-            ),
-            team_deployments=frozenset(
-                team_deployment(deployment.get("litellm_params"))
-                for deployment in deployments
-                if _is_team_deployment(deployment)
-            ),
-        )
+        return _route_of_deployments(_routed_deployments(llm_router, model, team_id))
 
     return route_of
 
@@ -231,6 +234,21 @@ def router_model_routes(llm_router: "Router | None", team_id: str | None) -> Rou
 def _deployment_id(deployment: Mapping[str, object]) -> object:
     model_info: Final = deployment.get("model_info")
     return model_info.get("id") if is_str_keyed_mapping(model_info) else None
+
+
+def _without(deployments: Sequence[Mapping[str, object]], replaced_id: str | None) -> tuple[Mapping[str, object], ...]:
+    return tuple(deployment for deployment in deployments if _deployment_id(deployment) != replaced_id)
+
+
+def _routed_deployments_without(
+    llm_router: "Router", model: str, team_id: str, replaced_id: str | None
+) -> tuple[Mapping[str, object], ...]:
+    target: Final = llm_router.registry().resolve(model)
+    return (
+        _without(_named_deployments(llm_router, target, team_id), replaced_id)
+        or _without(_named_deployments(llm_router, target, None), replaced_id)
+        or _without(llm_router.registry().deployments(target, source="wildcard", team_id=team_id), replaced_id)
+    )
 
 
 def _routable_name(llm_router: "Router | None", model: str) -> str:
@@ -325,9 +343,10 @@ def team_route_after_write(
                 team_deployment(_served_params(litellm_params, public_name, target)) for litellm_params in team_params
             )
         )
-    if llm_router is None or not _routed_deployments(llm_router, model, None):
-        return None
-    return router_model_routes(llm_router, None)(model)
+    remaining: Final = (
+        () if llm_router is None else _routed_deployments_without(llm_router, model, team_id, replaced_id)
+    )
+    return _route_of_deployments(remaining) if remaining else None
 
 
 def limits_added_by_team_write(
@@ -345,7 +364,7 @@ def limits_added_by_team_write(
         return frozenset()
     before: Final = (
         router_model_routes(llm_router, team_id)(model)
-        if replaced_id is None
+        if stored_params is None
         else team_route_after_write(llm_router, team_id, public_name, replaced_id, stored_params, model)
     )
     return required_limits(policy, model, after) - required_limits(policy, model, before or NO_ROUTE)

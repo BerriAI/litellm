@@ -9118,14 +9118,17 @@ class ProxyConfig:
         return ModelRoutesReload(routes_current=True, unloaded=unloaded)
 
     async def _upsert_db_credentials(self, prisma_client: PrismaClient) -> bool:
+        from prisma.errors import PrismaError
+
         try:
-            credentials: Final = await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_all()
-        except Exception as e:
-            if not PrismaDBExceptionHandler.is_database_connection_error(e):
-                raise
+            credentials: Final = [
+                self.decrypt_credentials(credential)
+                for credential in await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_all()
+            ]
+        except (PrismaError, httpx.HTTPError, asyncio.TimeoutError, ValueError) as e:
             verbose_proxy_logger.warning("Could not read the credentials from the database: %s", e)
             return False
-        CredentialAccessor.upsert_credentials([self.decrypt_credentials(credential) for credential in credentials])
+        CredentialAccessor.upsert_credentials(credentials)
         return True
 
     def _evict_db_models_missing_from(self, router: Router, db_model_ids: frozenset[str]) -> None:

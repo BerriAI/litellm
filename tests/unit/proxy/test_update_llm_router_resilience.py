@@ -589,12 +589,26 @@ async def test_quota_reload_installs_a_new_db_credential_while_the_config_cannot
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "read_credentials",
+    [
+        pytest.param(AsyncMock(side_effect=httpx.ConnectError("db unreachable")), id="db-unreachable"),
+        pytest.param(
+            AsyncMock(
+                return_value=[
+                    {"credential_name": "media-cred", "credential_values": {"api_key": "sk"}, "credential_info": None}
+                ]
+            ),
+            id="a-row-cannot-be-parsed",
+        ),
+    ],
+)
 async def test_quota_reload_cannot_confirm_routes_while_the_credentials_cannot_be_read(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, read_credentials: AsyncMock
 ) -> None:
     proxy_config: Final = ProxyConfig()
     prisma_client: Final = MagicMock()
-    prisma_client.db.litellm_credentialstable.find_many = AsyncMock(side_effect=httpx.ConnectError("db unreachable"))
+    prisma_client.db.litellm_credentialstable.find_many = read_credentials
     router: Final = litellm.Router(model_list=[])
     monkeypatch.setattr("litellm.proxy.proxy_server.DB_RECONCILE_LOCK", asyncio.Lock())
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)

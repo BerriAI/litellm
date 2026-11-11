@@ -936,15 +936,10 @@ def _project_limit(metadata: object, limits_key: str, model: str) -> object:
     return limits.get(model) if is_str_keyed_mapping(limits) else None
 
 
-def _projects_short_on(
-    projects: Sequence["prisma_models.LiteLLM_ProjectTable"], model: str, added: frozenset[QuotaLimit]
-) -> tuple[str, ...]:
-    return tuple(
-        project.project_alias or project.project_id
-        for project in projects
-        if model in project.models
-        and unmet_limits(
-            added,
+def _project_lacks(project: "prisma_models.LiteLLM_ProjectTable", model: str, limits: frozenset[QuotaLimit]) -> bool:
+    return bool(
+        unmet_limits(
+            limits,
             MappingProxyType(
                 {
                     "rpm": _project_limit(project.metadata, "model_rpm_limit", model),
@@ -953,6 +948,20 @@ def _projects_short_on(
             ),
         )
     )
+
+
+def _projects_short_on(
+    projects: Sequence["prisma_models.LiteLLM_ProjectTable"], model: str, added: frozenset[QuotaLimit]
+) -> tuple[str, ...]:
+    return tuple(
+        project.project_alias or project.project_id
+        for project in projects
+        if model in project.models and _project_lacks(project, model, added)
+    )
+
+
+def _models_short_in(project: "prisma_models.LiteLLM_ProjectTable") -> tuple[str, ...]:
+    return tuple(model for model in project.models if _project_lacks(project, model, EVERY_LIMIT))
 
 
 async def _raise_if_team_write_leaves_projects_short(
@@ -972,11 +981,7 @@ async def _raise_if_team_write_leaves_projects_short(
     if policy is None or not exempts_any_route(policy):
         return
     projects: Final = await ProjectRepository(prisma_client).table.find_many(where={"team_id": team_id})
-    listed: Final = frozenset(
-        model
-        for model in itertools.chain.from_iterable(project.models for project in projects)
-        if _projects_short_on(projects, model, EVERY_LIMIT)
-    )
+    listed: Final = frozenset(itertools.chain.from_iterable(_models_short_in(project) for project in projects))
     if not listed:
         return
     llm_router: Final = await model_router_reconciled_with_db(listed, team_id, replaced_id, requested_at)
