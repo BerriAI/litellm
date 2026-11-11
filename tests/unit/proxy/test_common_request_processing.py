@@ -13742,3 +13742,38 @@ class TestTotalTimeout:
         assert not prepared
         assert not called
         assert elapsed < 120
+
+
+@pytest.mark.parametrize("router_attempted_fallbacks", (0, 1))
+def test_get_custom_headers_count_a_quota_fallback_and_name_its_reason(router_attempted_fallbacks: int) -> None:
+    auth: Final = ProxyUserAPIKeyAuth(api_key="sk-quota-fallback", tpm_limit=None, rpm_limit=None, max_budget=None)
+    request_data: Final = {
+        "model": "luna",
+        "metadata": {"rate_limit_fallback": {"original_model_group": "opus", "descriptor_key": "model_per_key"}},
+    }
+
+    custom_headers: Callable[..., dict[str, str]] = ProxyBaseLLMRequestProcessing.get_custom_headers
+    headers: Final = custom_headers(
+        user_api_key_dict=auth,
+        call_id="quota-fallback",
+        request_data=request_data,
+        **{"x-litellm-attempted-fallbacks": router_attempted_fallbacks},
+    )
+
+    assert headers["x-litellm-attempted-fallbacks"] == str(router_attempted_fallbacks + 1)
+    assert headers["x-litellm-fallback-reason"] == "rate_limit:model_per_key"
+
+
+def test_get_custom_headers_leave_a_plain_request_without_a_fallback_reason() -> None:
+    auth: Final = ProxyUserAPIKeyAuth(api_key="sk-no-fallback", tpm_limit=None, rpm_limit=None, max_budget=None)
+
+    custom_headers: Callable[..., dict[str, str]] = ProxyBaseLLMRequestProcessing.get_custom_headers
+    headers: Final = custom_headers(
+        user_api_key_dict=auth,
+        call_id="no-fallback",
+        request_data={"model": "opus", "metadata": {}},
+        **{"x-litellm-attempted-fallbacks": 0},
+    )
+
+    assert headers["x-litellm-attempted-fallbacks"] == "0"
+    assert "x-litellm-fallback-reason" not in headers

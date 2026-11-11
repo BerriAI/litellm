@@ -1,10 +1,11 @@
 import asyncio
 import contextlib
+import itertools
 import json
 import logging
 import math
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -128,6 +129,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_param,
     openai_error_type,
     relayed_provider_specific_fields,
+)
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ATTEMPTED_FALLBACKS_HEADER,
+    rate_limit_fallback_from_request_data,
+    rate_limit_fallback_headers,
 )
 from litellm.proxy.common_utils.responses_stream_errors import (
     SSE_LINE_BREAK,
@@ -2384,12 +2390,12 @@ class ProxyBaseLLMRequestProcessing:
         response_cost: float | str | None = None,
         hidden_params: Mapping[str, object] | None = None,
         fastest_response_batch_completion: bool | None = None,
-        request_data: dict | None = {},
+        request_data: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         litellm_logging_obj: LiteLLMLoggingObj | None = None,
         read_timing_from_logging_obj: bool = True,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, str]:
         exclude_values: Final = {"", None, "None"}
         hidden_params = hidden_params or {}
         resolved_call_id: Final = (
@@ -2453,10 +2459,14 @@ class ProxyBaseLLMRequestProcessing:
             **{k: str(v) for k, v in kwargs.items()},
         }
         if request_data:
-            remaining_tokens_header: Final = get_remaining_tokens_and_requests_from_request_data(request_data)
+            remaining_tokens_header: Final = get_remaining_tokens_and_requests_from_request_data(dict(request_data))
             headers.update(remaining_tokens_header)
 
-            logging_caching_headers: Final = get_logging_caching_headers(request_data)
+            quota_fallback: Final = rate_limit_fallback_from_request_data(request_data)
+            if quota_fallback is not None:
+                headers.update(rate_limit_fallback_headers(quota_fallback, headers.get(ATTEMPTED_FALLBACKS_HEADER)))
+
+            logging_caching_headers: Final = get_logging_caching_headers(dict(request_data))
             if logging_caching_headers:
                 headers.update(logging_caching_headers)
 
@@ -2864,7 +2874,9 @@ class ProxyBaseLLMRequestProcessing:
         from litellm.proxy.common_utils.proxy_rate_limit_error import (
             PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
             ProxyRateLimitError,
+            RateLimitFallback,
             per_model_rate_limits_disable_fallbacks,
+            with_rate_limit_fallback,
         )
 
         general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
@@ -2933,6 +2945,7 @@ class ProxyBaseLLMRequestProcessing:
                 if isinstance(raw_router_settings, Mapping)
                 else None
             )
+            attempt_numbers: Final[Iterator[int]] = itertools.count(1)
             try:
                 for fallback_model in fallback_models:
                     if fallback_model == original_model:
@@ -2955,7 +2968,10 @@ class ProxyBaseLLMRequestProcessing:
                             user_api_key_dict.team_id,
                         ):
                             continue
-                        return await self.common_processing_pre_call_logic(
+                        attempt = next(attempt_numbers)
+                        admitted: tuple[
+                            Mapping[str, object], LiteLLMLoggingObj
+                        ] = await self.common_processing_pre_call_logic(
                             request=request,
                             general_settings=general_settings,
                             proxy_logging_obj=proxy_logging_obj,
@@ -2976,6 +2992,21 @@ class ProxyBaseLLMRequestProcessing:
                         if is_hard_per_model_limit(fallback_exc):
                             raise
                         continue
+                    else:
+                        admitted_data, admitted_logging_obj = admitted
+                        stamped: dict = dict(  # mutable-ok: caller-defined request-payload shape
+                            with_rate_limit_fallback(
+                                admitted_data,
+                                get_metadata_variable_name(request, admitted_data),
+                                RateLimitFallback(
+                                    original_model_group=original_model,
+                                    descriptor_key=original_exc.descriptor_key or "unknown",
+                                    attempts=attempt,
+                                ),
+                            )
+                        )
+                        self.data = stamped
+                        return stamped, admitted_logging_obj
             except BaseException:
                 self.data = rate_limited_data
                 raise
