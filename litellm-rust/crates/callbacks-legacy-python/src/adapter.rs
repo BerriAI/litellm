@@ -563,6 +563,10 @@ impl LegacyLogging {
         self.logger = Some(result.logger()?);
         self.call.set_kwargs(result.kwargs()?);
         if self.runs_deployment_hooks() {
+            self.call
+                .kwargs()
+                .bind(py)
+                .set_item("litellm_logging_obj", self.logger()?.object(py))?;
             return Ok(HookStep::Await(
                 DeploymentHooks::before_call(py, self.call.kwargs(), self.call_type())?,
                 Self::resume_begin,
@@ -1061,6 +1065,24 @@ if asynchronous:
                 .extract()
                 .unwrap();
             assert_eq!(names.contains(&"pre_hook".to_string()), asynchronous);
+        });
+    }
+
+    #[rstest::rstest]
+    fn the_deployment_pre_call_hook_receives_the_logger_as_client_injects_it() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(
+                py,
+                c"
+kwargs = {'logger': logger}
+logger.hooks['pre'] = lambda value: seen.append(value.get('litellm_logging_obj')) or 'awaitable'
+seen = []
+",
+            );
+            let (_, step) = begin(py, &locals, true);
+            assert!(awaits_deployment_hook(&step));
+            run(py, &locals, c"assert seen == [logger]");
         });
     }
 

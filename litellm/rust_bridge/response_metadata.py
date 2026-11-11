@@ -9,6 +9,8 @@ ResultT: Final = TypeVar("ResultT")
 
 
 def mark_rust_response(response: ResultT) -> ResultT:
+    if isinstance(response, dict):
+        return response  # pyright: ignore[reportUnknownVariableType]  # the caller's own dict, returned untouched
     cache_key: Final = get_hidden_params_dict(response).get("cache_key")
     _add_headers_to_response(
         response,

@@ -141,7 +141,7 @@ async fn rejected_results_are_not_delivered_or_cached(
 
     let response = if streaming {
         ResponseTemplate::new(200).set_body_raw(
-            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
             "text/event-stream",
         )
     } else {
@@ -619,5 +619,38 @@ async fn a_call_no_interceptor_owns_never_asks_the_host(call: MessagesCall) {
         .unwrap();
 
     assert!(answer.0.lock().unwrap().is_empty());
+    assert_eq!(received(&upstream).await.len(), 1);
+}
+
+#[derive(Default)]
+struct DecliningAnswer(Mutex<Vec<bool>>);
+
+impl litellm_inference_messages::HostAnswer for DecliningAnswer {
+    fn answer(&self, _stream: bool) -> futures_util::future::BoxFuture<'_, Result<(), Error>> {
+        panic!("a declined interception never asks for an answer")
+    }
+
+    fn intercept(&self, stream: bool) -> futures_util::future::BoxFuture<'_, Result<bool, Error>> {
+        self.0.lock().unwrap().push(stream);
+        Box::pin(async { Ok(false) })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn an_interception_no_interceptor_takes_reaches_the_provider(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let answer = Arc::new(DecliningAnswer::default());
+    let route = messages_route(no_secrets()).with_host_answer(answer.clone());
+    let mut request = authenticated(call, upstream.uri());
+    request.shaping.settings.intercepted = true;
+    let host = RecordingHost::passthrough(request);
+
+    route
+        .execute(host.request().unwrap(), &host, None)
+        .await
+        .unwrap();
+
+    assert_eq!(*answer.0.lock().unwrap(), vec![false]);
     assert_eq!(received(&upstream).await.len(), 1);
 }

@@ -19,4 +19,11 @@ impl HostAnswer for PythonAnswer {
                 .call(move |reply| MessagesHostCall::Answer { stream, reply }),
         )
     }
+
+    fn intercept(&self, stream: bool) -> BoxFuture<'_, Result<bool, Error>> {
+        Box::pin(
+            self.0
+                .call(move |reply| MessagesHostCall::Intercept { stream, reply }),
+        )
+    }
 }

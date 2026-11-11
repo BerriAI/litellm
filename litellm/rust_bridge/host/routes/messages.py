@@ -390,6 +390,10 @@ def _intercepted_provider(request: Mapping[str, object]) -> str | None:
     )
 
 
+def has_interceptors() -> bool:
+    return bool(get_messages_interceptors())
+
+
 def interceptor(request: Mapping[str, object]) -> MessagesInterceptor | None:
     tools: Final = cast(_JsonBlocks | None, request.get("tools"))  # cast-ok: handed on unchecked, as the handler does
     provider: Final = _intercepted_provider(request)

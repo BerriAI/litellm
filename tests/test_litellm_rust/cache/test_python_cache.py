@@ -366,12 +366,12 @@ async def test_rust_unary_messages_store_keeps_the_hidden_params_stamped_after_t
         "model_id": "deployment",
     }
     assert get_hidden_params_dict(first)["additional_headers"] == {
-        "x-litellm-rust": "true",
         "x-litellm-model-group": "group",
         "x-litellm-attempted-retries": 0,
     }
     hit: Final = await invoke("messages", recording_server, {})
-    assert get_hidden_params_dict(hit)["cache_key"] == cache_key(hit)
+    assert isinstance(get_hidden_params_dict(hit)["cache_key"], str)
+    assert cache_key(hit) is None
     assert len(recording_server.requests) == 1
 
 

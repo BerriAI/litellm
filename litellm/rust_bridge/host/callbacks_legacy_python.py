@@ -367,6 +367,32 @@ def record_api_window(logger: Logging, start: float, end: float) -> None:
         start_time=datetime.datetime.fromtimestamp(start),  # noqa: DTZ006  # the timed post records naive local times
         end_time=datetime.datetime.fromtimestamp(end),  # noqa: DTZ006  # the timed post records naive local times
     )
+    _log_api_window(logger, start, end)
+
+
+def _log_api_window(logger: Logging, start: float, end: float) -> None:
+    from litellm._logging import verbose_logger
+    from litellm.litellm_core_utils.logging_utils import (
+        _get_parent_otel_span_from_logging_obj,  # pyright: ignore[reportPrivateUsage]  # the timed post's own span lookup
+        _get_service_logger,  # pyright: ignore[reportPrivateUsage]  # the timed post's own service logger
+    )
+    from litellm.types.services import ServiceTypes
+
+    parent_otel_span: Final = _get_parent_otel_span_from_logging_obj(logger)
+    try:
+        service_logger: Final = _get_service_logger()
+        _ = asyncio.create_task(
+            service_logger.async_service_success_hook(  # pyright: ignore[reportUnknownMemberType]  # the hook's untyped event_metadata dict
+                service=ServiceTypes.LITELLM,
+                duration=end - start,
+                call_type="post <- track_llm_api_timing",
+                start_time=start,
+                end_time=end,
+                parent_otel_span=parent_otel_span,
+            )
+        )
+    except Exception as e:  # noqa: BLE001  # the timed post logs and drops a service logging failure
+        verbose_logger.debug("Error in service logging: %s", e)
 
 
 def times_provider_exchange(client: object) -> bool:
@@ -574,6 +600,12 @@ def stream_success(
     if first_chunk is not None:
         logger.completion_start_time = first_chunk
         logger.model_call_details["completion_start_time"] = first_chunk
+    superseded_error_event: Final = PassThroughStreamingHandler._error_frame_closed_at(  # pyright: ignore[reportPrivateUsage]  # the Messages stream's own close-at-frame check
+        EndpointType(endpoint_type), chunks
+    )
+    if superseded_error_event is not None:
+        _log_superseded_stream_failure(logger, endpoint_type, request_body, chunks, superseded_error_event)
+        return
     build: Final = cast(  # cast-ok: bounded adapter for the untyped pass-through logging builder
         StreamingLogBuilder,
         PassThroughStreamingHandler._route_streaming_logging_to_handler,  # pyright: ignore[reportPrivateUsage]  # the Messages stream iterator bills through the same builder
@@ -604,6 +636,37 @@ def stream_success(
         cancelled.add_done_callback(lambda _: enqueue_logging(coroutine))
         return
     enqueue_logging(coroutine)
+
+
+def _log_superseded_stream_failure(
+    logger: Logging,
+    endpoint_type: str,
+    request_body: Mapping[str, object],
+    chunks: Sequence[bytes],
+    error_event: tuple[str, str, int],
+) -> None:
+    from litellm._logging import verbose_proxy_logger
+    from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    error_type, message, status_code = error_event
+    PassThroughStreamingHandler._record_partial_usage_for_failure(  # pyright: ignore[reportPrivateUsage]  # the superseded stream's own partial usage record
+        litellm_logging_obj=logger,
+        endpoint_type=EndpointType(endpoint_type),
+        request_body=dict(request_body),
+        raw_bytes=tuple(chunks),
+        stream_context=None,
+    )
+    try:
+        enqueue_logging(
+            logger.dispatch_attempt_failure_handlers(  # pyright: ignore[reportArgumentType]  # the dispatch snapshots now, its coroutine never receives a sent value
+                anthropic_error_frame_exception(error_type, message, status_code, str(logger.model)),
+                traceback.format_exc(),
+            )
+        )
+    except Exception as e:  # noqa: BLE001  # the stream's failure scheduling logs and drops its own failure
+        verbose_proxy_logger.error("Error scheduling stream failure logging: %s", e)
 
 
 def stream_failure(

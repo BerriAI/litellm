@@ -124,6 +124,16 @@ pub(super) async fn answered(
     context: &CallContext<'_, impl Interceptors<Error>>,
 ) -> Result<MessagesCallResponse, Error> {
     host_answer.answer(stream).await?;
+    deliver_answer(route, provider, model, stream, context).await
+}
+
+pub(super) async fn deliver_answer(
+    route: &MessagesRoute,
+    provider: MessagesProvider,
+    model: String,
+    stream: bool,
+    context: &CallContext<'_, impl Interceptors<Error>>,
+) -> Result<MessagesCallResponse, Error> {
     let identity = ProviderIdentity {
         model,
         provider: provider.as_str().to_string(),
