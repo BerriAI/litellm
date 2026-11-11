@@ -437,7 +437,7 @@ class VectorStoreRegistry:
             # cast to VectorStoreConfig
             litellm_vector_store_config = LiteLLM_VectorStoreConfig(**vector_store_config)
             vector_store_name = litellm_vector_store_config.get("vector_store_name")
-            vector_store_litellm_params: dict[str, Any] = litellm_vector_store_config.get("litellm_params") or {}
+            vector_store_litellm_params = litellm_vector_store_config.get("litellm_params") or {}
 
             vector_store_id = vector_store_litellm_params.get("vector_store_id")
             if vector_store_id is None:

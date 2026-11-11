@@ -60,7 +60,6 @@ def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: st
         assert caught.value.response.headers["x-request-id"] == "cyber-policy-request"
 
 
-
 def _debug_info_for_api_base(configured_api_base: str) -> str:
     request: Final = httpx.Request("POST", "https://gateway.example/v1/chat/completions")
     original: Final = OpenAIError(
@@ -441,6 +440,67 @@ def test_gemini_context_window_error_mapping(error_message, should_raise_context
             )
 
 
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("streaming", [True, False])
+@pytest.mark.parametrize(
+    ("error_message", "expected_type"),
+    [
+        (
+            (
+                "Requested token count exceeds the model's maximum context length of 131072 tokens. "
+                "You requested a total of 140000 tokens: 130000 tokens from the input messages and "
+                "10000 tokens for the completion. Please reduce the number of tokens in the input "
+                "messages or the completion to fit within the limit."
+            ),
+            litellm.ContextWindowExceededError,
+        ),
+        (
+            (
+                "requested token count exceeds the model's maximum context length of 8192 tokens. "
+                "you requested a total of 9000 tokens"
+            ),
+            litellm.ContextWindowExceededError,
+        ),
+        ("max_tokens must be a positive integer", litellm.BadRequestError),
+    ],
+    ids=["sglang-context-overflow", "lowercase-context-overflow", "unrelated-bad-request"],
+)
+@pytest.mark.asyncio
+async def test_sglang_context_window_error_mapping(
+    sync_mode: bool,
+    streaming: bool,
+    error_message: str,
+    expected_type: type[litellm.BadRequestError],
+) -> None:
+    def reject_request(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=request,
+            json={"object": "error", "message": error_message, "type": "BadRequestError", "param": None, "code": 400},
+        )
+
+    transport: Final = httpx.MockTransport(reject_request)
+    if sync_mode:
+        with (
+            httpx.Client(transport=transport) as http_client,
+            OpenAI(api_key="sk-test", max_retries=0, http_client=http_client) as client,
+            pytest.raises(litellm.BadRequestError) as caught,
+        ):
+            _call_openai_api_sync("openai/sglang-model", "chat_completion", streaming, client)
+    else:
+        async with (
+            httpx.AsyncClient(transport=transport) as async_http_client,
+            AsyncOpenAI(api_key="sk-test", max_retries=0, http_client=async_http_client) as async_client,
+        ):
+            with pytest.raises(litellm.BadRequestError) as caught:
+                await _call_openai_api_async("openai/sglang-model", "chat_completion", streaming, async_client)
+
+    assert type(caught.value) is expected_type
+    assert caught.value.status_code == 400
+    assert error_message in str(caught.value)
+    assert caught.value.llm_provider == "openai"
+
+
 def test_lemonade_context_window_error_mapping():
     """Lemonade's llama.cpp backend should map context overflows to LiteLLM's standard error."""
 
@@ -541,6 +601,26 @@ def test_anthropic_context_window_error_mapping(error_message):
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.llm_provider == "anthropic"
+
+
+@pytest.mark.parametrize("upstream_status_code", [400, 500])
+def test_vertex_ai_anthropic_prompt_too_long_maps_to_context_window_exceeded(upstream_status_code: int) -> None:
+    original_exception: Final = VertexAIError(
+        status_code=upstream_status_code,
+        message='{"type":"error","error":{"type":"invalid_request_error",'
+        '"message":"prompt is too long: 210123 tokens > 200000 maximum"}}',
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=original_exception,
+            custom_llm_provider="vertex_ai",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == "vertex_ai"
+    assert excinfo.value.model == "claude-opus-5-5"
 
 
 # Test cases for Vertex AI RateLimitError mapping
@@ -1150,12 +1230,12 @@ def test_openai_incorrect_api_key_keeps_the_proxy_authentication_error_type() ->
 
 
 class _UpstreamHTTPError(Exception):
-    def __init__(self, status_code: int) -> None:
-        super().__init__("upstream failure")
-        self.message = "upstream failure"
+    def __init__(self, status_code: int, message: str = "upstream failure") -> None:
+        super().__init__(message)
+        self.message = message
         self.status_code = status_code
         self.request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
-        self.response = httpx.Response(status_code=status_code, request=self.request, text="upstream failure")
+        self.response = httpx.Response(status_code=status_code, request=self.request, text=message)
 
 
 UPSTREAM_STATUS_CODES = (400, 401, 402, 403, 404, 408, 422, 429, 500, 503)
@@ -1351,6 +1431,48 @@ def test_an_already_mapped_litellm_exception_passes_through_untouched(provider, 
     )
 
     assert returned is already_mapped
+
+
+@pytest.mark.parametrize(
+    "message",
+    ['{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}', "upstream failure"],
+)
+def test_an_anthropic_529_stays_an_internal_server_error_that_carries_the_529(message, quiet_exception_mapping):
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=529, message=message),
+            custom_llm_provider="anthropic",
+        )
+
+    assert (type(raised.value), raised.value.status_code, raised.value.provider_status_code) == (
+        litellm.InternalServerError,
+        500,
+        529,
+    )
+
+
+@pytest.mark.parametrize("status_code", [400, 404])
+def test_an_anthropic_client_error_naming_overloaded_carries_no_overload_status(status_code, quiet_exception_mapping):
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=status_code, message="model: claude-Overloaded"),
+            custom_llm_provider="anthropic",
+        )
+
+    assert raised.value.provider_status_code is None
+
+
+def test_an_anthropic_500_carries_its_own_status_as_the_provider_status(quiet_exception_mapping):
+    with pytest.raises(litellm.InternalServerError) as raised:
+        exception_type(
+            model="claude-opus-5-5",
+            original_exception=_UpstreamHTTPError(status_code=500),
+            custom_llm_provider="anthropic",
+        )
+
+    assert (raised.value.status_code, raised.value.provider_status_code) == (500, 500)
 
 
 @pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
@@ -1600,6 +1722,75 @@ def test_bedrock_mantle_400_maps_to_bad_request():
     assert excinfo.value.status_code == 400
     assert "Invalid 'input'" in excinfo.value.message
     assert type(excinfo.value) is litellm.BadRequestError
+
+
+class _ErrorWithoutResponse(Exception):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+def test_bedrock_mantle_context_overflow_without_a_provider_response_answers_400():
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=_ErrorWithoutResponse(
+                '{"error":{"code":"context_length_exceeded","message":"too long"}}', 400
+            ),
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.response.status_code == 400
+
+
+def _invalid_model_identifier_from(url: str) -> BedrockError:
+    return BedrockError(
+        status_code=400,
+        message='{"message":"The provided model identifier is invalid."}',
+        response=httpx.Response(status_code=400, request=httpx.Request(method="POST", url=url)),
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/model/us.newvendor.typo-1/converse", "/model/us.newvendor.typo-1/converse-stream"],
+)
+def test_bedrock_converse_rejecting_an_id_with_no_invoke_provider_answers_404(path):
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        exception_type(
+            model="us.newvendor.typo-1",
+            original_exception=_invalid_model_identifier_from(f"https://bedrock-runtime.us-east-1.amazonaws.com{path}"),
+            custom_llm_provider="bedrock",
+        )
+
+    assert excinfo.value.response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "original_exception",
+    [
+        _invalid_model_identifier_from("https://bedrock-runtime.us-east-1.amazonaws.com/model/claude-typo-9/invoke"),
+        _ErrorWithoutResponse("The provided model identifier is invalid.", 400),
+    ],
+    ids=["invoke", "no-response"],
+)
+def test_bedrock_invalid_model_identifier_not_from_converse_stays_a_bad_request(original_exception):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(model="claude-typo-9", original_exception=original_exception, custom_llm_provider="bedrock")
+
+    assert excinfo.value.status_code == 400
+
+
+def test_bedrock_invalid_model_identifier_without_a_model_stays_a_bad_request():
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model=None,
+            original_exception=_ErrorWithoutResponse("The provided model identifier is invalid.", 400),
+            custom_llm_provider="bedrock",
+        )
+
+    assert excinfo.value.status_code == 400
 
 
 def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
