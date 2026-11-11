@@ -32,7 +32,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate
 from functools import partial, reduce
-from itertools import takewhile
 from operator import attrgetter
 from types import MappingProxyType
 from typing import (
@@ -158,7 +157,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
     merged_guardrail_entries,
 )
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, overrides_hook
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
@@ -1891,9 +1890,14 @@ class _CallbackCapabilities:
     listed_models_filters: tuple[CustomLogger, ...] = field(default_factory=tuple)
 
 
-def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
-    leaf_to_base: Final = takewhile(lambda klass: klass is not CustomLogger, type(callback).__mro__)
-    return any(hook_name in klass.__dict__ for klass in leaf_to_base)
+def _overrides_hook(callback: object, hook_name: str) -> bool:
+    return overrides_hook(type(callback), hook_name)
+
+
+def routes_through_apply_guardrail(callback: CustomGuardrail) -> bool:
+    return overrides_hook(type(callback), "apply_guardrail", CustomGuardrail) and not getattr(
+        callback, "use_native_lifecycle_hooks", False
+    )
 
 
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
@@ -2632,9 +2636,7 @@ class ProxyLogging:
             Result from the guardrail execution
         """
         # Use unified_guardrail if callback has apply_guardrail method
-        has_apply_guardrail: Final = "apply_guardrail" in type(callback).__dict__ and not getattr(
-            callback, "use_native_lifecycle_hooks", False
-        )
+        has_apply_guardrail: Final = routes_through_apply_guardrail(callback)
         use_unified: Final = has_apply_guardrail and not (
             hook_type == "during_call" and getattr(callback, "use_native_during_call_hook", False)
         )
@@ -3359,8 +3361,7 @@ class ProxyLogging:
                         _callback is not None
                         and isinstance(_callback, CustomLogger)
                         and (not guardrails_only or _callback.enforces_request_content)
-                        and "async_pre_call_hook" in vars(_callback.__class__)
-                        and _callback.__class__.async_pre_call_hook != CustomLogger.async_pre_call_hook
+                        and _overrides_hook(_callback, "async_pre_call_hook")
                     ):
                         if call_type in MCP_GUARDRAIL_CALL_TYPES and user_api_key_dict is None:
                             continue
@@ -3687,38 +3688,16 @@ class ProxyLogging:
                 has_guardrail = True
             elif _overrides_moderation_hook(resolved):
                 has_moderation_override = True
-            # Use the same leaf-class ``__dict__`` check as the other hook
-            # capabilities: only callbacks that actually override the hook
-            # contribute to the flag. Setting this for every ``CustomLogger``
-            # instance (the prior behaviour) forced the full
-            # ``post_call_response_headers_hook`` body to run on every request
-            # even when no registered callback customized response headers.
-            cls_attrs = cls.__dict__
-            if "async_post_call_response_headers_hook" in cls_attrs:
+            if _overrides_hook(resolved, "async_post_call_response_headers_hook"):
                 has_post_call_response_headers = True
-            if "async_post_call_streaming_iterator_hook" in cls_attrs:
+            if _overrides_hook(resolved, "async_post_call_streaming_iterator_hook"):
                 has_iterator_override = True
                 iterator_overrides.append((resolved, "override"))
-            elif "apply_guardrail" in cls_attrs and not getattr(resolved, "use_native_lifecycle_hooks", False):
+            elif isinstance(resolved, CustomGuardrail) and routes_through_apply_guardrail(resolved):
                 iterator_overrides.append((resolved, "apply_guardrail"))
-            # Walk the MRO for ``async_post_call_streaming_hook`` rather than
-            # using the leaf-class ``__dict__`` check used by the other flags:
-            # before this PR the hook was unconditionally invoked, so a
-            # callback that inherits an override from an intermediate parent
-            # (e.g. a vendor base class providing the override, with the
-            # registered class adding nothing else) MUST still be detected.
-            # A leaf-class miss here would silently drop the inherited hook.
-            base_streaming_hook = CustomLogger.async_post_call_streaming_hook
-            cls_streaming_hook = getattr(
-                cls,
-                "async_post_call_streaming_hook",
-                base_streaming_hook,
-            )
-            if getattr(cls_streaming_hook, "__func__", cls_streaming_hook) is not getattr(
-                base_streaming_hook, "__func__", base_streaming_hook
-            ):
+            if _overrides_hook(resolved, "async_post_call_streaming_hook"):
                 has_streaming_chunk_override = True
-            if "async_pre_call_hook" in cls_attrs:
+            if _overrides_hook(resolved, "async_pre_call_hook"):
                 has_pre_call_override = True
                 if resolved.enforces_request_content is True:
                     has_content_enforcer = True
@@ -3873,8 +3852,7 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
     ) -> None:
         if (
-            "apply_guardrail" in type(callback).__dict__
-            and not callback.use_native_lifecycle_hooks
+            routes_through_apply_guardrail(callback)
             and user_api_key_dict is not None
             and not callback.use_native_during_call_hook
         ):
@@ -4485,7 +4463,7 @@ class ProxyLogging:
 
                 guardrail_response: Any | None = None
 
-                if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
+                if routes_through_apply_guardrail(callback):
                     data["guardrail_to_apply"] = callback
                     guardrail_response = await self._run_guardrail_with_metrics(
                         callback,
@@ -4525,6 +4503,8 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
+                if not _overrides_hook(callback, "async_post_call_success_hook"):
+                    continue
                 callback_response: LLMResponseTypes | None = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )
@@ -4563,7 +4543,7 @@ class ProxyLogging:
                 return
             if callback.post_call_already_checked(request_view, response) is True:
                 return
-            if "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks:
+            if routes_through_apply_guardrail(callback):
                 data["guardrail_to_apply"] = callback
                 await self._run_guardrail_with_metrics(
                     callback,
@@ -4631,7 +4611,7 @@ class ProxyLogging:
         for callback in caps.resolved_callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue
-            if "apply_guardrail" not in type(callback).__dict__ or callback.use_native_lifecycle_hooks:
+            if not routes_through_apply_guardrail(callback):
                 continue
             if (
                 callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_mcp_call)
@@ -4688,7 +4668,11 @@ class ProxyLogging:
                 else:
                     _callback = callback
 
-                if _callback is not None and isinstance(_callback, CustomLogger):
+                if (
+                    _callback is not None
+                    and isinstance(_callback, CustomLogger)
+                    and _overrides_hook(_callback, "async_post_call_response_headers_hook")
+                ):
                     if _accepts_litellm_call_info(_callback):
                         result = await _callback.async_post_call_response_headers_hook(
                             data=data,

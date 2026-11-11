@@ -55,6 +55,7 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
+from litellm.integrations.custom_logger import overrides_hook
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
@@ -158,6 +159,7 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     ProxyLogging,
     _check_and_merge_model_level_guardrails,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     check_and_merge_model_level_guardrails,
+    routes_through_apply_guardrail,
 )
 from litellm.responses.mcp.parked_stream_dispatch import in_flight_round_biller, parked_success
 from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect, spawn_logging_task
@@ -4050,11 +4052,9 @@ class ProxyBaseLLMRequestProcessing:
                 is not True
             ):
                 continue
-            leaf_attrs = type(cb).__dict__
-            holds_until_moderated = "async_post_call_streaming_iterator_hook" in leaf_attrs
+            holds_until_moderated = overrides_hook(type(cb), "async_post_call_streaming_iterator_hook")
             if (
-                "apply_guardrail" not in leaf_attrs
-                or cb.use_native_lifecycle_hooks
+                not routes_through_apply_guardrail(cb)
                 or cb.mask_response_content
                 or cb.run_in_parallel
                 or ProxyBaseLLMRequestProcessing._releases_held_stream_on_scan(cb, holds_until_moderated)
@@ -4524,14 +4524,14 @@ class ProxyBaseLLMRequestProcessing:
                     continue
                 try:
                     guardrail_result = None
-                    if "apply_guardrail" in type(cb).__dict__ and not cb.use_native_lifecycle_hooks:
+                    if routes_through_apply_guardrail(cb):
                         # Skip — unified-routed guardrails already ran via
                         # unified_guardrail's end-of-stream block in the
                         # streaming iterator pipeline.  Running them again
                         # here would duplicate the guardrail API call
                         # (e.g. double OpenAI Moderation charges).
                         continue
-                    if "async_post_call_streaming_iterator_hook" in type(cb).__dict__:
+                    if overrides_hook(type(cb), "async_post_call_streaming_iterator_hook"):
                         # Skip — the guardrail already scanned the assembled
                         # response via its own streaming iterator hook in the
                         # streaming pipeline. re running this function async_post_call_success_hook
