@@ -191,6 +191,7 @@ pub(super) struct MessagesPythonHost {
     hooked: bool,
     hooked_request: HookedRequest,
     requested_stream: bool,
+    arguments: Option<Py<PyDict>>,
     interceptor: Option<Py<PyAny>>,
     pending_answer: Option<Reply<()>>,
     pending_intercept: Option<Reply<bool>>,
@@ -218,6 +219,7 @@ impl MessagesPythonHost {
             hooked: false,
             hooked_request,
             requested_stream: false,
+            arguments: None,
             interceptor: None,
             pending_answer: None,
             pending_intercept: None,
@@ -592,6 +594,7 @@ impl PythonBinding for MessagesPythonHost {
             .get_item("stream")
             .map_err(InvokeError::Python)?
             .is_some_and(|stream| stream.is(pyo3::types::PyBool::new(py, true)));
+        self.arguments = Some(arguments.clone().unbind());
         let request = self.decode_call(py, arguments)?;
         let hosted = self
             .transport
@@ -629,10 +632,20 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         head: MessagesStreamHead,
     ) -> PyResult<Py<PyAny>> {
-        py.import(ROUTE_HOST_MODULE)?
+        let module = py.import(ROUTE_HOST_MODULE)?;
+        let head = module
             .getattr("stream_hidden_params")?
-            .call1((to_py(py, &head.headers)?,))
-            .map(Bound::unbind)
+            .call1((to_py(py, &head.headers)?,))?;
+        if let Some(arguments) = self
+            .arguments
+            .as_ref()
+            .filter(|_| self.asynchronous && !self.requested_stream)
+        {
+            module
+                .getattr("unrequested_stream")?
+                .call1((&head, arguments))?;
+        }
+        Ok(head.unbind())
     }
 
     fn encode_chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
@@ -753,6 +766,7 @@ impl PythonOwned for MessagesPythonHost {
         self.pending_intercept = None;
         self.answer = None;
         self.answered = None;
+        self.arguments = None;
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.view.traverse(visit)?;
@@ -760,6 +774,7 @@ impl PythonOwned for MessagesPythonHost {
         self.transport.traverse(visit)?;
         self.safeguards.traverse(visit)?;
         visit.call(&self.interceptor)?;
+        visit.call(&self.arguments)?;
         visit.call(&self.answer)
     }
 }

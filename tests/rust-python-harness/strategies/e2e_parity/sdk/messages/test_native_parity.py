@@ -45,6 +45,7 @@ from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # a primed entry must land before the measured call reads it
 )
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
@@ -2673,6 +2674,98 @@ MCP_CASES: Final = (
     ),
 )
 
+
+class _OrderedMemory(InMemoryCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.ops: list[str] = []
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: records the backend writes in order
+        self.ops.append(f"set {key}")
+        await super().async_set_cache(key, value, **kwargs)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache leaves its signature untyped
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: records the backend reads in order
+        self.ops.append(f"get {key}")
+        return await super().async_get_cache(key, **kwargs)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache leaves its signature untyped
+
+
+def _ordered_cache() -> Cache:
+    cache: Final = Cache()
+    cache.cache = _OrderedMemory()
+    return cache
+
+
+EMPTY_CONTENT_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType({**TEXT_RESPONSE, "content": []})
+EMPTY_TEXT_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {**TEXT_RESPONSE, "content": [{"type": "text", "text": ""}]}
+)
+
+HOOKED_STREAM_AND_CACHE_CASES: Final = (
+    Case(
+        "pre_request_hook_streams_runs_the_deployment_success_hook",
+        callbacks=(_UnstreamingHook,),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentHooks),
+    ),
+    Case(
+        "pre_request_hook_streams_behind_a_cache",
+        callbacks=(_UnstreamingHook,),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        cache=Cache,
+    ),
+    Case(
+        "stream_one_runs_the_deployment_success_hook",
+        _kw(stream=1),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentHooks),
+    ),
+    Case("stream_one_behind_a_cache", _kw(stream=1), upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)), cache=Cache),
+    Case(
+        "stream_one_sync_behind_a_cache",
+        _kw(stream=1),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        cache=Cache,
+        sync=True,
+    ),
+    Case(
+        "stream_string_true_behind_a_cache",
+        _kw(stream="true"),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        cache=Cache,
+    ),
+    Case(
+        "pre_request_hook_streams_on_an_integer_behind_a_cache",
+        callbacks=(_IntegerStreamHook,),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        cache=Cache,
+    ),
+    Case(
+        "cache_empty_content_is_not_stored",
+        upstream=(_ok(EMPTY_CONTENT_RESPONSE), _ok(EMPTY_CONTENT_RESPONSE)),
+        cache=Cache,
+    ),
+    Case(
+        "cache_empty_text_block_is_not_stored",
+        upstream=(_ok(EMPTY_TEXT_RESPONSE), _ok(EMPTY_TEXT_RESPONSE)),
+        cache=Cache,
+    ),
+    Case(
+        "mcp_cache_hit_stream",
+        _wiki(stream=True),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok(), _ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        cache=Cache,
+        gateway=True,
+    ),
+    Case(
+        "safeguards_classifier_stream_cached",
+        _safeguarded(stream=True),
+        upstream=(_stream(TOOL_STREAM), _stream(TOOL_STREAM)),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+        cache=_ordered_cache,
+    ),
+)
+
 CASES: Final = (
     *REQUEST_CASES,
     *INPUT_VALUE_CASES,
@@ -2696,6 +2789,7 @@ CASES: Final = (
     *INTERCEPTOR_CASES,
     *MCP_CASES,
     *DEPLOYMENT_HOOK_CASES,
+    *HOOKED_STREAM_AND_CACHE_CASES,
 )
 
 
@@ -2921,7 +3015,7 @@ def _response(result: object, private_keys: bool) -> Mapping[str, object]:
 def _hidden_params(result: object) -> Mapping[str, object]:
     hidden: Final = dict(_mapping(get_hidden_params_dict(result)))
     headers: Final = _mapping(hidden.pop("additional_headers", None))
-    header_names: Final = sorted(name for name in headers if name not in ("x-litellm-rust", "x-litellm-cache-key"))
+    header_names: Final = sorted(name for name in headers if name != "x-litellm-rust")
     return {"keys": sorted(hidden), "additional_headers": header_names}
 
 
@@ -3157,11 +3251,17 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
             hidden_params=hidden,
             logged=logged,
             callback_kwargs=callback_kwargs,
-            cached=() if litellm.cache is None else tuple(sorted(litellm.cache.cache.cache_dict)),
+            cached=() if litellm.cache is None else _cache_entries(litellm.cache),
             hook_inputs=tuple(getattr(logger, "seen", ()) for logger in loggers),
             classified=tuple(classified),
             tool_runs=tuple(runs),
         )
+
+
+def _cache_entries(cache: Cache) -> tuple[str, ...]:
+    backend: Final = cache.cache
+    keys: Final = tuple(sorted(backend.cache_dict)) if isinstance(backend, InMemoryCache) else ()
+    return (*keys, *backend.ops) if isinstance(backend, _OrderedMemory) else keys
 
 
 @pytest.fixture

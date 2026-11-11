@@ -15,6 +15,7 @@ use litellm_auth::AuthServices;
 use litellm_host::interceptors::Interceptors;
 use litellm_inference::context::CallContext;
 use litellm_inference::provider::resolve_llm_provider;
+use litellm_llms_types::recognized::Recognized;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
@@ -140,6 +141,7 @@ impl MessagesRoute {
     ) -> Result<MessagesCallResponse, Error> {
         litellm_inference::diagnostic::call(async {
             let requested_stream = call.body.params.streams();
+            let client_streams = call.body.params.stream == Some(Recognized::Known(true));
             let call = match &self.pre_request_hooks {
                 None => call,
                 Some(hooks) => {
@@ -180,7 +182,7 @@ impl MessagesRoute {
                 return handler::answered(self, host_answer, config, model, stream, &context).await;
             }
             let secrets = self.secrets.resolve(config.config().secret_names()).await?;
-            handler::execute(self, config, model, call, secrets, &context)
+            handler::execute(self, config, model, call, secrets, client_streams, &context)
                 .boxed()
                 .await
         })
