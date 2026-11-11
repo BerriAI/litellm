@@ -100049,5 +100049,23 @@
         "supports_tool_choice": false,
         "supports_video_input": true,
         "supports_vision": true
+    },
+    "azure_ai/mistral-large-4-latest": {
+        "deprecation_date": "2027-10-27",
+        "deprecation_source": "https://management.azure.com/subscriptions/{subscriptionId}/providers/Microsoft.CognitiveServices/locations/eastus/models?api-version=2024-10-01",
+        "input_cost_per_token": 7e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.1e-06,
+        "source": "https://docs.mistral.ai/models/mistral-large-4-0",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
