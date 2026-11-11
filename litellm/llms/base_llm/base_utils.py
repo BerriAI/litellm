@@ -14,7 +14,7 @@ from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import MalformedRequestFieldError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
@@ -462,7 +462,7 @@ def reject_developer_message_without_content(
     if missing_content_index is None:
         return
     param: Final = f"messages[{missing_content_index}].content"
-    raise BadRequestError(
+    raise MalformedRequestFieldError(
         message=f"Missing required parameter: '{param}'.",
         model=model,
         llm_provider=llm_provider or "",
