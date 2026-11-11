@@ -100,6 +100,7 @@ COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Install project and workspace packages (fast - deps already cached)
+ARG MATURIN_PEP517_ARGS=""
 RUN uv build --package litellm-proxy --wheel --out-dir /wheels
 RUN uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no-editable \
     --extra proxy \

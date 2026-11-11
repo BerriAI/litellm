@@ -45,6 +45,7 @@ COPY .cargo ./.cargo
 COPY litellm-rust ./litellm-rust
 COPY model_prices_and_context_window.json ./
 
+ARG MATURIN_PEP517_ARGS=""
 RUN --mount=type=cache,target=/root/.cache/uv \
     mkdir -p litellm/rust_bridge /wheels && \
     touch litellm/__init__.py litellm/rust_bridge/__init__.py && \

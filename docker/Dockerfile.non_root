@@ -107,6 +107,7 @@ RUN mkdir -p /var/lib/litellm/ui /var/lib/litellm/assets && \
     cp /app/litellm/proxy/logo.png /var/lib/litellm/assets/logo.png && \
     touch /var/lib/litellm/ui/.litellm_ui_ready
 
+ARG MATURIN_PEP517_ARGS=""
 RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     uv sync --frozen --no-default-groups --no-editable \
       --extra proxy \
