@@ -771,6 +771,13 @@ class DBSpendUpdateWriter:
                 llm_router=llm_router,
             )
             billable_cost: Final = _billable_cost(response_cost, payload)
+            if (
+                proxy_settings.get("disable_responses_id_security") is True
+                and payload["call_type"] in {"aget_responses", "acancel_responses"}
+                and payload["status"] == "success"
+                and not billable_cost
+            ):
+                return True
             payload["spend"] = billable_cost or 0.0
             payload["startTime"] = _iso_timestamp(payload["startTime"])
             payload["endTime"] = _iso_timestamp(payload["endTime"])
