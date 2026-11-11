@@ -51,7 +51,6 @@ class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
             litellm_params.get("api_version")
             or get_secret_str("AZURE_AI_API_VERSION")
             or litellm.api_version
-            or get_secret_str("AZURE_API_VERSION")
             or AZURE_AI_GPT_IMAGE_EDIT_DEFAULT_API_VERSION
         )
         return super().get_complete_url(  # pyright: ignore[reportUnknownMemberType]  # bare dict in base
