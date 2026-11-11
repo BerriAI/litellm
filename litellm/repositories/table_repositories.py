@@ -93,6 +93,10 @@ class ObjectPermissionRepository(PrismaTableRepository["prisma_models.LiteLLM_Ob
 class GuardrailsRepository(PrismaTableRepository["prisma_models.LiteLLM_GuardrailsTable"]):
     table_name = "litellm_guardrailstable"
 
+    async def find_active_guardrail_names(self, names: frozenset[str]) -> frozenset[str]:
+        rows: Final = await self.table.find_many(where={"guardrail_name": {"in": sorted(names)}, "status": "active"})
+        return frozenset(row.guardrail_name for row in rows)
+
 
 class MCPServerRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPServerTable"]):
     table_name = "litellm_mcpservertable"

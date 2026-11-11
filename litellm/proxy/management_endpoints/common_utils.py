@@ -1,6 +1,7 @@
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
@@ -271,6 +272,50 @@ def check_disable_global_guardrails_caller_permission(
 
 
 _check_disable_global_guardrails_caller_permission: Final = check_disable_global_guardrails_caller_permission
+
+_GUARDRAIL_ENTRIES: Final = TypeAdapter(list[str | dict[str, object]])
+
+
+def _guardrail_entry_names(entries: object) -> frozenset[str] | None:
+    try:
+        parsed: Final = _GUARDRAIL_ENTRIES.validate_python(entries)
+    except ValidationError:
+        return None
+    return frozenset(chain.from_iterable((entry,) if isinstance(entry, str) else entry.keys() for entry in parsed))
+
+
+async def raise_on_unknown_guardrails(
+    guardrails: Sequence[str] | None,
+    metadata: Mapping[str, object] | None,
+    *,
+    find_registered: Callable[[frozenset[str]], Awaitable[frozenset[str]]],
+    existing_metadata: Mapping[str, object] | None = None,
+) -> None:
+    requested_entries: Final = (
+        guardrails if guardrails is not None else (metadata.get("guardrails") if metadata is not None else None)
+    )
+    stored_entries: Final = existing_metadata.get("guardrails") if existing_metadata is not None else None
+    if requested_entries is None or requested_entries == stored_entries:
+        return
+    requested: Final = _guardrail_entry_names(requested_entries)
+    if requested is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "`guardrails` must be a list of guardrail names."},
+        )
+    new_names: Final = requested - (_guardrail_entry_names(stored_entries) or frozenset())
+    if not new_names:
+        return
+    unknown: Final = new_names - await find_registered(new_names)
+    if not unknown:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"Unknown guardrail(s): {', '.join(sorted(unknown))}. "
+            + "Create the guardrail first, or check the name against /v2/guardrails/list."
+        },
+    )
 
 
 def check_require_trace_id_caller_permission(

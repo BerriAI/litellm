@@ -100,6 +100,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_denied_passthrough_routes_caller_permission,
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
+    raise_on_unknown_guardrails,
     set_object_metadata_field,
     team_member_has_permission,
     user_api_key_has_admin_view,
@@ -1471,6 +1472,34 @@ async def _stored_user_role(prisma_client: PrismaClient | None, user_id: str | N
     return user_row.user_role if user_row is not None else None
 
 
+def registered_guardrail_lookup(
+    prisma_client: PrismaClient | None,
+) -> Callable[[frozenset[str]], Awaitable[frozenset[str]]]:
+    from litellm.proxy.guardrails.guardrail_registry import registered_guardrail_names
+
+    async def lookup(names: frozenset[str]) -> frozenset[str]:
+        return await registered_guardrail_names(names, prisma_client)
+
+    return lookup
+
+
+async def _raise_on_unknown_key_guardrails(
+    guardrails: Sequence[str] | None,
+    metadata: Mapping[str, object] | None,
+    existing_metadata: Mapping[str, object] | None,
+    prisma_client: PrismaClient | None,
+) -> None:
+    if guardrails:
+        # keys license-gate top-level guardrails later in the write path, keep that 403 ahead of a name 400
+        require_enterprise_license("guardrails")
+    await raise_on_unknown_guardrails(
+        guardrails,
+        metadata,
+        find_registered=registered_guardrail_lookup(prisma_client),
+        existing_metadata=existing_metadata,
+    )
+
+
 async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1608,6 +1637,7 @@ async def _common_key_generation_helper(
         _requested_metadata,
         user_api_key_dict,
     )
+    await _raise_on_unknown_key_guardrails(data.guardrails, _requested_metadata, None, prisma_client)
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -3396,6 +3426,12 @@ async def _process_single_key_update(
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
+    await _raise_on_unknown_key_guardrails(
+        update_key_request.guardrails,
+        update_key_request.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        prisma_client,
+    )
 
     # Custom key update hook
     if user_custom_key_update is not None:
@@ -3949,6 +3985,12 @@ async def _validate_update_key_data(
         data,
         user_api_key_dict,
         existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
+    await _raise_on_unknown_key_guardrails(
+        data.guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        checked_prisma_client,
     )
 
     # Check team limits if key has a team_id (from request or existing key)
@@ -6534,6 +6576,21 @@ def _check_regenerate_guardrail_opt_out(
     )
 
 
+async def _check_regenerate_guardrail_names(
+    data: RegenerateKeyRequest | None,
+    existing_metadata: Mapping[str, object] | None,
+    prisma_client: PrismaClient | None,
+) -> None:
+    if data is None:
+        return
+    await _raise_on_unknown_key_guardrails(
+        data.guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        existing_metadata,
+        prisma_client,
+    )
+
+
 @router.post(
     "/key/{key:path}/regenerate",
     tags=["key management"],
@@ -6744,6 +6801,11 @@ async def regenerate_key_fn(
             data,
             user_api_key_dict,
             existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        )
+        await _check_regenerate_guardrail_names(
+            data,
+            _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+            prisma_client,
         )
 
         if data is not None and (data.access_group_ids or data.object_permission is not None):

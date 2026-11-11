@@ -1982,3 +1982,52 @@ async def test_rotate_guardrail_params_gives_up_on_a_row_that_keeps_changing(mon
     assert rows_updated == 0
     assert prisma_client.db.litellm_guardrailstable.update_many.await_count == GUARDRAIL_ROTATION_ATTEMPTS
     assert prisma_client.db.litellm_guardrailstable.find_unique.await_count == GUARDRAIL_ROTATION_ATTEMPTS - 1
+
+
+@pytest.fixture
+def guardrail_loaded_here() -> Iterator[str]:
+    import litellm
+
+    lists: Final = _all_callback_lists()
+    snapshots: Final = [list(cb_list) for cb_list in lists]
+    litellm.logging_callback_manager.add_litellm_callback(CustomGuardrail(guardrail_name="loaded-here"))
+    try:
+        yield "loaded-here"
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+@pytest.mark.asyncio
+async def test_registered_guardrail_names_falls_back_to_active_db_rows(guardrail_loaded_here: str) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy.guardrails.guardrail_registry import registered_guardrail_names
+
+    prisma_client: Final = MagicMock()
+    find_many: Final = AsyncMock(return_value=[SimpleNamespace(guardrail_name="created-on-other-pod")])
+    prisma_client.db.litellm_guardrailstable.find_many = find_many
+
+    registered: Final = await registered_guardrail_names(
+        frozenset({guardrail_loaded_here, "created-on-other-pod", "typo"}), prisma_client
+    )
+
+    assert registered == {guardrail_loaded_here, "created-on-other-pod"}
+    assert find_many.await_args.kwargs["where"] == {
+        "guardrail_name": {"in": ["created-on-other-pod", "typo"]},
+        "status": "active",
+    }
+
+
+@pytest.mark.asyncio
+async def test_registered_guardrail_names_skips_the_db_when_everything_is_loaded(guardrail_loaded_here: str) -> None:
+    from litellm.proxy.guardrails.guardrail_registry import registered_guardrail_names
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock()
+
+    assert await registered_guardrail_names(frozenset({guardrail_loaded_here}), prisma_client) == {
+        guardrail_loaded_here
+    }
+    assert await registered_guardrail_names(frozenset({guardrail_loaded_here, "typo"}), None) == {guardrail_loaded_here}
+    prisma_client.db.litellm_guardrailstable.find_many.assert_not_awaited()

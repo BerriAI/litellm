@@ -70,6 +70,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    raise_on_unknown_guardrails,
     require_caller_user_id_for_non_admin,
     user_api_key_has_admin_view,
     validate_budget_duration,
@@ -81,6 +82,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     generate_key_helper_fn,
     prepare_metadata_fields,
     raise_on_logging_credential_change,
+    registered_guardrail_lookup,
 )
 from litellm.proxy.management_helpers.bulk_user_deletion import delete_users_from_current_teams
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -484,6 +486,16 @@ async def _fetch_user_team_ids(user_id: str, prisma_client: "PrismaClient") -> t
     return tuple(user_row.teams) if user_row is not None else ()
 
 
+async def _raise_on_unknown_new_user_key_guardrails(data: NewUserRequest, prisma_client: "PrismaClient | None") -> None:
+    if not data.auto_create_key:
+        return
+    await raise_on_unknown_guardrails(
+        data.guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        find_registered=registered_guardrail_lookup(prisma_client),
+    )
+
+
 @router.post(
     "/user/new",
     tags=["Internal User management"],
@@ -606,6 +618,7 @@ async def new_user(
             data=data,
             user_api_key_dict=user_api_key_dict,
         )
+        await _raise_on_unknown_new_user_key_guardrails(data, prisma_client)
 
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)

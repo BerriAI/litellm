@@ -1241,3 +1241,16 @@ IN_MEMORY_GUARDRAIL_HANDLER: Final = InMemoryGuardrailHandler()
 
 GUARDRAIL_RECONCILE_LOCK: Final = asyncio.Lock()
 ########################################################
+
+
+async def registered_guardrail_names(names: frozenset[str], prisma_client: PrismaClient | None) -> frozenset[str]:
+    loaded_names: Final = frozenset(
+        callback.guardrail_name
+        for callback in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=CustomGuardrail)
+        if isinstance(callback, CustomGuardrail)
+    )
+    loaded: Final = names & loaded_names
+    missing: Final = names - loaded
+    if not missing or prisma_client is None:
+        return loaded
+    return loaded | await GuardrailsRepository(prisma_client).find_active_guardrail_names(missing)
