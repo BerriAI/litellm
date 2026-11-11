@@ -6865,7 +6865,8 @@ async def test_a_stream_answered_with_one_json_body_is_not_replayed_for_a_provid
 
 _MANTLE_OVERFLOW_MESSAGE: Final = (
     'ErrorEvent { error: APIError { type: "invalid_request_error", code: Some(400), message: '
-    '"prompt tokens (165072) exceed model maximum (131072)", param: Some("input") } }'
+    '"The engine prompt length 165068 exceeds the max_model_len 131072. Please reduce prompt.", '
+    'param: Some("input") } }'
 )
 
 
@@ -6934,7 +6935,7 @@ def test_responses_raises_context_window_error_when_the_provider_answers_status_
             **_MANTLE_GPT_OSS_PARAMS,
         )
 
-    assert "prompt is too long: 165072 tokens > 131072 maximum" in str(raised.value)
+    assert "prompt is too long: 165068 tokens > 131072 maximum" in str(raised.value)
     response_headers: Final[object] = getattr(raised.value, "litellm_response_headers", None)
     assert isinstance(response_headers, httpx.Headers)
     assert response_headers.get("x-amzn-requestid") == "req_mantle_overflow"
@@ -6952,3 +6953,88 @@ def test_responses_returns_an_incomplete_response_without_raising():
 
     assert isinstance(response, ResponsesAPIResponse)
     assert response.status == "incomplete"
+
+
+_HOSTED_VLLM_PARAMS: Final = MappingProxyType(
+    {"model": "hosted_vllm/served-model", "api_base": "https://fake-vllm.test/v1", "api_key": "transport-only"}
+)
+_INVALID_PROMPT: Final = MappingProxyType(
+    {"type": "invalid_request_error", "code": "invalid_prompt", "message": "the prompt was rejected"}
+)
+
+
+def _failed_with(error: Mapping[str, object], **fields: object) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_responses_body("failed", error=dict(error), **fields))
+
+    return answer
+
+
+def test_responses_raises_for_a_fake_streamed_response_the_provider_failed():
+    with pytest.raises(litellm.BadRequestError, match="the prompt was rejected"):
+        litellm.responses(
+            input="hello",
+            stream=True,
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_failed_with(_INVALID_PROMPT)))),
+            **_HOSTED_VLLM_PARAMS,
+        )
+
+
+@pytest.mark.asyncio
+async def test_aresponses_raises_for_a_fake_streamed_response_the_provider_failed():
+    with pytest.raises(litellm.BadRequestError, match="the prompt was rejected"):
+        await litellm.aresponses(
+            input="hello",
+            stream=True,
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(_failed_with(_INVALID_PROMPT))),
+            **_HOSTED_VLLM_PARAMS,
+        )
+
+
+class _FailureCostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_costs: Final[asyncio.Queue[object]] = asyncio.Queue()
+
+    async def async_log_failure_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
+        self.failure_costs.put_nowait(kwargs.get("response_cost"))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_response_bills_the_usage_the_provider_reported(monkeypatch: pytest.MonkeyPatch):
+    recorder: Final = _FailureCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    failed_with_usage: Final = _failed_with(
+        _INVALID_PROMPT, usage={"input_tokens": 5, "output_tokens": 3, "total_tokens": 8}
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        await litellm.aresponses(
+            input="hello",
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(failed_with_usage)),
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
+            **_HOSTED_VLLM_PARAMS,
+        )
+
+    assert await asyncio.wait_for(recorder.failure_costs.get(), timeout=5) == pytest.approx(5 * 0.001 + 3 * 0.002)
+
+
+@pytest.mark.asyncio
+async def test_router_retries_a_response_the_provider_failed_with_a_server_error(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    vllm: Final = respx_mock.route(host="fake-vllm.test").mock(
+        side_effect=_failed_with({"type": "server_error", "code": "server_error", "message": "upstream crashed"})
+    )
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "served-model", "litellm_params": dict(_HOSTED_VLLM_PARAMS)}],
+        num_retries=2,
+        retry_after=0,
+    )
+
+    with pytest.raises(litellm.InternalServerError, match="upstream crashed"):
+        await router.aresponses(model="served-model", input="hello")  # pyright: ignore[reportUnknownMemberType]  # Router.aresponses kwargs are untyped
+
+    assert vllm.call_count == 3

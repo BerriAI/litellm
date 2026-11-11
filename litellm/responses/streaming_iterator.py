@@ -77,7 +77,7 @@ from litellm.types.llms.openai import (
     replayable_responses_input,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
-from litellm.types.utils import CallTypes, ModelResponse
+from litellm.types.utils import CallTypes, ModelResponse, Usage
 from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
@@ -299,7 +299,7 @@ def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]
         raw_message = None
         raw_type = None
         raw_code = None
-    message: Final = str(raw_message) if raw_message is not None else "Response API in-stream error"
+    message: Final = str(raw_message) if raw_message is not None else "The provider reported a failed response"
     error_type: Final = raw_type if isinstance(raw_type, str) else None
     code: Final = str(raw_code) if isinstance(raw_code, (str, int)) and not isinstance(raw_code, bool) else None
     return message, error_type, code
@@ -353,9 +353,26 @@ def failed_response_exception(
 ) -> Exception | None:
     if response.status != "failed":
         return None
+    usage_and_cost: Final = _failed_response_usage_and_cost(response, logging_obj)
+    if usage_and_cost is not None:
+        logging_obj.record_partial_usage_for_failure(*usage_and_cost)
     return map_stream_error_to_exception(
         _event_field(response, "error"), model, custom_llm_provider, headers=headers, logging_obj=logging_obj
     )
+
+
+def _failed_response_usage_and_cost(
+    response: ResponsesAPIResponse, logging_obj: LiteLLMLoggingObj
+) -> tuple[Usage, float] | None:
+    usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response, "usage", None))
+    if usage_obj is None:
+        return None
+    try:
+        failed_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
+    except (TypeError, ValueError) as usage_error:
+        verbose_logger.debug("could not record usage for a failed response: %s", usage_error)
+        return None
+    return failed_usage, logging_obj.response_cost_calculator(result=response) or 0.0
 
 
 def _mapped_exception(
@@ -793,23 +810,13 @@ class BaseResponsesAPIStreamingIterator:
     def _record_failed_response_usage(self, response_obj: ResponsesAPIResponse | None) -> None:
         if response_obj is None or self.logging_obj is None:
             return
-        usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
-        if usage_obj is None:
+        usage_and_cost: Final = _failed_response_usage_and_cost(response_obj, self.logging_obj)
+        if usage_and_cost is None:
             return
-        try:
-            failed_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
-        except (TypeError, ValueError) as usage_error:
-            verbose_logger.debug(
-                "could not record usage for failed responses stream: %s",
-                usage_error,
-            )
-            return
-        failed_cost: Final = self.logging_obj.response_cost_calculator(result=response_obj) or 0.0
         if self._earlier_rounds_spend is None:
-            self.logging_obj.model_call_details["combined_usage_object"] = failed_usage
-            self.logging_obj.model_call_details["response_cost"] = failed_cost
+            self.logging_obj.record_partial_usage_for_failure(*usage_and_cost)
             return
-        self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, failed_usage, failed_cost)
+        self.logging_obj.record_failure_after_earlier_rounds(self._earlier_rounds_spend, *usage_and_cost)
 
     def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
         self._earlier_rounds_spend = earlier
@@ -1475,20 +1482,14 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def __init__(
         self,
-        response: httpx.Response,
+        transformed: ResponsesAPIResponse,
         model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
         logging_obj: LiteLLMLoggingObj,
         litellm_metadata: dict[str, object] | None = None,
         custom_llm_provider: str | None = None,
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
     ):
-        transformed: Final = responses_api_provider_config.transform_response_api_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-        )
         super().__init__(
             response=httpx.Response(200),
             model=model,

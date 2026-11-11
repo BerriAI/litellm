@@ -2321,16 +2321,11 @@ async def test_mock_responses_streaming_iterator_async_iteration_logs_completion
         fake_update_metadata,
     )
 
-    class _MockTransformConfig:
-        def transform_response_api_response(self, **kwargs):
-            return _make_completed_response("resp_mock").response
-
     logging_obj = _FakeLoggingObj()
 
     iterator = MockResponsesAPIStreamingIterator(
-        response=httpx.Response(200),
+        transformed=_make_completed_response("resp_mock").response,
         model="test-model",
-        responses_api_provider_config=_MockTransformConfig(),
         logging_obj=logging_obj,
         request_data={"model": "test-model", "stream": True},
         call_type=CallTypes.responses.value,
@@ -2369,15 +2364,10 @@ def test_mock_responses_streaming_iterator_sync_iteration_logs_completion(monkey
         fake_update_metadata,
     )
 
-    class _MockTransformConfig:
-        def transform_response_api_response(self, **kwargs):
-            return _make_completed_response("resp_mock_sync").response
-
     logging_obj = _FakeLoggingObj()
     iterator = MockResponsesAPIStreamingIterator(
-        response=httpx.Response(200),
+        transformed=_make_completed_response("resp_mock_sync").response,
         model="test-model",
-        responses_api_provider_config=_MockTransformConfig(),
         logging_obj=logging_obj,
         request_data={"model": "test-model", "stream": True},
         call_type=CallTypes.responses.value,

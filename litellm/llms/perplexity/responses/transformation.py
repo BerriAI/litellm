@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.transformation import STANDARD_MODE_REASONING_FIELD_VALUES, ReasoningFieldValues
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig, drops_params
+from litellm.responses.streaming_iterator import stream_error_status_and_message
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -117,11 +118,8 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             raw_response_json = None
 
         if isinstance(raw_response_json, dict) and raw_response_json.get("status") == "failed":
-            error: Final = raw_response_json.get("error", {})
-            raise BaseLLMException(
-                status_code=raw_response.status_code,
-                message=error.get("message", "Unknown Perplexity error"),
-            )
+            status_code, message = stream_error_status_and_message(raw_response_json.get("error"))
+            raise BaseLLMException(status_code=status_code, message=message)
 
         return super().transform_response_api_response(
             model=model,

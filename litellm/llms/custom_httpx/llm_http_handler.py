@@ -3165,7 +3165,6 @@ class BaseLLMHTTPHandler:
             MockResponsesAPIStreamingIterator,
             model=model,
             logging_obj=logging_obj,
-            responses_api_provider_config=responses_api_provider_config,
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
             request_data=request_context,
@@ -3181,24 +3180,25 @@ class BaseLLMHTTPHandler:
                     stream=stream,
                     **body_kwargs,
                 )
-                if caller_requested_stream:
-                    if fake_stream is True:
-                        return replay_as_stream(response=response)
-                    if not (
+                if (
+                    caller_requested_stream
+                    and fake_stream is not True
+                    and not (
                         responses_api_provider_config.may_answer_stream_with_json()
                         and _is_sized_json_body(response)
                         and _is_json_document(response.read())
-                    ):
-                        return SyncResponsesAPIStreamingIterator(
-                            response=response,
-                            model=model,
-                            logging_obj=logging_obj,
-                            responses_api_provider_config=responses_api_provider_config,
-                            litellm_metadata=litellm_metadata,
-                            custom_llm_provider=custom_llm_provider,
-                            request_data=request_context,
-                            call_type=CallTypes.responses.value,
-                        )
+                    )
+                ):
+                    return SyncResponsesAPIStreamingIterator(
+                        response=response,
+                        model=model,
+                        logging_obj=logging_obj,
+                        responses_api_provider_config=responses_api_provider_config,
+                        litellm_metadata=litellm_metadata,
+                        custom_llm_provider=custom_llm_provider,
+                        request_data=request_context,
+                        call_type=CallTypes.responses.value,
+                    )
                 response.read()
             else:
                 response = sync_httpx_client.post(
@@ -3213,9 +3213,6 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        if is_stream_request and caller_requested_stream:
-            return replay_as_stream(response=response)
-
         initial_response: Final = responses_api_provider_config.transform_response_api_response(
             model=model,
             raw_response=response,
@@ -3226,6 +3223,9 @@ class BaseLLMHTTPHandler:
         )
         if failure is not None:
             raise failure
+
+        if is_stream_request and caller_requested_stream:
+            return replay_as_stream(transformed=initial_response)
 
         if self._has_agentic_completion_hook(logging_obj):
             agentic_kwargs: Final = dict(litellm_params)
@@ -3380,7 +3380,6 @@ class BaseLLMHTTPHandler:
             MockResponsesAPIStreamingIterator,
             model=model,
             logging_obj=logging_obj,
-            responses_api_provider_config=responses_api_provider_config,
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
             request_data=request_context,
@@ -3398,24 +3397,25 @@ class BaseLLMHTTPHandler:
                     **body_kwargs,
                 )
 
-                if caller_requested_stream:
-                    if fake_stream is True:
-                        return replay_as_stream(response=response)
-                    if not (
+                if (
+                    caller_requested_stream
+                    and fake_stream is not True
+                    and not (
                         responses_api_provider_config.may_answer_stream_with_json()
                         and _is_sized_json_body(response)
                         and _is_json_document(await response.aread())
-                    ):
-                        return ResponsesAPIStreamingIterator(
-                            response=response,
-                            model=model,
-                            logging_obj=logging_obj,
-                            responses_api_provider_config=responses_api_provider_config,
-                            litellm_metadata=litellm_metadata,
-                            custom_llm_provider=custom_llm_provider,
-                            request_data=request_context,
-                            call_type=CallTypes.responses.value,
-                        )
+                    )
+                ):
+                    return ResponsesAPIStreamingIterator(
+                        response=response,
+                        model=model,
+                        logging_obj=logging_obj,
+                        responses_api_provider_config=responses_api_provider_config,
+                        litellm_metadata=litellm_metadata,
+                        custom_llm_provider=custom_llm_provider,
+                        request_data=request_context,
+                        call_type=CallTypes.responses.value,
+                    )
                 await response.aread()
             else:
                 response = await async_httpx_client.post(
@@ -3432,9 +3432,6 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
-        if is_stream_request and caller_requested_stream:
-            return replay_as_stream(response=response)
-
         initial_response: Final = responses_api_provider_config.transform_response_api_response(
             model=model,
             raw_response=response,
@@ -3445,6 +3442,9 @@ class BaseLLMHTTPHandler:
         )
         if failure is not None:
             raise failure
+
+        if is_stream_request and caller_requested_stream:
+            return replay_as_stream(transformed=initial_response)
 
         agentic_kwargs: Final = dict(litellm_params)
         final_response: Final = await self._call_agentic_completion_hooks(
@@ -6348,9 +6348,10 @@ class BaseLLMHTTPHandler:
         payload: Final = result.model_dump() if hasattr(result, "model_dump") else result
         raw_response: Final = httpx.Response(status_code=200, json=payload)
         return MockResponsesAPIStreamingIterator(
-            response=raw_response,
+            transformed=responses_api_provider_config.transform_response_api_response(
+                model=model, raw_response=raw_response, logging_obj=logging_obj
+            ),
             model=model,
-            responses_api_provider_config=responses_api_provider_config,
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
         )

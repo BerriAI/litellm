@@ -497,6 +497,7 @@ class TestPerplexityResponsesTransformation:
             )
 
         assert "Model quota exceeded" in str(exc_info.value.message)
+        assert 400 <= exc_info.value.status_code <= 599
 
     def test_successful_response_passes_through(self):
         """Normal completed response delegates to base OpenAI handler"""
