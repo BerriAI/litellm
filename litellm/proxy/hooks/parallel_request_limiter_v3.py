@@ -4720,13 +4720,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reserved_tokens: Final = open_reservation.reserved_tokens if open_reservation is not None else 0
         reserved_model: Final = stash.reserved_model if stash is not None else None
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
-        # Reconciliation must target the same model-scoped counter that the
-        # pre-call reservation incremented. If a reservation was made,
+        served_model: Final = self._rate_limited_model(model_group)
         # ``reserved_model`` (resolved at admission, so an alias map reload
-        # mid-flight cannot move the charge) is authoritative; otherwise fall
-        # back to the router's ``model_group`` (the no-reservation charge path).
-        reconcile_model: Final = reserved_model if reserved_model is not None else self._rate_limited_model(model_group)
+        # mid-flight cannot move the charge) settles the request unless the
+        # router fell back to another model group, which changes the requested
+        # name: then the served group is charged and the abandoned group's
+        # per-model reservation is refunded.
+        fell_back: Final = (
+            reserved_model is not None
+            and served_model is not None
+            and served_model.requested != reserved_model.requested
+        )
+        reconcile_model: Final = served_model if fell_back or reserved_model is None else reserved_model
         reconcile_models: Final = self._rate_limited_models(reconcile_model)
+        abandoned_scopes: Final = (
+            tuple(sorted(scope for scope in reserved_scopes if scope[0] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS))
+            if fell_back
+            else ()
+        )
 
         pipeline_operations: Final[list[ReservationOperation]] = []
 
@@ -4776,6 +4787,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 targets=charged_targets,
                 reserved_scopes=reserved_scopes,
                 actual_tokens=total_tokens,
+                reserved_tokens=reserved_tokens,
+            )
+        )
+        pipeline_operations.extend(
+            self._build_reservation_aware_tpm_ops(
+                targets=abandoned_scopes,
+                reserved_scopes=reserved_scopes,
+                actual_tokens=0,
                 reserved_tokens=reserved_tokens,
             )
         )
