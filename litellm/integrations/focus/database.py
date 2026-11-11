@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 import polars as pl
 
@@ -32,7 +32,7 @@ class FocusLiteLLMDatabase:
         client: Final = self._ensure_prisma_client()
 
         where_clauses: Final[list[str]] = []
-        query_params: Final[list[Any]] = []
+        query_params: Final[list[datetime | int]] = []
         placeholder_index = 1
         if start_time_utc:
             where_clauses.append(f"dus.updated_at >= ${placeholder_index}::timestamptz")
@@ -112,7 +112,7 @@ class FocusLiteLLMDatabase:
         except Exception as exc:
             raise RuntimeError(f"Error retrieving usage data: {exc}") from exc
 
-    async def get_table_info(self) -> dict[str, Any]:
+    async def get_table_info(self) -> dict[str, object]:
         """Return metadata about the spend table for diagnostics."""
         client: Final = self._ensure_prisma_client()
 
@@ -123,7 +123,9 @@ class FocusLiteLLMDatabase:
         ORDER BY ordinal_position;
         """
         try:
-            columns_response: Final = await client.db.query_raw(info_query)
+            from litellm.proxy.utils import query_raw_rows
+
+            columns_response: Final = await query_raw_rows(client.db, info_query)
             return {"columns": columns_response, "table_name": "LiteLLM_DailyUserSpend"}
         except Exception as exc:
             raise RuntimeError(f"Error getting table info: {exc}") from exc

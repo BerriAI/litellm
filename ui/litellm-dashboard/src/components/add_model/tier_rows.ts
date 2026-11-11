@@ -1,8 +1,17 @@
-import type { ComplexityTiers } from "./ComplexityRouterConfig";
+import type { ParseKeys, TFunction } from "i18next";
+import i18n from "@/i18n/i18n";
+import { isForecastClassifier } from "./forecast_classifier_config";
+import type { ClassifierType, ComplexityTiers } from "./ComplexityRouterConfig";
 import type { ComplexityTier } from "./KeywordTierRules";
 import type { TierModelParams, TierModelParamsByTier } from "./complexity_router_tiers";
 
 export const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
+
+export const ALL_BUILT_IN_TIERS: ComplexityTier[] = ["NON_REASONING", ...TIER_ORDER];
+
+/** The ladder one router renders, ascending; NON_REASONING appears only when enabled. */
+export const tierOrderFor = (enableNonReasoningTier: boolean | undefined): ComplexityTier[] =>
+  enableNonReasoningTier ? ALL_BUILT_IN_TIERS : TIER_ORDER;
 
 export interface TierRow {
   id: string;
@@ -26,7 +35,9 @@ export const MAX_TIER_NAME_CHARS = 64;
 export const MAX_TIER_DEFINITION_CHARS = 500;
 
 export interface ActiveTierSet {
+  classifier_type?: ClassifierType;
   tiers: ComplexityTiers;
+  enable_non_reasoning_tier?: boolean;
   custom_tier_set?: CustomTierSet;
   tier_model_params?: TierModelParamsByTier;
 }
@@ -39,7 +50,8 @@ export const activeTierName = (row: TierRow): string => row.name.trim();
 export const sameTierIdentity = (left: string, right: string): boolean =>
   left.trim().toLowerCase() === right.trim().toLowerCase();
 
-export const isBuiltInTierName = (name: string): boolean => TIER_ORDER.some((tier) => sameTierIdentity(tier, name));
+export const isBuiltInTierName = (name: string): boolean =>
+  ALL_BUILT_IN_TIERS.some((tier) => sameTierIdentity(tier, name));
 
 const builtInRow = (tier: keyof ComplexityTiers, tiers: ComplexityTiers): TierRow => ({
   id: tier,
@@ -51,8 +63,15 @@ const builtInRow = (tier: keyof ComplexityTiers, tiers: ComplexityTiers): TierRo
 // The only reader of the tier set. Built-in rows carry the canonical tier key as their id, so every
 // pointer into the set is a row id in both modes and nothing downstream branches on the mode.
 export const activeTierRows = (value: ActiveTierSet): ActiveTierRow[] => {
-  const rows = value.custom_tier_set?.tiers ?? TIER_ORDER.map((tier) => builtInRow(tier, value.tiers));
-  return rows.map((row) => ({ ...row, params: value.tier_model_params?.[row.id] ?? {} }));
+  const rows =
+    value.custom_tier_set?.tiers ??
+    tierOrderFor(value.enable_non_reasoning_tier).map((tier) => builtInRow(tier, value.tiers));
+  return rows
+    .filter(
+      (row) =>
+        value.custom_tier_set || !isForecastClassifier(value.classifier_type ?? "heuristic") || row.models.length > 0,
+    )
+    .map((row) => ({ ...row, params: value.tier_model_params?.[row.id] ?? {} }));
 };
 
 // The wire shape of an edited tier set, shared by the payload builder and the prompt preview so the
@@ -107,64 +126,66 @@ export interface TierRestriction {
 export const CUSTOM_TIER_RESTRICTIONS = {
   displayNames: {
     omit: ["tier_labels"],
-    reason: "Display names rename the built-in tiers, which your tier set replaces. Name each tier directly",
+    reason: "addModel.tierRows.restrictions.displayNames",
   },
   escalation: {
     omit: ["escalation_keywords"],
-    reason: "Escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.escalation",
   },
   stallEscalation: {
     omit: ["stall_escalation_enabled", "stall_escalation_window", "stall_escalation_repeat_threshold"],
-    reason: "Stall escalation bumps a request along the built-in tier ladder, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.stallEscalation",
   },
   adaptive: {
     omit: ["adaptive", "adaptive_weights", "tier_distance_penalty", "adaptive_eligible"],
-    reason: "Adaptive routing scores models along the built-in tier ladder, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.adaptive",
   },
   sessionAffinity: {
     omit: [],
-    reason: "Session pinning escalates along the built-in tier ladder, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.sessionAffinity",
   },
   heuristicClassifier: {
-    omit: ["heuristic_first_max_tier", "hybrid_boundary_margin"],
-    reason:
-      "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM classifier. " +
-      "Heuristic first and hybrid are out for the same reason: their local scorer decides the traffic it is sure of",
+    omit: ["heuristic_first_max_tier", "hybrid_boundary_margin", "local_heuristic"],
+    reason: "addModel.tierRows.restrictions.heuristicClassifier",
   },
   heuristicScoring: {
     omit: [
       "tier_boundaries",
       "token_thresholds",
       "dimension_weights",
+      "custom_dimensions",
       "reasoning_override_min_score",
       "custom_technical_keywords",
     ],
-    reason: "The heuristic scorer never runs under an edited tier set, so its inputs have no effect",
+    reason: "addModel.tierRows.restrictions.heuristicScoring",
   },
   classificationRubric: {
     omit: [],
-    reason: "The preset calibration examples are written against the built-in tiers, which your tier set replaces",
+    reason: "addModel.tierRows.restrictions.classificationRubric",
   },
   classifierFallback: {
     omit: ["classifier_fallback"],
-    reason: "Fallback Tier is where an edited tier set routes when the classifier fails",
+    reason: "addModel.tierRows.restrictions.classifierFallback",
   },
-} as const satisfies Record<string, TierRestriction>;
+} as const satisfies Record<string, { omit: readonly string[]; reason: ParseKeys }>;
 
 export const CUSTOM_TIER_OMITTED_KEYS: readonly string[] = Object.values(CUSTOM_TIER_RESTRICTIONS).flatMap(
   (restriction) => restriction.omit,
 );
 
 // Row-shape errors the backend cannot phrase per row. Payload validity is the dry-run's job.
-export const getCustomTierRowsError = (customTierSet: CustomTierSet): string | null => {
+export const getCustomTierRowsError = (
+  customTierSet: CustomTierSet,
+  t: TFunction = i18n.t.bind(i18n),
+): string | null => {
   const rows = customTierSet.tiers;
   if (rows.length < MIN_TIER_COUNT || rows.length > MAX_TIER_COUNT)
-    return `A tier set needs ${MIN_TIER_COUNT} to ${MAX_TIER_COUNT} tiers`;
-  if (rows.some((row) => !activeTierName(row))) return "Name every tier";
+    return t("addModel.tierRows.tierCountRange", { min: MIN_TIER_COUNT, max: MAX_TIER_COUNT });
+  if (rows.some((row) => !activeTierName(row))) return t("addModel.tierRows.nameEveryTier");
   const folded = rows.map((row) => row.name.trim().toLowerCase());
-  if (new Set(folded).size !== folded.length) return "Tier names must be unique, ignoring case";
+  if (new Set(folded).size !== folded.length) return t("addModel.tierRows.uniqueNames");
   if (rows.some((row) => !row.definition.trim() && !isBuiltInTierName(row.name)))
-    return "Every custom tier needs a definition: it is the rubric the classifier routes on";
-  if (!tierRowById(rows, customTierSet.fallback_tier_id)) return "Pick a Fallback Tier for classifier failures";
+    return t("addModel.tierRows.definitionRequired");
+  if (!tierRowById(rows, customTierSet.fallback_tier_id)) return t("addModel.tierRows.pickFallbackTier");
   return null;
 };

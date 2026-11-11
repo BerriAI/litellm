@@ -1,0 +1,465 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "host.name",
+            "value": {
+              "stringValue": "fixture-host"
+            }
+          },
+          {
+            "key": "host.arch",
+            "value": {
+              "stringValue": "arm64"
+            }
+          },
+          {
+            "key": "host.id",
+            "value": {
+              "stringValue": "00000000-0000-0000-0000-000000000000"
+            }
+          },
+          {
+            "key": "process.pid",
+            "value": {
+              "intValue": "83271"
+            }
+          },
+          {
+            "key": "process.executable.name",
+            "value": {
+              "stringValue": "node"
+            }
+          },
+          {
+            "key": "process.executable.path",
+            "value": {
+              "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
+            }
+          },
+          {
+            "key": "process.command_args",
+            "value": {
+              "arrayValue": {
+                "values": [
+                  {
+                    "stringValue": "/home/user/.local/share/fnm/node-versions/v25.8.1/installation/bin/node"
+                  },
+                  {
+                    "stringValue": "--env-file=.env"
+                  },
+                  {
+                    "stringValue": "/home/user/dev/litellm-lens-example/mastra/simple/main.ts"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "key": "process.runtime.version",
+            "value": {
+              "stringValue": "25.8.1"
+            }
+          },
+          {
+            "key": "process.runtime.name",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "process.runtime.description",
+            "value": {
+              "stringValue": "Node.js"
+            }
+          },
+          {
+            "key": "process.command",
+            "value": {
+              "stringValue": "/home/user/dev/litellm-lens-example/mastra/simple/main.ts"
+            }
+          },
+          {
+            "key": "process.owner",
+            "value": {
+              "stringValue": "user"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:node"
+            }
+          },
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "nodejs"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "2.11.0"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "6573bbd66c74e1ceb09fd173fe4cdc45",
+              "spanId": "453659faa8fb4313",
+              "parentSpanId": "8992d8314e703e8c",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061319981000000",
+              "endTimeUnixNano": "1791061322404980084",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "afc4951d-7141-4476-b4d5-529b294e56b7"
+                  }
+                }
+              ],
+              "status": {},
+              "flags": 257
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "@mastra/otel-bridge",
+            "version": "1.0.0"
+          },
+          "spans": [
+            {
+              "traceId": "6573bbd66c74e1ceb09fd173fe4cdc45",
+              "spanId": "dc2c2cdc64224139",
+              "parentSpanId": "8992d8314e703e8c",
+              "name": "chat openai/gpt-6-luna",
+              "kind": 3,
+              "startTimeUnixNano": "1791061319977000000",
+              "endTimeUnixNano": "1791061322412000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "mastra.span.type",
+                  "value": {
+                    "stringValue": "model_inference"
+                  }
+                },
+                {
+                  "key": "gen_ai.output.messages",
+                  "value": {
+                    "stringValue": "[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"content\":\"An **agent trace** is a record of an AI agent\u2019s steps during a task\u2014such as the inputs it received, actions or tool calls it made, results it got back, and its final response. Traces help people debug, evaluate, and audit agent behavior.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "litellm.chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "23"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "142"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.reasoning_tokens",
+                  "value": {
+                    "intValue": "78"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.cache_read.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.id",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "mastra.completion_start_time",
+                  "value": {
+                    "stringValue": "2026-10-03T21:02:02.408Z"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.finish_reasons",
+                  "value": {
+                    "stringValue": "[\"stop\"]"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "mastra.metadata.runId",
+                  "value": {
+                    "stringValue": "c832c9e4-df32-442c-b296-4f4e62489aa2"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 257
+            },
+            {
+              "traceId": "6573bbd66c74e1ceb09fd173fe4cdc45",
+              "spanId": "8992d8314e703e8c",
+              "parentSpanId": "10b79de481b78d1b",
+              "name": "agent_step research_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061319974000000",
+              "endTimeUnixNano": "1791061322412000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "agent_step"
+                  }
+                },
+                {
+                  "key": "mastra.span.type",
+                  "value": {
+                    "stringValue": "model_step"
+                  }
+                },
+                {
+                  "key": "mastra.model_step.input",
+                  "value": {
+                    "stringValue": "[{\"role\":\"system\",\"content\":\"Answer the question concisely.\"},{\"role\":\"user\",\"content\":\"What is an agent trace?\"}]"
+                  }
+                },
+                {
+                  "key": "mastra.model_step.output",
+                  "value": {
+                    "stringValue": "{\"text\":\"An **agent trace** is a record of an AI agent\u2019s steps during a task\u2014such as the inputs it received, actions or tool calls it made, results it got back, and its final response. Traces help people debug, evaluate, and audit agent behavior.\",\"toolCalls\":[]}"
+                  }
+                },
+                {
+                  "key": "mastra.model_step.step_index",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "mastra.model_step.is_continued",
+                  "value": {
+                    "boolValue": false
+                  }
+                },
+                {
+                  "key": "mastra.metadata.runId",
+                  "value": {
+                    "stringValue": "c832c9e4-df32-442c-b296-4f4e62489aa2"
+                  }
+                },
+                {
+                  "key": "mastra.metadata.headers",
+                  "value": {
+                    "stringValue": "{\"content-encoding\":\"gzip\",\"content-length\":\"508\",\"content-security-policy\":\"frame-ancestors 'none'\",\"content-type\":\"application/json\",\"date\":\"Sat, 03 Oct 2026 21:01:58 GMT\",\"llm_provider-access-control-expose-headers\":\"X-Request-ID, CF-Ray, CF-Ray\",\"llm_provider-alt-svc\":\"h3=\\\":443\\\"; ma=86400\",\"llm_provider-cf-cache-status\":\"DYNAMIC\",\"llm_provider-cf-ray\":\"a44ee2a238354c71-SJC\",\"llm_provider-connection\":\"keep-alive\",\"llm_provider-content-encoding\":\"br\",\"llm_provider-content-type\":\"application/json\",\"llm_provider-date\":\"Sat, 03 Oct 2026 21:02:02 GMT\",\"llm_provider-openai-organization\":\"personal-1e898z\",\"llm_provider-openai-processing-ms\":\"2281\",\"llm_provider-openai-project\":\"proj_WG9WJ3ACNqlcabNE2emRzoqT\",\"llm_provider-openai-version\":\"2020-10-01\",\"llm_provider-server\":\"cloudflare\",\"llm_provider-strict-transport-security\":\"max-age=31536000; includeSubDomains; preload\",\"llm_provider-transfer-encoding\":\"chunked\",\"llm_provider-x-content-type-options\":\"nosniff\",\"llm_provider-x-openai-proxy-wasm\":\"v0.1\",\"llm_provider-x-ratelimit-limit-requests\":\"30000\",\"llm_provider-x-ratelimit-limit-tokens\":\"180000000\",\"llm_provider-x-ratelimit-remaining-requests\":\"29999\",\"llm_provider-x-ratelimit-remaining-tokens\":\"179999985\",\"llm_provider-x-ratelimit-reset-requests\":\"2ms\",\"llm_provider-x-ratelimit-reset-tokens\":\"0s\",\"llm_provider-x-request-id\":\"req_3bdaa67f622f4d60b679a0949bb6de56\",\"vary\":\"Accept-Encoding\",\"x-content-type-options\":\"nosniff\",\"x-frame-options\":\"DENY\",\"x-litellm-attempted-fallbacks\":\"0\",\"x-litellm-attempted-retries\":\"0\",\"x-litellm-call-id\":\"afc4951d-7141-4476-b4d5-529b294e56b7\",\"x-litellm-callback-duration-ms\":\"0.0\",\"x-litellm-key-spend\":\"7.329999999999999e-05\",\"x-litellm-model-api-base\":\"https://api.openai.com\",\"x-litellm-model-group\":\"openai/gpt-6-luna\",\"x-litellm-model-id\":\"e68fbd1ce26aa7a89b059c9a6df12007e624c6a2106cd3e6af492ab7a259f117\",\"x-litellm-model-name\":\"openai/gpt-6-luna\",\"x-litellm-overhead-duration-ms\":\"2.7521\",\"x-litellm-response-cost\":\"7.329999999999999e-05\",\"x-litellm-response-cost-discount-amount\":\"0.0\",\"x-litellm-response-cost-input\":\"2.3e-06\",\"x-litellm-response-cost-margin-amount\":\"0.0\",\"x-litellm-response-cost-margin-percent\":\"0.0\",\"x-litellm-response-cost-original\":\"7.329999999999999e-05\",\"x-litellm-response-cost-output\":\"7.099999999999999e-05\",\"x-litellm-response-cost-reasoning\":\"3.9e-05\",\"__truncated\":\"7 more keys omitted\"}"
+                  }
+                },
+                {
+                  "key": "mastra.metadata.modelMetadata",
+                  "value": {
+                    "stringValue": "{\"modelId\":\"openai/gpt-6-luna\",\"modelVersion\":\"v4\",\"modelProvider\":\"litellm.chat\"}"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 257
+            },
+            {
+              "traceId": "6573bbd66c74e1ceb09fd173fe4cdc45",
+              "spanId": "10b79de481b78d1b",
+              "parentSpanId": "60009089ee1451e9",
+              "name": "model_generation openai/gpt-6-luna",
+              "kind": 1,
+              "startTimeUnixNano": "1791061319969000000",
+              "endTimeUnixNano": "1791061322415000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "model_generation"
+                  }
+                },
+                {
+                  "key": "mastra.span.type",
+                  "value": {
+                    "stringValue": "model_generation"
+                  }
+                },
+                {
+                  "key": "mastra.model_generation.input",
+                  "value": {
+                    "stringValue": "{\"messages\":[{\"role\":\"system\",\"content\":\"Answer the question concisely.\"},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"What is an agent trace?\",\"providerOptions\":{\"mastra\":{\"createdAt\":1791061319965}}}]}]}"
+                  }
+                },
+                {
+                  "key": "mastra.model_generation.output",
+                  "value": {
+                    "stringValue": "{\"files\":[],\"reasoning\":[],\"sources\":[],\"text\":\"An **agent trace** is a record of an AI agent\u2019s steps during a task\u2014such as the inputs it received, actions or tool calls it made, results it got back, and its final response. Traces help people debug, evaluate, and audit agent behavior.\",\"warnings\":[]}"
+                  }
+                },
+                {
+                  "key": "mastra.metadata.runId",
+                  "value": {
+                    "stringValue": "c832c9e4-df32-442c-b296-4f4e62489aa2"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 257
+            },
+            {
+              "traceId": "6573bbd66c74e1ceb09fd173fe4cdc45",
+              "spanId": "60009089ee1451e9",
+              "name": "invoke_agent research_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061319961000000",
+              "endTimeUnixNano": "1791061322433000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "mastra.span.type",
+                  "value": {
+                    "stringValue": "agent_run"
+                  }
+                },
+                {
+                  "key": "mastra.agent_run.input",
+                  "value": {
+                    "stringValue": "What is an agent trace?"
+                  }
+                },
+                {
+                  "key": "mastra.agent_run.output",
+                  "value": {
+                    "stringValue": "{\"text\":\"An **agent trace** is a record of an AI agent\u2019s steps during a task\u2014such as the inputs it received, actions or tool calls it made, results it got back, and its final response. Traces help people debug, evaluate, and audit agent behavior.\",\"files\":[]}"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.id",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.system_instructions",
+                  "value": {
+                    "stringValue": "Answer the question concisely."
+                  }
+                },
+                {
+                  "key": "mastra.metadata.runId",
+                  "value": {
+                    "stringValue": "c832c9e4-df32-442c-b296-4f4e62489aa2"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1
+              },
+              "flags": 257
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

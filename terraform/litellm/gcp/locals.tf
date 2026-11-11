@@ -43,7 +43,7 @@ locals {
     "/v1/models*", "/models*",
     "/openai/*", "/engines/*",
     "/v1/messages*", "/messages*",
-    "/v1/skills/*", "/v1/a2a/*",
+    "/v1/skills/*", "/v1/a2a/*", "/api/event_logging*",
     "/v1/rerank*", "/v2/rerank*", "/rerank*",
     "/v1/ocr*", "/ocr*",
     "/v1/rag/*", "/rag/*",
@@ -55,7 +55,7 @@ locals {
     "/queue/chat/*",
     "/v1beta/*",
     "/interactions/*",
-    "/anthropic/*", "/azure/*", "/azure_ai/*", "/aws/*", "/bedrock/*", "/comprehendmedical*",
+    "/anthropic/*", "/azure/*", "/azure_ai/*", "/azure_speech/*", "/aws/*", "/bedrock/*", "/comprehendmedical*", "/transcribe*",
     "/cohere/*", "/gemini/*", "/google/*",
     "/vertex_ai/*", "/vertex-ai/*",
     "/assemblyai/*", "/eu.assemblyai/*",
@@ -92,11 +92,5 @@ locals {
     { name = "PROXY_CONFIG_HASH", value = md5(local.proxy_config_yaml) },
   ] : []
 
-  # Resolved image URIs: per-component override wins, otherwise compose
-  # from image_registry + image_tag. Cloud Run only accepts AR / gcr.io /
-  # docker.io paths — see variables.tf for the full constraint list.
-  gateway_image    = var.gateway_image != "" ? var.gateway_image : "${var.image_registry}/litellm-gateway:${var.image_tag}"
-  backend_image    = var.backend_image != "" ? var.backend_image : "${var.image_registry}/litellm-backend:${var.image_tag}"
-  ui_image         = var.ui_image != "" ? var.ui_image : "${var.image_registry}/litellm-ui:${var.image_tag}"
-  migrations_image = var.migrations_image != "" ? var.migrations_image : "${var.image_registry}/litellm-migrations:${var.image_tag}"
+  image = var.image != "" ? var.image : "${var.image_registry}/litellm:${var.image_tag}"
 }

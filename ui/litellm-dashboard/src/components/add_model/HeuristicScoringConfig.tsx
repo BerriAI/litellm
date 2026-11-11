@@ -1,5 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import React, { useState } from "react";
+import type { ParseKeys, TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,20 +9,28 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import i18n from "@/i18n/i18n";
 import { type ComplexityRouterConfigValue, heuristicScoringRole } from "./ComplexityRouterConfig";
-import { dimensionLabel, weightTotal } from "./heuristic_scoring_knobs";
+import {
+  dimensionLabel,
+  effectiveDimensionWeights,
+  rebalanceDimensionWeights,
+  type WeightEdit,
+} from "./heuristic_scoring_knobs";
+import CustomDimensionRows from "./CustomDimensionRows";
+import { customDimensionsError } from "./custom_dimensions";
 
 export type KnobGroup = "tier_boundaries" | "token_thresholds" | "dimension_weights";
 
 interface GroupSpec {
   group: KnobGroup;
-  title: string;
-  blurb: string;
+  title: ParseKeys;
+  blurb: ParseKeys;
   min: number;
   max?: number;
   step: number;
   withSlider: boolean;
-  labels: Record<string, string>;
+  labels: Record<string, ParseKeys>;
 }
 
 const OVERRIDE_FLOOR_ID = "reasoning-override-min-score";
@@ -28,33 +38,34 @@ const OVERRIDE_FLOOR_ID = "reasoning-override-min-score";
 const GROUPS: GroupSpec[] = [
   {
     group: "tier_boundaries",
-    title: "Tier boundaries",
-    blurb:
-      "The weighted score each tier starts at. Scores run from -1 to 1, and short or conversational prompts score below 0, so a negative boundary is a valid way to lift trivial traffic into a higher tier.",
+    title: "addModel.heuristicScoringConfig.groups.tierBoundaries.title",
+    blurb: "addModel.heuristicScoringConfig.groups.tierBoundaries.blurb",
     min: -1,
     max: 1,
     step: 0.01,
     withSlider: false,
     labels: {
-      simple_medium: "Simple to Medium",
-      medium_complex: "Medium to Complex",
-      complex_reasoning: "Complex to Reasoning",
+      simple_medium: "addModel.heuristicScoringConfig.groups.tierBoundaries.labels.simpleMedium",
+      medium_complex: "addModel.heuristicScoringConfig.groups.tierBoundaries.labels.mediumComplex",
+      complex_reasoning: "addModel.heuristicScoringConfig.groups.tierBoundaries.labels.complexReasoning",
     },
   },
   {
     group: "token_thresholds",
-    title: "Token thresholds",
-    blurb:
-      "Estimated prompt length, in tokens, that pushes the token count dimension to its floor or ceiling. Lengths between the two score neutral.",
+    title: "addModel.heuristicScoringConfig.groups.tokenThresholds.title",
+    blurb: "addModel.heuristicScoringConfig.groups.tokenThresholds.blurb",
     min: 0,
     step: 1,
     withSlider: false,
-    labels: { simple: "Short below", complex: "Long above" },
+    labels: {
+      simple: "addModel.heuristicScoringConfig.groups.tokenThresholds.labels.simple",
+      complex: "addModel.heuristicScoringConfig.groups.tokenThresholds.labels.complex",
+    },
   },
   {
     group: "dimension_weights",
-    title: "Dimension weights",
-    blurb: "How much each signal contributes to the score. Absolute multipliers, so the total need not be 1.00.",
+    title: "addModel.heuristicScoringConfig.groups.dimensionWeights.title",
+    blurb: "addModel.heuristicScoringConfig.groups.dimensionWeights.blurb",
     min: 0,
     max: 1,
     step: 0.01,
@@ -65,14 +76,14 @@ const GROUPS: GroupSpec[] = [
 
 /** Why a group is currently misconfigured, or null. Never blocks the save: a router written this way in
  *  config.yaml would otherwise be uneditable here for every unrelated change. */
-const warn = (group: KnobGroup, values: Record<string, number>): string | null => {
+const warn = (group: KnobGroup, values: Record<string, number>, t: TFunction = i18n.t.bind(i18n)): string | null => {
   if (
     group === "tier_boundaries" &&
     (values.simple_medium > values.medium_complex || values.medium_complex > values.complex_reasoning)
   )
-    return "These boundaries decrease, so every tier between them is unreachable and its traffic routes elsewhere.";
+    return t("addModel.heuristicScoringConfig.warnings.boundariesDecrease");
   if (group === "token_thresholds" && values.simple >= values.complex)
-    return "The short threshold is not below the long one, so no prompt length scores neutral on length.";
+    return t("addModel.heuristicScoringConfig.warnings.thresholdsInverted");
   return null;
 };
 
@@ -82,6 +93,7 @@ interface HeuristicScoringConfigProps {
 }
 
 const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, onChange }) => {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [draft, setDraft] = useState<{ id: string; raw: string } | null>(null);
   const { data: defaults, isPending, isError, refetch } = useComplexityScorerDefaults();
@@ -89,6 +101,19 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
   // The panel owns its own visibility: the scorer does not run at all when an LLM classifier
   // falls back to the default model, so there is nothing here to configure.
   const scorerRuns = heuristicScoringRole(value) !== "never";
+  const customEnabled = heuristicScoringRole(value) === "decides";
+  const customRows = customEnabled ? value.custom_dimensions : undefined;
+  const [weightError, setWeightError] = useState<string | null>(null);
+  const rowError = customDimensionsError(customRows, undefined, t);
+  const changeWeights = (edit: WeightEdit) => {
+    const result = rebalanceDimensionWeights(defaults?.dimension_weights, value.dimension_weights, customRows, edit);
+    if (!result.ok) {
+      setWeightError(result.error);
+      return;
+    }
+    setWeightError(null);
+    onChange({ ...value, dimension_weights: result.dimension_weights, custom_dimensions: result.custom_dimensions });
+  };
 
   // What an untouched override floor follows: the boundary in effect, override included, not the shipped one.
   const trackedFloor: number | undefined = { ...defaults?.tier_boundaries, ...value.tier_boundaries }.simple_medium;
@@ -102,6 +127,10 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
   const commit = (spec: GroupSpec, effective: Record<string, number>, key: string, raw: string) => {
     const parsed = Number(raw);
     if (raw.trim() === "" || !Number.isFinite(parsed)) return;
+    if (spec.group === "dimension_weights") {
+      changeWeights({ type: "set", target: { kind: "builtin", id: key }, weight: parsed });
+      return;
+    }
     const clamped = Math.min(spec.max ?? Infinity, Math.max(spec.min, parsed));
     onChange({
       ...value,
@@ -123,69 +152,88 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
         <ChevronDown
           className={`size-4 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`}
         />
-        <span className="text-sm font-medium">Advanced scoring</span>
+        <span className="text-sm font-medium">{t("addModel.heuristicScoringConfig.title")}</span>
         {overrides > 0 && (
           <Badge variant="secondary" data-testid="advanced-scoring-override-count">
-            {overrides} {overrides === 1 ? "override" : "overrides"}
+            {overrides}{" "}
+            {overrides === 1
+              ? t("addModel.heuristicScoringConfig.overrideOne")
+              : t("addModel.heuristicScoringConfig.overrideMany")}
           </Badge>
         )}
       </CollapsibleTrigger>
 
       <CollapsibleContent>
         <div className="mt-3 space-y-6 pl-6">
-          <p className="text-xs text-muted-foreground">
-            Every knob below is optional. Left untouched, the router follows the shipped defaults, so it picks up any
-            recalibration of them rather than staying pinned to the numbers shown here.
-          </p>
+          <p className="text-xs text-muted-foreground">{t("addModel.heuristicScoringConfig.description")}</p>
 
           {isPending ? (
-            <p className="text-xs text-muted-foreground">Loading the shipped defaults...</p>
+            <p className="text-xs text-muted-foreground">{t("addModel.heuristicScoringConfig.loadingDefaults")}</p>
           ) : (
             <>
               {isError && (
                 <div className="flex items-start gap-2" role="alert">
                   <p className="text-xs font-medium text-destructive">
-                    Could not load the shipped defaults, so only values this router already overrides are shown. Saving
-                    still works, and an untouched knob keeps following the defaults.
+                    {t("addModel.heuristicScoringConfig.loadDefaultsFailed")}
                   </p>
                   <Button type="button" variant="link" size="xs" onClick={() => void refetch()}>
-                    Retry
+                    {t("addModel.heuristicScoringConfig.retry")}
                   </Button>
                 </div>
               )}
               {GROUPS.map((spec) => {
-                const shipped = defaults?.[spec.group] ?? {};
-                const effective: Record<string, number> = { ...shipped, ...value[spec.group] };
-                const problem = warn(spec.group, effective);
+                const shipped = defaults?.[spec.group] ?? value[spec.group] ?? {};
+                const effective: Record<string, number> =
+                  spec.group === "dimension_weights"
+                    ? effectiveDimensionWeights(shipped, value.dimension_weights)
+                    : { ...shipped, ...value[spec.group] };
+                const total =
+                  Object.values(effective).reduce((sum, weight) => sum + weight, 0) +
+                  (customRows ?? []).reduce((sum, row) => sum + row.weight, 0);
+                const problem = warn(spec.group, effective, t);
+                const overridden =
+                  value[spec.group] !== undefined || (spec.withSlider && value.custom_dimensions !== undefined);
+                const resettable = spec.withSlider || overridden;
+                const scoringError = spec.withSlider ? weightError || rowError : null;
                 return (
                   <section key={spec.group} className="space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium">{spec.title}</span>
+                        <span className="text-sm font-medium">{t(spec.title)}</span>
                         {/* Only a known dimension set has a meaningful total; summing the overrides
                             alone would state a total that is not the router's. */}
                         {spec.withSlider && defaults !== undefined && (
                           <span className="text-xs text-muted-foreground" data-testid="dimension-weight-total">
-                            total {weightTotal(effective).toFixed(2)}
+                            {t("addModel.heuristicScoringConfig.total", { total: total.toFixed(2) })}
                           </span>
                         )}
                       </div>
-                      {value[spec.group] !== undefined && (
+                      {resettable && (
                         <Button
                           type="button"
                           variant="link"
                           size="xs"
-                          onClick={() => onChange({ ...value, [spec.group]: undefined })}
+                          disabled={!overridden}
+                          onClick={() => {
+                            setWeightError(null);
+                            onChange({
+                              ...value,
+                              [spec.group]: undefined,
+                              ...(spec.withSlider && { custom_dimensions: undefined }),
+                            });
+                          }}
                         >
-                          Reset to defaults
+                          {spec.withSlider
+                            ? t("addModel.heuristicScoringConfig.restoreDefaultWeights")
+                            : t("addModel.heuristicScoringConfig.resetToDefaults")}
                         </Button>
                       )}
                     </div>
-                    <p className="text-xs text-muted-foreground">{spec.blurb}</p>
+                    <p className="text-xs text-muted-foreground">{t(spec.blurb)}</p>
 
                     {Object.keys(effective).map((key) => {
                       const id = `${spec.group}-${key}`;
-                      const label = spec.labels[key] ?? dimensionLabel(key);
+                      const label = Object.hasOwn(spec.labels, key) ? t(spec.labels[key]) : dimensionLabel(key);
                       return (
                         <div key={key} className="flex items-center gap-3">
                           <Label htmlFor={id} className="w-44 text-xs font-normal">
@@ -196,12 +244,13 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                               min={spec.min}
                               max={spec.max}
                               step={spec.step}
+                              disabled={defaults === undefined}
                               value={[effective[key]]}
                               onValueChange={(next) =>
                                 commit(spec, effective, key, String(Array.isArray(next) ? next[0] : next))
                               }
                               className="flex-1"
-                              aria-label={`${label} weight`}
+                              aria-label={t("addModel.heuristicScoringConfig.weightAria", { label })}
                             />
                           )}
                           <Input
@@ -209,7 +258,8 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                             type="text"
                             inputMode="decimal"
                             className={spec.withSlider ? "w-24" : "w-28"}
-                            value={draft?.id === id ? draft.raw : String(effective[key])}
+                            disabled={spec.withSlider && defaults === undefined}
+                            value={draft?.id === id ? draft.raw : Number(effective[key].toPrecision(6)).toString()}
                             onChange={(event) => {
                               setDraft({ id, raw: event.target.value });
                               commit(spec, effective, key, event.target.value);
@@ -220,6 +270,28 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                       );
                     })}
 
+                    {spec.withSlider && customEnabled && (
+                      <CustomDimensionRows
+                        rows={customRows ?? []}
+                        disabled={defaults === undefined}
+                        onChange={(rows) => onChange({ ...value, custom_dimensions: rows })}
+                        onWeight={(id, weight) =>
+                          changeWeights({ type: "set", target: { kind: "custom", id }, weight })
+                        }
+                        onAdd={() =>
+                          changeWeights({
+                            type: "add",
+                            row: { id: crypto.randomUUID(), name: "", weight: 0.1, scoring_mode: "match_count" },
+                          })
+                        }
+                        onRemove={(id) => changeWeights({ type: "remove", id })}
+                      />
+                    )}
+                    {scoringError && (
+                      <p className="text-xs text-destructive" role="alert">
+                        {scoringError}
+                      </p>
+                    )}
                     {problem && (
                       <p className="text-xs font-medium text-destructive" role="alert">
                         {problem}
@@ -231,7 +303,9 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
 
               <section className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Reasoning override floor</span>
+                  <span className="text-sm font-medium">
+                    {t("addModel.heuristicScoringConfig.overrideFloor.title")}
+                  </span>
                   {value.reasoning_override_min_score !== undefined && (
                     <Button
                       type="button"
@@ -239,21 +313,22 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                       size="xs"
                       onClick={() => onChange({ ...value, reasoning_override_min_score: undefined })}
                     >
-                      Reset to defaults
+                      {t("addModel.heuristicScoringConfig.resetToDefaults")}
                     </Button>
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Two or more reasoning markers promote a request to the reasoning tier, but only once its weighted
-                  score reaches this floor.{" "}
+                  {t("addModel.heuristicScoringConfig.overrideFloor.description")}{" "}
                   {trackedFloor === undefined
-                    ? "Left untouched, it tracks the Simple to Medium boundary."
-                    : `Left untouched, it tracks the Simple to Medium boundary, currently ${trackedFloor.toFixed(2)}.`}{" "}
-                  Set it to 0 to promote on the markers alone.
+                    ? t("addModel.heuristicScoringConfig.overrideFloor.tracksBoundary")
+                    : t("addModel.heuristicScoringConfig.overrideFloor.tracksBoundaryCurrently", {
+                        value: trackedFloor.toFixed(2),
+                      })}{" "}
+                  {t("addModel.heuristicScoringConfig.overrideFloor.markersAlone")}
                 </p>
                 <div className="flex items-center gap-3">
                   <Label htmlFor={OVERRIDE_FLOOR_ID} className="w-44 text-xs font-normal">
-                    Minimum score
+                    {t("addModel.heuristicScoringConfig.overrideFloor.minimumScore")}
                   </Label>
                   <Input
                     id={OVERRIDE_FLOOR_ID}

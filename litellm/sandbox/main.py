@@ -13,7 +13,7 @@ way `litellm.asearch` is.
 
 from typing import Final
 
-import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.sandbox.transformation import (
     BaseSandboxConfig,
     CodeExecutionResult,
@@ -143,4 +143,4 @@ async def acode_interpreter_tool(
         try:
             await config.adelete_sandbox(container=container, api_key=api_key, api_base=api_base, **forwarded)
         except Exception as e:
-            litellm._logging.verbose_logger.debug("sandbox: failed to delete ephemeral container: %s", e)
+            verbose_logger.debug("sandbox: failed to delete ephemeral container: %s", e)

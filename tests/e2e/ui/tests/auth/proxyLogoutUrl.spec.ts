@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { ADMIN_STORAGE_PATH } from "../../constants";
+import { Role, users } from "../../fixtures/users";
+import { logInThroughLoginPage } from "../../helpers/userOnboarding";
 
 /**
  * Runs as part of the standard e2e suite: both `run_e2e.sh` and the CircleCI
@@ -16,9 +17,12 @@ const LOGOUT_URL = process.env.PROXY_LOGOUT_URL ?? "";
 test.skip(!LOGOUT_URL, "Requires PROXY_LOGOUT_URL env var");
 
 test.describe("PROXY_LOGOUT_URL redirect", () => {
-  test.use({ storageState: ADMIN_STORAGE_PATH });
+  test.use({ storageState: { cookies: [], origins: [] } });
 
   test("Logout clears the session and redirects to PROXY_LOGOUT_URL", async ({ page }) => {
+    const admin = users[Role.ProxyAdmin];
+    await logInThroughLoginPage(page, admin.email, admin.password);
+
     const target = new URL(LOGOUT_URL);
 
     // Stub the external logout destination so the assertion doesn't depend on
@@ -46,8 +50,8 @@ test.describe("PROXY_LOGOUT_URL redirect", () => {
     await expect(page.getByRole("complementary").getByText("Virtual Keys")).toBeVisible({ timeout: 15_000 });
     await settingsLoaded;
 
-    // Pre-condition: we start authenticated. The admin storage state carries a
-    // `token` cookie, so a real logout has something to tear down.
+    // Pre-condition: we start authenticated. The fresh login set a `token`
+    // cookie, so a real logout has something to tear down.
     const tokensBefore = (await page.context().cookies()).filter((c) => c.name === "token");
     expect(tokensBefore.length, "should start logged in with a token cookie").toBeGreaterThan(0);
 

@@ -8,12 +8,17 @@ from .transformation import FalAIBaseConfig
 
 class FalAINanoBananaConfig(FalAIBaseConfig):
     """
-    Configuration for Fal AI's Nano Banana / Gemini 2.5 Flash Image models.
+    Configuration for Fal AI's Nano Banana family (Gemini Flash / Pro Image models).
 
-    Serves the imagen4 deprecation migration path. The same underlying model is
-    exposed under two endpoints that share an identical schema:
+    Serves the imagen4 deprecation migration path. Every endpoint shares the same
+    request schema, so one config covers all of them:
     - fal-ai/nano-banana
     - fal-ai/gemini-25-flash-image
+    - fal-ai/nano-banana-2
+    - fal-ai/nano-banana-pro
+
+    Provider-specific params such as ``resolution`` ("0.5K", "1K", "2K", "4K") are
+    forwarded as-is and drive the per-resolution price in the cost map.
 
     Documentation: https://fal.ai/models/fal-ai/nano-banana
     """

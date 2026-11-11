@@ -62,32 +62,19 @@ locals {
     { name = "OTEL_HEADERS", secret = var.otel_headers_secret, version = "latest" },
   ] : []
 
-  # Enterprise request metering, gated on billing_metrics_endpoint. The
-  # endpoint rides in as a plain env var; the mTLS material lives in Secret
-  # Manager (secrets.tf) and is injected as PEM-valued env vars, which the
-  # proxy accepts in place of file paths. Each PEM is wired only when the
-  # operator supplied it, so an empty ca_cert_pem falls back to the system
-  # trust store.
-  billing_metrics_enabled             = var.billing_metrics_endpoint != ""
-  billing_metrics_client_cert_enabled = local.billing_metrics_enabled && var.billing_metrics_client_cert_pem != ""
-  billing_metrics_client_key_enabled  = local.billing_metrics_enabled && var.billing_metrics_client_key_pem != ""
-  billing_metrics_ca_cert_enabled     = local.billing_metrics_enabled && var.billing_metrics_ca_cert_pem != ""
+  # Enterprise request metering, gated on billing_metrics_endpoint.
+  billing_metrics_enabled               = var.billing_metrics_endpoint != ""
+  billing_metrics_client_secret_enabled = local.billing_metrics_enabled && var.billing_metrics_client_secret != ""
 
   billing_metrics_env_kv = local.billing_metrics_enabled ? [
     { name = "LITELLM_BILLING_METRICS_ENDPOINT", value = var.billing_metrics_endpoint },
+    { name = "LITELLM_BILLING_METRICS_CLIENT_ID", value = var.billing_metrics_client_id },
+    { name = "LITELLM_BILLING_METRICS_TOKEN_URL", value = var.billing_metrics_token_url },
   ] : []
 
-  billing_metrics_env_secrets = concat(
-    local.billing_metrics_client_cert_enabled ? [
-      { name = "LITELLM_BILLING_METRICS_CLIENT_CERT", secret = google_secret_manager_secret.billing_metrics_client_cert[0].id, version = "latest" },
-    ] : [],
-    local.billing_metrics_client_key_enabled ? [
-      { name = "LITELLM_BILLING_METRICS_CLIENT_KEY", secret = google_secret_manager_secret.billing_metrics_client_key[0].id, version = "latest" },
-    ] : [],
-    local.billing_metrics_ca_cert_enabled ? [
-      { name = "LITELLM_BILLING_METRICS_CA_CERT", secret = google_secret_manager_secret.billing_metrics_ca_cert[0].id, version = "latest" },
-    ] : [],
-  )
+  billing_metrics_env_secrets = local.billing_metrics_client_secret_enabled ? [
+    { name = "LITELLM_BILLING_METRICS_CLIENT_SECRET", secret = google_secret_manager_secret.billing_metrics_client_secret[0].id, version = "latest" },
+  ] : []
 
   # Cloud Run v2 secret env vars use value_source.secret_key_ref pointing at a
   # secret resource ID. Shared between gateway and backend (the migrations
@@ -138,28 +125,72 @@ locals {
     "export DATABASE_URL_READ_REPLICA=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST_READ_REPLICA}:$${DATABASE_PORT_READ_REPLICA}/$${DATABASE_NAME}\"",
   ]
 
-  gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
-  backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
+  gateway_pool_env = var.gateway_connection_pool_enabled ? [
+    { name = "LITELLM_PGBOUNCER_ENABLED", value = "true" },
+    { name = "LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS", value = tostring(var.gateway_pool_max_db_connections) },
+    { name = "LITELLM_PGBOUNCER_MAX_CLIENT_CONN", value = tostring(var.gateway_pool_max_client_conn) },
+  ] : []
 
-  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args};; *) exec uvicorn gateway.main:app ${local.gateway_uvicorn_args};; esac"
-  backend_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args};; *) exec uvicorn backend.main:app ${local.backend_uvicorn_args};; esac"
+  image_entrypoint = "/app/docker-entrypoint.sh"
 
   gateway_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    [local.gateway_launch_cmd],
+    ["exec ${local.image_entrypoint} gateway --workers ${var.gateway_num_workers}"],
   ))
+
+  metrics_enabled       = var.create_runtime && var.gateway_metrics_port != null
+  metrics_multiproc_dir = "/tmp/litellm_prometheus_multiproc"
+  metrics_volume        = "prometheus-multiproc"
+  metrics_env_kv        = local.metrics_enabled ? [{ name = "PROMETHEUS_MULTIPROC_DIR", value = local.metrics_multiproc_dir }] : []
+  metrics_config_volume = "gmp-config"
+
+  metrics_run_monitoring_yaml = local.metrics_enabled ? yamlencode({
+    apiVersion = "monitoring.googleapis.com/v1beta"
+    kind       = "RunMonitoring"
+    metadata   = { name = "${local.name}-gateway" }
+    spec = {
+      endpoints = [{ port = var.gateway_metrics_port, path = "/metrics", interval = "30s" }]
+    }
+  }) : ""
 
   backend_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    [local.backend_launch_cmd],
+    ["exec ${local.image_entrypoint} backend"],
   ))
 
-  # Env shipped to the migrations Job. The migrations image runs run.py
-  # which assembles DATABASE_URL from these discrete vars itself, so we
-  # only need writer-side DB env (no read replica, no proxy_config, no
-  # master key).
+  collector_address = "tcp://127.0.0.1:${var.collector_port}"
+  collector_env_kv = var.collector_enabled ? [
+    { name = "LITELLM_COLLECTOR_ENABLED", value = "true" },
+    { name = "LITELLM_COLLECTOR_ADDRESS", value = local.collector_address },
+    { name = "LITELLM_COLLECTOR_BUFFER_SIZE", value = tostring(var.collector_buffer_size) },
+    { name = "LITELLM_COLLECTOR_ON_UNAVAILABLE", value = var.collector_on_unavailable },
+    { name = "LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS", value = tostring(var.collector_drain_timeout_seconds) },
+  ] : []
+
+  gateway_env_kv      = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env, local.metrics_env_kv, local.gateway_pool_env, local.collector_env_kv)
+  gateway_env_secrets = concat(local.shared_env_secrets, local.otel_env_secrets, local.billing_metrics_env_secrets, local.gateway_extra_secret_kv)
+
+  collector_env_kv_all = concat(
+    local.shared_env_kv,
+    local.gateway_extra_env_kv,
+    local.proxy_config_env,
+    local.gateway_pool_env,
+    local.collector_env_kv,
+    [{ name = "LITELLM_JOB_ROLE", value = "collector" }],
+  )
+  collector_env_secrets = concat(local.shared_env_secrets, local.gateway_extra_secret_kv)
+
+  collector_args = join(" && ", concat(
+    local.redis_ca_fragment,
+    local.database_url_fragment,
+    ["exec ${local.image_entrypoint} collector"],
+  ))
+
+  # run.py assembles DATABASE_URL from these discrete vars itself, so the
+  # migrations Job only needs writer-side DB env (no read replica, no
+  # proxy_config, no master key).
   migrations_env_kv = [
     { name = "DATABASE_HOST", value = google_sql_database_instance.writer.private_ip_address },
     { name = "DATABASE_PORT", value = "5432" },
@@ -182,6 +213,13 @@ resource "google_cloud_run_v2_service" "gateway" {
   labels              = local.labels
   deletion_protection = false
 
+  lifecycle {
+    precondition {
+      condition     = !var.collector_enabled || var.gateway_metrics_port == null || var.collector_port != var.gateway_metrics_port
+      error_message = "collector_port and gateway_metrics_port must differ: both sidecars bind loopback in the same instance."
+    }
+  }
+
   template {
     service_account                  = google_service_account.runtime.email
     max_instance_request_concurrency = var.gateway_max_instance_request_concurrency
@@ -197,7 +235,8 @@ resource "google_cloud_run_v2_service" "gateway" {
     }
 
     containers {
-      image   = local.gateway_image
+      name    = "gateway"
+      image   = local.image
       command = ["sh", "-c"]
       args    = [local.gateway_args]
 
@@ -213,7 +252,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env)
+        for_each = local.gateway_env_kv
         content {
           name  = env.value.name
           value = env.value.value
@@ -221,7 +260,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_secrets, local.otel_env_secrets, local.billing_metrics_env_secrets, local.gateway_extra_secret_kv)
+        for_each = local.gateway_env_secrets
         content {
           name = env.value.name
           value_source {
@@ -238,6 +277,14 @@ resource "google_cloud_run_v2_service" "gateway" {
         content {
           name       = local.proxy_config_volume
           mount_path = local.proxy_config_mount_path
+        }
+      }
+
+      dynamic "volume_mounts" {
+        for_each = local.metrics_enabled ? [1] : []
+        content {
+          name       = local.metrics_volume
+          mount_path = local.metrics_multiproc_dir
         }
       }
 
@@ -262,6 +309,116 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
     }
 
+    dynamic "containers" {
+      for_each = local.metrics_enabled ? [1] : []
+      content {
+        name  = "metrics"
+        image = local.image
+        args  = ["metrics", "--port", tostring(var.gateway_metrics_port)]
+
+        dynamic "env" {
+          for_each = local.metrics_env_kv
+          content {
+            name  = env.value.name
+            value = env.value.value
+          }
+        }
+
+        volume_mounts {
+          name       = local.metrics_volume
+          mount_path = local.metrics_multiproc_dir
+        }
+
+        startup_probe {
+          http_get {
+            path = "/health"
+            port = var.gateway_metrics_port
+          }
+          period_seconds    = 5
+          timeout_seconds   = 3
+          failure_threshold = 12
+        }
+
+        liveness_probe {
+          http_get {
+            path = "/health"
+            port = var.gateway_metrics_port
+          }
+          period_seconds  = 30
+          timeout_seconds = 5
+        }
+      }
+    }
+
+    dynamic "containers" {
+      for_each = local.metrics_enabled ? [1] : []
+      content {
+        name       = "collector"
+        image      = var.gateway_metrics_collector_image
+        depends_on = ["metrics"]
+
+        volume_mounts {
+          name       = local.metrics_config_volume
+          mount_path = "/etc/rungmp"
+        }
+
+        liveness_probe {
+          http_get {
+            path = "/liveness"
+            port = 13133
+          }
+          period_seconds  = 30
+          timeout_seconds = 30
+        }
+      }
+    }
+
+    dynamic "containers" {
+      for_each = var.collector_enabled ? [1] : []
+      content {
+        name    = "spend-collector"
+        image   = local.image
+        command = ["sh", "-c"]
+        args    = [local.collector_args]
+
+        resources {
+          limits = {
+            cpu    = var.collector_cpu
+            memory = var.collector_memory
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.collector_env_kv_all
+          content {
+            name  = env.value.name
+            value = env.value.value
+          }
+        }
+
+        dynamic "env" {
+          for_each = local.collector_env_secrets
+          content {
+            name = env.value.name
+            value_source {
+              secret_key_ref {
+                secret  = env.value.secret
+                version = env.value.version
+              }
+            }
+          }
+        }
+
+        dynamic "volume_mounts" {
+          for_each = local.proxy_config_enabled ? [1] : []
+          content {
+            name       = local.proxy_config_volume
+            mount_path = local.proxy_config_mount_path
+          }
+        }
+      }
+    }
+
     dynamic "volumes" {
       for_each = local.proxy_config_enabled ? [1] : []
       content {
@@ -269,6 +426,31 @@ resource "google_cloud_run_v2_service" "gateway" {
         gcs {
           bucket    = google_storage_bucket.proxy_config[0].name
           read_only = true
+        }
+      }
+    }
+
+    dynamic "volumes" {
+      for_each = local.metrics_enabled ? [1] : []
+      content {
+        name = local.metrics_volume
+        empty_dir {
+          medium     = "MEMORY"
+          size_limit = "256Mi"
+        }
+      }
+    }
+
+    dynamic "volumes" {
+      for_each = local.metrics_enabled ? [1] : []
+      content {
+        name = local.metrics_config_volume
+        secret {
+          secret = google_secret_manager_secret.metrics_run_monitoring[0].secret_id
+          items {
+            version = "latest"
+            path    = "config.yaml"
+          }
         }
       }
     }
@@ -280,9 +462,9 @@ resource "google_cloud_run_v2_service" "gateway" {
     google_secret_manager_secret_iam_member.license,
     google_secret_manager_secret_iam_member.extras,
     google_secret_manager_secret_iam_member.otel_headers,
-    google_secret_manager_secret_iam_member.billing_metrics_client_cert,
-    google_secret_manager_secret_iam_member.billing_metrics_client_key,
-    google_secret_manager_secret_iam_member.billing_metrics_ca_cert,
+    google_secret_manager_secret_iam_member.billing_metrics_client_secret,
+    google_secret_manager_secret_iam_member.metrics_run_monitoring,
+    google_project_iam_member.runtime_metric_writer,
     google_storage_bucket_iam_member.proxy_config_runtime,
     google_sql_user.app,
     # Don't go live until the schema is migrated; otherwise the proxy boots,
@@ -316,7 +498,7 @@ resource "google_cloud_run_v2_service" "backend" {
     }
 
     containers {
-      image   = local.backend_image
+      image   = local.image
       command = ["sh", "-c"]
       args    = [local.backend_args]
 
@@ -332,7 +514,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env, local.metrics_env_kv)
         content {
           name  = env.value.name
           value = env.value.value
@@ -400,9 +582,7 @@ resource "google_cloud_run_v2_service" "backend" {
     google_secret_manager_secret_iam_member.ui_password,
     google_secret_manager_secret_iam_member.extras,
     google_secret_manager_secret_iam_member.otel_headers,
-    google_secret_manager_secret_iam_member.billing_metrics_client_cert,
-    google_secret_manager_secret_iam_member.billing_metrics_client_key,
-    google_secret_manager_secret_iam_member.billing_metrics_ca_cert,
+    google_secret_manager_secret_iam_member.billing_metrics_client_secret,
     google_storage_bucket_iam_member.proxy_config_runtime,
     google_sql_user.app,
     terraform_data.migration,
@@ -432,7 +612,8 @@ resource "google_cloud_run_v2_service" "ui" {
     }
 
     containers {
-      image = local.ui_image
+      image = local.image
+      args  = ["ui"]
 
       ports {
         container_port = 3000
@@ -494,9 +675,6 @@ resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
 }
 
 # ---------- Migrations job ----------
-# Dedicated litellm-migrations image — slim, ENTRYPOINT runs run.py which
-# assembles DATABASE_URL from the DATABASE_* env vars and runs `prisma
-# migrate deploy`. No proxy_config, no master key, no shell wrapper.
 resource "google_cloud_run_v2_job" "migrations" {
   count = var.create_runtime ? 1 : 0
 
@@ -515,7 +693,8 @@ resource "google_cloud_run_v2_job" "migrations" {
       }
 
       containers {
-        image = local.migrations_image
+        image = local.image
+        args  = ["migrations"]
 
         # Prisma's Node + Rust engine plus the v2 migration resolver
         # routinely peaks above 1 GiB while applying the schema, so 2 GiB

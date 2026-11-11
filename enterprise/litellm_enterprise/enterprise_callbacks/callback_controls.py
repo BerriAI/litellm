@@ -7,7 +7,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.llm_request_utils import (
     get_proxy_server_request_headers,
 )
-from litellm.proxy._types import CommonProxyErrors
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
@@ -34,9 +33,8 @@ class EnterpriseCallbackControls:
 
             try:
                 disabled_callbacks = EnterpriseCallbackControls.get_disabled_callbacks(litellm_params, standard_callback_dynamic_params)
-                verbose_logger.debug(f"Dynamically disabled callbacks from {X_LITELLM_DISABLE_CALLBACKS}: {disabled_callbacks}")
-                verbose_logger.debug(f"Checking if {callback} is disabled via headers. Disable callbacks from headers: {disabled_callbacks}")
                 if disabled_callbacks is not None:
+                    verbose_logger.debug(f"Checking if {callback} is in dynamically disabled callbacks: {disabled_callbacks}")
                     #########################################################
                     # premium user check
                     #########################################################
@@ -86,6 +84,7 @@ class EnterpriseCallbackControls:
     @staticmethod
     def _should_allow_dynamic_callback_disabling():
         import litellm
+        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import premium_user
 
         # Check if admin has disabled this feature

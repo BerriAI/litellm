@@ -1,9 +1,7 @@
-from typing import Any
-
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class TestPromptRequest(BaseModel):
+class TestPromptRequest(LiteLLMBaseModel):
     dotprompt_content: str
-    prompt_variables: dict[str, Any] | None = None
+    prompt_variables: dict[str, object] | None = None
     conversation_history: list[dict[str, str]] | None = None

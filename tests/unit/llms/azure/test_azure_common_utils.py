@@ -1,0 +1,2994 @@
+import asyncio
+import io
+import json
+import os
+import sys
+import threading
+import traceback
+import uuid
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from queue import SimpleQueue
+from typing import Awaitable, Callable, Final, Optional
+from urllib.parse import parse_qs
+from unittest.mock import ANY, MagicMock, patch
+
+import httpx
+import openai
+import pytest
+import requests
+from azure.core.pipeline.transport import RequestsTransport
+
+import litellm
+from litellm.llms.azure.common_utils import (
+    BaseAzureLLM,
+    _cached_azure_ad_token_refresh_provider,
+    _cached_default_azure_credential_provider,
+    _cached_entra_id_token_provider,
+    get_azure_ad_token,
+    get_azure_ad_token_from_entra_id,
+    get_azure_ad_token_from_oidc,
+    get_azure_ad_token_from_username_password,
+)
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    get_azure_ad_token_provider,
+)
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.secret_managers.get_azure_ad_token_provider import (
+    AzureCredentialType,
+)
+from litellm.types.utils import CallTypes
+
+
+# Mock the necessary dependencies
+@pytest.fixture
+def setup_mocks(monkeypatch):
+    # Clear Azure environment variables that might interfere with tests
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+    _cached_azure_ad_token_refresh_provider.cache_clear()
+    _cached_default_azure_credential_provider.cache_clear()
+
+    with (
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id"
+        ) as mock_entra_token,
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password"
+        ) as mock_username_password_token,
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc"
+        ) as mock_oidc_token,
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_provider"
+        ) as mock_token_provider,
+        patch("litellm.llms.azure.common_utils.litellm") as mock_litellm,
+        patch("litellm.llms.azure.common_utils.verbose_logger") as mock_logger,
+        patch(
+            "litellm.llms.azure.common_utils.select_azure_base_url_or_endpoint"
+        ) as mock_select_url,
+    ):
+        # Configure mocks
+        mock_litellm.AZURE_DEFAULT_API_VERSION = "2023-05-15"
+        mock_litellm.enable_azure_ad_token_refresh = False
+
+        mock_entra_token.return_value = lambda: "mock-entra-token"
+        mock_username_password_token.return_value = (
+            lambda: "mock-username-password-token"
+        )
+        mock_oidc_token.return_value = "mock-oidc-token"
+        mock_token_provider.return_value = lambda: "mock-default-token"
+
+        mock_select_url.side_effect = (
+            lambda azure_client_params, **kwargs: azure_client_params
+        )
+
+        yield {
+            "entra_token": mock_entra_token,
+            "username_password_token": mock_username_password_token,
+            "oidc_token": mock_oidc_token,
+            "token_provider": mock_token_provider,
+            "litellm": mock_litellm,
+            "logger": mock_logger,
+            "select_url": mock_select_url,
+        }
+    _cached_azure_ad_token_refresh_provider.cache_clear()
+    _cached_default_azure_credential_provider.cache_clear()
+
+
+def test_initialize_with_api_key(setup_mocks):
+    # Test with api_key provided
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Verify expected result
+    assert result["api_key"] == "test-api-key"
+    assert result["azure_endpoint"] == "https://test.openai.azure.com"
+    assert result["api_version"] == "2023-06-01"
+    assert "azure_ad_token" in result
+    assert result["azure_ad_token"] is None
+
+
+def test_initialize_with_tenant_credentials_env_var(setup_mocks, monkeypatch):
+    monkeypatch.setenv("AZURE_TENANT_ID", "test-tenant-id")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("AZURE_SCOPE", "test-azure-scope")
+
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_from_entra_id was called
+    setup_mocks["entra_token"].assert_called_once_with(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        scope="test-azure-scope",
+    )
+
+    # Verify expected result
+    assert result["api_key"] is None
+    assert result["azure_endpoint"] == "https://test.openai.azure.com"
+    assert "azure_ad_token_provider" in result
+
+
+def test_initialize_with_tenant_credentials(setup_mocks):
+    # Test with tenant_id, client_id, and client_secret provided
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "tenant_id": "test-tenant-id",
+            "client_id": "test-client-id",
+            "client_secret": "test-client-secret",
+            "azure_scope": "test-azure-scope",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_from_entra_id was called
+    setup_mocks["entra_token"].assert_called_once_with(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        scope="test-azure-scope",
+    )
+
+    # Verify expected result
+    assert result["api_key"] is None
+    assert result["azure_endpoint"] == "https://test.openai.azure.com"
+    assert "azure_ad_token_provider" in result
+
+
+def test_initialize_with_username_password(monkeypatch, setup_mocks):
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+
+    # Test with azure_username, azure_password, and client_id provided
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "azure_username": "test-username",
+            "azure_password": "test-password",
+            "client_id": "test-client-id",
+            "azure_scope": "test-azure-scope",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Print the call arguments for debugging
+    print("\nDebug - Call arguments for all mocks:")
+    print("username_password_token:", setup_mocks["username_password_token"].call_args)
+    print("entra_token:", setup_mocks["entra_token"].call_args)
+    print("oidc_token:", setup_mocks["oidc_token"].call_args)
+    print("token_provider:", setup_mocks["token_provider"].call_args)
+    print("\nResult:", result)
+
+    # Verify that get_azure_ad_token_from_username_password was called
+    setup_mocks["username_password_token"].assert_called_once_with(
+        azure_username="test-username",
+        azure_password="test-password",
+        client_id="test-client-id",
+        scope="test-azure-scope",
+    )
+
+    # Verify expected result
+    assert "azure_ad_token_provider" in result
+
+
+def test_initialize_with_oidc_token(setup_mocks, monkeypatch):
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+
+    # Test with azure_ad_token that starts with "oidc/"
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={"azure_ad_token": "oidc/test-token"},
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    setup_mocks["oidc_token"].assert_called_once_with(
+        azure_ad_token="oidc/test-token",
+        azure_client_id=None,
+        azure_tenant_id=None,
+        scope="https://cognitiveservices.azure.com/.default",
+    )
+
+    # Verify expected result
+    assert result["azure_ad_token"] == "mock-oidc-token"
+
+
+def test_initialize_with_oidc_token_and_client_params(setup_mocks):
+    # Test with azure_ad_token that starts with "oidc/" and explicit client/tenant IDs
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "azure_ad_token": "oidc/test-token",
+            "client_id": "test-client-id",
+            "tenant_id": "test-tenant-id",
+            "azure_scope": "test-azure-scope",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_from_oidc was called with the correct parameters
+    setup_mocks["oidc_token"].assert_called_once_with(
+        azure_ad_token="oidc/test-token",
+        azure_client_id="test-client-id",
+        azure_tenant_id="test-tenant-id",
+        scope="test-azure-scope",
+    )
+
+    # Verify expected result
+    assert result["azure_ad_token"] == "mock-oidc-token"
+
+
+def test_initialize_with_oidc_token_fallback_to_env(setup_mocks, monkeypatch):
+    # Set environment variables
+    monkeypatch.setenv("AZURE_CLIENT_ID", "env-client-id")
+    monkeypatch.setenv("AZURE_TENANT_ID", "env-tenant-id")
+
+    # Test with azure_ad_token that starts with "oidc/" but no explicit client/tenant IDs
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "azure_ad_token": "oidc/test-token",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_from_oidc was called with environment variables
+    setup_mocks["oidc_token"].assert_called_once_with(
+        azure_ad_token="oidc/test-token",
+        azure_client_id="env-client-id",
+        azure_tenant_id="env-tenant-id",
+        scope="https://cognitiveservices.azure.com/.default",
+    )
+
+    # Verify expected result
+    assert result["azure_ad_token"] == "mock-oidc-token"
+
+
+def test_initialize_with_ad_token_provider(setup_mocks, monkeypatch):
+    # Clear environment variables
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+
+    # Test with custom azure_ad_token_provider
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={
+            "azure_ad_token_provider": lambda: "mock-custom-token",
+        },
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify expected result
+    assert result["azure_ad_token_provider"]() == "mock-custom-token"
+
+
+def test_initialize_with_enable_token_refresh(setup_mocks, monkeypatch):
+    litellm.turn_on_debug()
+    # Enable token refresh
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+
+    # Test with token refresh enabled
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify that get_azure_ad_token_provider was called
+    setup_mocks["token_provider"].assert_called_once()
+
+    # Verify expected result
+    assert "azure_ad_token_provider" in result
+
+
+def test_initialize_with_token_refresh_error(setup_mocks, monkeypatch):
+    # Enable token refresh but make it raise an error
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+    setup_mocks["token_provider"].side_effect = ValueError("Token provider error")
+
+    # Test with token refresh enabled but raising error
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version=None,
+        is_async=False,
+    )
+
+    # Verify error was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Azure AD Token Provider could not be used."
+    )
+
+
+def test_api_version_from_env_var(setup_mocks):
+    # Test api_version from environment variable
+    with patch.dict(os.environ, {"AZURE_API_VERSION": "2023-07-01"}):
+        result = BaseAzureLLM().initialize_azure_sdk_client(
+            litellm_params={},
+            api_key="test-api-key",
+            api_base="https://test.openai.azure.com",
+            model_name="gpt-4",
+            api_version=None,
+            is_async=False,
+        )
+
+    # Verify expected result
+    assert result["api_version"] == "2023-07-01"
+
+
+def test_select_azure_base_url_called(setup_mocks):
+    # Test that select_azure_base_url_or_endpoint is called
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Verify that select_azure_base_url_or_endpoint was called
+    setup_mocks["select_url"].assert_called_once()
+
+
+def test_initialize_defaults_max_retries_to_litellm_default(setup_mocks):
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    assert result["max_retries"] == litellm.constants.DEFAULT_MAX_RETRIES
+
+
+@pytest.mark.parametrize(
+    "configured, expected",
+    [(0, 0), (5, 5), (None, litellm.constants.DEFAULT_MAX_RETRIES)],
+)
+def test_initialize_honors_explicit_max_retries(setup_mocks, configured, expected):
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={"max_retries": configured},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    assert result["max_retries"] == expected
+
+
+def test_default_max_retries_env_var_reaches_azure_sdk_client():
+    import subprocess
+    import sys
+
+    code = (
+        "from litellm.llms.azure.common_utils import BaseAzureLLM\n"
+        "client = BaseAzureLLM().get_azure_openai_client("
+        "api_key='test-api-key', api_base='https://test.openai.azure.com', api_version='2024-02-01',"
+        " client=None, _is_async=True, litellm_params={}, model='gpt-4')\n"
+        "print(client.max_retries)"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "DEFAULT_MAX_RETRIES": "0"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert completed.stdout.strip() == "0"
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        call_type
+        for call_type in CallTypes.__members__.values()
+        if call_type.name.startswith("a")
+        and call_type.name
+        not in [
+            "amoderation",
+            "arerank",
+            "arealtime",
+            "anthropic_messages",
+            "aanthropic_messages",
+            "add_message",
+            "arun_thread_stream",
+            "aresponses",
+            "aget_responses",
+            "adelete_responses",
+            "acancel_responses",
+            "acompact_responses",
+            "aresponses_websocket",
+            "alist_input_items",
+            "acreate_fine_tuning_job",
+            "acancel_fine_tuning_job",
+            "alist_fine_tuning_jobs",
+            "aretrieve_fine_tuning_job",
+            "afile_list",
+            "aimage_edit",
+            "image_edit",
+            "agenerate_content_stream",
+            "agenerate_content",
+            "allm_passthrough_route",
+            "llm_passthrough_route",
+            "asearch",
+            "adecisions",
+            "asystemone",
+            "aextraction",
+            "avector_store_create",
+            "avector_store_search",
+            "acreate_skill",
+            "acreate_interaction",
+            "acreate_realtime_client_secret",
+            "acreate_realtime_transcription_session",
+            "acreate_realtime_translation_client_secret",
+            "arealtime_calls",
+            "arealtime_translation_calls",
+        ]
+    ],
+)
+@pytest.mark.asyncio
+async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
+    from litellm.router import Router
+
+    # Create a router with an Azure model
+    azure_model_name = "azure/chatgpt-v-2"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": azure_model_name,
+                    "api_key": "test-api-key",
+                    "api_version": os.getenv("AZURE_API_VERSION", "2023-05-15"),
+                    "api_base": os.getenv(
+                        "AZURE_AI_API_BASE", "https://test.openai.azure.com"
+                    ),
+                },
+            }
+        ],
+    )
+
+    # Prepare test input based on call type
+    test_inputs = {
+        "acompletion": {
+            "messages": [{"role": "user", "content": "Hello, how are you?"}]
+        },
+        "atext_completion": {"prompt": "Hello, how are you?"},
+        "aimage_generation": {"prompt": "Hello, how are you?"},
+        "aembedding": {"input": "Hello, how are you?"},
+        "arerank": {"input": "Hello, how are you?"},
+        "atranscription": {"file": "path/to/file"},
+        "aspeech": {"input": "Hello, how are you?", "voice": "female"},
+        "acreate_batch": {
+            "completion_window": 10,
+            "endpoint": "https://test.openai.azure.com",
+            "input_file_id": "123",
+        },
+        "aretrieve_batch": {"batch_id": "123"},
+        "acancel_batch": {"batch_id": "123"},
+        "aget_assistants": {"custom_llm_provider": "azure"},
+        "acreate_assistants": {"custom_llm_provider": "azure"},
+        "adelete_assistant": {"custom_llm_provider": "azure", "assistant_id": "123"},
+        "acreate_thread": {"custom_llm_provider": "azure"},
+        "aget_thread": {"custom_llm_provider": "azure", "thread_id": "123"},
+        "a_add_message": {
+            "custom_llm_provider": "azure",
+            "thread_id": "123",
+            "role": "user",
+            "content": "Hello, how are you?",
+        },
+        "aget_messages": {"custom_llm_provider": "azure", "thread_id": "123"},
+        "arun_thread": {
+            "custom_llm_provider": "azure",
+            "assistant_id": "123",
+            "thread_id": "123",
+        },
+        "acreate_file": {
+            "custom_llm_provider": "azure",
+            "file": MagicMock(),
+            "purpose": "assistants",
+        },
+        "afile_content": {
+            "custom_llm_provider": "azure",
+            "file_id": "123",
+        },
+        "afile_delete": {
+            "custom_llm_provider": "azure",
+            "file_id": "123",
+        },
+        "avideo_content": {
+            "custom_llm_provider": "azure",
+            "video_id": "123",
+        },
+        "avideo_list": {
+            "custom_llm_provider": "azure",
+        },
+        "avideo_remix": {
+            "custom_llm_provider": "azure",
+            "video_id": "123",
+            "prompt": "A new video based on this one",
+        },
+    }
+
+    # Get appropriate input for this call type
+    input_kwarg = test_inputs.get(call_type.value, {})
+
+    patch_target = (
+        "litellm.llms.azure.common_utils.BaseAzureLLM.initialize_azure_sdk_client"
+    )
+    if call_type == CallTypes.arerank:
+        patch_target = (
+            "litellm.rerank_api.main.azure_rerank.initialize_azure_sdk_client"
+        )
+    elif (
+        call_type == CallTypes.acreate_batch
+        or call_type == CallTypes.aretrieve_batch
+        or call_type == CallTypes.acancel_batch
+    ):
+        patch_target = (
+            "litellm.batches.main.azure_batches_instance.initialize_azure_sdk_client"
+        )
+    elif (
+        call_type == CallTypes.aget_assistants
+        or call_type == CallTypes.acreate_assistants
+        or call_type == CallTypes.adelete_assistant
+        or call_type == CallTypes.acreate_thread
+        or call_type == CallTypes.aget_thread
+        or call_type == CallTypes.a_add_message
+        or call_type == CallTypes.aget_messages
+        or call_type == CallTypes.arun_thread
+    ):
+        patch_target = (
+            "litellm.assistants.main.azure_assistants_api.initialize_azure_sdk_client"
+        )
+    elif call_type == CallTypes.acreate_file or call_type == CallTypes.afile_content:
+        patch_target = (
+            "litellm.files.main.azure_files_instance.initialize_azure_sdk_client"
+        )
+    elif (
+        call_type == CallTypes.avideo_generation
+        or call_type == CallTypes.avideo_content
+        or call_type == CallTypes.avideo_list
+        or call_type == CallTypes.avideo_remix
+        or call_type == CallTypes.avideo_create_character
+        or call_type == CallTypes.avideo_get_character
+        or call_type == CallTypes.avideo_edit
+        or call_type == CallTypes.avideo_extension
+    ):
+        # Skip video call types as they don't use Azure SDK client initialization
+        pytest.skip(
+            f"Skipping {call_type.value} because Azure video calls don't use initialize_azure_sdk_client"
+        )
+    elif (
+        call_type == CallTypes.alist_containers
+        or call_type == CallTypes.aretrieve_container
+        or call_type == CallTypes.acreate_container
+        or call_type == CallTypes.adelete_container
+        or call_type == CallTypes.alist_container_files
+        or call_type == CallTypes.aupload_container_file
+    ):
+        # Skip container call types as they're not supported for Azure (only OpenAI)
+        pytest.skip(
+            f"Skipping {call_type.value} because Azure doesn't support container operations"
+        )
+    elif (
+        call_type == CallTypes.avector_store_file_create
+        or call_type == CallTypes.avector_store_file_list
+        or call_type == CallTypes.avector_store_file_retrieve
+        or call_type == CallTypes.avector_store_file_content
+        or call_type == CallTypes.avector_store_file_update
+        or call_type == CallTypes.avector_store_file_delete
+    ):
+        # Skip vector store file call types as they're not supported for Azure (only OpenAI)
+        pytest.skip(
+            f"Skipping {call_type.value} because Azure doesn't support vector store file operations"
+        )
+    elif call_type == CallTypes.aocr or call_type == CallTypes.ocr:
+        # Skip OCR call types as they don't use Azure SDK client initialization
+        pytest.skip(
+            f"Skipping {call_type.value} because OCR calls don't use initialize_azure_sdk_client"
+        )
+    # Mock the initialize_azure_sdk_client function
+    with patch(patch_target) as mock_init_azure:
+        # Also mock async_function_with_fallbacks to prevent actual API calls
+        # Call the appropriate router method
+        try:
+            get_attr = getattr(router, call_type.value, None)
+            if get_attr is None:
+                pytest.skip(
+                    f"Skipping {call_type.value} because it is not supported on Router"
+                )
+            await getattr(router, call_type.value)(
+                model="gpt-3.5-turbo",
+                **input_kwarg,
+                num_retries=0,
+                azure_ad_token="oidc/test-token",
+            )
+        except Exception as e:
+            traceback.print_exc()
+
+        # Verify initialize_azure_sdk_client was called
+        mock_init_azure.assert_called_once()
+
+        # Verify it was called with the right model name
+        calls = mock_init_azure.call_args_list
+        azure_calls = [call for call in calls]
+
+        litellm_params = azure_calls[0].kwargs["litellm_params"]
+        print("litellm_params", litellm_params)
+
+        assert (
+            "azure_ad_token" in litellm_params
+        ), "azure_ad_token not found in parameters"
+        assert (
+            litellm_params["azure_ad_token"] == "oidc/test-token"
+        ), "azure_ad_token is not correct"
+
+        # More detailed verification (optional)
+        for call in azure_calls:
+            assert "api_key" in call.kwargs, "api_key not found in parameters"
+            assert "api_base" in call.kwargs, "api_base not found in parameters"
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        CallTypes.atext_completion,
+        CallTypes.acompletion,
+    ],
+)
+@pytest.mark.asyncio
+async def test_ensure_initialize_azure_sdk_client_always_used_azure_text(call_type):
+    from litellm.router import Router
+
+    # Create a router with an Azure model
+    azure_model_name = "azure_text/chatgpt-v-2"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": azure_model_name,
+                    "api_key": "test-api-key",
+                    "api_version": os.getenv("AZURE_API_VERSION", "2023-05-15"),
+                    "api_base": os.getenv(
+                        "AZURE_AI_API_BASE", "https://test.openai.azure.com"
+                    ),
+                },
+            }
+        ],
+    )
+
+    # Prepare test input based on call type
+    test_inputs = {
+        "acompletion": {
+            "messages": [{"role": "user", "content": "Hello, how are you?"}]
+        },
+        "atext_completion": {"prompt": "Hello, how are you?"},
+    }
+
+    # Get appropriate input for this call type
+    input_kwarg = test_inputs.get(call_type.value, {})
+
+    patch_target = "litellm.main.azure_text_completions.initialize_azure_sdk_client"
+
+    # Mock the initialize_azure_sdk_client function
+    with patch(patch_target) as mock_init_azure:
+        # Also mock async_function_with_fallbacks to prevent actual API calls
+        # Call the appropriate router method
+        try:
+            get_attr = getattr(router, call_type.value, None)
+            if get_attr is None:
+                pytest.skip(
+                    f"Skipping {call_type.value} because it is not supported on Router"
+                )
+            await getattr(router, call_type.value)(
+                model="gpt-3.5-turbo",
+                **input_kwarg,
+                num_retries=0,
+                azure_ad_token="oidc/test-token",
+            )
+        except Exception as e:
+            traceback.print_exc()
+
+        # Verify initialize_azure_sdk_client was called
+        mock_init_azure.assert_called_once()
+
+        # Verify it was called with the right model name
+        calls = mock_init_azure.call_args_list
+        azure_calls = [call for call in calls]
+
+        litellm_params = azure_calls[0].kwargs["litellm_params"]
+        print("litellm_params", litellm_params)
+
+        assert (
+            "azure_ad_token" in litellm_params
+        ), "azure_ad_token not found in parameters"
+        assert (
+            litellm_params["azure_ad_token"] == "oidc/test-token"
+        ), "azure_ad_token is not correct"
+
+        # More detailed verification (optional)
+        for call in azure_calls:
+            assert "api_key" in call.kwargs, "api_key not found in parameters"
+            assert "api_base" in call.kwargs, "api_base not found in parameters"
+
+
+# Test parameters for different API functions with Azure models
+AZURE_API_FUNCTION_PARAMS = [
+    # (function_name, is_async, args)
+    (
+        "completion",
+        False,
+        {
+            "model": "azure/gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 10,
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "completion",
+        True,
+        {
+            "model": "azure/gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 10,
+            "stream": True,
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "embedding",
+        False,
+        {
+            "model": "azure/text-embedding-ada-002",
+            "input": "Hello world",
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "embedding",
+        True,
+        {
+            "model": "azure/text-embedding-ada-002",
+            "input": "Hello world",
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "speech",
+        False,
+        {
+            "model": "azure/tts",
+            "input": "Hello, this is a test of text to speech",
+            "voice": "alloy",
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "speech",
+        True,
+        {
+            "model": "azure/tts-1",
+            "input": "Hello, this is a test of text to speech",
+            "voice": "alloy",
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "transcription",
+        False,
+        {
+            "model": "azure/whisper-1",
+            "file": MagicMock(),
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+    (
+        "transcription",
+        True,
+        {
+            "model": "azure/whisper-1",
+            "file": MagicMock(),
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize("function_name,is_async,args", AZURE_API_FUNCTION_PARAMS)
+@pytest.mark.asyncio
+async def test_azure_client_reuse(function_name, is_async, args):
+    """
+    Test that multiple Azure API calls reuse the same Azure OpenAI client
+    """
+
+    # Determine which client class to mock based on whether the test is async
+    client_path = (
+        "litellm.llms.azure.common_utils.AsyncAzureOpenAI"
+        if is_async
+        else "litellm.llms.azure.common_utils.AzureOpenAI"
+    )
+
+    # Create a proper mock class that can pass isinstance checks
+    mock_client = MagicMock()
+
+    # Create the appropriate patches
+    with (
+        patch(client_path) as mock_client_class,
+        patch.object(BaseAzureLLM, "set_cached_openai_client") as mock_set_cache,
+        patch.object(BaseAzureLLM, "get_cached_openai_client") as mock_get_cache,
+        patch.object(BaseAzureLLM, "initialize_azure_sdk_client") as mock_init_azure,
+    ):
+        # Configure the mock client class to return our mock instance
+        mock_client_class.return_value = mock_client
+
+        # Setup the mock to return None first time (cache miss) then a client for subsequent calls
+        mock_get_cache.side_effect = [None] + [
+            mock_client
+        ] * 9  # First call returns None, rest return the mock client
+
+        # Mock the initialize_azure_sdk_client to return a dict with the necessary params
+        mock_init_azure.return_value = {
+            "api_key": args.get("api_key"),
+            "azure_endpoint": args.get("api_base"),
+            "api_version": args.get("api_version"),
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        # Make 10 API calls
+        for _ in range(10):
+            try:
+                # Call the appropriate function based on parameters
+                if is_async:
+                    # Add 'a' prefix for async functions
+                    func = getattr(litellm, f"a{function_name}")
+                    await func(**args)
+                else:
+                    func = getattr(litellm, function_name)
+                    func(**args)
+            except Exception:
+                # We expect exceptions since we're mocking the client
+                pass
+
+        # Verify client was created only once
+        assert (
+            mock_client_class.call_count == 1
+        ), f"{'Async' if is_async else ''}AzureOpenAI client should be created only once"
+
+        # Verify initialize_azure_sdk_client was called once
+        assert (
+            mock_init_azure.call_count == 1
+        ), "initialize_azure_sdk_client should be called once"
+
+        # Verify the client was cached
+        assert mock_set_cache.call_count == 1, "Client should be cached once"
+
+        # Verify we tried to get from cache 10 times (once per request)
+        assert mock_get_cache.call_count == 10, "Should check cache for each request"
+
+
+@pytest.mark.asyncio
+async def test_azure_client_cache_separates_sync_and_async():
+    """
+    Test that the Azure client cache correctly separates sync and async clients.
+    This directly tests the fix for issues #9801 and #10318 where sync and async
+    clients were being mixed up in the cache.
+    """
+    from litellm.llms.azure.common_utils import BaseAzureLLM
+
+    # Clear the in-memory cache before test
+    litellm.in_memory_llm_clients_cache._cache = {}
+
+    # Create mock sync and async clients
+    mock_sync_client = MagicMock()
+    mock_async_client = MagicMock()
+
+    # Patch the Azure client classes
+    with (
+        patch("litellm.llms.azure.common_utils.AzureOpenAI") as mock_sync_client_class,
+        patch(
+            "litellm.llms.azure.common_utils.AsyncAzureOpenAI"
+        ) as mock_async_client_class,
+        patch.object(BaseAzureLLM, "initialize_azure_sdk_client") as mock_init_azure,
+    ):
+        # Configure the mocks to return our instances
+        mock_sync_client_class.return_value = mock_sync_client
+        mock_async_client_class.return_value = mock_async_client
+
+        # Mock the initialize_azure_sdk_client to return necessary params
+        mock_init_azure.return_value = {
+            "api_key": "test-api-key",
+            "azure_endpoint": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        # Create an instance and make identical requests with different async flags
+        base_llm = BaseAzureLLM()
+        common_params = {
+            "api_key": "test-api-key",
+            "api_base": "https://test.openai.azure.com",
+            "api_version": "2023-05-15",
+            "model": "gpt-4",
+            "litellm_params": {},
+        }
+
+        # Get a sync client
+        sync_client = base_llm.get_azure_openai_client(_is_async=False, **common_params)
+        # Then get an async client with identical parameters
+        async_client = base_llm.get_azure_openai_client(_is_async=True, **common_params)
+
+        # Verify we got the right classes
+        assert (
+            sync_client is mock_sync_client
+        ), "Sync client should be the mock sync client"
+        assert (
+            async_client is mock_async_client
+        ), "Async client should be the mock async client"
+
+        # Verify each client class was instantiated exactly once
+        assert (
+            mock_sync_client_class.call_count == 1
+        ), "AzureOpenAI should be instantiated once"
+        assert (
+            mock_async_client_class.call_count == 1
+        ), "AsyncAzureOpenAI should be instantiated once"
+
+        # Verify initialize_azure_sdk_client was called for each client type
+        assert (
+            mock_init_azure.call_count == 2
+        ), "initialize_azure_sdk_client should be called twice"
+
+
+def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeypatch):
+    """
+    Test that the scope parameter in initialize_azure_sdk_client is always a string,
+    regardless of the input provided (None, empty string, etc.).
+    """
+    # Clear environment variables to ensure clean test state
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+
+    base_llm = BaseAzureLLM()
+    expected_default_scope = "https://cognitiveservices.azure.com/.default"
+
+    # Test case 1: scope is None in litellm_params
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={"azure_scope": None},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Verify scope is a string and has the expected default value
+    # We need to check the internal logic by inspecting what was passed to mocked functions
+    setup_mocks["select_url"].assert_called()
+    call_args = setup_mocks["select_url"].call_args[1]["azure_client_params"]
+    # The scope should be used internally when setting up token providers
+
+    # Test case 2: azure_scope key is missing entirely
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Test case 3: azure_scope is an empty string
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={"azure_scope": ""},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Test case 4: azure_scope is a valid custom string
+    custom_scope = "https://custom.scope.com/.default"
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={"azure_scope": custom_scope},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Test case 5: Test with token authentication to verify scope is passed correctly
+    setup_mocks["entra_token"].reset_mock()
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={
+            "azure_scope": None,  # This should default to the expected scope
+            "tenant_id": "test-tenant",
+            "client_id": "test-client",
+            "client_secret": "test-secret",
+        },
+        api_key=None,  # No API key to trigger token authentication
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Verify that the token function was called with a string scope
+    setup_mocks["entra_token"].assert_called_once()
+    call_args = setup_mocks["entra_token"].call_args
+    scope_arg = call_args[1]["scope"]  # scope should be passed as keyword argument
+    assert isinstance(
+        scope_arg, str
+    ), f"Scope should be a string, got {type(scope_arg)}"
+    assert (
+        scope_arg == expected_default_scope
+    ), f"Scope should be {expected_default_scope}, got {scope_arg}"
+
+    # Test case 6: Test with environment variable set to None (edge case)
+    monkeypatch.setenv("AZURE_SCOPE", "")
+    result = base_llm.initialize_azure_sdk_client(
+        litellm_params={"azure_scope": None},
+        api_key="test-api-key",
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    print("All scope tests passed - scope is always a string")
+
+
+def test_with_existing_token_provider(setup_mocks):
+    """Test get_azure_ad_token with an existing token provider."""
+    token_provider = lambda: "test-token"
+    litellm_params = GenericLiteLLMParams(azure_ad_token_provider=token_provider)
+
+    token = get_azure_ad_token(litellm_params)
+
+    assert token == "test-token"
+
+
+def test_with_existing_azure_ad_token(setup_mocks):
+    """Test get_azure_ad_token with an existing azure ad token."""
+    litellm_params = GenericLiteLLMParams(azure_ad_token="test-token")
+
+    token = get_azure_ad_token(litellm_params)
+
+    assert token == "test-token"
+
+
+def test_with_existing_azure_ad_token_from_env(setup_mocks):
+    """Test get_azure_ad_token with an existing AZURE_AD_TOKEN from env."""
+
+    # mock get_secret_str("AZURE_AD_TOKEN") to "test-token"
+    with patch("litellm.llms.azure.common_utils.get_secret_str") as mock_get_secret_str:
+        # Configure the mock to return "test-token" when called with "AZURE_AD_TOKEN"
+        mock_get_secret_str.side_effect = lambda key: (
+            "test-token" if key == "AZURE_AD_TOKEN" else None
+        )
+
+        litellm_params = GenericLiteLLMParams()
+
+        token = get_azure_ad_token(litellm_params)
+
+        assert token == "test-token"
+        # Verify that get_secret_str was called with "AZURE_AD_TOKEN"
+        mock_get_secret_str.assert_called_with("AZURE_AD_TOKEN")
+
+
+def test_get_azure_ad_token_with_client_id_and_client_secret(setup_mocks):
+    """Test get_azure_ad_token with tenant_id, client_id, and client_secret."""
+    # Reset mocks to ensure clean state
+    setup_mocks["entra_token"].reset_mock()
+
+    # Create test parameters with username, password, and client_id
+    # but no other authentication methods
+    litellm_params = GenericLiteLLMParams(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        azure_scope="test-azure-scope",
+    )
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure AD Token Provider from Entra ID for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_from_entra_id was called with correct params
+    setup_mocks["entra_token"].assert_called_once_with(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-entra-token"
+
+
+def test_get_azure_ad_token_with_client_id_and_client_secret_from_env(
+    setup_mocks, monkeypatch
+):
+    """Test get_azure_ad_token with tenant_id, client_id, and client_secret from env."""
+    # Reset mocks to ensure clean state
+    setup_mocks["entra_token"].reset_mock()
+
+    # Set environment variables
+    monkeypatch.setenv("AZURE_TENANT_ID", "test-tenant-id")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "test-client-secret")
+    monkeypatch.setenv("AZURE_SCOPE", "test-azure-scope")
+
+    # Create test parameters with username, password, and client_id
+    # but no other authentication methods
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure AD Token Provider from Entra ID for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_from_entra_id was called with correct params
+    setup_mocks["entra_token"].assert_called_once_with(
+        tenant_id="test-tenant-id",
+        client_id="test-client-id",
+        client_secret="test-client-secret",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-entra-token"
+
+
+def test_get_azure_ad_token_with_username_password(setup_mocks):
+    """Test get_azure_ad_token with username, password, and client_id."""
+    # Reset mocks to ensure clean state
+    setup_mocks["username_password_token"].reset_mock()
+
+    # Create test parameters with username, password, and client_id
+    # but no other authentication methods
+    litellm_params = GenericLiteLLMParams(
+        azure_username="test-username",
+        azure_password="test-password",
+        client_id="test-client-id",
+        azure_scope="test-azure-scope",
+        # Ensure no other auth methods are available
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+        tenant_id=None,
+        client_secret=None,
+    )
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure Username and Password for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_from_username_password was called with correct params
+    setup_mocks["username_password_token"].assert_called_once_with(
+        azure_username="test-username",
+        azure_password="test-password",
+        client_id="test-client-id",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-username-password-token"
+
+
+def test_get_azure_ad_token_with_missing_username_password(setup_mocks):
+    """Test get_azure_ad_token skips username/password auth when credentials are incomplete."""
+    # Reset mocks to ensure clean state
+    setup_mocks["username_password_token"].reset_mock()
+
+    # Test cases with missing credentials
+    test_cases = [
+        # Missing username
+        GenericLiteLLMParams(
+            azure_username=None,
+            azure_password="test-password",
+            client_id="test-client-id",
+        ),
+        # Missing password
+        GenericLiteLLMParams(
+            azure_username="test-username",
+            azure_password=None,
+            client_id="test-client-id",
+        ),
+        # Missing client_id
+        GenericLiteLLMParams(
+            azure_username="test-username",
+            azure_password="test-password",
+            client_id=None,
+        ),
+    ]
+
+    for params in test_cases:
+        # Call the function
+        get_azure_ad_token(params)
+
+        # Verify username/password auth was not used
+        setup_mocks["username_password_token"].assert_not_called()
+
+        # Reset mock for next test case
+        setup_mocks["username_password_token"].reset_mock()
+
+
+def test_get_azure_ad_token_with_username_password_from_env(setup_mocks, monkeypatch):
+    """Test get_azure_ad_token with username, password, and client_id from environment variables."""
+    # Reset mocks to ensure clean state
+    setup_mocks["username_password_token"].reset_mock()
+
+    # Set environment variables
+    monkeypatch.setenv("AZURE_USERNAME", "env-username")
+    monkeypatch.setenv("AZURE_PASSWORD", "env-password")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "env-client-id")
+    monkeypatch.setenv("AZURE_SCOPE", "test-azure-scope")
+
+    # Create test parameters with no explicit credentials
+    litellm_params = GenericLiteLLMParams(
+        # Ensure no other auth methods are available
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+        tenant_id=None,
+        client_secret=None,
+        # Don't set username, password, or client_id directly
+    )
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure Username and Password for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_from_username_password was called with correct params from env
+    setup_mocks["username_password_token"].assert_called_once_with(
+        azure_username="env-username",
+        azure_password="env-password",
+        client_id="env-client-id",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-username-password-token"
+
+
+def test_get_azure_ad_token_with_oidc_token(setup_mocks, monkeypatch):
+    """Test get_azure_ad_token with OIDC token."""
+    # Reset mocks to ensure clean state
+    setup_mocks["oidc_token"].reset_mock()
+
+    # Clear environment variables that might interfere with OIDC token logic
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+
+    # Create test parameters with OIDC token, client_id, and tenant_id
+    litellm_params = GenericLiteLLMParams(
+        azure_ad_token="oidc/test-token",
+        client_id="test-client-id",
+        tenant_id="test-tenant-id",
+        azure_scope="test-azure-scope",
+        # Ensure no other auth methods are available
+        azure_ad_token_provider=None,
+        client_secret=None,
+        azure_username=None,
+        azure_password=None,
+    )
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call("Using Azure OIDC Token for Azure Auth")
+
+    # Verify get_azure_ad_token_from_oidc was called with correct params
+    setup_mocks["oidc_token"].assert_called_once_with(
+        azure_ad_token="oidc/test-token",
+        azure_client_id="test-client-id",
+        azure_tenant_id="test-tenant-id",
+        scope="test-azure-scope",
+    )
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-oidc-token"
+
+
+def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
+    """Test get_azure_ad_token with token refresh enabled."""
+    # Reset mocks to ensure clean state
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+
+    setup_mocks["token_provider"].reset_mock()
+
+    # Enable token refresh
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+
+    # Create test parameters with no other auth methods available
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_provider was called
+    setup_mocks["token_provider"].assert_called_once()
+
+    # Verify the token is what we expect from our mock
+    assert token == "mock-default-token"
+
+
+def test_get_azure_ad_token_with_token_refresh_reuses_provider_per_scope(setup_mocks):
+    """Repeated requests reuse one token provider per scope instead of building a
+    new credential, and fetching a new token, on every call (#46419)"""
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+    default_scope = "https://cognitiveservices.azure.com/.default"
+    other_scope = "api://other-resource/.default"
+
+    tokens = [
+        get_azure_ad_token(GenericLiteLLMParams()),
+        get_azure_ad_token(GenericLiteLLMParams()),
+        get_azure_ad_token(GenericLiteLLMParams(azure_scope=other_scope)),
+    ]
+
+    assert tokens == ["mock-default-token"] * 3
+    assert [c.kwargs for c in setup_mocks["token_provider"].call_args_list] == [
+        {"azure_scope": default_scope},
+        {"azure_scope": other_scope},
+    ]
+
+
+def test_get_azure_ad_token_reuses_one_default_azure_credential_provider_per_scope(setup_mocks):
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+    default_scope: Final = "https://cognitiveservices.azure.com/.default"
+    other_scope: Final = "api://other-resource/.default"
+
+    def provider_for(azure_scope: str, azure_credential: AzureCredentialType | None = None) -> Callable[[], str]:
+        if azure_credential != AzureCredentialType.DefaultAzureCredential:
+            raise ValueError("No credential provided")
+        return lambda: f"token-for-{azure_scope}"
+
+    setup_mocks["token_provider"].side_effect = provider_for
+
+    tokens: Final = (
+        get_azure_ad_token(GenericLiteLLMParams()),
+        get_azure_ad_token(GenericLiteLLMParams()),
+        get_azure_ad_token(GenericLiteLLMParams(azure_scope=other_scope)),
+    )
+
+    default_credential_builds: Final = tuple(
+        call.kwargs["azure_scope"]
+        for call in setup_mocks["token_provider"].call_args_list
+        if call.kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential
+    )
+    assert tokens == (f"token-for-{default_scope}", f"token-for-{default_scope}", f"token-for-{other_scope}")
+    assert default_credential_builds == (default_scope, other_scope)
+
+
+def test_get_azure_ad_token_with_token_refresh_error(setup_mocks):
+    """Test get_azure_ad_token with token refresh enabled but raising an error."""
+    # Reset mocks to ensure clean state
+    setup_mocks["token_provider"].reset_mock()
+
+    # Enable token refresh but make it raise an error
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+    setup_mocks["token_provider"].side_effect = ValueError("Token provider error")
+
+    # Create test parameters with no other auth methods available
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
+    )
+
+    # Verify error was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Azure AD Token Provider could not be used."
+    )
+
+    # Verify get_azure_ad_token_provider was called twice (once for service principal, once for DefaultAzureCredential)
+    assert setup_mocks["token_provider"].call_count == 2
+
+    # Verify the token is None since the provider raised an error
+    assert token is None
+
+
+def test_token_provider_returns_non_string(setup_mocks):
+    """Test that get_azure_ad_token raises TypeError when token provider returns non-string value."""
+    # Create a token provider that returns a non-string value
+    non_string_provider = lambda: 123  # Returns an integer instead of a string
+
+    # Create test parameters with the non-string token provider
+    litellm_params = GenericLiteLLMParams(azure_ad_token_provider=non_string_provider)
+
+    # Call the function and expect a TypeError
+    with pytest.raises(TypeError) as excinfo:
+        get_azure_ad_token(litellm_params)
+
+    # Verify the error message
+    assert "Azure AD token must be a string" in str(excinfo.value)
+
+    # Verify the error was logged
+    setup_mocks["logger"].error.assert_any_call(
+        "Azure AD token provider returned non-string value: %s", int
+    )
+
+
+def test_token_provider_raises_exception(setup_mocks):
+    """Test that get_azure_ad_token raises RuntimeError when token provider raises an exception."""
+    # Create a token provider that raises an exception
+    error_message = "Test provider error"
+    error_provider = lambda: exec('raise ValueError("' + error_message + '")')
+
+    # Create test parameters with the error-raising token provider
+    litellm_params = GenericLiteLLMParams(azure_ad_token_provider=error_provider)
+
+    # Call the function and expect a RuntimeError
+    with pytest.raises(RuntimeError) as excinfo:
+        get_azure_ad_token(litellm_params)
+
+    # Verify the error message
+    assert "Failed to get Azure AD token" in str(excinfo.value)
+    assert error_message in str(excinfo.value)
+
+    # Verify the error was logged
+    setup_mocks["logger"].error.assert_called()
+
+
+def test_get_azure_ad_token_provider_with_default_azure_credential():
+    """
+    Test that get_azure_ad_token_provider correctly uses DefaultAzureCredential
+    when explicitly specified as the credential type. This verifies that the function
+    can dynamically instantiate DefaultAzureCredential and return a working token provider.
+    """
+    # Mock Azure identity classes
+    with (
+        patch("azure.identity.DefaultAzureCredential") as mock_default_cred,
+        patch("azure.identity.get_bearer_token_provider") as mock_token_provider,
+    ):
+        # Configure mocks
+        mock_credential_instance = MagicMock()
+        mock_default_cred.return_value = mock_credential_instance
+        mock_token_provider.return_value = lambda: "test-default-azure-token"
+
+        # Test with DefaultAzureCredential specified explicitly
+        token_provider = get_azure_ad_token_provider(
+            azure_scope="https://cognitiveservices.azure.com/.default",
+            azure_credential=AzureCredentialType.DefaultAzureCredential,
+        )
+
+        # Verify DefaultAzureCredential was instantiated
+        mock_default_cred.assert_called_once_with()
+
+        # Verify get_bearer_token_provider was called with the right parameters
+        mock_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
+
+        # Verify the returned token provider works
+        token = token_provider()
+        assert token == "test-default-azure-token"
+
+
+def test_get_azure_ad_token_fallback_to_default_azure_credential(
+    setup_mocks, monkeypatch
+):
+    """
+    Test that get_azure_ad_token falls back to DefaultAzureCredential when the
+    service principal method fails but token refresh is enabled. This tests the
+    complete fallback flow from service principal to DefaultAzureCredential.
+    """
+    # Clear environment variables that might interfere
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+
+    # Reset mocks to ensure clean state
+    setup_mocks["token_provider"].reset_mock()
+
+    # Enable token refresh
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = True
+
+    # Configure get_azure_ad_token_provider to fail first (service principal)
+    # but succeed on second call (DefaultAzureCredential)
+    def mock_token_provider_side_effect(*args, **kwargs):
+        # If called with azure_credential=DefaultAzureCredential, return a working provider
+        if kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential:
+            return lambda: "mock-default-azure-credential-token"
+        # Otherwise (service principal call), return None to simulate failure
+        return None
+
+    setup_mocks["token_provider"].side_effect = mock_token_provider_side_effect
+
+    # Create test parameters with no other auth methods available
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the success debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "Successfully obtained Azure AD token provider using DefaultAzureCredential"
+    )
+
+    # Verify get_azure_ad_token_provider was called twice:
+    # 1. First with just azure_scope (service principal attempt)
+    # 2. Second with azure_credential=DefaultAzureCredential (fallback)
+    assert setup_mocks["token_provider"].call_count == 2
+
+    # Verify the calls were made with expected parameters
+    calls = setup_mocks["token_provider"].call_args_list
+
+    # First call should be service principal attempt (no azure_credential)
+    first_call_kwargs = calls[0][1]
+    assert "azure_scope" in first_call_kwargs
+    assert first_call_kwargs.get("azure_credential") is None
+
+    # Second call should be DefaultAzureCredential attempt
+    second_call_kwargs = calls[1][1]
+    assert "azure_scope" in second_call_kwargs
+    assert (
+        second_call_kwargs.get("azure_credential")
+        == AzureCredentialType.DefaultAzureCredential
+    )
+
+    # Verify the token is what we expect from our DefaultAzureCredential mock
+    assert token == "mock-default-azure-credential-token"
+
+
+@pytest.mark.parametrize(
+    "api_version,expected",
+    [
+        ("preview", True),
+        ("latest", True),
+        ("v1", True),
+        (None, False),
+        ("2023-05-15", False),
+        ("2024-01-01", False),
+        ("", False),
+    ],
+)
+def test_is_azure_v1_api_version(api_version, expected):
+    """
+    Test that is_azure_v1_api_version correctly identifies v1 API versions.
+    """
+    result = BaseAzureLLM.is_azure_v1_api_version(api_version=api_version)
+    assert result == expected
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_uses_openai_client(api_version):
+    """
+    Test that Azure v1 API versions use OpenAI client instead of AzureOpenAI.
+
+    When api_version is 'v1', 'latest', or 'preview', the client should be
+    instantiated as OpenAI/AsyncOpenAI with base_url pointing to /openai/v1/
+    instead of the traditional AzureOpenAI client with /deployments/ URL pattern.
+
+    See: https://learn.microsoft.com/en-us/azure/ai-services/openai/reference#api-specs
+    """
+    from openai import AsyncOpenAI, OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    # Test sync client
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "test-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        client = base_llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+        # Should be OpenAI client, not AzureOpenAI
+        assert isinstance(
+            client, OpenAI
+        ), f"Expected OpenAI client for api_version={api_version}"
+        # base_url should be /openai/v1/ (not /deployments/)
+        assert "/openai/v1/" in str(
+            client.base_url
+        ), f"base_url should contain /openai/v1/, got {client.base_url}"
+
+    # Test async client
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "test-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        async_client = base_llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=True,
+        )
+
+        # Should be AsyncOpenAI client, not AsyncAzureOpenAI
+        assert isinstance(
+            async_client, AsyncOpenAI
+        ), f"Expected AsyncOpenAI client for api_version={api_version}"
+        # base_url should be /openai/v1/
+        assert "/openai/v1/" in str(
+            async_client.base_url
+        ), f"base_url should contain /openai/v1/, got {async_client.base_url}"
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://test.openai.azure.com",
+        "https://test.openai.azure.com/",
+        "https://test.openai.azure.com/openai/v1",
+        "https://test.openai.azure.com/openai/v1/",
+    ],
+)
+@pytest.mark.parametrize("is_async", [False, True])
+def test_azure_v1_api_client_targets_openai_v1_once_whatever_the_api_base_ends_in(api_base: str, is_async: bool):
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key="test-key", api_base=api_base, api_version="v1", _is_async=is_async
+    )
+
+    assert str(client.base_url) == "https://test.openai.azure.com/openai/v1/"
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_with_azure_ad_token_provider(api_version):
+    """
+    The v1 OpenAI client path must forward `azure_ad_token_provider` so Azure AD
+    auth works for `api_version` in {"v1", "latest", "preview"}.
+
+    Regression: https://github.com/BerriAI/litellm/issues/27945 — before the fix
+    the v1 branch only forwarded `api_key`, so AD-only configs raised
+    "The api_key client option must be set" on every request.
+
+    The OpenAI SDK accepts a callable for `api_key` and re-invokes it on every
+    request, so passing the provider directly preserves token refresh.
+    """
+    from openai import AsyncOpenAI, OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    token_value = "mock-azure-ad-token-from-provider"
+
+    def token_provider():
+        return token_value
+
+    init_return = {
+        "api_key": None,
+        "azure_endpoint": api_base,
+        "api_version": api_version,
+        "azure_ad_token": None,
+        "azure_ad_token_provider": token_provider,
+    }
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = init_return
+
+        client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+        assert isinstance(client, OpenAI)
+        # The SDK stores callables as `_api_key_provider` and refreshes
+        # `self.api_key` before each request.
+        assert client._api_key_provider is token_provider
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = init_return
+
+        async_client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=True,
+        )
+
+        assert isinstance(async_client, AsyncOpenAI)
+        # Async client requires an async provider; we wrap the sync provider
+        # so the SDK can `await` it.
+        assert async_client._api_key_provider is not None
+        assert async_client._api_key_provider is not token_provider
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_async_token_provider_resolves_to_current_token(api_version):
+    """
+    The async wrapper must call the underlying sync provider on each invocation
+    (not cache its first return value), so token rotation is honored.
+    """
+    import asyncio
+
+    from openai import AsyncOpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    tokens = iter(["token-1", "token-2", "token-3"])
+
+    def rotating_provider():
+        return next(tokens)
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": rotating_provider,
+        }
+
+        async_client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=True,
+        )
+
+    assert isinstance(async_client, AsyncOpenAI)
+    loop = asyncio.new_event_loop()
+    try:
+        first = loop.run_until_complete(async_client._api_key_provider())
+        second = loop.run_until_complete(async_client._api_key_provider())
+    finally:
+        loop.close()
+
+    assert first == "token-1"
+    assert second == "token-2"
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_with_static_azure_ad_token(api_version):
+    """
+    When only `azure_ad_token` (a static string) is set, the v1 client should
+    receive it as `api_key`.
+    """
+    from openai import OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    token_value = "static-azure-ad-token"
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": token_value,
+            "azure_ad_token_provider": None,
+        }
+
+        client = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+        assert isinstance(client, OpenAI)
+        assert client.api_key == token_value
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_api_key_wins_over_ad_token(api_version):
+    """
+    Explicit `api_key` takes precedence over `azure_ad_token_provider` /
+    `azure_ad_token`, matching the priority documented in
+    `initialize_azure_sdk_client`.
+    """
+    from openai import OpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "explicit-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": "should-be-ignored",
+            "azure_ad_token_provider": lambda: "also-ignored",
+        }
+
+        client = base_llm.get_azure_openai_client(
+            api_key="explicit-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+        assert isinstance(client, OpenAI)
+        assert client.api_key == "explicit-key"
+        assert client._api_key_provider is None
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_client_cache_separates_distinct_ad_providers(api_version):
+    """
+    Two configs sharing api_base/api_version but with different AD token
+    providers must not share a cached OpenAI client, otherwise requests for
+    one config would be sent with another config's AD credentials.
+    """
+    from openai import AsyncOpenAI
+
+    litellm.in_memory_llm_clients_cache._cache = {}
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    def provider_a():
+        return "token-a"
+
+    def provider_b():
+        return "token-b"
+
+    def _init_for(provider):
+        return {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": provider,
+        }
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = _init_for(provider_a)
+        client_a = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"azure_ad_token_provider": provider_a},
+            _is_async=True,
+        )
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = _init_for(provider_b)
+        client_b = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"azure_ad_token_provider": provider_b},
+            _is_async=True,
+        )
+
+    assert isinstance(client_a, AsyncOpenAI)
+    assert isinstance(client_b, AsyncOpenAI)
+    assert client_a is not client_b
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_client_cache_separates_distinct_entra_credentials(api_version):
+    """
+    Configs that synthesize an AD provider from tenant_id/client_id/client_secret
+    must not share a cached client when those inputs differ.
+    """
+    from openai import AsyncOpenAI
+
+    litellm.in_memory_llm_clients_cache._cache = {}
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    def synth_provider():
+        return "synthesized-token"
+
+    def _init_synth():
+        return {
+            "api_key": None,
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": synth_provider,
+        }
+
+    common = {
+        "api_key": None,
+        "api_base": api_base,
+        "api_version": api_version,
+        "_is_async": True,
+    }
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = _init_synth()
+        client_a = base_llm.get_azure_openai_client(
+            litellm_params={
+                "tenant_id": "tenant-a",
+                "client_id": "client-a",
+                "client_secret": "secret-a",
+            },
+            **common,
+        )
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = _init_synth()
+        client_b = base_llm.get_azure_openai_client(
+            litellm_params={
+                "tenant_id": "tenant-b",
+                "client_id": "client-b",
+                "client_secret": "secret-b",
+            },
+            **common,
+        )
+
+    assert isinstance(client_a, AsyncOpenAI)
+    assert isinstance(client_b, AsyncOpenAI)
+    assert client_a is not client_b
+
+
+@pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
+def test_azure_v1_client_cache_reuses_for_identical_ad_config(api_version):
+    """
+    Identical AD configs should still share a cached client (regression guard
+    so the cache-key change doesn't accidentally disable caching).
+    """
+    from openai import AsyncOpenAI
+
+    litellm.in_memory_llm_clients_cache._cache = {}
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+
+    def provider():
+        return "tok"
+
+    init_return = {
+        "api_key": None,
+        "azure_endpoint": api_base,
+        "api_version": api_version,
+        "azure_ad_token": None,
+        "azure_ad_token_provider": provider,
+    }
+
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = init_return
+        client_a = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"azure_ad_token_provider": provider},
+            _is_async=True,
+        )
+        client_b = base_llm.get_azure_openai_client(
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"azure_ad_token_provider": provider},
+            _is_async=True,
+        )
+
+    assert isinstance(client_a, AsyncOpenAI)
+    assert client_a is client_b
+
+
+def test_azure_traditional_api_uses_azure_openai_client():
+    """
+    Test that traditional Azure API versions still use AzureOpenAI client.
+
+    When api_version is a dated version like '2023-05-15', the client should
+    be instantiated as AzureOpenAI/AsyncAzureOpenAI with the traditional
+    /deployments/ URL pattern.
+    """
+    from openai import AsyncAzureOpenAI, AzureOpenAI
+
+    base_llm = BaseAzureLLM()
+    api_base = "https://test.openai.azure.com"
+    api_version = "2023-05-15"
+
+    # Test sync client
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "test-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        client = base_llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=False,
+        )
+
+        # Should be AzureOpenAI client
+        assert isinstance(
+            client, AzureOpenAI
+        ), f"Expected AzureOpenAI client for api_version={api_version}"
+
+    # Test async client
+    with patch.object(base_llm, "initialize_azure_sdk_client") as mock_init:
+        mock_init.return_value = {
+            "api_key": "test-key",
+            "azure_endpoint": api_base,
+            "api_version": api_version,
+            "azure_ad_token": None,
+            "azure_ad_token_provider": None,
+        }
+
+        async_client = base_llm.get_azure_openai_client(
+            api_key="test-key",
+            api_base=api_base,
+            api_version=api_version,
+            _is_async=True,
+        )
+
+        # Should be AsyncAzureOpenAI client
+        assert isinstance(
+            async_client, AsyncAzureOpenAI
+        ), f"Expected AsyncAzureOpenAI client for api_version={api_version}"
+
+
+class TestEntraIdTokenProviderCache:
+    def setup_method(self):
+        _cached_entra_id_token_provider.cache_clear()
+
+    def teardown_method(self):
+        _cached_entra_id_token_provider.cache_clear()
+
+    def test_reuses_credential_for_the_same_service_principal(self):
+        with (
+            patch("azure.identity.ClientSecretCredential") as mock_credential,
+            patch("azure.identity.get_bearer_token_provider", side_effect=lambda credential, scope: lambda: "token"),
+        ):
+            first = get_azure_ad_token_from_entra_id(
+                tenant_id="tenant",
+                client_id="client",
+                client_secret="secret",
+                scope="https://cognitiveservices.azure.com/.default",
+            )
+            second = get_azure_ad_token_from_entra_id(
+                tenant_id="tenant",
+                client_id="client",
+                client_secret="secret",
+                scope="https://cognitiveservices.azure.com/.default",
+            )
+
+        assert first is second
+        assert mock_credential.call_count == 1
+
+    def test_concurrent_first_callers_build_one_credential(self):
+        callers: Final = 8
+        start: Final = threading.Barrier(callers)
+        built: Final = SimpleQueue[None]()
+        everyone_built: Final = threading.Event()
+        release: Final = threading.Event()
+
+        def held_credential(*_: str) -> MagicMock:
+            built.put(None)
+            if built.qsize() >= callers:
+                everyone_built.set()
+            release.wait(5)
+            return MagicMock()
+
+        def first_call() -> Callable[[], str]:
+            start.wait(5)
+            return get_azure_ad_token_from_entra_id(
+                tenant_id="tenant",
+                client_id="client",
+                client_secret="secret",
+                scope="https://cognitiveservices.azure.com/.default",
+            )
+
+        with (
+            patch("azure.identity.ClientSecretCredential", side_effect=held_credential),
+            patch("azure.identity.get_bearer_token_provider", side_effect=lambda credential, scope: lambda: "token"),
+            ThreadPoolExecutor(max_workers=callers) as pool,
+        ):
+            calls: Final = tuple(pool.submit(first_call) for _ in range(callers))
+            everyone_built.wait(0.5)
+            release.set()
+            providers: Final = tuple(call.result(timeout=5) for call in calls)
+
+        assert built.qsize() == 1
+        assert all(provider is providers[0] for provider in providers)
+
+    @pytest.mark.parametrize(
+        "second_call_kwargs",
+        [
+            {"tenant_id": "other-tenant"},
+            {"client_id": "other-client"},
+            {"client_secret": "other-secret"},
+            {"scope": "https://ai.azure.com/.default"},
+        ],
+    )
+    def test_does_not_share_a_provider_across_credentials_or_scopes(self, second_call_kwargs):
+        base_kwargs = {
+            "tenant_id": "tenant",
+            "client_id": "client",
+            "client_secret": "secret",
+            "scope": "https://cognitiveservices.azure.com/.default",
+        }
+
+        with (
+            patch("azure.identity.ClientSecretCredential") as mock_credential,
+            patch("azure.identity.get_bearer_token_provider", side_effect=lambda credential, scope: lambda: "token"),
+        ):
+            first = get_azure_ad_token_from_entra_id(**base_kwargs)
+            second = get_azure_ad_token_from_entra_id(**{**base_kwargs, **second_call_kwargs})
+
+        assert first is not second
+        assert mock_credential.call_count == 2
+
+
+def test_username_password_token_provider_reuses_same_credentials_and_separates_passwords() -> None:
+    with (
+        patch("azure.identity.UsernamePasswordCredential") as mock_credential,
+        patch(
+            "azure.identity.get_bearer_token_provider",
+            side_effect=lambda credential, scope: lambda: "token",
+        ),
+    ):
+        first: Final = get_azure_ad_token_from_username_password(
+            client_id="client",
+            azure_username="user",
+            azure_password="password",
+            scope="https://cognitiveservices.azure.com/.default",
+        )
+        second: Final = get_azure_ad_token_from_username_password(
+            client_id="client",
+            azure_username="user",
+            azure_password="password",
+            scope="https://cognitiveservices.azure.com/.default",
+        )
+        changed_password: Final = get_azure_ad_token_from_username_password(
+            client_id="client",
+            azure_username="user",
+            azure_password="different-password",
+            scope="https://cognitiveservices.azure.com/.default",
+        )
+
+    assert first() == second() == changed_password() == "token"
+    assert mock_credential.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_non_v1_azure_token_refresh_runs_off_the_event_loop_thread() -> None:
+    from openai import AsyncAzureOpenAI
+
+    def token_provider_naming_its_thread() -> str:
+        return str(threading.get_ident())
+
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=None,
+        api_base="https://test.openai.azure.com",
+        api_version="2024-02-01",
+        litellm_params={"azure_ad_token_provider": token_provider_naming_its_thread},
+        _is_async=True,
+    )
+
+    assert isinstance(client, AsyncAzureOpenAI)
+    try:
+        token_thread: Final = await client._get_azure_ad_token()
+    finally:
+        await client.close()
+
+    assert token_thread is not None
+    assert token_thread != str(threading.get_ident())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_version", ["2024-02-01", "v1"])
+async def test_async_azure_ad_token_provider_reaches_azure_as_bearer_token(
+    monkeypatch: pytest.MonkeyPatch, api_version: str
+) -> None:
+    def echo_authorization(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": request.headers["authorization"]},
+                    }
+                ],
+            },
+        )
+
+    async def async_token_provider() -> str:
+        return "async-token"
+
+    monkeypatch.setattr(
+        litellm, "aclient_session", httpx.AsyncClient(transport=httpx.MockTransport(echo_authorization))
+    )
+    client: Final = BaseAzureLLM().get_azure_openai_client(
+        api_key=None,
+        api_base=f"https://async-token-provider-{api_version}.openai.azure.com",
+        api_version=api_version,
+        litellm_params={"azure_ad_token_provider": async_token_provider},
+        _is_async=True,
+    )
+
+    response: Final = await client.chat.completions.create(model="gpt", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "Bearer async-token"
+
+
+def test_oidc_token_exchange_closes_its_own_http_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    class TokenEndpoint(httpx.BaseTransport):
+        def __init__(self) -> None:
+            self.closed = False
+
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            form: Final = parse_qs(request.read().decode())
+            return httpx.Response(
+                200, json={"access_token": f"minted-for-{form['client_assertion'][0]}", "expires_in": 3600}
+            )
+
+        def close(self) -> None:
+            self.closed = True
+
+    token_endpoint: Final = TokenEndpoint()
+    monkeypatch.setattr(litellm, "sync_transport", token_endpoint, raising=False)
+    monkeypatch.setenv("AZURE_TEST_OIDC_ASSERTION", "workload-jwt")
+
+    token: Final = get_azure_ad_token_from_oidc(
+        azure_ad_token="os.environ/AZURE_TEST_OIDC_ASSERTION",
+        azure_client_id="client",
+        azure_tenant_id="tenant-closes-its-client",
+    )
+
+    assert token == "minted-for-workload-jwt"
+    assert token_endpoint.closed
+
+
+def test_concurrent_oidc_callers_share_one_token_exchange(monkeypatch: pytest.MonkeyPatch) -> None:
+    callers: Final = 8
+    start: Final = threading.Barrier(callers)
+    exchanges: Final = SimpleQueue[None]()
+    everyone_exchanging: Final = threading.Event()
+    release: Final = threading.Event()
+
+    class HeldTokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            exchanges.put(None)
+            if exchanges.qsize() >= callers:
+                everyone_exchanging.set()
+            release.wait(5)
+            return httpx.Response(200, json={"access_token": "exchanged-token", "expires_in": 3600})
+
+    monkeypatch.setattr(litellm, "sync_transport", HeldTokenEndpoint(), raising=False)
+    monkeypatch.setenv("AZURE_TEST_OIDC_BURST_ASSERTION", "burst-jwt")
+    tenant: Final = f"tenant-{uuid.uuid4().hex}"
+
+    def exchange() -> str:
+        start.wait(5)
+        return get_azure_ad_token_from_oidc(
+            azure_ad_token="os.environ/AZURE_TEST_OIDC_BURST_ASSERTION",
+            azure_client_id="client",
+            azure_tenant_id=tenant,
+        )
+
+    with ThreadPoolExecutor(max_workers=callers) as pool:
+        calls: Final = tuple(pool.submit(exchange) for _ in range(callers))
+        exchanges.get(timeout=5)
+        everyone_exchanging.wait(0.5)
+        release.set()
+        tokens: Final = tuple(call.result(timeout=5) for call in calls)
+
+    assert tokens == ("exchanged-token",) * callers
+    assert exchanges.qsize() == 0
+
+
+def test_oidc_tokens_for_different_scopes_are_exchanged_and_cached_separately(monkeypatch: pytest.MonkeyPatch) -> None:
+    exchanged_scopes: Final = SimpleQueue[str]()
+
+    class ScopedTokenEndpoint(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            scope: Final = parse_qs(request.read().decode())["scope"][-1]
+            exchanged_scopes.put(scope)
+            return httpx.Response(200, json={"access_token": f"token-for:{scope}", "expires_in": 3600})
+
+    monkeypatch.setattr(litellm, "sync_transport", ScopedTokenEndpoint(), raising=False)
+    monkeypatch.setenv("AZURE_TEST_OIDC_SCOPED_ASSERTION", "scoped-jwt")
+    tenant: Final = f"tenant-{uuid.uuid4().hex}"
+
+    def token_for(scope: str) -> str:
+        return get_azure_ad_token_from_oidc(
+            azure_ad_token="os.environ/AZURE_TEST_OIDC_SCOPED_ASSERTION",
+            azure_client_id="client",
+            azure_tenant_id=tenant,
+            scope=scope,
+        )
+
+    tokens: Final = tuple(token_for(scope) for scope in ("api://first/.default", "api://second/.default") * 2)
+
+    assert tokens == ("token-for:api://first/.default", "token-for:api://second/.default") * 2
+    assert exchanged_scopes.qsize() == 2
+
+
+def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):
+    """`initialize_azure_sdk_client` puts `litellm.aclient_session` on the SDK client.
+
+    That session belongs to the caller. `AsyncAzureOpenAI.close()` closes whatever
+    http client it was handed, so treating the wrapper as litellm's to close would
+    close the caller's shared session out from under them.
+    """
+    import httpx
+
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    shared_session = httpx.AsyncClient()
+    closer = EvictedClientCloser(grace_seconds=0.0)
+    monkeypatch.setattr(litellm, "aclient_session", shared_session)
+    monkeypatch.setattr(
+        litellm,
+        "in_memory_llm_clients_cache",
+        LLMClientCache(evicted_client_closer=closer),
+    )
+
+    wrapper = BaseAzureLLM().get_azure_openai_client(
+        api_key="not-a-real-key",
+        api_base="https://litellm.openai.azure.com",
+        api_version="2024-02-01",
+        litellm_params={},
+        _is_async=True,
+    )
+
+    assert wrapper is not None
+    assert wrapper._client is shared_session, "the wrapper should be built on the caller's session"
+
+    closer.schedule(wrapper)
+    closer.reap()
+
+    assert closer.pending_count == 0, "a wrapper around the caller's session must never be queued"
+    assert shared_session.is_closed is False, "closed the session the caller configured"
+
+
+def test_an_azure_client_litellm_built_its_own_http_client_for_is_still_closed(monkeypatch):
+    """The ownership check must not turn the reclaim off for the ordinary case."""
+    from litellm.caching.evicted_client_closer import EvictedClientCloser
+    from litellm.caching.llm_caching_handler import LLMClientCache
+
+    closer = EvictedClientCloser(grace_seconds=0.0)
+    monkeypatch.setattr(litellm, "aclient_session", None)
+    monkeypatch.setattr(litellm, "client_session", None)
+    monkeypatch.setattr(
+        litellm,
+        "in_memory_llm_clients_cache",
+        LLMClientCache(evicted_client_closer=closer),
+    )
+
+    wrapper = BaseAzureLLM().get_azure_openai_client(
+        api_key="not-a-real-key",
+        api_base="https://litellm.openai.azure.com",
+        api_version="2024-02-01",
+        litellm_params={},
+        _is_async=False,
+    )
+
+    assert wrapper is not None
+    closer.schedule(wrapper)
+
+    assert closer.pending_count == 1, "litellm built this client's http client, so it owns it"
+
+    closer.reap()
+
+    assert wrapper.is_closed() is True
+
+
+_ENTRA_APP_CLIENT_ID: Final = "0d08e61f-6184-4980-9cef-a2e9128f4cb2"
+_ENTRA_TRACE_ID: Final = "f0c149d3-ef20-4194-8b81-c81a5e002500"
+_ENTRA_REJECTIONS: Final = {
+    "wrong_secret": (
+        "AADSTS7000215",
+        "Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the "
+        "request is the client secret value, not the client secret ID, for a secret added to app "
+        f"'{_ENTRA_APP_CLIENT_ID}'. Trace ID: {_ENTRA_TRACE_ID} Correlation ID: ecfd2c73-ec0a-474c-bba7-205be903159d "
+        "Timestamp: 2026-10-29 07:19:40Z",
+    ),
+    "expired_secret": (
+        "AADSTS7000222",
+        f"Authentication failed: AADSTS7000222: The provided client secret keys for app '{_ENTRA_APP_CLIENT_ID}' "
+        f"are expired. Visit the Azure portal to create new keys for your app. Trace ID: {_ENTRA_TRACE_ID} "
+        "Correlation ID: 354f9b57-5fed-47e4-a67d-89a7c56f6ddc Timestamp: 2026-10-29 07:19:50Z",
+    ),
+}
+
+
+def _raising_token_provider(error: Exception) -> Callable[[], str]:
+    def token_provider() -> str:
+        raise error
+
+    return token_provider
+
+
+def _azure_chat(token_provider: Callable[[], str]) -> object:
+    return litellm.completion(
+        model="azure/gpt-4.1",
+        api_base="https://litellm-qa.openai.azure.com",
+        api_version="2025-04-01-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        azure_ad_token_provider=token_provider,
+        max_retries=0,
+    )
+
+
+def _azure_async_chat(token_provider: Callable[[], str]) -> object:
+    return asyncio.run(
+        litellm.acompletion(
+            model="azure/gpt-4.1",
+            api_base="https://litellm-qa.openai.azure.com",
+            api_version="2025-04-01-preview",
+            messages=[{"role": "user", "content": "hi"}],
+            azure_ad_token_provider=token_provider,
+        )
+    )
+
+
+def _azure_responses(token_provider: Callable[[], str]) -> object:
+    return litellm.responses(
+        model="azure/gpt-4.1",
+        api_base="https://litellm-qa.openai.azure.com",
+        api_version="2025-04-01-preview",
+        input="hi",
+        azure_ad_token_provider=token_provider,
+    )
+
+
+def _azure_ai_decisions(token_provider: Callable[[], str]) -> object:
+    return litellm.systemone(
+        model="azure_ai/decision-1-qa",
+        api_base="https://litellm-qa.services.ai.azure.com",
+        state={"ticket": "The login page returns a 500 error after deploy"},
+        questions={"is_bug": {"type": "noul", "instructions": "Is this a software bug report?"}},
+        azure_ad_token_provider=token_provider,
+    )
+
+
+_AZURE_CALLS: Final = {
+    "chat": _azure_chat,
+    "async_chat": _azure_async_chat,
+    "responses": _azure_responses,
+    "decisions": _azure_ai_decisions,
+}
+
+
+@pytest.fixture
+def no_azure_api_key(monkeypatch):
+    for env_var in (
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+@pytest.mark.parametrize(("aadsts_code", "entra_message"), _ENTRA_REJECTIONS.values(), ids=_ENTRA_REJECTIONS.keys())
+def test_entra_rejecting_the_credential_answers_401_with_only_the_aadsts_reason(
+    no_azure_api_key, call, aadsts_code, entra_message
+):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        call(_raising_token_provider(ClientAuthenticationError(message=entra_message)))
+
+    assert excinfo.value.status_code == 401
+    assert aadsts_code in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+@pytest.mark.parametrize("api_version", ["2025-04-01-preview", "v1"])
+def test_entra_rejecting_an_async_token_provider_answers_401(no_azure_api_key, api_version):
+    from azure.core.exceptions import ClientAuthenticationError
+
+    aadsts_code, entra_message = _ENTRA_REJECTIONS["wrong_secret"]
+
+    async def token_provider() -> str:
+        raise ClientAuthenticationError(message=entra_message)
+
+    async_token_provider: Final[Callable[[], Awaitable[str]]] = token_provider
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        asyncio.run(
+            litellm.acompletion(
+                model="azure/gpt-4.1",
+                api_base="https://litellm-qa.openai.azure.com",
+                api_version=api_version,
+                messages=[{"role": "user", "content": "hi"}],
+                azure_ad_token_provider=async_token_provider,
+            )
+        )
+
+    assert excinfo.value.status_code == 401
+    assert aadsts_code in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+def _azure_identity_wrapped_token_provider(inner_error: Exception) -> Callable[[], str]:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    def token_provider() -> str:
+        try:
+            raise inner_error
+        except Exception as error:
+            raise ClientAuthenticationError(message=f"Authentication failed: {error}") from error
+
+    return token_provider
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+@pytest.mark.parametrize("failed_leg", ["request", "response"])
+def test_unreachable_entra_endpoint_stays_a_retryable_server_error(no_azure_api_key, call, failed_leg):
+    from azure.core.exceptions import ServiceRequestError, ServiceResponseError
+
+    transport_error: Final = {"request": ServiceRequestError, "response": ServiceResponseError}[failed_leg](
+        "('Unable to connect to proxy', NewConnectionError(\"Failed to establish a new connection: "
+        "[Errno 111] Connection refused\"))"
+    )
+
+    with pytest.raises(openai.APIError) as excinfo:
+        call(_azure_identity_wrapped_token_provider(transport_error))
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code != 401
+
+
+_ENTRA_TENANT_ID: Final = "5b3e1c7a-2f4d-4e8b-9a61-0c2d7f8e9b14"
+_ENTRA_SCOPE: Final = "https://cognitiveservices.azure.com/.default"
+_ENTRA_OPENID_CONFIGURATION: Final = {
+    "token_endpoint": f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/token",
+    "authorization_endpoint": f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/authorize",
+    "issuer": f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/v2.0",
+}
+
+
+class _FakeEntraAdapter(requests.adapters.BaseAdapter):
+    def __init__(self, status_code: int | None, body: Mapping[str, object] | str) -> None:
+        super().__init__()
+        self.status_code: Final = status_code
+        self.body: Final = body
+
+    def send(self, request: requests.PreparedRequest, *args: object, **kwargs: object) -> requests.Response:
+        if "openid-configuration" in str(request.url):
+            return self._answer(request, 200, _ENTRA_OPENID_CONFIGURATION)
+        if self.status_code is None:
+            raise requests.exceptions.ConnectionError("Failed to establish a new connection: Connection refused")
+        return self._answer(request, self.status_code, self.body)
+
+    def close(self) -> None:
+        pass
+
+    @staticmethod
+    def _answer(
+        request: requests.PreparedRequest, status_code: int, body: Mapping[str, object] | str
+    ) -> requests.Response:
+        response: Final = requests.Response()
+        response.status_code = status_code
+        response.raw = io.BytesIO((body if isinstance(body, str) else json.dumps(body)).encode())
+        response.headers = requests.structures.CaseInsensitiveDict(
+            {"Content-Type": "application/json", "Retry-After": "0"}
+        )
+        response.url = str(request.url)
+        response.request = request
+        return response
+
+
+def _entra_answering(status_code: int | None, body: Mapping[str, object] | str = "") -> RequestsTransport:
+    session: Final = requests.Session()
+    session.mount("https://", _FakeEntraAdapter(status_code, body))
+    return RequestsTransport(session=session, session_owner=False)
+
+
+def _entra_error(aadsts_code: str, description: str) -> Mapping[str, object]:
+    return {
+        "error": "invalid_client",
+        "error_description": f"{aadsts_code}: {description} Trace ID: {_ENTRA_TRACE_ID}",
+        "error_codes": [int(aadsts_code.removeprefix("AADSTS"))],
+    }
+
+
+def _real_credential_token_provider(credential_kind: str, entra: RequestsTransport) -> Callable[[], str]:
+    from azure.identity import (
+        ChainedTokenCredential,
+        ClientAssertionCredential,
+        ClientSecretCredential,
+        get_bearer_token_provider,
+    )
+
+    client_secret: Final = ClientSecretCredential(
+        _ENTRA_TENANT_ID, _ENTRA_APP_CLIENT_ID, "wrong-secret", transport=entra, disable_instance_discovery=True
+    )
+    credentials: Final = {
+        "client_secret": client_secret,
+        "default_azure_credential_chain": ChainedTokenCredential(client_secret),
+        "workload_identity": ClientAssertionCredential(
+            _ENTRA_TENANT_ID, _ENTRA_APP_CLIENT_ID, lambda: "federated-token", transport=entra, retry_total=0
+        ),
+    }
+    return get_bearer_token_provider(credentials[credential_kind], _ENTRA_SCOPE)
+
+
+_REAL_CREDENTIAL_REJECTIONS: Final = {
+    "wrong_secret": ("client_secret", "AADSTS7000215", "Invalid client secret provided."),
+    "wrong_secret_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        "AADSTS7000215",
+        "Invalid client secret provided.",
+    ),
+    "unknown_app_through_workload_identity": (
+        "workload_identity",
+        "AADSTS700016",
+        f"Application with identifier '{_ENTRA_APP_CLIENT_ID}' was not found in the directory.",
+    ),
+    "unknown_federated_subject_through_workload_identity": (
+        "workload_identity",
+        "AADSTS700213",
+        "No matching federated identity record found for presented assertion subject 'system:serviceaccount:qa:proxy'.",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("credential_kind", "aadsts_code", "description"),
+    _REAL_CREDENTIAL_REJECTIONS.values(),
+    ids=_REAL_CREDENTIAL_REJECTIONS.keys(),
+)
+def test_entra_rejection_through_a_real_azure_identity_credential_answers_401(
+    no_azure_api_key, credential_kind, aadsts_code, description
+):
+    entra: Final = _entra_answering(401, _entra_error(aadsts_code, description))
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        _azure_chat(_real_credential_token_provider(credential_kind, entra))
+
+    assert excinfo.value.status_code == 401
+    assert aadsts_code in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+_REAL_CREDENTIAL_NON_REJECTIONS: Final = {
+    "unreachable_through_a_credential_chain": ("default_azure_credential_chain", None, ""),
+    "html_503_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        503,
+        "<html><body>Service Unavailable</body></html>",
+    ),
+    "json_503_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        503,
+        _entra_error("AADSTS90033", "A transient error has occurred."),
+    ),
+    "throttled_client_secret": (
+        "client_secret",
+        429,
+        _entra_error("AADSTS50196", "The server terminated an operation because it encountered a client request loop."),
+    ),
+    "tenant_throttled_client_secret": (
+        "client_secret",
+        429,
+        _entra_error("AADSTS90055", "There are too many incoming requests."),
+    ),
+    "request_budget_exceeded_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS90024", "A transient error has occurred. Try again."),
+    ),
+    "retryable_error_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS50033", "A transient error has occurred."),
+    ),
+    "external_server_retryable_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS90006", "The service is temporarily unavailable."),
+    ),
+    "graph_retryable_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS90090", "The service is temporarily unavailable."),
+    ),
+    "token_issuance_error_client_secret": (
+        "client_secret",
+        400,
+        _entra_error("AADSTS50000", "There was an error issuing a token or an issue with our sign-in service."),
+    ),
+    "throttled_without_a_code_through_a_credential_chain": (
+        "default_azure_credential_chain",
+        429,
+        {"error": "temporarily_unavailable", "error_description": "Too many requests."},
+    ),
+    "json_503_through_workload_identity": (
+        "workload_identity",
+        503,
+        _entra_error("AADSTS90033", "A transient error has occurred."),
+    ),
+    "throttled_workload_identity_naming_a_rejection_code": (
+        "workload_identity",
+        429,
+        _entra_error("AADSTS7000215", "Invalid client secret provided."),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("credential_kind", "status_code", "body"),
+    _REAL_CREDENTIAL_NON_REJECTIONS.values(),
+    ids=_REAL_CREDENTIAL_NON_REJECTIONS.keys(),
+)
+def test_entra_outage_or_throttle_through_a_real_azure_identity_credential_stays_retryable(
+    no_azure_api_key, credential_kind, status_code, body
+):
+    with pytest.raises(openai.APIError) as excinfo:
+        _azure_chat(_real_credential_token_provider(credential_kind, _entra_answering(status_code, body)))
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code != 401
+
+
+def _azure_chat_with_oidc_token(
+    respx_mock,
+    monkeypatch,
+    entra_status_code: int,
+    entra_body: Mapping[str, object],
+    entra_headers: Mapping[str, str] | None = None,
+):
+    monkeypatch.setenv("LITELLM_QA_FEDERATED_TOKEN", "federated-token")
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    respx_mock.post(f"https://login.microsoftonline.com/{_ENTRA_TENANT_ID}/oauth2/v2.0/token").mock(
+        return_value=httpx.Response(entra_status_code, json=entra_body, headers=entra_headers)
+    )
+    return litellm.completion(
+        model="azure/gpt-4.1",
+        api_base="https://litellm-qa.openai.azure.com",
+        api_version="2025-04-01-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        azure_ad_token="oidc/env/LITELLM_QA_FEDERATED_TOKEN",
+        tenant_id=_ENTRA_TENANT_ID,
+        client_id=_ENTRA_APP_CLIENT_ID,
+        max_retries=0,
+    )
+
+
+def test_entra_rejecting_an_oidc_token_answers_401_with_only_the_aadsts_reason(no_azure_api_key, respx_mock, monkeypatch):
+    rejection: Final = _entra_error(
+        "AADSTS700213", f"No matching federated identity record found for app '{_ENTRA_APP_CLIENT_ID}'."
+    )
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        _azure_chat_with_oidc_token(respx_mock, monkeypatch, 400, rejection)
+
+    assert excinfo.value.status_code == 401
+    assert "AADSTS700213" in str(excinfo.value)
+    assert _ENTRA_APP_CLIENT_ID not in str(excinfo.value)
+    assert _ENTRA_TRACE_ID not in str(excinfo.value)
+
+
+def test_entra_answering_an_oidc_exchange_with_a_transient_code_keeps_its_status(
+    no_azure_api_key, respx_mock, monkeypatch
+):
+    with pytest.raises(openai.APIError) as excinfo:
+        _azure_chat_with_oidc_token(
+            respx_mock, monkeypatch, 400, _entra_error("AADSTS90024", "A transient error has occurred. Try again.")
+        )
+
+    assert excinfo.value.status_code == 400
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+
+
+def test_entra_throttling_an_oidc_exchange_keeps_its_retry_after(no_azure_api_key, respx_mock, monkeypatch):
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        _azure_chat_with_oidc_token(
+            respx_mock,
+            monkeypatch,
+            429,
+            _entra_error("AADSTS90055", "TenantThrottlingError: There are too many pending requests."),
+            {"Retry-After": "7"},
+        )
+
+    assert excinfo.value.response.headers.get("retry-after") == "7"
+
+
+class _EntraServiceUnavailableAnswer:
+    status_code: Final = 503
+    reason: Final = "Service Unavailable"
+
+    def text(self, encoding: str | None = None) -> str:
+        return "<html><body>Service Unavailable</body></html>"
+
+
+@pytest.mark.parametrize("call", _AZURE_CALLS.values(), ids=_AZURE_CALLS.keys())
+@pytest.mark.parametrize("credential_kind", ["client_secret", "managed_identity"])
+def test_entra_answering_a_server_error_stays_a_retryable_server_error(no_azure_api_key, call, credential_kind):
+    from azure.core.exceptions import ClientAuthenticationError
+    from msal.exceptions import MsalServiceError
+
+    token_providers: Final = {
+        "client_secret": _azure_identity_wrapped_token_provider(
+            MsalServiceError("HTTP Error: 503", error=None, error_description=None)
+        ),
+        "managed_identity": _raising_token_provider(
+            ClientAuthenticationError(message="No token received.", response=_EntraServiceUnavailableAnswer())
+        ),
+    }
+
+    with pytest.raises(openai.APIError) as excinfo:
+        call(token_providers[credential_kind])
+
+    assert not isinstance(excinfo.value, litellm.AuthenticationError)
+    assert excinfo.value.status_code != 401
+
+
+def test_token_provider_error_without_azure_core_installed_keeps_the_generic_token_error(monkeypatch):
+    monkeypatch.setitem(sys.modules, "azure.core.exceptions", None)
+
+    with pytest.raises(RuntimeError, match="Failed to get Azure AD token: token service down"):
+        get_azure_ad_token(
+            GenericLiteLLMParams(azure_ad_token_provider=_raising_token_provider(ValueError("token service down")))
+        )
+
+
+def test_image_generation_with_an_api_key_ignores_a_non_callable_azure_ad_token_provider():
+    import respx
+
+    with respx.mock:
+        image_route: Final = respx.post(url__startswith="https://litellm-qa.openai.azure.com").mock(
+            return_value=httpx.Response(200, json={"created": 1, "data": [{"b64_json": "aGk="}]})
+        )
+        response: Final = litellm.image_generation(
+            model="azure/gpt-image-1",
+            prompt="a red dot",
+            api_base="https://litellm-qa.openai.azure.com",
+            api_version="2025-04-01-preview",
+            api_key="configured-key",
+            azure_ad_token_provider="not-a-callable",
+        )
+
+    assert image_route.calls.last.request.headers["api-key"] == "configured-key"
+    assert response.data[0].b64_json == "aGk="

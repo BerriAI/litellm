@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, Protocol
+
+from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
@@ -11,8 +13,12 @@ if TYPE_CHECKING:
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
 
 
 @dataclass(slots=True)
@@ -40,11 +46,15 @@ class StreamingScanKey:
     """What a streaming guardrail round would hand to ``apply_guardrail``. Two keys
     compare equal when the round would scan the same content again; ``stream_ended``
     stays out of the comparison and only says whether the handler is on its
-    end-of-stream path, where an empty payload is still scanned today."""
+    end-of-stream path, where an empty payload is still scanned today.
+    ``tool_calls_in_flight`` also stays out of the comparison: it flags that tool
+    calls have streamed which this round cannot scan yet, so a buffered window
+    holding them must stay withheld until the end-of-stream scan covers them."""
 
     texts: tuple[str, ...]
     tool_calls: tuple[str, ...] = ()
     stream_ended: bool = field(default=False, compare=False)
+    tool_calls_in_flight: bool = field(default=False, compare=False)
 
     @property
     def has_nothing_to_scan(self) -> bool:
@@ -52,9 +62,32 @@ class StreamingScanKey:
 
 
 class BaseTranslation(ABC):
+    delivers_ended_stream_rewrites: ClassVar[bool] = False
+    """Whether ``process_output_streaming_response`` accepts
+    ``deliver_ended_stream_rewrites=True`` and, on an ended (fully buffered)
+    stream, writes guardrail text and tool-call rewrites back across
+    ``responses_so_far`` so a buffered pipeline can release rewritten chunks,
+    raising ``UndeliverableStreamRewrite`` for a shape it cannot place. Rewrites
+    on every other translation are undeliverable: the pipeline executor
+    discards them and releases the original chunks."""
+
+    assembles_streamed_response: ClassVar[bool] = False
+    """Whether ``process_output_streaming_response`` stores the assembled response of an
+    ended stream under ``request_data["response"]`` before scanning it, the way the chat,
+    Responses, and Messages translations do. A streaming pipeline runs a guardrail that only
+    has the legacy post-call hook against that response, so on a translation without it such
+    a guardrail keeps running on its own."""
+
+    def post_call_hook_response(self, response: object) -> object:
+        """The ``response`` this endpoint's non-streaming post-call hooks receive, derived from
+        the object the translation stores under ``request_data["response"]`` while scanning an
+        ended stream. Chat and Responses scan that shape already; a translation that scans a
+        different one (Messages scans an OpenAI-shaped ModelResponse) overrides this."""
+        return response
+
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
-        user_api_key_dict: Any | None,
+        user_api_key_dict: object,
     ) -> dict[str, object]:
         """
         Transform user_api_key_dict to a metadata dict with prefixed keys.
@@ -72,7 +105,11 @@ class BaseTranslation(ABC):
             return {}
 
         # Convert to dict if it's a Pydantic object
-        user_dict = user_api_key_dict.model_dump() if hasattr(user_api_key_dict, "model_dump") else user_api_key_dict
+        user_dict: Final = (
+            user_api_key_dict.model_dump()
+            if has_attributes(user_api_key_dict, _ModelDumpable, "model_dump")
+            else user_api_key_dict
+        )
 
         if not isinstance(user_dict, dict):
             return {}
@@ -94,7 +131,7 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def merge_user_api_key_metadata_into_request(
-        request_data: dict[str, Any],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
+        request_data: dict[str, object],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
         user_api_key_dict: Optional["UserAPIKeyAuth"],
     ) -> None:
         """
@@ -157,18 +194,34 @@ class BaseTranslation(ABC):
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
-    ) -> Any:
+        deliver_ended_stream_rewrites: bool = False,
+    ) -> object:
         """
         Process output streaming response with guardrails.
 
         Optional to override in subclasses. ``stream_transform_sink`` is the
         out-parameter used by handlers that support streaming text
         transformations (see ``StreamTransformSink``); base handlers ignore it.
+        ``deliver_ended_stream_rewrites`` is passed True only when the caller
+        holds the whole buffered stream and the subclass declares
+        ``delivers_ended_stream_rewrites``: the handler then writes
+        guardrail text and tool-call rewrites back across ``responses_so_far``
+        instead of discarding them.
         """
         return responses_so_far
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         return None
+
+    def needs_ended_stream_scan(self, guardrail: "CustomGuardrail", responses_so_far: Sequence[object]) -> bool:
+        """Whether the end-of-stream round scans ``guardrail`` even when a sampled round already covered every
+        text, because this translation hands that guardrail marks only the ended round carries."""
+        return False
+
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        """The chunks a client left the stream with, closed the way this endpoint ends a stream, so the
+        end-of-stream scan also inspects tool calls the stream never finished"""
+        return tuple(responses_so_far)
 
     def build_block_sse_chunks(
         self,
@@ -214,11 +267,12 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict) -> list["AllMessageValues"] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 
-        Override in subclasses for format-specific conversion.
+        Override in subclasses for format-specific conversion. ``keep_tool_errors`` copies a provider's
+        tool-failure marker onto tool messages as ``is_error``; only for copies that are never sent to a model.
 
         Returns None if no convertible content is found.
         """

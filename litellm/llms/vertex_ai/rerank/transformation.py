@@ -4,10 +4,13 @@ Translates from Cohere's `/v1/rerank` input format to Vertex AI Discovery Engine
 Why separate file? Make it easy to see how transformation works
 """
 
-from collections.abc import Mapping
-from typing import Any, Final
+import math
+import uuid
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -25,12 +28,25 @@ from litellm.types.rerank import (
 )
 
 
+class _VertexRankedRecord(TypedDict):
+    id: ReadOnly[str]
+    score: NotRequired[ReadOnly[float]]
+    title: NotRequired[ReadOnly[str]]
+    content: NotRequired[ReadOnly[str]]
+
+
+class _VertexRankResponse(TypedDict, total=False):
+    records: ReadOnly[Sequence[_VertexRankedRecord]]
+
+
 class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
     """
     Configuration for Vertex AI Discovery Engine Rerank API
 
     Reference: https://cloud.google.com/generative-ai-app-builder/docs/ranking#rank_or_rerank_a_set_of_records_according_to_a_query
     """
+
+    MAX_RECORDS_PER_SEARCH_UNIT = 100
 
     def __init__(self) -> None:
         super().__init__()
@@ -168,7 +184,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Transform Vertex AI Discovery Engine response to Cohere format
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[_VertexRankResponse] = raw_response.json()
         except Exception as e:
             raise ValueError(f"Failed to parse response: {e}")
 
@@ -208,10 +224,11 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
                 RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
             )
 
-        # Create meta object
-        meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=len(records)))
+        input_record_count: Final = len(request_data.get("records", ()))
+        search_units: Final = math.ceil(input_record_count / self.MAX_RECORDS_PER_SEARCH_UNIT)
+        meta: Final = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=search_units))
 
-        return RerankResponse(id=f"vertex_ai_rerank_{model}", results=rerank_results, meta=meta)
+        return RerankResponse(id=f"vertex_ai_rerank_{uuid.uuid4()}", results=rerank_results, meta=meta)
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [
@@ -227,7 +244,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

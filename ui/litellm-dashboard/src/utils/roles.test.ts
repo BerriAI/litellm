@@ -8,6 +8,7 @@ import {
   isOrgAdminForAnyOrg,
   isOrgAdminSessionRole,
   isProxyAdminRole,
+  isProxyAdminTierRole,
   isUserTeamAdminForAnyTeam,
   isUserTeamAdminForSingleTeam,
   isViewOnlySessionRole,
@@ -55,6 +56,22 @@ describe("roles", () => {
       expect(isProxyAdminRole("Internal Viewer")).toBe(false);
       expect(isProxyAdminRole("regular_user")).toBe(false);
       expect(isProxyAdminRole("")).toBe(false);
+    });
+  });
+
+  describe("isProxyAdminTierRole", () => {
+    it("should return true for proxy admin and proxy admin viewer roles", () => {
+      expect(isProxyAdminTierRole("proxy_admin")).toBe(true);
+      expect(isProxyAdminTierRole("Admin")).toBe(true);
+      expect(isProxyAdminTierRole("proxy_admin_viewer")).toBe(true);
+      expect(isProxyAdminTierRole("Admin Viewer")).toBe(true);
+    });
+
+    it("should return false for org admin and non-admin roles", () => {
+      expect(isProxyAdminTierRole("org_admin")).toBe(false);
+      expect(isProxyAdminTierRole("Internal User")).toBe(false);
+      expect(isProxyAdminTierRole("Internal Viewer")).toBe(false);
+      expect(isProxyAdminTierRole("")).toBe(false);
     });
   });
 

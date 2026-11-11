@@ -49,7 +49,7 @@ mcp_servers:
 
 # General Settings
 general_settings:
-  master_key: sk-1234
+  master_key: os.environ/LITELLM_MASTER_KEY
   store_model_in_db: false
 
 # LiteLLM Settings

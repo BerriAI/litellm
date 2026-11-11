@@ -2,22 +2,31 @@
 ObjectPermission repository for database operations on LiteLLM_ObjectPermissionTable.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
+class _ObjectPermissionTable(PrismaTableRepository["prisma_models.LiteLLM_ObjectPermissionTable"]):
+    table_name = "litellm_objectpermissiontable"
+
+
 class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
     """Repository for object permission database operations."""
 
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
+        super().__init__(prisma_client)
+        self._use_writer = use_writer
+
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]:
-        return self.prisma_client.db.litellm_objectpermissiontable
+        return _ObjectPermissionTable(self._prisma_client, use_writer=self._use_writer).table
 
     @property
     def model_class(self) -> type[LiteLLM_ObjectPermissionTable]:
@@ -40,9 +49,10 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         blocked_tools: list[str] | None = None,
         mcp_toolsets: list[str] | None = None,
         search_tools: list[str] | None = None,
+        skills: list[str] | None = None,
     ) -> LiteLLM_ObjectPermissionTable:
         """Create a new object permission record."""
-        data: Final[dict[str, Any]] = {}
+        data: Final[dict[str, object]] = {}
         if mcp_servers is not None:
             data["mcp_servers"] = mcp_servers
         if mcp_access_groups is not None:
@@ -63,6 +73,8 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
             data["mcp_toolsets"] = mcp_toolsets
         if search_tools is not None:
             data["search_tools"] = search_tools
+        if skills is not None:
+            data["skills"] = skills
 
         return await self.create(data)
 
@@ -79,9 +91,10 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         blocked_tools: list[str] | None = None,
         mcp_toolsets: list[str] | None = None,
         search_tools: list[str] | None = None,
+        skills: list[str] | None = None,
     ) -> LiteLLM_ObjectPermissionTable | None:
         """Update an object permission record."""
-        data: Final[dict[str, Any]] = {}
+        data: Final[dict[str, object]] = {}
         if mcp_servers is not None:
             data["mcp_servers"] = mcp_servers
         if mcp_access_groups is not None:
@@ -102,6 +115,8 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
             data["mcp_toolsets"] = mcp_toolsets
         if search_tools is not None:
             data["search_tools"] = search_tools
+        if skills is not None:
+            data["skills"] = skills
 
         return await self.update(object_permission_id, data, id_field="object_permission_id")
 

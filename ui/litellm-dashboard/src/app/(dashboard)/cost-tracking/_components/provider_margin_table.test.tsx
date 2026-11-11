@@ -46,6 +46,8 @@ describe("ProviderMarginTable", () => {
     expect(screen.getByRole("columnheader", { name: "Provider" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Margin" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Margin" })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Provider" })).not.toHaveClass("text-right");
   });
 
   it("should display the provider display name", () => {

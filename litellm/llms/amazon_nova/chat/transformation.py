@@ -2,6 +2,8 @@
 Translate from OpenAI's `/v1/chat/completions` to Amazon Nova's `/v1/chat/completions`
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -17,7 +19,7 @@ from litellm.types.utils import ModelResponse
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AmazonNovaChatConfig(OpenAILikeChatConfig):
@@ -38,7 +40,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         tools: list | None = None,
         reasoning_effort: list | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -86,7 +88,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

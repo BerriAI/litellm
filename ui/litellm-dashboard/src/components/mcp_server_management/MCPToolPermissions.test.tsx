@@ -19,6 +19,7 @@ describe("MCPToolPermissions", () => {
     vi.clearAllMocks();
     testQueryClient.clear();
     vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
   });
 
   it("should update tool permissions when user selects a tool", async () => {
@@ -78,11 +79,11 @@ describe("MCPToolPermissions", () => {
     const expectedToolPermissions = {
       [mockServerId]: ["read_wiki_contents", "ask_question"],
     };
-    expect(mockOnChange).toHaveBeenCalledWith(expectedToolPermissions);
+    expect(mockOnChange).toHaveBeenCalledWith(expectedToolPermissions, "edit");
 
     // Verify API calls
     // Note: useMCPServers uses useAuthorized() internally, which returns "123" from global mock
-    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined);
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith("123", undefined, undefined, undefined);
     // listMCPTools uses the accessToken prop directly
     expect(networking.listMCPTools).toHaveBeenCalledWith(mockAccessToken, mockServerId);
   });
@@ -132,10 +133,14 @@ describe("MCPToolPermissions", () => {
     const selectAllButton = screen.getByRole("button", { name: "Select All" });
     await userEvent.click(selectAllButton);
 
-    // Verify onChange was called with all tools selected
-    expect(mockOnChange).toHaveBeenCalledWith({
-      [mockServerId]: ["read_wiki_structure", "read_wiki_contents", "ask_question"],
-    });
+    // Selecting every displayed tool writes the wildcard, which also covers tools the
+    // server adds later.
+    expect(mockOnChange).toHaveBeenCalledWith(
+      {
+        [mockServerId]: ["*"],
+      },
+      "edit",
+    );
   });
 
   it("should deselect all tools when Deselect All button is clicked", async () => {
@@ -184,8 +189,85 @@ describe("MCPToolPermissions", () => {
     await userEvent.click(deselectAllButton);
 
     // Verify onChange was called with no tools selected
-    expect(mockOnChange).toHaveBeenCalledWith({
-      [mockServerId]: [],
+    expect(mockOnChange).toHaveBeenCalledWith(
+      {
+        [mockServerId]: [],
+      },
+      "edit",
+    );
+  });
+
+  describe("wildcard all-tools grant", () => {
+    const wildcardServerId = "server-1";
+    const wildcardServer = { server_id: wildcardServerId, server_name: "Wildcard Server", alias: "Wildcard Server" };
+    const wildcardTools = [
+      { name: "read_wiki_structure", description: "Get documentation topics" },
+      { name: "read_wiki_contents", description: "View documentation" },
+      { name: "ask_question", description: "Ask questions" },
+    ];
+
+    beforeEach(() => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([wildcardServer]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: wildcardTools, error: false });
+    });
+
+    it("renders every tool checked with the future-tools note when the entry is the wildcard", async () => {
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[wildcardServerId]}
+          toolPermissions={{ [wildcardServerId]: ["*"] }}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText("Wildcard Server")).toBeInTheDocument();
+      expect(screen.getByText("All tools allowed, including tools added to this server later")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByText("Flat List"));
+      for (const checkbox of screen.getAllByRole("checkbox")) {
+        expect(checkbox).toBeChecked();
+      }
+    });
+
+    it("writes the wildcard when Select All covers every displayed tool", async () => {
+      const mockOnChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[wildcardServerId]}
+          toolPermissions={{ [wildcardServerId]: ["read_wiki_structure"] }}
+          onChange={mockOnChange}
+        />,
+      );
+
+      expect(await screen.findByText("read_wiki_structure")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Select All" }));
+
+      expect(mockOnChange).toHaveBeenCalledWith({ [wildcardServerId]: ["*"] }, "edit");
+    });
+
+    it("converts back to an enumerated list when one tool is unchecked from a wildcard grant", async () => {
+      const mockOnChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[wildcardServerId]}
+          toolPermissions={{ [wildcardServerId]: ["*"] }}
+          onChange={mockOnChange}
+        />,
+      );
+
+      expect(await screen.findByText("read_wiki_structure")).toBeInTheDocument();
+      await userEvent.click(screen.getByText("Flat List"));
+      await userEvent.click(screen.getByRole("checkbox", { name: "ask_question" }));
+
+      expect(mockOnChange).toHaveBeenCalledWith(
+        {
+          [wildcardServerId]: ["read_wiki_structure", "read_wiki_contents"],
+        },
+        "edit",
+      );
     });
   });
 
@@ -247,7 +329,7 @@ describe("MCPToolPermissions", () => {
       expect(deleteIssue).toBeChecked();
 
       await userEvent.click(listIssues);
-      expect(mockOnChange).toHaveBeenCalledWith({ [groupServer.server_id]: ["delete_issue"] });
+      expect(mockOnChange).toHaveBeenCalledWith({ [groupServer.server_id]: ["delete_issue"] }, "edit");
     });
 
     it("marks an access-group server as inherited and leaves a directly selected one unmarked", async () => {
@@ -396,7 +478,7 @@ describe("MCPToolPermissions", () => {
       // First checkbox is the header toggle of the group holding list_issues.
       await userEvent.click(screen.getAllByRole("checkbox")[0]);
 
-      expect(mockOnChange).toHaveBeenCalledWith({ [toolsetServer.server_id]: ["list_issues"] });
+      expect(mockOnChange).toHaveBeenCalledWith({ [toolsetServer.server_id]: ["list_issues"] }, "edit");
     });
 
     // Copying the toolset's tools into the entry would outlive the toolset, so a write keeps only
@@ -427,7 +509,9 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
       await userEvent.click(screen.getByText("Select All"));
 
-      expect(mockOnChange).toHaveBeenCalledWith({ [toolsetServer.server_id]: ["delete_issue"] });
+      // A toolset-sourced server never writes the wildcard: that would create a standing direct
+      // grant outliving the toolset. The write keeps only the tools this level grants itself.
+      expect(mockOnChange).toHaveBeenCalledWith({ [toolsetServer.server_id]: ["delete_issue"] }, "edit");
     });
 
     // The default narrows an unrestricted server; against a toolset-restricted one it would widen
@@ -522,7 +606,7 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findByText("Payments")).toBeInTheDocument();
       expect(screen.queryByText("srv-collide")).not.toBeInTheDocument();
       await waitFor(() => {
-        expect(mockOnChange).toHaveBeenCalledWith({ "srv-collide": ["list_issues"] });
+        expect(mockOnChange).toHaveBeenCalledWith({ "srv-collide": ["list_issues"] }, "default");
       });
       expect(mockOnChange.mock.calls.every(([written]) => !Object.hasOwn(written, "srv-twin"))).toBe(true);
       expect(networking.listMCPTools).not.toHaveBeenCalledWith(mockAccessToken, "srv-twin");
@@ -565,7 +649,7 @@ describe("MCPToolPermissions", () => {
       );
 
       await waitFor(() => {
-        expect(mockOnChange).toHaveBeenCalledWith({ [directServer.server_id]: ["list_issues"] });
+        expect(mockOnChange).toHaveBeenCalledWith({ [directServer.server_id]: ["list_issues"] }, "default");
       });
     });
 
@@ -621,6 +705,45 @@ describe("MCPToolPermissions", () => {
       );
 
       expect(await screen.findByText("Unable to load MCP servers")).toBeInTheDocument();
+      expect(screen.queryByText(/has 0 servers/)).not.toBeInTheDocument();
+    });
+
+    it("tells the admin when a loaded access group has no member servers", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([groupServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={["production-group", "ops_readonly"]}
+          toolPermissions={{}}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText('Access group "ops_readonly" has 0 servers')).toBeInTheDocument();
+      expect(screen.getByText("Group Server")).toBeInTheDocument();
+      expect(screen.queryByText('Access group "production-group" has 0 servers')).not.toBeInTheDocument();
+    });
+
+    it("does not call a group empty when its servers are only hidden from the caller's catalog", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue(["production-group"]);
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={["production-group", "ops_readonly"]}
+          toolPermissions={{}}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText('Access group "ops_readonly" has 0 servers')).toBeInTheDocument();
+      expect(screen.queryByText('Access group "production-group" has 0 servers')).not.toBeInTheDocument();
     });
 
     it("warns when the selected toolsets cannot be resolved to servers", async () => {
@@ -690,7 +813,7 @@ describe("MCPToolPermissions", () => {
       expect(await screen.findByText("list_issues")).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Deselect All" }));
 
-      expect(mockOnChange).toHaveBeenCalledWith({ github_mcp: [] });
+      expect(mockOnChange).toHaveBeenCalledWith({ github_mcp: [] }, "edit");
     });
   });
 
@@ -809,7 +932,7 @@ describe("MCPToolPermissions", () => {
 
       const written = mockOnChange.mock.calls.at(-1)?.[0] as Record<string, string[]>;
       expect(written["github_mcp"]).toEqual(["list_issues"]);
-      expect(written[twin.server_id]).toEqual(["list_issues", "create_issue", "delete_issue"]);
+      expect(written[twin.server_id]).toEqual(["*"]);
     });
 
     it("says nothing about shared names when every key names one server", async () => {
@@ -870,7 +993,7 @@ describe("MCPToolPermissions", () => {
 
       await userEvent.click(readGroupToggle);
 
-      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["delete_document"] });
+      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["delete_document"] }, "edit");
     });
 
     it("adds the rest of a partially-allowed risk group when its mixed toggle is clicked", async () => {
@@ -882,7 +1005,7 @@ describe("MCPToolPermissions", () => {
 
       await userEvent.click(readGroupToggle);
 
-      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
+      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] }, "edit");
     });
 
     it("toggles a single tool exactly once when its checkbox is clicked inside the clickable row", async () => {
@@ -892,7 +1015,7 @@ describe("MCPToolPermissions", () => {
       await userEvent.click(await screen.findByRole("checkbox", { name: "delete_document" }));
 
       expect(mockOnChange).toHaveBeenCalledTimes(1);
-      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
+      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] }, "edit");
     });
 
     it("toggles a single tool when the row around its checkbox is clicked", async () => {
@@ -902,7 +1025,7 @@ describe("MCPToolPermissions", () => {
       await userEvent.click(await screen.findByText("Destroy a document"));
 
       expect(mockOnChange).toHaveBeenCalledTimes(1);
-      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] });
+      expect(mockOnChange).toHaveBeenCalledWith({ [mockServerId]: ["list_documents", "get_document"] }, "edit");
     });
 
     it("re-renders each checkbox from the permissions it emitted", async () => {
@@ -946,6 +1069,50 @@ describe("MCPToolPermissions", () => {
       expect(readGroupToggle).toBeChecked();
       expect(screen.getByRole("status")).toHaveTextContent("list_documents,get_document");
       expect(screen.getByRole("checkbox", { name: "delete_document" })).not.toBeChecked();
+    });
+  });
+
+  describe("preserveUnrestrictedServers", () => {
+    const tools = [
+      { name: "read_file", description: "Read a file" },
+      { name: "delete_file", description: "Delete a file" },
+    ];
+    const server = { server_id: "srv-files", server_name: "Files", alias: "files" };
+
+    beforeEach(() => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([server]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools, error: false });
+    });
+
+    it("keeps an unrestricted server stored by alias unrestricted when tools load", async () => {
+      const onChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={["files"]}
+          toolPermissions={{}}
+          onChange={onChange}
+          preserveUnrestrictedServers={["files"]}
+        />,
+      );
+
+      expect(await screen.findByText("read_file")).toBeInTheDocument();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("still defaults a newly added server to non-delete tools", async () => {
+      const onChange = vi.fn();
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={["files"]}
+          toolPermissions={{}}
+          onChange={onChange}
+          preserveUnrestrictedServers={["some-other-server"]}
+        />,
+      );
+
+      await waitFor(() => expect(onChange).toHaveBeenCalledWith({ "srv-files": ["read_file"] }, "default"));
     });
   });
 });

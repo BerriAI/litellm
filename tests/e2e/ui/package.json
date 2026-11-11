@@ -9,6 +9,7 @@
     "e2e:migration:root": "playwright test --config migration.serverRootPath.config.ts"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@playwright/test": "1.58.1",
     "@types/node": "20.19.37",
     "typescript": "5.9.3"

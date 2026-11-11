@@ -15,6 +15,8 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_logger
 from litellm.compression import compress
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import allowed_tools_tool_choice_with_function
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.integrations.compression_interception import (
     CompressionInterceptionConfig,
     CompressionSavingsMetadata,
@@ -153,7 +155,7 @@ class CompressionInterceptionLogger(CustomLogger):
 
         self._prune_expired_cache()
 
-        compressed: Final = compress(
+        compressed: Final = await asyncify(compress)(
             messages=messages,
             model=model,
             call_type=CallTypes.anthropic_messages,
@@ -179,6 +181,10 @@ class CompressionInterceptionLogger(CustomLogger):
                     existing_tools=cast(list[dict[str, object]] | None, kwargs.get("tools")),
                     compressed_tools=compressed_tools,
                 )
+                if "tool_choice" in kwargs:
+                    kwargs["tool_choice"] = allowed_tools_tool_choice_with_function(
+                        kwargs["tool_choice"], LITELLM_CONTENT_RETRIEVE_TOOL_NAME
+                    )
             call_id = cast(str | None, kwargs.get("litellm_call_id"))
             if not call_id:
                 call_id = str(uuid.uuid4())

@@ -1,10 +1,12 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class AuditLogResponse(BaseModel):
+class AuditLogResponse(LiteLLMBaseModel):
     """Response model for a single audit log entry"""
 
     id: str
@@ -18,7 +20,7 @@ class AuditLogResponse(BaseModel):
     updated_values: Optional[Dict[str, Any]] = None
 
 
-class PaginatedAuditLogResponse(BaseModel):
+class PaginatedAuditLogResponse(LiteLLMBaseModel):
     """Response model for paginated audit logs"""
 
     audit_logs: List[AuditLogResponse]

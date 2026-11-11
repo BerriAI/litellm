@@ -45,8 +45,8 @@ class _Upstream(LocalHttpServer):
         super().__init__(("127.0.0.1", 0), _UpstreamHandler)
         self.response_status: Final = status
 
-class _UpstreamHandler(LocalHttpHandler):
 
+class _UpstreamHandler(LocalHttpHandler):
     def do_POST(self) -> None:
         length: Final = int(self.headers.get("content-length") or "0")
         self.rfile.read(length)
@@ -58,6 +58,7 @@ class _UpstreamHandler(LocalHttpHandler):
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
 
 def _upstream(status: int = 200) -> AbstractContextManager[_Upstream]:
     return serve_in_thread(_Upstream(status))

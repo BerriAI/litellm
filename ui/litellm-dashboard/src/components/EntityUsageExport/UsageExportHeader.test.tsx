@@ -2,7 +2,6 @@ import { renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import UsageExportHeader from "./UsageExportHeader";
-import type { EntitySpendData } from "./types";
 
 vi.mock("./EntityUsageExportModal", () => ({
   default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
@@ -16,16 +15,7 @@ vi.mock("./EntityUsageExportModal", () => ({
 const defaultProps = {
   dateValue: { from: new Date("2025-01-01"), to: new Date("2025-01-31") },
   entityType: "team" as const,
-  spendData: {
-    results: [],
-    metadata: {
-      total_spend: 0,
-      total_api_requests: 0,
-      total_successful_requests: 0,
-      total_failed_requests: 0,
-      total_tokens: 0,
-    },
-  } satisfies EntitySpendData,
+  onExport: vi.fn().mockResolvedValue(new Blob(["data"])),
 };
 
 describe("UsageExportHeader", () => {

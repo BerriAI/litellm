@@ -7,9 +7,12 @@ https://docs.twelvelabs.io/docs/models/pegasus
 
 import json
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -20,18 +23,28 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.http_handler import header_value
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, Usage
 from litellm.utils import get_base64_str
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _PegasusResponse(TypedDict):
+    message: ReadOnly[NotRequired[str | None]]
+    finishReason: ReadOnly[NotRequired[str | None]]
+
+
+_PEGASUS_RESPONSE: Final = TypeAdapter(_PegasusResponse)
+_OPTIONAL_PARAM: Final = TypeAdapter(object)
 
 
 class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
@@ -54,7 +67,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -68,7 +81,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 optional_params["responseFormat"] = self._normalize_response_format(value)
         return optional_params
 
-    def _normalize_response_format(self, value: Any) -> Any:
+    def _normalize_response_format(self, value: object) -> object:
         """Normalize response_format to TwelveLabs format.
 
         TwelveLabs expects:
@@ -99,7 +112,11 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
                 return value
             # Otherwise return the dict as is
             return value
-        return type_to_response_format_param(response_format=value) or value
+        if value is None:
+            return None
+        if isinstance(value, type) and issubclass(value, BaseModel):
+            return type_to_response_format_param(response_format=value) or value
+        raise TypeError(f"Unsupported response_format type - {value}")
 
     def transform_request(
         self,
@@ -110,7 +127,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         headers: dict,
     ) -> dict:
         input_prompt: Final = self._convert_messages_to_prompt(messages=messages)
-        request_data: Final[dict[str, Any]] = {"inputPrompt": input_prompt}
+        request_data: Final[dict[str, object]] = {"inputPrompt": input_prompt}
 
         media_source: Final = self._build_media_source(optional_params)
         if media_source is not None:
@@ -123,7 +140,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
 
         # Handle responseFormat - transform to TwelveLabs format
         if "responseFormat" in optional_params:
-            response_format: Final = optional_params["responseFormat"]
+            response_format: Final = _OPTIONAL_PARAM.validate_python(optional_params["responseFormat"])
             transformed_format: Final = self._normalize_response_format(response_format)
             if transformed_format:
                 request_data["responseFormat"] = transformed_format
@@ -190,7 +207,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -207,11 +224,12 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         ModelResponse with choices[0].message.content and finish_reason
         """
         try:
-            completion_response: Final = raw_response.json()
+            completion_response: Final = _PEGASUS_RESPONSE.validate_python(raw_response.json())
         except Exception as e:
             raise BedrockError(
                 message=f"Error parsing response: {raw_response.text}, error: {e}",
                 status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
 
         verbose_logger.debug(
@@ -223,7 +241,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         message_content: Final = completion_response.get("message", "")
 
         # Extract finish reason and map to LiteLLM format
-        finish_reason_raw: Final = completion_response.get("finishReason", "stop")
+        finish_reason_raw: Final = completion_response.get("finishReason") or "stop"
         finish_reason: Final = map_finish_reason(finish_reason_raw)
 
         # Set the response content
@@ -241,11 +259,12 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             raise BedrockError(
                 message=f"Error setting response content: {e}. Response: {completion_response}",
                 status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
 
         # Calculate usage from headers
-        bedrock_input_tokens: Final = raw_response.headers.get("x-amzn-bedrock-input-token-count", None)
-        bedrock_output_tokens: Final = raw_response.headers.get("x-amzn-bedrock-output-token-count", None)
+        bedrock_input_tokens: Final = header_value(raw_response.headers, "x-amzn-bedrock-input-token-count")
+        bedrock_output_tokens: Final = header_value(raw_response.headers, "x-amzn-bedrock-output-token-count")
 
         prompt_tokens: Final = int(bedrock_input_tokens or litellm.token_counter(messages=messages))
 

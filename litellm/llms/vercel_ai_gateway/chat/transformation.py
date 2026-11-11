@@ -6,17 +6,28 @@ Calls done in OpenAI/openai.py as Vercel AI Gateway is openai-compatible.
 Docs: https://vercel.com/docs/ai-gateway
 """
 
+from collections.abc import Sequence
 from typing import Final
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import VercelAIGatewayException
+
+
+class _VercelAIGatewayModel(TypedDict):
+    id: ReadOnly[str]
+
+
+class _VercelAIGatewayModelList(TypedDict):
+    data: ReadOnly[Sequence[_VercelAIGatewayModel]]
 
 
 class VercelAIGatewayConfig(OpenAIGPTConfig):
@@ -36,6 +47,13 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("VERCEL_AI_GATEWAY_API_BASE") or "https://ai-gateway.vercel.sh/v1"
         user_api_key = api_key or get_secret_str("VERCEL_AI_GATEWAY_API_KEY") or get_secret_str("VERCEL_OIDC_TOKEN")
         return api_base, user_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def map_openai_params(
         self,
@@ -85,11 +103,11 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         if api_base is None:
             api_base = "https://ai-gateway.vercel.sh/v1"
 
-        models_url: Final = f"{api_base}/models"
+        models_url: Final = join_api_base(api_base, "models")
         response: Final = litellm.module_level_client.get(url=models_url)
 
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
 
-        models: Final = response.json()["data"]
-        return [model["id"] for model in models]
+        models: Final[_VercelAIGatewayModelList] = response.json()
+        return [model["id"] for model in models["data"]]

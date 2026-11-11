@@ -71,6 +71,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     metadata: dict | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
     budget_duration: str | None = None

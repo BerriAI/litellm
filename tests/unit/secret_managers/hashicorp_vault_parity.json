@@ -1,0 +1,85 @@
+[
+  {
+    "name": "defaults",
+    "env": {
+      "HCP_VAULT_TOKEN": "token"
+    },
+    "secret_name": "OPENAI_API_KEY",
+    "expected_secret_url": "http://127.0.0.1:8200/v1/secret/data/OPENAI_API_KEY",
+    "expected_login_url": null,
+    "expected_login_namespace": null,
+    "expected_secret_namespace": null
+  },
+  {
+    "name": "global_namespace",
+    "env": {
+      "HCP_VAULT_ADDR": "http://vault.test:8200",
+      "HCP_VAULT_TOKEN": "token",
+      "HCP_VAULT_NAMESPACE": "admin"
+    },
+    "secret_name": "OPENAI_API_KEY",
+    "expected_secret_url": "http://vault.test:8200/v1/admin/secret/data/OPENAI_API_KEY",
+    "expected_login_url": null,
+    "expected_login_namespace": "admin",
+    "expected_secret_namespace": "admin"
+  },
+  {
+    "name": "namespace_overrides",
+    "env": {
+      "HCP_VAULT_ADDR": "http://vault.test:8200",
+      "HCP_VAULT_TOKEN": "token",
+      "HCP_VAULT_NAMESPACE": "admin",
+      "HCP_VAULT_LOGIN_NAMESPACE": "root",
+      "HCP_VAULT_SECRET_NAMESPACE": "teams/team-a"
+    },
+    "secret_name": "OPENAI_API_KEY",
+    "expected_secret_url": "http://vault.test:8200/v1/teams/team-a/secret/data/OPENAI_API_KEY",
+    "expected_login_url": null,
+    "expected_login_namespace": "root",
+    "expected_secret_namespace": "teams/team-a"
+  },
+  {
+    "name": "custom_mount_and_prefix",
+    "env": {
+      "HCP_VAULT_ADDR": "http://vault.test:8200",
+      "HCP_VAULT_TOKEN": "token",
+      "HCP_VAULT_MOUNT_NAME": " /kv-prod/ ",
+      "HCP_VAULT_PATH_PREFIX": " /virtual-keys/ "
+    },
+    "secret_name": "DB_PASSWORD",
+    "expected_secret_url": "http://vault.test:8200/v1/kv-prod/data/virtual-keys/DB_PASSWORD",
+    "expected_login_url": null,
+    "expected_login_namespace": null,
+    "expected_secret_namespace": null
+  },
+  {
+    "name": "approle_custom_mount",
+    "env": {
+      "HCP_VAULT_ADDR": "http://vault.test:8200",
+      "HCP_VAULT_APPROLE_ROLE_ID": "role-id",
+      "HCP_VAULT_APPROLE_SECRET_ID": "secret-id",
+      "HCP_VAULT_APPROLE_MOUNT_PATH": "custom-approle",
+      "HCP_VAULT_NAMESPACE": "admin"
+    },
+    "secret_name": "OPENAI_API_KEY",
+    "expected_secret_url": "http://vault.test:8200/v1/admin/secret/data/OPENAI_API_KEY",
+    "expected_login_url": "http://vault.test:8200/v1/auth/custom-approle/login",
+    "expected_login_namespace": "admin",
+    "expected_secret_namespace": "admin"
+  },
+  {
+    "name": "tls_cert",
+    "env": {
+      "HCP_VAULT_ADDR": "http://vault.test:8200",
+      "HCP_VAULT_CLIENT_CERT": "/tmp/client.crt",
+      "HCP_VAULT_CLIENT_KEY": "/tmp/client.key",
+      "HCP_VAULT_CERT_ROLE": "vault-role",
+      "HCP_VAULT_NAMESPACE": "admin"
+    },
+    "secret_name": "OPENAI_API_KEY",
+    "expected_secret_url": "http://vault.test:8200/v1/admin/secret/data/OPENAI_API_KEY",
+    "expected_login_url": "http://vault.test:8200/v1/auth/cert/login",
+    "expected_login_namespace": "admin",
+    "expected_secret_namespace": "admin"
+  }
+]

@@ -51,4 +51,23 @@ describe("ResponseMetrics prompt cache chips", () => {
 
     expect(screen.queryByText(/Response Cache/)).not.toBeInTheDocument();
   });
+
+  it("does not render the Cost chip when a persisted cost is null", () => {
+    render(<ResponseMetrics usage={{ promptTokens: 1, cost: null as unknown as number }} />);
+
+    expect(screen.queryByText(/Cost:/)).not.toBeInTheDocument();
+    expect(screen.getByText("In: 1")).toBeInTheDocument();
+  });
+
+  it("does not render the Cost chip for NaN", () => {
+    render(<ResponseMetrics usage={{ ...baseUsage, cost: Number.NaN }} />);
+
+    expect(screen.queryByText(/Cost:/)).not.toBeInTheDocument();
+  });
+
+  it("renders the Cost chip for a finite cost", () => {
+    render(<ResponseMetrics usage={{ ...baseUsage, cost: 0.000063 }} />);
+
+    expect(screen.getByText("Cost: $0.000063")).toBeInTheDocument();
+  });
 });

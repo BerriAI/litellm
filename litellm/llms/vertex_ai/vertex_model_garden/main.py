@@ -24,19 +24,12 @@ import httpx
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse
 
-from ..common_utils import VertexAIError, get_vertex_base_model_name
+from ..common_utils import (
+    VertexAIError,
+    get_vertex_base_model_name,
+    vertex_model_garden_model_id_in_json_body,
+)
 from ..vertex_llm_base import VertexBase
-
-
-def _vertex_model_garden_model_id_in_json_body(model: str) -> bool:
-    """
-    Vertex catalog / publisher models are addressed as publisher/model (e.g.
-    xai/grok-4.1-fast-reasoning) on the shared OpenAPI URL, with the id in the JSON body.
-
-    Deployed Model Garden endpoints are typically a single segment (often numeric)
-    and use .../endpoints/{ENDPOINT_ID}/chat/completions with an empty model field.
-    """
-    return "/" in model
 
 
 def create_vertex_url(
@@ -48,7 +41,7 @@ def create_vertex_url(
 ) -> str:
     """Return the api base for vertex model garden (without /chat/completions)."""
     base_url: Final = get_vertex_base_url(vertex_location)
-    if _vertex_model_garden_model_id_in_json_body(model):
+    if vertex_model_garden_model_id_in_json_body(model):
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
     return f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
 
@@ -124,7 +117,7 @@ class VertexAIModelGardenModels(VertexBase):
                 )
             # Publisher/catalog models: model id must be sent in the JSON body (OpenAPI route).
             # Single-segment endpoint ids: model is encoded in the URL path; body model stays empty.
-            if not _vertex_model_garden_model_id_in_json_body(model):
+            if not vertex_model_garden_model_id_in_json_body(model):
                 model = ""
             return openai_like_chat_completions.completion(
                 model=model,

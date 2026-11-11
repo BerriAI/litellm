@@ -1,0 +1,7 @@
+model_list: []
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  custom_team_metadata_validate: litellm.proxy.example_config_yaml.team_metadata_validator_e2e.validate_team_metadata
+  team_metadata_validation_timeout: 5
+  team_metadata_validation_error_message: "Cost center validation is unavailable right now; the team was not saved. Contact FinOps."

@@ -1,15 +1,23 @@
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
 from fastapi.responses import StreamingResponse
 
 import litellm
 from litellm.files.types import FileContentProvider, FileContentStreamingResult
-from litellm.types.utils import OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+from litellm.types.utils import FILE_CONTENT_STREAMING_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
+
+
+class _CallIdFields(Protocol):
+    def get(self, key: Literal["litellm_call_id"], default: str, /) -> str: ...
+
+
+def _call_id_fields(data: _CallIdFields) -> _CallIdFields:
+    return data
 
 
 class FileContentStreamingHandler:
@@ -18,11 +26,11 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: dict[str, Any],
+        data: dict[str, object],
         should_route: bool,
         original_file_id: str | None,
-        credentials: dict[str, Any] | None,
-    ) -> tuple[str, str, dict[str, Any]]:
+        credentials: dict[str, object] | None,
+    ) -> tuple[str, str, dict[str, object]]:
         """
         Resolve the provider, file ID, and request payload to use for streaming.
 
@@ -64,7 +72,7 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
     ) -> bool:
-        return custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+        return custom_llm_provider in FILE_CONTENT_STREAMING_PROVIDERS
 
     @staticmethod
     async def stream_file_content_with_logging(
@@ -77,7 +85,7 @@ class FileContentStreamingHandler:
             async for chunk in stream_iterator:
                 yield chunk
             await proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
+                litellm_call_id=_call_id_fields(data).get("litellm_call_id", ""), status="success"
             )
         except Exception as e:
             await proxy_logging_obj.post_call_failure_hook(
@@ -95,7 +103,7 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: dict[str, Any],
+        data: dict[str, object],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         version: str,

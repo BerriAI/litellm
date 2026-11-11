@@ -1,25 +1,32 @@
 "use client";
 
-import { BotIcon, InfoIcon, LayersIcon, ServerIcon } from "lucide-react";
+import { BotIcon, InfoIcon, LayersIcon, ServerIcon, SparklesIcon } from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
-import { z } from "zod/v4";
+import { useTranslation } from "react-i18next";
+import { z } from "zod";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { MultiSelect } from "@/components/shared/MultiSelect";
+import SkillSelector from "@/components/skills/SkillSelector";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import i18n from "@/i18n/i18n";
 
 export const accessGroupFormSchema = z.object({
-  name: z.string().min(1, "Please enter the access group name"),
+  name: z.string().min(1, { error: () => i18n.t("accessGroups.form.name.required") }),
   description: z.string(),
   modelIds: z.array(z.string()),
   mcpServerIds: z.array(z.string()),
+  mcpToolPermissions: z.record(z.string(), z.array(z.string())),
   agentIds: z.array(z.string()),
+  skillNames: z.array(z.string()),
 });
 
 export type AccessGroupFormValues = z.output<typeof accessGroupFormSchema>;
@@ -28,59 +35,44 @@ export const GENERAL_TAB = "general";
 export const MODELS_TAB = "models";
 export const MCP_SERVERS_TAB = "mcp-servers";
 export const AGENTS_TAB = "agents";
-
-interface MultiSelectOption {
-  value: string;
-  label: string;
-}
-
-interface MultiSelectProps {
-  id: string;
-  value: string[];
-  onChange: (value: string[]) => void;
-  options: MultiSelectOption[];
-  placeholder: string;
-  "aria-invalid": true | undefined;
-  "aria-describedby": string | undefined;
-}
-
-const MultiSelect = ({
-  id,
-  value,
-  onChange,
-  options,
-  placeholder,
-  "aria-invalid": ariaInvalid,
-  "aria-describedby": ariaDescribedBy,
-}: MultiSelectProps) => (
-  <Select multiple items={options} value={value} onValueChange={onChange}>
-    <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy} className="w-full">
-      <SelectValue placeholder={placeholder}>
-        {(selected: string[]) =>
-          selected.length === 0
-            ? placeholder
-            : options
-                .filter((option) => selected.includes(option.value))
-                .map((option) => option.label)
-                .join(", ")
-        }
-      </SelectValue>
-    </SelectTrigger>
-    <SelectContent>
-      {options.map((option) => (
-        <SelectItem key={option.value} value={option.value} title={option.label}>
-          {option.label}
-        </SelectItem>
-      ))}
-    </SelectContent>
-  </Select>
-);
+export const SKILLS_TAB = "skills";
 
 interface AccessGroupBaseFormProps {
   form: UseFormReturn<AccessGroupFormValues>;
   isNameDisabled?: boolean;
   activeTab: string;
   onTabChange: (tab: string) => void;
+  initialServerIds?: readonly string[];
+}
+
+export function AccessGroupMCPToolPermissions({
+  selectedServers,
+  toolPermissions,
+  onChange,
+  preserveUnrestrictedServers,
+}: {
+  selectedServers: string[];
+  toolPermissions: Record<string, string[]>;
+  onChange: (next: Record<string, string[]>) => void;
+  preserveUnrestrictedServers?: readonly string[];
+}) {
+  const { accessToken } = useAuthorized();
+
+  if (selectedServers.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="pt-4">
+      <MCPToolPermissions
+        accessToken={accessToken ?? ""}
+        selectedServers={selectedServers}
+        toolPermissions={toolPermissions}
+        onChange={onChange}
+        preserveUnrestrictedServers={preserveUnrestrictedServers}
+      />
+    </div>
+  );
 }
 
 export function AccessGroupBaseForm({
@@ -88,7 +80,10 @@ export function AccessGroupBaseForm({
   isNameDisabled = false,
   activeTab,
   onTabChange,
+  initialServerIds,
 }: AccessGroupBaseFormProps) {
+  const { t } = useTranslation();
+  const { accessToken } = useAuthorized();
   const { data: agentsData } = useAgents();
   const { data: mcpServersData } = useMCPServers();
 
@@ -106,70 +101,99 @@ export function AccessGroupBaseForm({
       <TabsList className="w-full">
         <TabsTrigger value={GENERAL_TAB}>
           <InfoIcon size={16} />
-          General Info
+          {t("accessGroups.form.tabs.general")}
         </TabsTrigger>
         <TabsTrigger value={MODELS_TAB}>
           <LayersIcon size={16} />
-          Models
+          {t("accessGroups.form.tabs.models")}
         </TabsTrigger>
         <TabsTrigger value={MCP_SERVERS_TAB}>
           <ServerIcon size={16} />
-          MCP Servers
+          {t("accessGroups.form.tabs.mcpServers")}
         </TabsTrigger>
         <TabsTrigger value={AGENTS_TAB}>
           <BotIcon size={16} />
-          Agents
+          {t("accessGroups.form.tabs.agents")}
+        </TabsTrigger>
+        <TabsTrigger value={SKILLS_TAB}>
+          <SparklesIcon size={16} />
+          {t("accessGroups.form.tabs.skills")}
         </TabsTrigger>
       </TabsList>
 
       <TabsContent value={GENERAL_TAB} className="pt-4">
         <FieldGroup>
-          <FormField control={form.control} name="name" label="Group Name">
+          <FormField control={form.control} name="name" label={t("accessGroups.form.name.label")}>
             {({ ref, ...field }) => (
-              <Input {...field} ref={ref} placeholder="e.g. Engineering Team" disabled={isNameDisabled} />
+              <Input
+                {...field}
+                ref={ref}
+                placeholder={t("accessGroups.form.name.placeholder")}
+                disabled={isNameDisabled}
+              />
             )}
           </FormField>
-          <FormField control={form.control} name="description" label="Description">
+          <FormField control={form.control} name="description" label={t("accessGroups.form.description.label")}>
             {({ ref, ...field }) => (
-              <Textarea {...field} ref={ref} rows={4} placeholder="Describe the purpose of this access group..." />
+              <Textarea {...field} ref={ref} rows={4} placeholder={t("accessGroups.form.description.placeholder")} />
             )}
           </FormField>
         </FieldGroup>
       </TabsContent>
 
       <TabsContent value={MODELS_TAB} className="pt-4">
-        <FormField control={form.control} name="modelIds" label="Allowed Models">
+        <FormField control={form.control} name="modelIds" label={t("accessGroups.form.models.label")}>
           {(field) => <ModelSelect context="global" value={field.value} onChange={field.onChange} />}
         </FormField>
       </TabsContent>
 
       <TabsContent value={MCP_SERVERS_TAB} className="pt-4">
-        <FormField control={form.control} name="mcpServerIds" label="Allowed MCP Servers">
-          {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+        <FormField control={form.control} name="mcpServerIds" label={t("accessGroups.form.mcpServers.label")}>
+          {({ id, value, onChange }) => (
             <MultiSelect
               id={id}
               value={value}
-              onChange={onChange}
+              onValueChange={onChange}
               options={mcpServerOptions}
-              placeholder="Select MCP servers"
-              aria-invalid={ariaInvalid}
-              aria-describedby={ariaDescribedBy}
+              placeholder={t("accessGroups.form.mcpServers.placeholder")}
+            />
+          )}
+        </FormField>
+        <AccessGroupMCPToolPermissions
+          selectedServers={form.watch("mcpServerIds")}
+          toolPermissions={form.watch("mcpToolPermissions")}
+          onChange={(next) => form.setValue("mcpToolPermissions", next, { shouldDirty: true })}
+          preserveUnrestrictedServers={initialServerIds}
+        />
+      </TabsContent>
+
+      <TabsContent value={AGENTS_TAB} className="pt-4">
+        <FormField control={form.control} name="agentIds" label={t("accessGroups.form.agents.label")}>
+          {({ id, value, onChange }) => (
+            <MultiSelect
+              id={id}
+              value={value}
+              onValueChange={onChange}
+              options={agentOptions}
+              placeholder={t("accessGroups.form.agents.placeholder")}
             />
           )}
         </FormField>
       </TabsContent>
 
-      <TabsContent value={AGENTS_TAB} className="pt-4">
-        <FormField control={form.control} name="agentIds" label="Allowed Agents">
-          {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-            <MultiSelect
-              id={id}
-              value={value}
+      <TabsContent value={SKILLS_TAB} className="pt-4">
+        <FormField
+          control={form.control}
+          name="skillNames"
+          label={t("accessGroups.form.skills.label")}
+          description={t("accessGroups.form.skills.description")}
+        >
+          {({ value, onChange }) => (
+            <SkillSelector
               onChange={onChange}
-              options={agentOptions}
-              placeholder="Select agents"
-              aria-invalid={ariaInvalid}
-              aria-describedby={ariaDescribedBy}
+              value={value}
+              accessToken={accessToken || ""}
+              placeholder={t("accessGroups.form.skills.placeholder")}
             />
           )}
         </FormField>

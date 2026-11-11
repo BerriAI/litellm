@@ -1,0 +1,22 @@
+{
+  "classification": {"label": "Classification", "category": "General"},
+  "content_writing": {"label": "Content Writing", "category": "General"},
+  "roleplay_fiction": {"label": "Roleplay & Fiction", "category": "General"},
+  "conversation": {"label": "Conversation", "category": "General"},
+  "research_reports": {"label": "Research & Reports", "category": "General"},
+  "qa_knowledge": {"label": "Q&A & Knowledge", "category": "General"},
+  "customer_support": {"label": "Customer Support", "category": "General"},
+  "summarization": {"label": "Summarization", "category": "General"},
+  "translation": {"label": "Translation", "category": "General"},
+  "workflow_execution": {"label": "Workflow Execution", "category": "Agent"},
+  "multi_step_planning": {"label": "Multi-step Planning", "category": "Agent"},
+  "tool_dispatch": {"label": "Tool Dispatch", "category": "Agent"},
+  "code_generation": {"label": "Code Generation", "category": "Code"},
+  "debugging": {"label": "Debugging", "category": "Code"},
+  "code_review": {"label": "Code Review", "category": "Code"},
+  "frontend_ui": {"label": "Frontend & UI", "category": "Code"},
+  "file_io": {"label": "File I/O", "category": "Code"},
+  "shell_execution": {"label": "Shell Execution", "category": "Code"},
+  "data_extraction": {"label": "Data Extraction", "category": "Data"},
+  "data_transformation": {"label": "Data Transformation", "category": "Data"}
+}

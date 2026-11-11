@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useInfiniteUsers, useUserLookup } from "./useUsers";
-import { userListCall } from "@/components/networking";
-import type { UserListResponse } from "@/components/networking";
+import { useInfiniteUsers, useUserEmailLookup, useUserLookup } from "./useUsers";
+import { userGetInfoV2, userListCall } from "@/components/networking";
+import type { UserInfoV2Response, UserListResponse } from "@/components/networking";
+import { ApiError } from "@/lib/http/client";
 
 vi.mock("@/components/networking", () => ({
+  userGetInfoV2: vi.fn(),
   userListCall: vi.fn(),
 }));
 
@@ -54,6 +56,23 @@ const buildUserListResponse = (page: number, totalPages: number, userCount = 2):
     sso_user_id: null,
     budget_duration: null,
   })),
+});
+
+const buildUserInfoV2Response = (userId: string): UserInfoV2Response => ({
+  user_id: userId,
+  user_email: "alice@example.com",
+  user_alias: "Alice",
+  user_role: "Internal User",
+  spend: 0,
+  max_budget: null,
+  models: [],
+  budget_duration: null,
+  budget_reset_at: null,
+  metadata: null,
+  created_at: null,
+  updated_at: null,
+  sso_user_id: null,
+  teams: [],
 });
 
 describe("useInfiniteUsers", () => {
@@ -235,7 +254,7 @@ describe("useInfiniteUsers", () => {
   });
 
   it("should execute query for each admin role", async () => {
-    const adminRoles = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"];
+    const adminRoles = ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin", "Org Admin"];
 
     for (const role of adminRoles) {
       vi.clearAllMocks();
@@ -299,22 +318,47 @@ describe("useUserLookup", () => {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
   it("fetches exactly the requested user by id", async () => {
-    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+    const exactUser = buildUserInfoV2Response("user-1-0");
+    vi.mocked(userGetInfoV2).mockResolvedValue(exactUser);
 
     const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["user-1-0"], 1, 1);
+    expect(userGetInfoV2).toHaveBeenCalledWith("test-access-token", "user-1-0");
+    expect(userListCall).not.toHaveBeenCalled();
+    expect(result.current.data).toMatchObject(exactUser);
     expect(result.current.data?.user_id).toBe("user-1-0");
   });
 
-  it("resolves to null when the proxy returns a different user than requested", async () => {
-    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+  it("resolves to no user when user info returns a different user id", async () => {
+    vi.mocked(userGetInfoV2).mockResolvedValue(buildUserInfoV2Response("a+b"));
 
-    const { result } = renderHook(() => useUserLookup("someone-else"), { wrapper });
+    const { result } = renderHook(() => useUserLookup("a b"), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data).toBeNull();
+    expect(userListCall).not.toHaveBeenCalled();
+  });
+
+  it("resolves to no user when the user info endpoint returns a 404", async () => {
+    vi.mocked(userGetInfoV2).mockRejectedValue(new ApiError("Not Found", 404, {}));
+
+    const { result } = renderHook(() => useUserLookup("bob"), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBeNull();
+    expect(userListCall).not.toHaveBeenCalled();
+  });
+
+  it("rethrows errors other than 404", async () => {
+    const serverError = new ApiError("Internal Server Error", 500, {});
+    vi.mocked(userGetInfoV2).mockRejectedValue(serverError);
+
+    const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toBe(serverError);
+    expect(userListCall).not.toHaveBeenCalled();
   });
 
   it("does not query without a user id", async () => {
@@ -322,13 +366,82 @@ describe("useUserLookup", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.fetchStatus).toBe("idle");
-    expect(userListCall).not.toHaveBeenCalled();
+    expect(userGetInfoV2).not.toHaveBeenCalled();
   });
 
   it("does not query for a non-admin role", async () => {
     mockUseAuthorized.mockReturnValue({ ...DEFAULT_AUTH, userRole: "Internal User" });
 
     const { result } = renderHook(() => useUserLookup("user-1-0"), { wrapper });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(userGetInfoV2).not.toHaveBeenCalled();
+  });
+});
+
+describe("useUserEmailLookup", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue(DEFAULT_AUTH);
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("fetches the distinct ids in one call and maps each id to its email", async () => {
+    const response = buildUserListResponse(1, 1, 2);
+    vi.mocked(userListCall).mockResolvedValue(response);
+
+    const { result } = renderHook(() => useUserEmailLookup(["user-1-1", "user-1-0", "user-1-1", ""]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(userListCall).toHaveBeenCalledTimes(1);
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["user-1-0", "user-1-1"], 1, 2);
+    expect(result.current.data).toEqual({
+      "user-1-0": "user-1-0@example.com",
+      "user-1-1": "user-1-1@example.com",
+    });
+  });
+
+  it("omits users that have no email so callers fall back to the id", async () => {
+    const response = buildUserListResponse(1, 1, 2);
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      users: [{ ...response.users[0], user_email: "" }, response.users[1]],
+    });
+
+    const { result } = renderHook(() => useUserEmailLookup(["user-1-0", "user-1-1"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ "user-1-1": "user-1-1@example.com" });
+  });
+
+  it("does not query with no ids", async () => {
+    const { result } = renderHook(() => useUserEmailLookup([]), { wrapper });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(userListCall).not.toHaveBeenCalled();
+  });
+
+  it("queries for the formatted Org Admin session role", async () => {
+    mockUseAuthorized.mockReturnValue({ ...DEFAULT_AUTH, userRole: "Org Admin" });
+    vi.mocked(userListCall).mockResolvedValue(buildUserListResponse(1, 1, 1));
+
+    const { result } = renderHook(() => useUserEmailLookup(["user-1-0"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ "user-1-0": "user-1-0@example.com" });
+  });
+
+  it("does not query for a non-admin role", async () => {
+    mockUseAuthorized.mockReturnValue({ ...DEFAULT_AUTH, userRole: "Internal User" });
+
+    const { result } = renderHook(() => useUserEmailLookup(["user-1-0"]), { wrapper });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(result.current.fetchStatus).toBe("idle");

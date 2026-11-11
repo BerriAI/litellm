@@ -1,11 +1,14 @@
-use thiserror::Error as ThisError;
+use std::{io, path::PathBuf};
 
-#[derive(Debug, ThisError)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("read_model_list failed: {0}")]
-    PythonLoading(String),
-    #[error("serializing model_list failed: {0}")]
-    Serialization(String),
-    #[error("parsing model_list failed: {0}")]
-    ModelListParsing(#[source] serde_json::Error),
+    #[error("could not read config {}", path.display())]
+    Read { path: PathBuf, source: io::Error },
+    #[error("invalid YAML config")]
+    Parse(#[from] serde_yaml_ng::Error),
+    #[error("invalid YAML config {}", path.display())]
+    ParseFile {
+        path: PathBuf,
+        source: serde_yaml_ng::Error,
+    },
 }

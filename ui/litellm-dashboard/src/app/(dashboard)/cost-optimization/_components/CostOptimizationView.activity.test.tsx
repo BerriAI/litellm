@@ -3,8 +3,7 @@ import { fireEvent, render, waitFor, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-const mockUserDailyActivityCall = vi.fn();
-const mockUserDailyActivityAggregatedCall = vi.fn();
+const mockDailyActivityAggregatedCall = vi.fn();
 const { useAuthorizedMock, mockToolSpendResponse } = vi.hoisted(() => ({
   useAuthorizedMock: vi.fn(),
   mockToolSpendResponse: { by_tool: [], daily: [], start_date: null, end_date: null },
@@ -15,8 +14,8 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 }));
 
 vi.mock("@/components/networking", () => ({
-  userDailyActivityCall: (...args: unknown[]) => mockUserDailyActivityCall(...args),
-  userDailyActivityAggregatedCall: (...args: unknown[]) => mockUserDailyActivityAggregatedCall(...args),
+  dailyActivityAggregatedCall: (...args: unknown[]) => mockDailyActivityAggregatedCall(...args),
+  cacheLeakageKeysCall: vi.fn().mockResolvedValue({ api_keys: [] }),
   getToolSpend: vi.fn().mockResolvedValue(mockToolSpendResponse),
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   organizationListCall: vi.fn().mockResolvedValue([]),
@@ -42,6 +41,7 @@ vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => 
 }));
 
 vi.mock("./PromptCompressionTab", () => ({ __esModule: true, default: () => <div /> }));
+vi.mock("./PromptCachingRequestsTable", () => ({ default: () => <div /> }));
 
 import CostOptimizationView from "./CostOptimizationView";
 
@@ -52,7 +52,7 @@ const singlePage = {
 
 describe("CostOptimizationView daily activity", () => {
   it("fetches daily activity once for the page and shares it with every tab that needs it", async () => {
-    mockUserDailyActivityAggregatedCall.mockResolvedValue(singlePage);
+    mockDailyActivityAggregatedCall.mockResolvedValue(singlePage);
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -62,25 +62,17 @@ describe("CostOptimizationView daily activity", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockDailyActivityAggregatedCall).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("tab", { name: "Prompt Caching" }));
     await screen.findByTestId("caching-settings");
 
-    expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
-    expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
-    expect(screen.queryByText(/Currently fetching spend data/)).not.toBeInTheDocument();
+    expect(mockDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the fetch-progress banner while the paginated fallback streams pages in", async () => {
-    mockUserDailyActivityAggregatedCall.mockReset();
-    mockUserDailyActivityCall.mockReset();
-    mockUserDailyActivityAggregatedCall.mockRejectedValue(new Error("aggregated unavailable"));
-    mockUserDailyActivityCall.mockImplementation((...args: unknown[]) =>
-      args[3] === 1
-        ? Promise.resolve({ results: [], metadata: { total_pages: 3, has_more: true, page: 1 } })
-        : new Promise(() => {}),
-    );
+  it("surfaces a failure alert when the aggregated fetch fails", async () => {
+    mockDailyActivityAggregatedCall.mockReset();
+    mockDailyActivityAggregatedCall.mockRejectedValue(new Error("aggregated unavailable"));
     useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: "proxy_admin" });
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -90,7 +82,6 @@ describe("CostOptimizationView daily activity", () => {
       </QueryClientProvider>,
     );
 
-    expect(await screen.findByText(/Currently fetching spend data: fetched 1 \/ 3 pages/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(await screen.findByText(/Fetching spend data failed/)).toBeInTheDocument();
   });
 });

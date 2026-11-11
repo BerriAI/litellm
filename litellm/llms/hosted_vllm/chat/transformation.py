@@ -2,16 +2,17 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
+import copy
 import json
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, Literal, cast, overload
 
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _get_image_mime_type_from_url,
+from litellm.litellm_core_utils.prompt_templates.factory import parse_mime_type
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+    get_image_mime_type_from_url,
 )
-from litellm.litellm_core_utils.prompt_templates.factory import _parse_mime_type
 from litellm.litellm_core_utils.reasoning_effort_utils import (
-    reasoning_effort_from_thinking_budget,
+    reasoning_effort_from_thinking,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -23,17 +24,17 @@ from litellm.types.llms.openai import (
     ChatCompletionVideoUrlObject,
 )
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
+from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
-    def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, object]]) -> list[dict[str, object]]:
         """
         vLLM chat completions currently accepts only OpenAI function tools.
         Convert custom tools into function tools so request validation does not fail.
         """
-        converted_tools: Final[list[dict[str, Any]]] = []
+        converted_tools: Final[list[dict[str, object]]] = []
         for idx, tool in enumerate(tools):
             if not isinstance(tool, dict):
                 converted_tools.append(tool)
@@ -63,17 +64,14 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     "required": ["input"],
                 }
 
-            function_tool: dict[str, Any] = {
-                "type": "function",
-                "function": {
-                    "name": str(tool_name),
-                    "parameters": tool_parameters,
-                },
+            function_definition: dict[str, object] = {
+                "name": str(tool_name),
+                "parameters": tool_parameters,
             }
             if isinstance(tool_description, str):
-                function_tool["function"]["description"] = tool_description
+                function_definition["description"] = tool_description
 
-            converted_tools.append(function_tool)
+            converted_tools.append({"type": "function", "function": function_definition})
 
         return converted_tools
 
@@ -89,24 +87,31 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        _tools = non_default_params.pop("tools", None)
+        params: Final = dict[str, object](non_default_params)
+        mapped_params: Final = {
+            key: value
+            for key, value in params.items()
+            if params.get("tools") != [] or key not in ("tools", "tool_choice", "parallel_tool_calls")
+        }
+        _tools = mapped_params.pop("tools", None)
         if _tools is not None:
-            _tools = _remove_additional_properties(_tools)
-            _tools = _remove_strict_from_schema(_tools)
+            _tools = remove_additional_properties(copy.deepcopy(_tools))  # pyright: ignore[reportArgumentType]  # tools arrive untyped through the bare-dict params
+            _tools = remove_strict_from_schema(_tools)
             if isinstance(_tools, list):
                 _tools = self._convert_custom_tools_to_function_tools(_tools)
         if _tools is not None:
-            non_default_params["tools"] = _tools
+            mapped_params["tools"] = _tools
 
-        thinking: Final = non_default_params.pop("thinking", None)
-        if thinking is not None and isinstance(thinking, dict):
-            if thinking.get("type") == "enabled":
-                if "reasoning_effort" not in non_default_params:
-                    non_default_params["reasoning_effort"] = reasoning_effort_from_thinking_budget(
-                        thinking.get("budget_tokens", 0)
-                    )
+        thinking: Final = mapped_params.pop("thinking", None)
+        thinking_effort: Final = (
+            None
+            if "reasoning_effort" in mapped_params
+            else reasoning_effort_from_thinking(thinking, model=model, drop_params=drop_params)
+        )
+        if thinking_effort is not None:
+            mapped_params["reasoning_effort"] = thinking_effort
 
-        return super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        return super().map_openai_params(mapped_params, optional_params, model, drop_params)
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
@@ -114,6 +119,13 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
         dynamic_api_key: Final = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def _is_video_file(self, content_item: ChatCompletionFileObject) -> bool:
         file: Final = content_item.get("file", {})
@@ -125,11 +137,11 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         if format and format.startswith("video/"):
             return True
         elif file_data:
-            mime_type = _parse_mime_type(file_data)
+            mime_type = parse_mime_type(file_data)
             if mime_type and mime_type.startswith("video/"):
                 return True
         elif file_id:
-            mime_type = _get_image_mime_type_from_url(file_id)
+            mime_type = get_image_mime_type_from_url(file_id)
             if mime_type and mime_type.startswith("video/"):
                 return True
         return False
@@ -148,7 +160,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -160,17 +172,18 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Support translating:
         - video files from file_id or file_data to video_url
-        - thinking_blocks and reasoning_content on assistant messages are removed,
-          and content lists are converted to strings for vLLM compatibility
+        - thinking_blocks and non-string reasoning_content on assistant messages
+          are removed, and content lists are converted to strings for vLLM compatibility
         """
         for message in messages:
             if message["role"] == "assistant":
                 message.pop("thinking_blocks", None)
-                message.pop("reasoning_content", None)
+                if not isinstance(message.get("reasoning_content"), str):
+                    message.pop("reasoning_content", None)
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []

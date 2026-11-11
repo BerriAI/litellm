@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
@@ -109,7 +109,7 @@ vi.mock("../common/queryKeysFactory", () => ({
 
 describe("useProxyConfig", () => {
   let queryClient: QueryClient;
-  let fetchSpy: ReturnType<typeof vi.fn>;
+  let fetchSpy: Mock;
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -277,7 +277,7 @@ describe("useProxyConfig", () => {
 
 describe("useDeleteProxyConfigField", () => {
   let queryClient: QueryClient;
-  let fetchSpy: ReturnType<typeof vi.fn>;
+  let fetchSpy: Mock;
 
   beforeEach(() => {
     queryClient = new QueryClient({
@@ -452,7 +452,7 @@ describe("useDeleteProxyConfigField", () => {
 });
 
 describe("getProxyConfigCall", () => {
-  let fetchSpy: ReturnType<typeof vi.fn>;
+  let fetchSpy: Mock;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -508,7 +508,7 @@ describe("getProxyConfigCall", () => {
 });
 
 describe("deleteProxyConfigFieldCall", () => {
-  let fetchSpy: ReturnType<typeof vi.fn>;
+  let fetchSpy: Mock;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {

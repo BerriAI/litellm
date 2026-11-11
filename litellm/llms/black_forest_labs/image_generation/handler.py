@@ -20,8 +20,8 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageResponse
@@ -119,7 +119,7 @@ class BlackForestLabsImageGeneration:
 
         # Sync version
         if client is None or not isinstance(client, HTTPHandler):
-            sync_client = _get_httpx_client()
+            sync_client = get_httpx_client()
         else:
             sync_client = client
 

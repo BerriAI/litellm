@@ -11,7 +11,7 @@ exception types:
   an upstream LLM provider returns 429.
 * :class:`fastapi.HTTPException` (status 429) — raised directly by proxy hooks
   such as ``parallel_request_limiter``, ``dynamic_rate_limiter``,
-  ``batch_rate_limiter``, ``max_budget_limiter``, ``max_iterations_limiter``,
+  ``batch_rate_limiter``, ``max_iterations_limiter``,
   etc.
 * :class:`litellm.llms.base_llm.chat.transformation.BaseLLMException` (status
   429) — raised by some provider transports.
@@ -37,11 +37,130 @@ This module provides a single proxy-side error class that:
 
 import json
 from collections.abc import Mapping
-from typing import Any, Final
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final
 
 from fastapi import HTTPException
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
+
+PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
+    {
+        "model_per_key",
+        "model_per_team",
+        "model_per_end_user",
+        "model_per_organization",
+        "model_per_project",
+        "model_per_project_itpm",
+        "model_per_project_otpm",
+    }
+)
+DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING: Final = "disable_fallbacks_on_per_model_rate_limits"
+_DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
+
+
+def per_model_rate_limits_disable_fallbacks(general_settings: Mapping[str, object]) -> bool:
+    raw_value: Final = general_settings.get(DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING)
+    try:
+        return _DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_FLAG.validate_python(raw_value) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING,
+            raw_value,
+        )
+        return False
+
+
+RATE_LIMIT_FALLBACK_METADATA_KEY: Final = "rate_limit_fallback"
+RATE_LIMIT_FALLBACK_REASON_HEADER: Final = "x-litellm-fallback-reason"
+ATTEMPTED_FALLBACKS_HEADER: Final = "x-litellm-attempted-fallbacks"
+
+
+@dataclass(frozen=True, slots=True)
+class RateLimitFallback:
+    original_model_group: str
+    descriptor_key: str
+    attempts: int = 1
+
+    def stamp(self) -> Mapping[str, object]:
+        return MappingProxyType(
+            {
+                "original_model_group": self.original_model_group,
+                "descriptor_key": self.descriptor_key,
+                "attempts": self.attempts,
+            }
+        )
+
+    @property
+    def reason(self) -> str:
+        return f"rate_limit:{self.descriptor_key}"
+
+
+class _StampedBucket(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    rate_limit_fallback: RateLimitFallback | None = None
+
+
+class _StampedRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    metadata: _StampedBucket | None = None
+    litellm_metadata: _StampedBucket | None = None
+
+
+_STAMPED_REQUEST: Final[TypeAdapter[_StampedRequest]] = TypeAdapter(_StampedRequest)
+_ROUTER_HOPS: Final[TypeAdapter[int]] = TypeAdapter(int)
+
+
+def rate_limit_fallback_from_request_data(request_data: Mapping[str, object]) -> RateLimitFallback | None:
+    try:
+        stamped: Final = _STAMPED_REQUEST.validate_python(request_data)
+    except ValidationError:
+        return None
+    buckets: Final = (stamped.metadata, stamped.litellm_metadata)
+    return next(
+        (bucket.rate_limit_fallback for bucket in buckets if bucket is not None and bucket.rate_limit_fallback), None
+    )
+
+
+_METADATA_BUCKET: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _metadata_bucket(value: object) -> Mapping[str, object]:
+    try:
+        return _METADATA_BUCKET.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def with_rate_limit_fallback(
+    request_data: Mapping[str, object], bucket_name: str, fallback: RateLimitFallback
+) -> Mapping[str, object]:
+    bucket: Final = _metadata_bucket(request_data.get(bucket_name))
+    return MappingProxyType(
+        {**request_data, bucket_name: {**bucket, RATE_LIMIT_FALLBACK_METADATA_KEY: dict(fallback.stamp())}}
+    )
+
+
+def rate_limit_fallback_headers(fallback: RateLimitFallback, attempted_fallbacks: object) -> Mapping[str, str]:
+    try:
+        router_hops: Final = _ROUTER_HOPS.validate_python(attempted_fallbacks)
+    except ValidationError:
+        return MappingProxyType(
+            {
+                ATTEMPTED_FALLBACKS_HEADER: str(max(fallback.attempts, 1)),
+                RATE_LIMIT_FALLBACK_REASON_HEADER: fallback.reason,
+            }
+        )
+    return MappingProxyType(
+        {
+            ATTEMPTED_FALLBACKS_HEADER: str(max(router_hops, 0) + max(fallback.attempts, 1)),
+            RATE_LIMIT_FALLBACK_REASON_HEADER: fallback.reason,
+        }
+    )
 
 
 def map_v3_rate_limit_type(
@@ -66,7 +185,7 @@ def map_v3_rate_limit_type(
     return None
 
 
-def _coerce_message(detail: Any) -> str:
+def _coerce_message(detail: object) -> str:
     """Best-effort, JSON-friendly stringification of an HTTPException-style detail."""
     if detail is None:
         return ""
@@ -143,12 +262,14 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
 
     def __init__(
         self,
-        detail: Any,
-        headers: Mapping[str, Any] | None = None,
+        detail: object,
+        headers: Mapping[str, object] | None = None,
         category: str | RateLimitErrorCategory = RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         rate_limit_type: str | RateLimitType | None = None,
         model: str | None = None,
         llm_provider: str | None = "litellm_proxy",
+        *,
+        descriptor_key: str | None = None,
     ):
         # Normalize None → safe defaults so callers (and the resolver helper
         # in `rate_limiter_utils`) can pass `None` without producing an
@@ -191,3 +312,4 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
         self.headers = stringified_headers
         self.detail = detail
         self.status_code = 429
+        self.descriptor_key = descriptor_key

@@ -1,0 +1,401 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.42.1"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.63b1"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "8110744290a0840bc6029401723da262",
+              "spanId": "43984ccbf7e93ffd",
+              "parentSpanId": "bfce1782cb74272d",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061515625246000",
+              "endTimeUnixNano": "1791061516532034000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "5034129d-560a-4a8b-85da-4f0f3628e70b"
+                  }
+                },
+                {
+                  "key": "error.type",
+                  "value": {
+                    "stringValue": "RuntimeError"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "openinference.instrumentation.google_adk",
+            "version": "1.0.2"
+          },
+          "spans": [
+            {
+              "traceId": "8110744290a0840bc6029401723da262",
+              "spanId": "bfce1782cb74272d",
+              "parentSpanId": "7611c56bb29c96fb",
+              "name": "call_llm",
+              "kind": 1,
+              "startTimeUnixNano": "1791061514524877000",
+              "endTimeUnixNano": "1791061516555946000",
+              "attributes": [
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "debug_session_id"
+                  }
+                },
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "debug_user_id"
+                  }
+                },
+                {
+                  "key": "gen_ai.system",
+                  "value": {
+                    "stringValue": "openai"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "generate_content"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "debug_session_id"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.event_id",
+                  "value": {
+                    "stringValue": "db077ed8-0a70-452c-ac79-63b21e8524af"
+                  }
+                },
+                {
+                  "key": "gcp.vertex.agent.invocation_id",
+                  "value": {
+                    "stringValue": "e-c953220a-8abb-4009-92bf-dd41e4307b58"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791061516555887000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "litellm.exceptions.InternalServerError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error."
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1709, in request\n    response = await self._send_request(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<3 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_client.py\", line 1097, in _send_request\n    response = await self._send_with_auth_retry(request, stream=stream, **kwargs)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_client.py\", line 1075, in _send_with_auth_retry\n    response = await super()._send_request(request, stream=stream, **kwargs)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1628, in _send_request\n    return await self._client.send(request, stream=stream, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_client.py\", line 1643, in send\n    raise exc\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_client.py\", line 1637, in send\n    await response.aread()\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 979, in aread\n    self._content = b\"\".join([part async for part in self.aiter_bytes()])\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 997, in aiter_bytes\n    async for raw_bytes in self.aiter_raw():\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 1055, in aiter_raw\n    async for raw_stream_bytes in self.stream:\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_client.py\", line 176, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/shared/python/gateway_tracing/_transport.py\", line 28, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/google-adk/validate_attempts.py\", line 35, in __anext__\n    raise RuntimeError(\"Client lost billed response\")\nRuntimeError: Client lost billed response\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/llms/openai/openai.py\", line 946, in acompletion\n    headers, response = await self.make_openai_chat_completion_request(\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/logging_utils.py\", line 338, in async_wrapper\n    result: Final = await func(*args, **kwargs)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/llms/openai/openai.py\", line 503, in make_openai_chat_completion_request\n    raise e\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/llms/openai/openai.py\", line 479, in make_openai_chat_completion_request\n    raw_response = await openai_aclient.chat.completions.with_raw_response.create(**data, timeout=timeout)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_legacy_response.py\", line 386, in wrapped\n    return cast(LegacyAPIResponse[R], await func(*args, **kwargs))\n                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/resources/chat/completions/completions.py\", line 2907, in create\n    return await self._post(\n           ^^^^^^^^^^^^^^^^^\n    ...<55 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1992, in post\n    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1744, in request\n    raise APIConnectionError(request=request) from err\nopenai.APIConnectionError: Connection error.\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/main.py\", line 649, in acompletion\n    response = await _resolve_dispatched_chat_response(init_response)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/main.py\", line 714, in _resolve_dispatched_chat_response\n    return await pending\n           ^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/llms/openai/openai.py\", line 1006, in acompletion\n    raise OpenAIError(\n    ...<4 lines>...\n    )\nlitellm.llms.openai.common_utils.OpenAIError: Connection error.\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/opentelemetry/trace/__init__.py\", line 608, in use_span\n    yield span\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openinference/instrumentation/_tracers.py\", line 142, in start_as_current_span\n    yield cast(OpenInferenceSpan, current_span)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_model_call.py\", line 273, in _call_llm_with_tracing\n    async for llm_response in agen:\n    ...<20 lines>...\n      yield llm_response\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/base_llm_flow.py\", line 657, in _run_and_handle_error\n    async for response in agen:\n      yield response\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_finalizer.py\", line 385, in run_and_handle_error\n    raise model_error\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_finalizer.py\", line 358, in run_and_handle_error\n    async for llm_response in agen:\n      tel_ctx.record_llm_response(invocation_context, llm_response)\n      yield llm_response\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/models/lite_llm.py\", line 3883, in generate_content_async\n    response = await self.llm_client.acompletion(**completion_args)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/models/lite_llm.py\", line 923, in acompletion\n    return await acompletion(\n           ^^^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/chat_completions/dispatch.py\", line 114, in acompletion\n    return await _ADISPATCH.arun(\n           ^^^^^^^^^^^^^^^^^^^^^^\n    ...<5 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/rust_bridge/dispatch.py\", line 83, in arun\n    return await python(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/utils.py\", line 2160, in wrapper_async\n    raise e\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/utils.py\", line 1972, in wrapper_async\n    result = await original_function(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/main.py\", line 702, in acompletion\n    raise exception_type(\n          ~~~~~~~~~~~~~~^\n        model=model,\n        ^^^^^^^^^^^^\n    ...<3 lines>...\n        extra_kwargs=kwargs,\n        ^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 2700, in exception_type\n    raise e  # it's already mapped\n    ^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 2461, in exception_type\n    _map_openai_exception(\n    ~~~~~~~~~~~~~~~~~~~~~^\n        model=model,\n        ^^^^^^^^^^^^\n    ...<5 lines>...\n        extra_information=extra_information,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 469, in _map_openai_exception\n    raise InternalServerError(\n    ...<6 lines>...\n    )\nlitellm.exceptions.InternalServerError: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "InternalServerError: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.",
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "8110744290a0840bc6029401723da262",
+              "spanId": "7611c56bb29c96fb",
+              "parentSpanId": "663c66fc33092ec1",
+              "name": "agent_run [research_agent]",
+              "kind": 1,
+              "startTimeUnixNano": "1791061514510843000",
+              "endTimeUnixNano": "1791061516560240000",
+              "attributes": [
+                {
+                  "key": "agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "debug_session_id"
+                  }
+                },
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "debug_user_id"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.description",
+                  "value": {
+                    "stringValue": ""
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.conversation.id",
+                  "value": {
+                    "stringValue": "debug_session_id"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "AGENT"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791061516560209000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "litellm.exceptions.InternalServerError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error."
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1709, in request\n    response = await self._send_request(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<3 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_client.py\", line 1097, in _send_request\n    response = await self._send_with_auth_retry(request, stream=stream, **kwargs)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_client.py\", line 1075, in _send_with_auth_retry\n    response = await super()._send_request(request, stream=stream, **kwargs)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1628, in _send_request\n    return await self._client.send(request, stream=stream, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_client.py\", line 1643, in send\n    raise exc\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_client.py\", line 1637, in send\n    await response.aread()\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 979, in aread\n    self._content = b\"\".join([part async for part in self.aiter_bytes()])\n                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 997, in aiter_bytes\n    async for raw_bytes in self.aiter_raw():\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 1055, in aiter_raw\n    async for raw_stream_bytes in self.stream:\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/httpx/_client.py\", line 176, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/shared/python/gateway_tracing/_transport.py\", line 28, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/google-adk/validate_attempts.py\", line 35, in __anext__\n    raise RuntimeError(\"Client lost billed response\")\nRuntimeError: Client lost billed response\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/llms/openai/openai.py\", line 946, in acompletion\n    headers, response = await self.make_openai_chat_completion_request(\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/logging_utils.py\", line 338, in async_wrapper\n    result: Final = await func(*args, **kwargs)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/llms/openai/openai.py\", line 503, in make_openai_chat_completion_request\n    raise e\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/llms/openai/openai.py\", line 479, in make_openai_chat_completion_request\n    raw_response = await openai_aclient.chat.completions.with_raw_response.create(**data, timeout=timeout)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_legacy_response.py\", line 386, in wrapped\n    return cast(LegacyAPIResponse[R], await func(*args, **kwargs))\n                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/resources/chat/completions/completions.py\", line 2907, in create\n    return await self._post(\n           ^^^^^^^^^^^^^^^^^\n    ...<55 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1992, in post\n    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openai/_base_client.py\", line 1744, in request\n    raise APIConnectionError(request=request) from err\nopenai.APIConnectionError: Connection error.\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/main.py\", line 649, in acompletion\n    response = await _resolve_dispatched_chat_response(init_response)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/main.py\", line 714, in _resolve_dispatched_chat_response\n    return await pending\n           ^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/llms/openai/openai.py\", line 1006, in acompletion\n    raise OpenAIError(\n    ...<4 lines>...\n    )\nlitellm.llms.openai.common_utils.OpenAIError: Connection error.\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/opentelemetry/trace/__init__.py\", line 608, in use_span\n    yield span\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openinference/instrumentation/_tracers.py\", line 142, in start_as_current_span\n    yield cast(OpenInferenceSpan, current_span)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openinference/instrumentation/google_adk/_wrappers.py\", line 222, in __aiter__\n    async for event in self.__wrapped__:\n    ...<24 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/base_agent.py\", line 328, in run_async\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/base_agent.py\", line 422, in _run_with_lifecycle\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/utils/_runner_utils.py\", line 42, in _with_caller_context\n    async for item in a:\n    ...<4 lines>...\n        context.detach(token)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/base_agent.py\", line 392, in _run\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/llm_agent.py\", line 632, in _run_async_impl\n    async for event in agen:\n    ...<8 lines>...\n        should_pause = True\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/base_llm_flow.py\", line 333, in run_async\n    async for event in agen:\n    ...<3 lines>...\n        break\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/base_llm_flow.py\", line 415, in _run_one_step_async\n    async for llm_response in agen:\n    ...<23 lines>...\n          yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/base_llm_flow.py\", line 607, in _call_llm_async\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_model_call.py\", line 309, in call_llm_async\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/utils/_runner_utils.py\", line 42, in _with_caller_context\n    async for item in a:\n    ...<4 lines>...\n        context.detach(token)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_model_call.py\", line 273, in _call_llm_with_tracing\n    async for llm_response in agen:\n    ...<20 lines>...\n      yield llm_response\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/base_llm_flow.py\", line 657, in _run_and_handle_error\n    async for response in agen:\n      yield response\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_finalizer.py\", line 385, in run_and_handle_error\n    raise model_error\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_finalizer.py\", line 358, in run_and_handle_error\n    async for llm_response in agen:\n      tel_ctx.record_llm_response(invocation_context, llm_response)\n      yield llm_response\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/models/lite_llm.py\", line 3883, in generate_content_async\n    response = await self.llm_client.acompletion(**completion_args)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/models/lite_llm.py\", line 923, in acompletion\n    return await acompletion(\n           ^^^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/chat_completions/dispatch.py\", line 114, in acompletion\n    return await _ADISPATCH.arun(\n           ^^^^^^^^^^^^^^^^^^^^^^\n    ...<5 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/rust_bridge/dispatch.py\", line 83, in arun\n    return await python(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/utils.py\", line 2160, in wrapper_async\n    raise e\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/utils.py\", line 1972, in wrapper_async\n    result = await original_function(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/main.py\", line 702, in acompletion\n    raise exception_type(\n          ~~~~~~~~~~~~~~^\n        model=model,\n        ^^^^^^^^^^^^\n    ...<3 lines>...\n        extra_kwargs=kwargs,\n        ^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 2700, in exception_type\n    raise e  # it's already mapped\n    ^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 2461, in exception_type\n    _map_openai_exception(\n    ~~~~~~~~~~~~~~~~~~~~~^\n        model=model,\n        ^^^^^^^^^^^^\n    ...<5 lines>...\n        extra_information=extra_information,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 469, in _map_openai_exception\n    raise InternalServerError(\n    ...<6 lines>...\n    )\nlitellm.exceptions.InternalServerError: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "InternalServerError: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.",
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "8110744290a0840bc6029401723da262",
+              "spanId": "663c66fc33092ec1",
+              "name": "invocation [research_app]",
+              "kind": 1,
+              "startTimeUnixNano": "1791061514461546000",
+              "endTimeUnixNano": "1791061516571932000",
+              "attributes": [
+                {
+                  "key": "input.value",
+                  "value": {
+                    "stringValue": "{\"user_id\": \"debug_user_id\", \"session_id\": \"debug_session_id\", \"invocation_id\": null, \"new_message\": {\"parts\": [{\"text\": \"Reply with one short sentence about agent traces.\"}], \"role\": \"user\"}, \"state_delta\": null, \"run_config\": {\"save_input_blobs_as_artifacts\": false, \"support_cfc\": false, \"streaming_mode\": \"StreamingMode.NONE\", \"output_audio_transcription\": {}, \"input_audio_transcription\": {}, \"save_live_blob\": false, \"save_live_audio\": false, \"max_llm_calls\": 500, \"include_thoughts_from_other_agents\": false}, \"yield_user_message\": false, \"abort_signal\": null}"
+                  }
+                },
+                {
+                  "key": "input.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "user.id",
+                  "value": {
+                    "stringValue": "debug_user_id"
+                  }
+                },
+                {
+                  "key": "session.id",
+                  "value": {
+                    "stringValue": "debug_session_id"
+                  }
+                },
+                {
+                  "key": "output.value",
+                  "value": {
+                    "stringValue": "{\"error_code\":\"InternalServerError\",\"error_message\":\"litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.\",\"invocation_id\":\"e-c953220a-8abb-4009-92bf-dd41e4307b58\",\"author\":\"research_agent\",\"actions\":{\"state_delta\":{},\"artifact_delta\":{},\"requested_auth_configs\":{},\"requested_tool_confirmations\":{}},\"node_info\":{\"path\":\"research_agent@1\"},\"id\":\"5f7d201d-64ca-46b1-9e66-e6fb2b77eed9\",\"timestamp\":1791061516.564712}"
+                  }
+                },
+                {
+                  "key": "output.mime_type",
+                  "value": {
+                    "stringValue": "application/json"
+                  }
+                },
+                {
+                  "key": "openinference.span.kind",
+                  "value": {
+                    "stringValue": "CHAIN"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791061516571913000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "litellm.exceptions.InternalServerError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error."
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_node_runner_utils.py\", line 250, in _drive_root_node\n    await root_ctx._run_node_internal(  # pylint: disable=protected-access\n    ...<3 lines>...\n    )\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/context.py\", line 515, in _run_node_internal\n    return await _dynamic_node_scheduler.run_node_internal(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<12 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_dynamic_node_scheduler.py\", line 740, in run_node_internal\n    raise DynamicNodeFailError(\n    ...<3 lines>...\n    )\ngoogle.adk.workflow._errors.DynamicNodeFailError: Dynamic node research_agent failed\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/opentelemetry/trace/__init__.py\", line 608, in use_span\n    yield span\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openinference/instrumentation/_tracers.py\", line 142, in start_as_current_span\n    yield cast(OpenInferenceSpan, current_span)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openinference/instrumentation/google_adk/_wrappers.py\", line 163, in __aiter__\n    async for event in self.__wrapped__:\n    ...<22 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/runners.py\", line 1240, in run_async\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/runners.py\", line 590, in _run_node_async\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_node_runner_utils.py\", line 357, in run_node_async\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/utils/_runner_utils.py\", line 42, in _with_caller_context\n    async for item in a:\n    ...<4 lines>...\n        context.detach(token)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_node_runner_utils.py\", line 283, in _run\n    await runner._cleanup_root_task(  # pylint: disable=protected-access\n        task, runner.agent.name\n    )\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/runners.py\", line 877, in _cleanup_root_task\n    await task\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_node_runner_utils.py\", line 259, in _drive_root_node\n    raise e.error\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_node_runner.py\", line 138, in run\n    await self._execute_node(ctx, node_input)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_node_runner.py\", line 307, in _execute_node\n    await self._run_node_loop(ctx, node_input)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_node_runner.py\", line 321, in _run_node_loop\n    async for event in agen:\n    ...<8 lines>...\n        break\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_base_node.py\", line 190, in run\n    async for item in agen:\n    ...<12 lines>...\n        yield Event(output=validated)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/llm_agent.py\", line 683, in _run_impl\n    async for event in agen:\n    ...<4 lines>...\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/workflow/_llm_agent_wrapper.py\", line 494, in run_llm_agent_as_node\n    async for event in run_iter:\n    ...<31 lines>...\n        break\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/openinference/instrumentation/google_adk/_wrappers.py\", line 222, in __aiter__\n    async for event in self.__wrapped__:\n    ...<24 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/base_agent.py\", line 328, in run_async\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/base_agent.py\", line 422, in _run_with_lifecycle\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/utils/_runner_utils.py\", line 42, in _with_caller_context\n    async for item in a:\n    ...<4 lines>...\n        context.detach(token)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/base_agent.py\", line 392, in _run\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/agents/llm_agent.py\", line 632, in _run_async_impl\n    async for event in agen:\n    ...<8 lines>...\n        should_pause = True\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/base_llm_flow.py\", line 333, in run_async\n    async for event in agen:\n    ...<3 lines>...\n        break\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/base_llm_flow.py\", line 415, in _run_one_step_async\n    async for llm_response in agen:\n    ...<23 lines>...\n          yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/base_llm_flow.py\", line 607, in _call_llm_async\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_model_call.py\", line 309, in call_llm_async\n    async for event in agen:\n      yield event\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/utils/_runner_utils.py\", line 42, in _with_caller_context\n    async for item in a:\n    ...<4 lines>...\n        context.detach(token)\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_model_call.py\", line 273, in _call_llm_with_tracing\n    async for llm_response in agen:\n    ...<20 lines>...\n      yield llm_response\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/base_llm_flow.py\", line 657, in _run_and_handle_error\n    async for response in agen:\n      yield response\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_finalizer.py\", line 385, in run_and_handle_error\n    raise model_error\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/flows/llm_flows/core/_finalizer.py\", line 358, in run_and_handle_error\n    async for llm_response in agen:\n      tel_ctx.record_llm_response(invocation_context, llm_response)\n      yield llm_response\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/models/lite_llm.py\", line 3883, in generate_content_async\n    response = await self.llm_client.acompletion(**completion_args)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/google/adk/models/lite_llm.py\", line 923, in acompletion\n    return await acompletion(\n           ^^^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/chat_completions/dispatch.py\", line 114, in acompletion\n    return await _ADISPATCH.arun(\n           ^^^^^^^^^^^^^^^^^^^^^^\n    ...<5 lines>...\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/rust_bridge/dispatch.py\", line 83, in arun\n    return await python(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/utils.py\", line 2160, in wrapper_async\n    raise e\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/utils.py\", line 1972, in wrapper_async\n    result = await original_function(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/main.py\", line 702, in acompletion\n    raise exception_type(\n          ~~~~~~~~~~~~~~^\n        model=model,\n        ^^^^^^^^^^^^\n    ...<3 lines>...\n        extra_kwargs=kwargs,\n        ^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 2700, in exception_type\n    raise e  # it's already mapped\n    ^^^^^^^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 2461, in exception_type\n    _map_openai_exception(\n    ~~~~~~~~~~~~~~~~~~~~~^\n        model=model,\n        ^^^^^^^^^^^^\n    ...<5 lines>...\n        extra_information=extra_information,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/home/user/dev/litellm-lens-example/google-adk/.venv/lib/python3.13/site-packages/litellm/litellm_core_utils/exception_mapping_utils.py\", line 469, in _map_openai_exception\n    raise InternalServerError(\n    ...<6 lines>...\n    )\nlitellm.exceptions.InternalServerError: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "InternalServerError: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.",
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

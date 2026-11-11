@@ -3,7 +3,7 @@ from typing import Optional, Union
 from litellm.secret_managers.main import str_to_bool
 
 
-def _should_block_robots():
+def should_block_robots():
     """
     Returns True if the robots.txt file should block web crawlers
 
@@ -33,3 +33,4 @@ def _should_block_robots():
             )
         return True
     return False
+_should_block_robots = should_block_robots

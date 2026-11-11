@@ -1,12 +1,21 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { CircleCheck, CircleX, LoaderCircle } from "lucide-react";
 
-import { testModelGroupConnection, ModelGroupConnectionResult } from "../networking";
+import {
+  testModelGroupConnection,
+  ModelGroupConnectionResult,
+  testAutoRouterRouting,
+  AutoRouterRoutingTestRequest,
+} from "../networking";
 import { AutoRouterTestTarget } from "./build_auto_router_test_targets";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 interface AutoRouterConnectionTestProps {
   accessToken: string;
   targets: AutoRouterTestTarget[];
+  jevRequest?: AutoRouterRoutingTestRequest;
   onTestComplete?: () => void;
 }
 
@@ -20,15 +29,37 @@ const cleanErrorMessage = (error: string): string => {
 const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   accessToken,
   targets,
+  jevRequest,
   onTestComplete,
 }) => {
+  const { t } = useTranslation();
   const [results, setResults] = React.useState<TargetResult[]>(() => targets.map(() => ({ status: "pending" })));
+  const [jevResult, setJevResult] = React.useState<TargetResult>({ status: "pending" });
 
   React.useEffect(() => {
     let cancelled = false;
+    const probeJev = async () => {
+      if (!jevRequest) return;
+      const response = await testAutoRouterRouting(accessToken, jevRequest);
+      if (cancelled) return;
+      if (response.status === "error") {
+        setJevResult(response);
+        return;
+      }
+      const decision = response.result.routing_decision;
+      setJevResult(
+        decision.cause === "jev_classifier"
+          ? { status: "success" }
+          : {
+              status: "error",
+              error: t("addModel.autoRouterConnectionTest.ossNotReached", { cause: decision.cause ?? "unknown" }),
+            },
+      );
+    };
     const run = async () => {
-      await Promise.all(
-        targets.map(async (target, index) => {
+      await Promise.all([
+        probeJev(),
+        ...targets.map(async (target, index) => {
           const result = target.requestParams
             ? await testModelGroupConnection(accessToken, target.modelGroup, target.mode, target.requestParams)
             : await testModelGroupConnection(accessToken, target.modelGroup, target.mode);
@@ -37,7 +68,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
             result.status === "error" ? { status: "error", error: cleanErrorMessage(result.error) } : result;
           setResults((prev) => prev.map((r, i) => (i === index ? cleaned : r)));
         }),
-      );
+      ]);
       if (!cancelled && onTestComplete) onTestComplete();
     };
     run();
@@ -47,20 +78,27 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- probes run once per mount; the parent remounts via `key` to start a fresh test, and re-running on prop identity changes would refire paid requests
   }, []);
 
-  if (targets.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        No complexity tiers are configured yet, so there is nothing to test.
-      </p>
-    );
+  if (targets.length === 0 && !jevRequest) {
+    return <p className="text-sm text-muted-foreground">{t("addModel.autoRouterConnectionTest.nothingToTest")}</p>;
   }
 
   return (
     <div className="space-y-3">
-      <p className="mb-2 text-sm text-muted-foreground">
-        Test Connection sends a minimal request to every configured tier, classifier, default, and embedding model. The
-        classifier probe includes its reasoning effort override.
-      </p>
+      <p className="mb-2 text-sm text-muted-foreground">{t("addModel.autoRouterConnectionTest.intro")}</p>
+      {jevRequest && (
+        <div
+          role="status"
+          aria-label={t("addModel.autoRouterConnectionTest.ossConnection")}
+          className="rounded-lg border p-3 text-sm"
+        >
+          <strong>{t("addModel.autoRouterConnectionTest.ossClassifier")}</strong>
+          <p>
+            {jevResult.status === "pending" && t("addModel.autoRouterConnectionTest.ossTesting")}
+            {jevResult.status === "success" && t("addModel.autoRouterConnectionTest.ossSucceeded")}
+            {jevResult.status === "error" && jevResult.error}
+          </p>
+        </div>
+      )}
       {targets.map((target, index) => {
         const result = results[index] ?? { status: "pending" };
         return (
@@ -84,7 +122,7 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
               <span className="font-medium">{target.labels.join(", ")}</span>{" "}
               <span className="text-muted-foreground">
                 {"->"} {target.modelGroup}
-                {target.mode === "embedding" ? " (embedding)" : ""}
+                {target.mode === "embedding" ? t("addModel.autoRouterConnectionTest.embeddingSuffix") : ""}
               </span>
               {result.status === "error" && (
                 <p className="mt-1 text-xs text-destructive" data-testid="test-error-message">
@@ -100,3 +138,27 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
 };
 
 export default AutoRouterConnectionTest;
+
+export function AutoRouterConnectionTestDialog({
+  open,
+  onClose,
+  testId,
+  ...props
+}: AutoRouterConnectionTestProps & { open: boolean; onClose: () => void; testId: number }) {
+  const { t } = useTranslation();
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+        <DialogHeader>
+          <DialogTitle>{t("addModel.autoRouterConnectionTest.title")}</DialogTitle>
+        </DialogHeader>
+        {open && <AutoRouterConnectionTest key={testId} {...props} />}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            {t("addModel.autoRouterConnectionTest.close")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

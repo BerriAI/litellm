@@ -1,7 +1,4 @@
-export type LicenseExpiryTier = "none" | "warning" | "critical" | "expired";
-
-export const LICENSE_EXPIRY_WARNING_DAYS = 30;
-export const LICENSE_EXPIRY_CRITICAL_DAYS = 7;
+import i18n from "@/i18n/i18n";
 
 export const getDaysUntilExpiration = (expirationDate: string | null, now: Date = new Date()): number | null => {
   if (!expirationDate) {
@@ -16,23 +13,6 @@ export const getDaysUntilExpiration = (expirationDate: string | null, now: Date 
   const nowUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const diffMs = expiration.getTime() - nowUtcMidnight;
   return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
-};
-
-export const getLicenseExpiryTier = (expirationDate: string | null, now: Date = new Date()): LicenseExpiryTier => {
-  const days = getDaysUntilExpiration(expirationDate, now);
-  if (days === null) {
-    return "none";
-  }
-  if (days < 0) {
-    return "expired";
-  }
-  if (days <= LICENSE_EXPIRY_CRITICAL_DAYS) {
-    return "critical";
-  }
-  if (days <= LICENSE_EXPIRY_WARNING_DAYS) {
-    return "warning";
-  }
-  return "none";
 };
 
 const EXPIRY_DATE_FORMAT: Intl.DateTimeFormatOptions = {
@@ -53,7 +33,9 @@ export const formatExpiryDate = (expirationDate: string): string => {
 export const formatExpirationStatus = (expirationDate: string | null, now: Date = new Date()): string => {
   const days = getDaysUntilExpiration(expirationDate, now);
   if (expirationDate === null || days === null) {
-    return "No expiration";
+    return i18n.t("utils.licenseUtils.noExpiration");
   }
-  return days < 0 ? `Expired ${formatExpiryDate(expirationDate)}` : `Expires ${formatExpiryDate(expirationDate)}`;
+  return days < 0
+    ? i18n.t("utils.licenseUtils.expired", { date: formatExpiryDate(expirationDate) })
+    : i18n.t("utils.licenseUtils.expires", { date: formatExpiryDate(expirationDate) });
 };

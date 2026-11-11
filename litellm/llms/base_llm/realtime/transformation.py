@@ -1,8 +1,12 @@
+import dataclasses
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping, Sequence
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import httpx
 
+from litellm._uuid import uuid
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
     RealtimeInputAudioTranscriptionUsage,
@@ -18,6 +22,43 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class RealtimeSessionUpdateRejection:
+    code: Literal["invalid_type", "invalid_value", "session_update_not_applied", "session_update_too_large"]
+    message: str
+    param: str
+
+    def error_event(self, client_event_id: object) -> dict[str, object]:
+        return {
+            "type": "error",
+            "event_id": f"event_{uuid.uuid4()}",
+            "error": {
+                "type": "invalid_request_error",
+                "code": self.code,
+                "message": self.message,
+                "param": self.param,
+                "event_id": client_event_id if isinstance(client_event_id, str) else None,
+            },
+        }
+
+
+class RealtimeBackend(Protocol):
+    async def __aenter__(self) -> object: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    async def send(self, message: str | bytes) -> None: ...
+
+    async def recv(self, decode: bool | None = None) -> str | bytes: ...
+
+    async def close(self) -> None: ...
 
 
 class BaseRealtimeConfig(ABC):
@@ -54,8 +95,11 @@ class BaseRealtimeConfig(ABC):
         message: str,
         model: str,
         session_configuration_request: str | None = None,
-    ) -> list[str]:
+    ) -> Sequence[str | bytes]:
         pass
+
+    async def pace_backend_send(self, message: bytes) -> None:
+        return None
 
     def is_setup_message(self, msg_obj: dict) -> bool:
         return False
@@ -71,15 +115,32 @@ class BaseRealtimeConfig(ABC):
     def session_configuration_request(self, model: str) -> str | None:  # message sent to setup the realtime session
         return None
 
+    def builds_setup_from_session_update(self) -> bool:
+        return False
+
+    def setup_session_update_rejection(
+        self, model: str, session: Mapping[str, object], *, setup_sent: bool
+    ) -> RealtimeSessionUpdateRejection | None:
+        return None
+
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return None
+
+    def session_refusal(self) -> Exception | None:
+        return None
+
+    async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
+        return None
+
+    def wrap_backend(self, backend: RealtimeBackend) -> RealtimeBackend:
+        return backend
 
     def transform_session_created_event(
         self,
         model: str,
         logging_session_id: str,
         session_configuration_request: str | None = None,
-    ) -> dict | OpenAIRealtimeStreamSessionEvents | None:
+    ) -> Mapping[str, object] | OpenAIRealtimeStreamSessionEvents | None:
         """
         Optional hook for providers that defer session setup until client `session.update`.
 

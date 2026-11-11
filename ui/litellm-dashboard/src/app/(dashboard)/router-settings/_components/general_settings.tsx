@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,10 +15,14 @@ import { StatusBadge } from "@/components/shared/table_cells";
 import RouterSettings from "@/components/router_settings";
 import Fallbacks from "@/components/Settings/RouterSettings/Fallbacks/Fallbacks";
 import RoutingGroups from "@/components/routing_groups";
+import { RequestTagMappingsEditor, requestTagMappingsAreValid } from "./RequestTagMappings";
 
 const PROMPT_CACHING_TAB = "prompt_caching";
 const ENABLE_ANTHROPIC_PROMPT_CACHING = "enable_anthropic_prompt_caching";
 const ANTHROPIC_PROMPT_CACHING_TTL = "anthropic_prompt_caching_ttl";
+const OPENAI_SYSTEM_MESSAGES_FIRST = "openai_system_messages_first";
+
+const isOn = (value: unknown) => value === true || value === "true";
 
 interface GeneralSettingsPageProps {
   accessToken: string | null;
@@ -31,6 +36,7 @@ export interface generalSettingsItem {
   field_value: any;
   field_description: string;
   stored_in_db: boolean | null;
+  editable?: boolean;
   field_options?: string[] | null;
   field_tab?: string | null;
   field_default_value?: any;
@@ -40,10 +46,39 @@ const NUMERIC_INPUT_WIDTH = "w-36";
 
 const toNumericValue = (raw: string): number | null => (raw === "" ? null : Number(raw));
 
+const toListValue = (raw: string): string[] | null => {
+  const items = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+  return items.length === 0 ? null : items;
+};
+
+const fromListValue = (value: unknown): string => (Array.isArray(value) ? value.join(", ") : "");
+
 const SettingValueEditor: React.FC<{
   setting: generalSettingsItem;
   onChange: (fieldName: string, newValue: any) => void;
 }> = ({ setting, onChange }) => {
+  const { t } = useTranslation();
+  if (setting.field_name === "request_tag_mappings") {
+    return (
+      <RequestTagMappingsEditor
+        value={setting.field_value}
+        disabled={setting.editable === false}
+        onChange={(rules) => onChange(setting.field_name, rules)}
+      />
+    );
+  }
+  if (setting.field_type === "String") {
+    return (
+      <Input
+        aria-label={setting.field_name}
+        value={setting.field_value ?? ""}
+        onChange={(event) => onChange(setting.field_name, event.target.value)}
+      />
+    );
+  }
   if (setting.field_type === "Integer") {
     return (
       <Input
@@ -90,17 +125,25 @@ const SettingValueEditor: React.FC<{
       </InputGroup>
     );
   }
+  if (setting.field_type === "List") {
+    return (
+      <Input
+        key={String(setting.stored_in_db)}
+        aria-label={setting.field_name}
+        placeholder={t("routerSettings.generalSettings.listPlaceholder")}
+        defaultValue={fromListValue(setting.field_value)}
+        onChange={(event) => onChange(setting.field_name, toListValue(event.target.value))}
+      />
+    );
+  }
   if (setting.field_type === "Select") {
     return (
-      <Select
-        value={setting.field_value || null}
-        onValueChange={(newValue) => onChange(setting.field_name, newValue ?? "")}
-      >
+      <Select value={setting.field_value ?? null} onValueChange={(newValue) => onChange(setting.field_name, newValue)}>
         <SelectTrigger className="min-w-32">
-          <SelectValue placeholder="Default" />
+          <SelectValue placeholder={t("routerSettings.generalSettings.selectDefault")} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={null}>Default</SelectItem>
+          <SelectItem value={null}>{t("routerSettings.generalSettings.selectDefault")}</SelectItem>
           {(setting.field_options ?? []).map((option) => (
             <SelectItem key={option} value={option}>
               {option}
@@ -118,16 +161,18 @@ export const PromptCachingPanel: React.FC<{
   settings: generalSettingsItem[];
   onChange: (fieldName: string, newValue: any) => void;
 }> = ({ accessToken, settings, onChange }) => {
+  const { t } = useTranslation();
   const enableSetting = settings.find((s) => s.field_name === ENABLE_ANTHROPIC_PROMPT_CACHING);
   const ttlSetting = settings.find((s) => s.field_name === ANTHROPIC_PROMPT_CACHING_TTL);
+  const systemFirstSetting = settings.find((s) => s.field_name === OPENAI_SYSTEM_MESSAGES_FIRST);
 
-  // The two rows come from the same registry the General tab reads; if they
+  // The rows come from the same registry the General tab reads; if they
   // are not loaded yet there is nothing to render.
   if (!enableSetting) {
     return null;
   }
 
-  const enabled = enableSetting.field_value === true || enableSetting.field_value === "true";
+  const enabled = isOn(enableSetting.field_value);
 
   // Apply immediately: a toggle and a dropdown are direct controls, so there is
   // no separate Update button. Clearing the ttl resets it to the provider default.
@@ -143,11 +188,11 @@ export const PromptCachingPanel: React.FC<{
   return (
     <Card>
       <CardContent>
-        <CardTitle>Prompt Caching</CardTitle>
+        <CardTitle>{t("routerSettings.promptCaching.title")}</CardTitle>
 
         <div className="mt-6 flex items-start justify-between gap-8">
           <div className="min-w-0 max-w-2xl">
-            <p className="font-medium">Automatic Anthropic prompt caching</p>
+            <p className="font-medium">{t("routerSettings.promptCaching.anthropicCaching")}</p>
             <p className="mt-1 break-words text-xs text-muted-foreground">{enableSetting.field_description}</p>
           </div>
           <Switch checked={enabled} onCheckedChange={(checked) => persist(ENABLE_ANTHROPIC_PROMPT_CACHING, checked)} />
@@ -156,19 +201,21 @@ export const PromptCachingPanel: React.FC<{
         {ttlSetting && (
           <div className="mt-6 flex items-start justify-between gap-8">
             <div className="min-w-0 max-w-2xl">
-              <p className={`font-medium ${enabled ? "" : "text-muted-foreground"}`}>Cache lifetime (TTL)</p>
+              <p className={`font-medium ${enabled ? "" : "text-muted-foreground"}`}>
+                {t("routerSettings.promptCaching.cacheLifetime")}
+              </p>
               <p className="mt-1 break-words text-xs text-muted-foreground">{ttlSetting.field_description}</p>
             </div>
             <Select
               disabled={!enabled}
-              value={ttlSetting.field_value || null}
-              onValueChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue ?? "")}
+              value={ttlSetting.field_value ?? null}
+              onValueChange={(newValue) => persist(ANTHROPIC_PROMPT_CACHING_TTL, newValue)}
             >
               <SelectTrigger className="min-w-40">
-                <SelectValue placeholder="5m (default)" />
+                <SelectValue placeholder={t("routerSettings.promptCaching.ttlDefault")} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={null}>5m (default)</SelectItem>
+                <SelectItem value={null}>{t("routerSettings.promptCaching.ttlDefault")}</SelectItem>
                 {(ttlSetting.field_options ?? []).map((option) => (
                   <SelectItem key={option} value={option}>
                     {option}
@@ -178,12 +225,27 @@ export const PromptCachingPanel: React.FC<{
             </Select>
           </div>
         )}
+
+        {systemFirstSetting && (
+          <div className="mt-6 flex items-start justify-between gap-8">
+            <div className="min-w-0 max-w-2xl">
+              <p className="font-medium">{t("routerSettings.promptCaching.systemMessagesFirst")}</p>
+              <p className="mt-1 break-words text-xs text-muted-foreground">{systemFirstSetting.field_description}</p>
+            </div>
+            <Switch
+              aria-label={t("routerSettings.promptCaching.systemMessagesFirst")}
+              checked={isOn(systemFirstSetting.field_value)}
+              onCheckedChange={(checked) => persist(OPENAI_SYSTEM_MESSAGES_FIRST, checked)}
+            />
+          </div>
+        )}
       </CardContent>
     </Card>
   );
 };
 
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
+  const { t } = useTranslation();
   const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
 
   useEffect(() => {
@@ -204,18 +266,20 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     setGeneralSettings(updatedSettings);
   };
 
-  const handleUpdateField = (fieldName: string) => {
+  const handleUpdateField = async (fieldName: string) => {
     if (!accessToken) {
       return;
     }
 
-    let fieldValue = generalSettings.find((setting) => setting.field_name === fieldName)?.field_value;
+    const setting = generalSettings.find((setting) => setting.field_name === fieldName);
+    const fieldValue = setting?.field_value;
 
-    if (fieldValue == null || fieldValue == undefined) {
+    if (fieldValue == null) {
+      if (setting?.field_type === "Select" || setting?.field_type === "List") handleResetField(fieldName);
       return;
     }
     try {
-      updateConfigFieldSetting(accessToken, fieldName, fieldValue);
+      await updateConfigFieldSetting(accessToken, fieldName, fieldValue);
       // update value in state
 
       const updatedSettings = generalSettings.map((setting) =>
@@ -255,11 +319,11 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     <div className="w-full">
       <Tabs defaultValue="loadbalancing" className="h-[75vh] w-full">
         <TabsList variant="line" className="mx-8 mt-4">
-          <TabsTrigger value="loadbalancing">Loadbalancing</TabsTrigger>
-          <TabsTrigger value="routing-groups">Routing Groups</TabsTrigger>
-          <TabsTrigger value="fallbacks">Fallbacks</TabsTrigger>
-          <TabsTrigger value="prompt-caching">Prompt Caching</TabsTrigger>
-          <TabsTrigger value="general">General</TabsTrigger>
+          <TabsTrigger value="loadbalancing">{t("routerSettings.generalSettings.tabs.loadbalancing")}</TabsTrigger>
+          <TabsTrigger value="routing-groups">{t("routerSettings.generalSettings.tabs.routingGroups")}</TabsTrigger>
+          <TabsTrigger value="fallbacks">{t("routerSettings.generalSettings.tabs.fallbacks")}</TabsTrigger>
+          <TabsTrigger value="prompt-caching">{t("routerSettings.generalSettings.tabs.promptCaching")}</TabsTrigger>
+          <TabsTrigger value="general">{t("routerSettings.generalSettings.tabs.general")}</TabsTrigger>
         </TabsList>
         <TabsContent value="loadbalancing" className="px-8 py-6" keepMounted>
           <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
@@ -279,10 +343,10 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Setting</TableHead>
-                    <TableHead>Value</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Action</TableHead>
+                    <TableHead>{t("routerSettings.generalSettings.columns.setting")}</TableHead>
+                    <TableHead>{t("routerSettings.generalSettings.columns.value")}</TableHead>
+                    <TableHead>{t("routerSettings.generalSettings.columns.status")}</TableHead>
+                    <TableHead>{t("routerSettings.generalSettings.columns.action")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -308,21 +372,31 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                         </TableCell>
                         <TableCell>
                           {value.stored_in_db == true ? (
-                            <StatusBadge tone="success" label="In DB" />
+                            <StatusBadge tone="success" label={t("routerSettings.generalSettings.status.inDb")} />
                           ) : value.stored_in_db == false ? (
-                            <StatusBadge tone="neutral" label="In Config" />
+                            <StatusBadge tone="neutral" label={t("routerSettings.generalSettings.status.inConfig")} />
                           ) : (
-                            <StatusBadge tone="neutral" label="Not Set" />
+                            <StatusBadge tone="neutral" label={t("routerSettings.generalSettings.status.notSet")} />
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
-                          <span
-                            onClick={() => handleResetField(value.field_name)}
-                            className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
+                          <Button
+                            disabled={
+                              value.field_name === "request_tag_mappings" &&
+                              (value.editable === false || !requestTagMappingsAreValid(value.field_value))
+                            }
+                            onClick={() => handleUpdateField(value.field_name)}
                           >
-                            <Trash2 className="h-5 w-5 shrink-0" />
-                          </span>
+                            {t("routerSettings.generalSettings.update")}
+                          </Button>
+                          {value.field_name === "request_tag_mappings" && value.editable === false ? null : (
+                            <span
+                              onClick={() => handleResetField(value.field_name)}
+                              className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
+                            >
+                              <Trash2 className="h-5 w-5 shrink-0" />
+                            </span>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

@@ -37,6 +37,25 @@ class SDKError(BaseModel):
     llm_provider: str | None
 
 
+class CallbackObservation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    hook: Literal[
+        "log_success_event",
+        "async_log_success_event",
+        "log_failure_event",
+        "async_log_failure_event",
+    ]
+    phase: Literal["success", "failure"]
+    model: str | None
+    call_type: str | None
+    litellm_call_id: str | None
+    metadata: JsonValue
+    kwargs: JsonValue
+    payload: JsonValue
+    error: SDKError | None
+
+
 class SDKJsonChunk(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -119,6 +138,7 @@ class Execution(BaseModel):
 
     requests: tuple[CapturedRequest, ...]
     report: SDKReport
+    callbacks: tuple[CallbackObservation, ...] | None = None
 
 
 class SDKCommand(BaseModel):
@@ -133,6 +153,7 @@ class WorkerSuccess(BaseModel):
 
     status: Literal["ok"] = "ok"
     report: SDKReport
+    callbacks: tuple[CallbackObservation, ...] | None = None
 
 
 class WorkerFailure(BaseModel):
