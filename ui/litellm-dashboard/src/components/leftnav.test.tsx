@@ -292,9 +292,7 @@ describe("Sidebar (leftnav)", () => {
       "Organizations",
       "Access Groups",
       "Budgets",
-      "API Reference",
       "AI Hub",
-      "Learning Resources",
       "Experimental",
       "Settings",
     ];
@@ -728,7 +726,6 @@ describe("Sidebar (leftnav)", () => {
     expectHref("Models + Endpoints", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
     expectHref("Alerts", "/ui/alerts");
-    expectHref("API Reference", "/ui/api-reference");
   });
 
   it("never links a leaf to the legacy ?page= switch", () => {
