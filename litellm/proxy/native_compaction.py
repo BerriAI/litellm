@@ -20,7 +20,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     native_compaction_call,
 )
 
-_ResultT: Final = TypeVar("_ResultT")
+_ResultT = TypeVar("_ResultT")
 _ASGI_APP: Final = TypeAdapter[ASGIApp](ASGIApp)
 _ROOT_PATH: Final = TypeAdapter(str)
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])

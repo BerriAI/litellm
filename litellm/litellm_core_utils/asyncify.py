@@ -8,7 +8,7 @@ import anyio
 import anyio.to_thread
 from typing_extensions import ParamSpec, TypeVar
 
-T_ParamSpec: Final = ParamSpec("T_ParamSpec")
+T_ParamSpec = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 
 

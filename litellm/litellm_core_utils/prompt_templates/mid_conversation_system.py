@@ -66,7 +66,7 @@ _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
-_Message: Final = TypeVar("_Message")
+_Message = TypeVar("_Message")
 _TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
 
 

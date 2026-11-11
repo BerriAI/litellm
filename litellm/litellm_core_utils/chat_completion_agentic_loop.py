@@ -46,7 +46,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import CustomStreamWrapper
 
-_DispatchResult: Final = TypeVar("_DispatchResult")
+_DispatchResult = TypeVar("_DispatchResult")
 
 _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
     (

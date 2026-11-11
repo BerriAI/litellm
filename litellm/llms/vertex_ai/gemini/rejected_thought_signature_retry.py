@@ -11,8 +11,8 @@ from litellm.types.llms.vertex_ai import ContentType, PartType, RequestBody
 
 from ..context_caching.rejected_cache_retry import status_and_message
 
-Body: Final = TypeVar("Body", bound=Mapping[str, object])
-Sent: Final = TypeVar("Sent")
+Body = TypeVar("Body", bound=Mapping[str, object])
+Sent = TypeVar("Sent")
 
 _REJECTED_SIGNATURE_MARKER: Final = "thought signature"
 _SIGNATURE_KEYS: Final = frozenset({"thoughtSignature", "thought_signature"})

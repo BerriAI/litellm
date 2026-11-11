@@ -131,7 +131,7 @@ Current limits: Bedrock cannot be mounted in record or replay (SigV4 signs the H
 
 ## Typing
 
-The harness is fully typed with no error budget: `make lint-e2e-basedpyright` must report zero basedpyright errors, and CI enforces that on any PR touching `tests/e2e/**/*.py`. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
+The harness is fully typed with no error budget: `make lint-e2e-basedpyright` must report zero basedpyright errors, and CI enforces that on any PR touching `tests/e2e/**/*.py`, `tests/e2e_harness/**/*.py`, `litellm/**/*.py`, `litellm-proxy-extras/**/*.py`, `pyrightconfig.json`, `pyproject.toml` or `uv.lock`. When a response field is untyped, model it in `models.py` (just the fields you read) and let pydantic validate it, rather than threading a `dict` or `Any` through the test
 
 ## Typed test metadata
 

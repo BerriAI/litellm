@@ -78,7 +78,7 @@ _RequestContent: TypeAlias = str | bytes | Iterable[bytes] | AsyncIterable[bytes
 
 _IPV4_LOCAL_ADDRESS: Final = "0.0.0.0"
 
-_HttpxTransportT: Final = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
+_HttpxTransportT = TypeVar("_HttpxTransportT", httpx.BaseTransport, httpx.AsyncBaseTransport)
 
 HTTPEventHooks: TypeAlias = Mapping[str, list[Callable[..., object]]]
 

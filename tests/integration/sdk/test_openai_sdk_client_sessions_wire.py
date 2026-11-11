@@ -21,7 +21,7 @@ from litellm import Router
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import ImageResponse, ModelResponse, TextCompletionResponse
 
-_R: Final = TypeVar("_R")
+_R = TypeVar("_R")
 
 _PROVIDER_KEY: Final = "sk-scripted-provider"
 _API_VERSION: Final = "2024-10-21"

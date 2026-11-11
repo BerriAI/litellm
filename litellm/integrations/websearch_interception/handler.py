@@ -109,7 +109,7 @@ _OPTIONAL_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 _CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX: Final = "Perform a web search for the query:"
 
-_ResponseT: Final = TypeVar("_ResponseT")
+_ResponseT = TypeVar("_ResponseT")
 
 
 class _PlanMetadataView(TypedDict):

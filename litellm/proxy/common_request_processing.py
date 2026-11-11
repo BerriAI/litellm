@@ -178,9 +178,9 @@ from litellm.types.router_weights import RouterWeights, validate_router_weights
 
 _LateResponseT = TypeVar("_LateResponseT")
 _LlmCallT = TypeVar("_LlmCallT")
-_ResponseT: Final = TypeVar("_ResponseT")
-_ChunkT: Final = TypeVar("_ChunkT")
-_ProcessedT: Final = TypeVar("_ProcessedT")
+_ResponseT = TypeVar("_ResponseT")
+_ChunkT = TypeVar("_ChunkT")
+_ProcessedT = TypeVar("_ProcessedT")
 
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")

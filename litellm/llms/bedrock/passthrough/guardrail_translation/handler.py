@@ -871,7 +871,7 @@ class InvokeStreamFrame:
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
-_Frame: Final = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
+_Frame = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
 
 
 def _event_message(raw: bytes) -> tuple[str, bytes] | None:

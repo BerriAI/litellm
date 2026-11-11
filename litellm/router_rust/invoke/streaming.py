@@ -83,7 +83,7 @@ MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS: Final = 200
 
 # The hidden params and headers a fallback's response carries, as dicts the proxy writes into.
 _Prepared: TypeAlias = "tuple[dict[str, object], dict[str, object]]"
-_RestT: Final = TypeVar("_RestT", Iterator[object], AsyncIterator[object])
+_RestT = TypeVar("_RestT", Iterator[object], AsyncIterator[object])
 
 
 # --- the attempt a stream came from -------------------------------------------------------------
@@ -290,7 +290,7 @@ def _record_now(recording: Callable[[], object]) -> None:
         verbose_router_logger.warning("a stream's outcome was not recorded: %s", error)
 
 
-_ItemT: Final = TypeVar("_ItemT")
+_ItemT = TypeVar("_ItemT")
 
 
 async def _areported(

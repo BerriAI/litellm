@@ -114,8 +114,8 @@ class _BudgetedCustomerFilter(TypedDict):
     budget_id: ReadOnly[_IsNotNull]
 
 
-_BudgetRowT: Final = TypeVar("_BudgetRowT")
-_TableRowT: Final = TypeVar("_TableRowT", bound=BaseModel)
+_BudgetRowT = TypeVar("_BudgetRowT")
+_TableRowT = TypeVar("_TableRowT", bound=BaseModel)
 
 _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT: Final = 5.0
 
@@ -266,7 +266,7 @@ class _LabeledMetric:
 
 _MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric | MetricWrapperBase"
 
-_SeriesLimitT: Final = TypeVar("_SeriesLimitT", int, float)
+_SeriesLimitT = TypeVar("_SeriesLimitT", int, float)
 _REQUEST_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])

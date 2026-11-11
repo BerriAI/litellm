@@ -486,7 +486,7 @@ class AnthropicAdapter:
         return anthropic_wrapper.anthropic_sse_wrapper()
 
 
-_BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
+_BlockT = TypeVar("_BlockT", bound=Mapping[str, object])
 
 
 _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.value})

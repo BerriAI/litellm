@@ -1016,7 +1016,7 @@ _KEY_TYPE_PRESET_ROUTES: Final = MappingProxyType(
 )
 
 
-_KeyJsonT: Final = TypeVar("_KeyJsonT", bound=dict[str, object])
+_KeyJsonT = TypeVar("_KeyJsonT", bound=dict[str, object])
 
 
 def handle_key_type(data: GenerateKeyRequest, data_json: _KeyJsonT) -> _KeyJsonT:

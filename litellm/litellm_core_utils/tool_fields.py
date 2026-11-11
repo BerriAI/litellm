@@ -180,7 +180,7 @@ def resolve_deployment_tool_fields(
     return resolve_tool_fields(kwargs, lambda: (drop_policy(kwargs),))
 
 
-_ToolT: Final = TypeVar("_ToolT")
+_ToolT = TypeVar("_ToolT")
 
 HOSTED_MCP_DROP_WARNING: Final = (
     "Dropping the hosted MCP tool(s) %s for model=%s on %s (drop_params=True) because this route cannot run a "
@@ -295,7 +295,7 @@ def tools_without_mcp_servers(
 
 
 _TOOL_SELECTION_PARAMS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
-_ParamsT: Final = TypeVar("_ParamsT", bound=dict[str, object])
+_ParamsT = TypeVar("_ParamsT", bound=dict[str, object])
 
 
 def tool_params_without_hosted_mcp(

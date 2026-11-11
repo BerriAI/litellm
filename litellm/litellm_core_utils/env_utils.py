@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Final, TypeVar
 
-_NumberT: Final = TypeVar("_NumberT", int, float)
+_NumberT = TypeVar("_NumberT", int, float)
 
 # Marked before logging: the LiteLLM loggers' own filters read env knobs through these helpers, so
 # warning first would re-enter the helper from inside the log call and recurse until RecursionError.

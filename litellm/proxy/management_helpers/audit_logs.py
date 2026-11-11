@@ -135,7 +135,7 @@ def _audit_log_task_done_callback(task: asyncio.Task) -> None:
         verbose_proxy_logger.error("Audit log callback task failed: %s", exc, exc_info=exc)
 
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 class AuditTaskRegistry:

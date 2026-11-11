@@ -625,7 +625,7 @@ def _coerce_timeout(value: object, fallback: float) -> float:
     return fallback
 
 
-_ReadResultT: Final = TypeVar("_ReadResultT")
+_ReadResultT = TypeVar("_ReadResultT")
 
 
 class _DBReconnectClient(Protocol):

@@ -58,7 +58,7 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
     UnblockUsersResponse,
 )
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
 _CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
 

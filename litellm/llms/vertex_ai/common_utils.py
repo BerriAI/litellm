@@ -754,7 +754,7 @@ def _integer_enums_fit(schema: JsonValue) -> bool:
     )
 
 
-_GeminiRequestPart: Final = TypeVar("_GeminiRequestPart")
+_GeminiRequestPart = TypeVar("_GeminiRequestPart")
 
 
 def with_integer_enums_that_fit(

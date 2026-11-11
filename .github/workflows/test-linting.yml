@@ -191,10 +191,10 @@ jobs:
       - name: Check tests/e2e basedpyright (zero errors)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' pyrightconfig.json | grep -q .; then
+          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' ':(glob)litellm/**/*.py' ':(glob)litellm-proxy-extras/**/*.py' pyrightconfig.json pyproject.toml uv.lock | grep -q .; then
             uv run --no-sync basedpyright tests/e2e tests/e2e_harness
           else
-            echo "No changed tests/e2e Python files; skipping."
+            echo "No changed tests/e2e, litellm, or litellm-proxy-extras Python, or dependency files; skipping."
           fi
 
       - name: Run the e2e harness tests
@@ -622,6 +622,9 @@ jobs:
 
       - name: check_e2e_no_raw_requests
         run: uv run --no-sync python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
+
+      - name: check_router_constructor_stub
+        run: uv run --no-sync python ./tests/code_coverage_tests/check_router_constructor_stub.py
 
       - name: check_migrations_no_data_rewrites
         run: uv run --no-sync python ./tests/code_coverage_tests/check_migrations_no_data_rewrites.py

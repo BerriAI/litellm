@@ -25,7 +25,7 @@ from litellm.proxy.list_api.list_framework import (
     Within,
 )
 
-TRow: Final = TypeVar("TRow")
+TRow = TypeVar("TRow")
 
 Cell: TypeAlias = str | int | float | datetime | None
 # A tuple-valued cell is a row's repeated field (a model group's providers, say). A predicate

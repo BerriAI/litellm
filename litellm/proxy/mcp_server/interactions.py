@@ -193,7 +193,7 @@ def seal_continuation(
     return InputRequiredResult(input_requests=result.input_requests, request_state=sealed.ok, _meta=result.meta)
 
 
-_Terminal: Final = TypeVar("_Terminal")
+_Terminal = TypeVar("_Terminal")
 
 
 @dataclass(frozen=True, slots=True)

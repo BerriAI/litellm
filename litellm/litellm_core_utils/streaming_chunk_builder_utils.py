@@ -1341,7 +1341,7 @@ def _as_text_completion_chunk(
     return _text_completion_chunk_from_mapping(chunk)
 
 
-_LogprobsValue: Final = TypeVar("_LogprobsValue")
+_LogprobsValue = TypeVar("_LogprobsValue")
 
 
 def _joined_or_none(fields: Iterable[Sequence[_LogprobsValue] | None]) -> list[_LogprobsValue] | None:

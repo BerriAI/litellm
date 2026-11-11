@@ -51,7 +51,7 @@ _PROVIDERS_LISTED_ONLY_THROUGH_A_DEPLOYMENT: Final = frozenset(
     {LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value, LlmProviders.LITELLM_PROXY.value}
 )
 
-_Listed: Final = TypeVar("_Listed")
+_Listed = TypeVar("_Listed")
 
 
 async def run_model_listing(listing: Callable[[], _Listed]) -> _Listed:

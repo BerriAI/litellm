@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Final, Generic, ParamSpec, TypeVar
 
-_P: Final = ParamSpec("_P")
-_R: Final = TypeVar("_R")
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 @dataclass(slots=True)

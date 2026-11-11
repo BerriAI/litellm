@@ -78,7 +78,7 @@ SPEECH_UPSTREAM_MODEL: Final = "gpt-4o-mini-tts"
 PAYMENT_REQUIRED_DEPLOYMENTS: Final[Mapping[str, str]] = MappingProxyType(
     {"openai": "openai/gpt-4o-mini", "anthropic": "anthropic/claude-sonnet-4-5"}
 )
-_R: Final = TypeVar("_R")
+_R = TypeVar("_R")
 
 
 def _identity(prefix: str) -> str:

@@ -2751,7 +2751,7 @@ WebsocketUpstreamFrameClassifier: TypeAlias = Callable[[Mapping[str, object]], W
 _SESSION_FRAMES_EVERY_ROW_CARRIES: Final[frozenset[WebsocketUpstreamFrameKind]] = frozenset(
     {"opens_session", "updates_session"}
 )
-_FrameT: Final = TypeVar("_FrameT", bound=Mapping[str, object])
+_FrameT = TypeVar("_FrameT", bound=Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)

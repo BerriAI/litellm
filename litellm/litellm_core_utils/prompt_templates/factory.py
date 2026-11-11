@@ -2876,7 +2876,7 @@ def _unsigned_thinking_identity(kind: str, thinking: object, signature: object) 
             return None
 
 
-_Replayed: Final = TypeVar("_Replayed")
+_Replayed = TypeVar("_Replayed")
 
 
 def _with_missing_thinking_blocks(

@@ -32,7 +32,7 @@ BATCH_COST_REQUEST_ID_SUFFIX: Final = "_batch_cost"
 _AZURE_PROVIDERS: Final = frozenset({LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value})
 
 _batch_create_routing: Final[ContextVar[bool]] = ContextVar("batch_create_routing", default=False)
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 class InMemoryFile(io.BytesIO):

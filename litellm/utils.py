@@ -840,7 +840,7 @@ _OIDC_TOKEN_FETCH_EXECUTOR: Final = ThreadPoolExecutor(thread_name_prefix="litel
 _PASS_THROUGH_CALL_TYPES: Final = frozenset(
     {CallTypes.allm_passthrough_route.value, CallTypes.llm_passthrough_route.value}
 )
-_Resolved: Final = TypeVar("_Resolved")
+_Resolved = TypeVar("_Resolved")
 
 
 async def _resolved_off_the_event_loop(resolve: Callable[[OidcResolver], _Resolved], api_key: object) -> _Resolved:
@@ -4109,7 +4109,7 @@ def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
 
 _REGISTRATION_ATTEMPTS: Final = 3
 
-_ModelInfoT: Final = TypeVar("_ModelInfoT", bound=ModelInfoBase)
+_ModelInfoT = TypeVar("_ModelInfoT", bound=ModelInfoBase)
 
 
 def _lookup_mapped_model_info(lookup: Callable[[], _ModelInfoT]) -> _ModelInfoT | ModelInfoLookupMiss:

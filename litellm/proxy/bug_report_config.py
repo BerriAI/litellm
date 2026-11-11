@@ -108,7 +108,7 @@ def _litellm_settings_keys() -> frozenset[str]:
 def _router_settings_keys() -> frozenset[str]:
     from litellm.router import Router
 
-    return frozenset(name for name in inspect.signature(Router.__init__).parameters if name != "self")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped params, only names are read
+    return frozenset(inspect.signature(Router).parameters)
 
 
 @functools.cache

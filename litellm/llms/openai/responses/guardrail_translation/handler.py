@@ -630,7 +630,7 @@ def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
     return ((None, tool_content),) if isinstance(tool_content, str) and tool_content else ()
 
 
-_Grouped: Final = TypeVar("_Grouped")
+_Grouped = TypeVar("_Grouped")
 
 
 def _pair_call_id(pair: tuple[str, object]) -> str:

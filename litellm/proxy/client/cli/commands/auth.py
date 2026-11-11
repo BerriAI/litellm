@@ -140,7 +140,7 @@ class CliAuthResult(TypedDict):
     team_id: str | None
 
 
-_TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
+_TeamMapping = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 

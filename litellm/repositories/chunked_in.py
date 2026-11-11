@@ -21,8 +21,8 @@ IN_LIST_CHUNK_SIZE: Final = 5_000
 MAX_IN_LIST_CHUNK_SIZE: Final = 30_000
 LOGICAL_KEYS: Final = frozenset({"AND", "OR", "NOT"})
 
-RowT: Final = TypeVar("RowT")
-ResultT: Final = TypeVar("ResultT")
+RowT = TypeVar("RowT")
+ResultT = TypeVar("ResultT")
 
 Atomicity: TypeAlias = Literal["caller_transaction", "per_chunk_ok"]
 """More than `chunk_size` values means more than one statement. `caller_transaction`

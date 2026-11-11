@@ -266,7 +266,7 @@ class _PrismaDrainTracker:
         await self._drained.wait()
 
 
-_EngineResponseT: Final = TypeVar("_EngineResponseT")
+_EngineResponseT = TypeVar("_EngineResponseT")
 
 
 class _TrackedPrismaEngine:

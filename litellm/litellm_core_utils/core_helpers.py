@@ -162,7 +162,7 @@ def attribute_or_none(source: object, name: str) -> object:
     return getattr(source, name, None)
 
 
-_Shape: Final = TypeVar("_Shape")
+_Shape = TypeVar("_Shape")
 
 
 def has_attributes(

@@ -22,7 +22,7 @@ from typing import Final, Generic, TypeVar
 
 from litellm._logging import verbose_proxy_logger
 
-T: Final = TypeVar("T")
+T = TypeVar("T")
 
 _INTERRUPT_GRACE_SECONDS: Final = 1.0
 _INTERRUPT_POLL_SECONDS: Final = 0.05

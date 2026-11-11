@@ -27,7 +27,7 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
 )
 _THINKING_OFF: Final = "none"
 
-_JsonValue: Final = TypeVar("_JsonValue")
+_JsonValue = TypeVar("_JsonValue")
 
 
 def json_copy_or_original(value: _JsonValue) -> _JsonValue:

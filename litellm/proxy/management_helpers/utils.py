@@ -769,8 +769,8 @@ async def _emit_management_endpoint_otel_span(
         )
 
 
-_P: Final = ParamSpec("_P")
-_R: Final = TypeVar("_R")
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 def management_endpoint_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:

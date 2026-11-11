@@ -552,7 +552,7 @@ _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 _STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
 
-_StrictlyValidatedParams: Final = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
+_StrictlyValidatedParams = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
 
 
 def validate_litellm_params_strictly(
