@@ -35,7 +35,7 @@ The v2 request has no `collector_key` or `consumer_id`, so on v2 the configured 
 
 ## Identity
 
-Each evaluate call carries `session_id` from the LiteLLM session and `consumer_id` from the virtual key (`attributes.user` on v2): the key alias, else the key's user email, user id, or team alias. TrustGuard Activity and per-consumer policies group by that value.
+Each evaluate call carries `session_id` from the LiteLLM session and `consumer_id` from the virtual key: the key alias, else the key's user email, user id, or team alias. On v1, TrustGuard Activity and per-consumer policies group by that value. On v2 it goes in `attributes.user`: an email is resolved as the user in Activity, and any other value is sent as `user.id`, which policy conditions can match but which is not resolved as a user.
 
 ## Multi-turn attacks
 
