@@ -101,7 +101,7 @@ func upsertLiteLLMFallback(ctx context.Context, d *schema.ResourceData, m interf
 	fallbackData := buildFallbackData(d)
 	log.Printf("[DEBUG] %s fallback request payload: %+v", action, fallbackData)
 
-	resp, err := MakeRequest(client, "POST", endpointFallbackCreate, fallbackData)
+	resp, err := MakeRequestWithContext(ctx, client, "POST", endpointFallbackCreate, fallbackData)
 	if err != nil {
 		return fmt.Errorf("error %s fallback: %w", action, err)
 	}
@@ -120,7 +120,7 @@ func readBackWrittenFallback(ctx context.Context, d *schema.ResourceData, client
 	written := stringListFromState(d.Get("fallback_models"))
 	delay := fallbackReadBackFirstDelay
 	for attempt := 1; ; attempt++ {
-		served, err := fetchFallback(client, d.Id(), fallbackTypeFromState(d))
+		served, err := fetchFallback(ctx, client, d.Id(), fallbackTypeFromState(d))
 		if err != nil {
 			return err
 		}
@@ -149,9 +149,9 @@ func resourceLiteLLMFallbackCreate(ctx context.Context, d *schema.ResourceData, 
 	return diag.FromErr(upsertLiteLLMFallback(ctx, d, m, "creating", waitOrCancel))
 }
 
-func fetchFallback(client *Client, model, fallbackType string) (*FallbackGetResponse, error) {
+func fetchFallback(ctx context.Context, client *Client, model, fallbackType string) (*FallbackGetResponse, error) {
 	endpoint := fmt.Sprintf("/fallback/%s?fallback_type=%s", url.PathEscape(model), url.QueryEscape(fallbackType))
-	resp, err := MakeRequest(client, "GET", endpoint, nil)
+	resp, err := MakeRequestWithContext(ctx, client, "GET", endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error reading fallback: %w", err)
 	}
@@ -183,7 +183,7 @@ func resourceLiteLLMFallbackRead(d *schema.ResourceData, m interface{}) error {
 
 	log.Printf("[INFO] Reading fallback for model: %s", d.Id())
 
-	fallbackResp, err := fetchFallback(client, d.Id(), fallbackTypeFromState(d))
+	fallbackResp, err := fetchFallback(context.Background(), client, d.Id(), fallbackTypeFromState(d))
 	if err != nil {
 		return err
 	}

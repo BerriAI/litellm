@@ -11,7 +11,7 @@ Tests:
 import asyncio
 import copy
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, TypeAlias, get_args
@@ -19,12 +19,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pydantic import JsonValue, TypeAdapter
 from redis.exceptions import NoPermissionError
 
 import litellm
 from litellm import Router
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.config_resolvers.settings_rules import Section
+from litellm.proxy.deps.database import get_database
 from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,
@@ -33,12 +37,14 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
     delete_fallback,
     get_fallback,
 )
-from litellm.proxy.proxy_server import ProxyConfig
+from litellm.proxy.proxy_server import ProxyConfig, app
 from litellm.proxy.utils import evict_config_param, get_config_param, litellm_config_cache
-from litellm.repositories.config_repository import CONFIG_PARAM_LOCK_SQL
+from litellm.repositories.database import Database
+from litellm.repositories.router_fallback_repository import RouterFallbackRepository
 from litellm.router_api import ChangeSet
 from litellm.router_api import RouterSettings as RouterSettingsSnapshot
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
+from tests._support.native_database import native_database
 
 
 @pytest.fixture(autouse=True)
@@ -82,9 +88,7 @@ class TestFallbackCreateRequest:
 
     def test_duplicate_fallback_models(self):
         """Test that duplicate fallback models raise validation error"""
-        with pytest.raises(
-            ValueError, match="fallback_models must not contain duplicates"
-        ):
+        with pytest.raises(ValueError, match="fallback_models must not contain duplicates"):
             FallbackCreateRequest(
                 model="gpt-3.5-turbo",
                 fallback_models=["gpt-4", "gpt-4"],
@@ -199,11 +203,10 @@ class TestCreateFallbackForTeamScopedModels:
     ) -> FallbackResponse:
         with (
             patch("litellm.proxy.proxy_server.llm_router", router),
-            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
         ):
-            return await create_fallback(request, MagicMock())
+            return await create_fallback(request, MagicMock(), fallbacks=RouterFallbackRepository(prisma_client))
 
     async def test_public_names_create_a_rule_keyed_on_the_public_name(
         self, router: Router, stored: "_StoredRouterSettings", prisma_client: MagicMock, proxy_config: MagicMock
@@ -278,6 +281,9 @@ class _ConfigFileProxyConfig(ProxyConfig):
         return {"router_settings": copy.deepcopy(self.config_file)}
 
 
+NATIVE: Final = native_database()
+
+
 class _ConfigTransaction:
     def __init__(self, stored: "_StoredRouterSettings") -> None:
         self._stored: Final = stored
@@ -289,7 +295,8 @@ class _ConfigTransaction:
         return self
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, int]]:
-        assert (query, args) == (CONFIG_PARAM_LOCK_SQL, ("router_settings",))
+        if "router_settings" not in args or self.holds_lock:
+            return ()
         if self._stored.lock.locked():
             self._stored.lock_contended.set()
         await self._stored.lock.acquire()
@@ -300,6 +307,9 @@ class _ConfigTransaction:
         visible: Final = self.staged or copy.deepcopy(self._stored.row)
         await self._stored.after_read()
         return visible
+
+    async def find_first(self, where: Mapping[str, str]) -> SimpleNamespace | None:
+        return await self.find_unique(where)
 
     async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, str]]) -> None:
         if self._stored.fail_writes:
@@ -333,10 +343,12 @@ class _StoredRouterSettings:
             side_effect=lambda value, **_: self.row if value == "router_settings" else None
         )
         self.prisma_client.writer_db.tx = self._transaction
+        self.prisma_client.tx = self._transaction
         self.prisma_client.db.litellm_config.find_unique = AsyncMock(
             side_effect=lambda **_: None if lagging_replica else copy.deepcopy(self.row)
         )
         self.proxy_config: Final = _ConfigFileProxyConfig(config_file)
+        self.fallbacks: Final = RouterFallbackRepository(self.prisma_client)
 
     @asynccontextmanager
     async def _transaction(self) -> AsyncIterator[_ConfigTransaction]:
@@ -399,27 +411,24 @@ class TestFallbackWritesSeeTheLatestStoredRules:
     async def _create(self, request: FallbackCreateRequest, stored: _StoredRouterSettings) -> FallbackResponse:
         with (
             patch("litellm.proxy.proxy_server.llm_router", _team_router()),
-            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
         ):
-            return await create_fallback(request, MagicMock())
+            return await create_fallback(request, MagicMock(), fallbacks=stored.fallbacks)
 
     async def _delete(self, model: str, stored: _StoredRouterSettings) -> FallbackDeleteResponse:
         with (
             patch("litellm.proxy.proxy_server.llm_router", _team_router()),
-            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
         ):
-            return await delete_fallback(model, "general", MagicMock())
+            return await delete_fallback(model, "general", MagicMock(), fallbacks=stored.fallbacks)
 
     async def _while_a_write_holds_the_rules(
         self, stored: _StoredRouterSettings, holder: FallbackWrite, contender: FallbackWrite
     ) -> None:
         with (
             patch("litellm.proxy.proxy_server.llm_router", _team_router()),
-            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
         ):
@@ -438,10 +447,14 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         await self._while_a_write_holds_the_rules(
             stored,
             lambda: create_fallback(
-                FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"]), MagicMock()
+                FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"]),
+                MagicMock(),
+                fallbacks=stored.fallbacks,
             ),
             lambda: create_fallback(
-                FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), MagicMock()
+                FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]),
+                MagicMock(),
+                fallbacks=stored.fallbacks,
             ),
         )
 
@@ -455,13 +468,39 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         await self._while_a_write_holds_the_rules(
             stored,
             lambda: create_fallback(
-                FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), MagicMock()
+                FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]),
+                MagicMock(),
+                fallbacks=stored.fallbacks,
             ),
-            lambda: delete_fallback("team-primary", "general", MagicMock()),
+            lambda: delete_fallback("team-primary", "general", MagicMock(), fallbacks=stored.fallbacks),
         )
 
         assert stored.row is not None
         assert stored.row.param_value == {"fallbacks": [GATEWAY_RULE], "routing_strategy": "latency-based-routing"}
+
+    async def test_a_config_section_write_racing_a_fallback_write_keeps_both_changes(self) -> None:
+        stored: Final = _StoredRouterSettings({"fallbacks": [TEAM_RULE]}, hold_first_read=True)
+
+        await self._while_a_write_holds_the_rules(
+            stored,
+            lambda: create_fallback(
+                FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]),
+                MagicMock(),
+                fallbacks=stored.fallbacks,
+            ),
+            lambda: stored.proxy_config._upsert_changed_config_section(
+                section_name="router_settings",
+                changed_keys={"routing_strategy": "latency-based-routing"},
+                removed_keys=frozenset(),
+                prisma_client=stored.prisma_client,
+            ),
+        )
+
+        assert stored.row is not None
+        assert stored.row.param_value == {
+            "fallbacks": [TEAM_RULE, GATEWAY_RULE],
+            "routing_strategy": "latency-based-routing",
+        }
 
     async def test_a_failed_write_changes_neither_the_stored_rules_nor_the_router(self) -> None:
         stored: Final = _StoredRouterSettings({"fallbacks": [TEAM_RULE]}, fail_writes=True)
@@ -470,18 +509,84 @@ class TestFallbackWritesSeeTheLatestStoredRules:
 
         with (
             patch("litellm.proxy.proxy_server.llm_router", router),
-            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
             pytest.raises(HTTPException) as failed,
         ):
             await create_fallback(
-                FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), MagicMock()
+                FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]),
+                MagicMock(),
+                fallbacks=stored.fallbacks,
             )
 
         assert failed.value.status_code == 500
         assert stored.stored_fallbacks() == [TEAM_RULE]
         assert router.settings().fallbacks == [TEAM_RULE]
+
+    async def test_a_delete_of_a_missing_rule_answers_404_and_leaves_the_row_and_lock_untouched(self) -> None:
+        settings: Final = {"fallbacks": [TEAM_RULE], "routing_strategy": "latency-based-routing"}
+        stored: Final = _StoredRouterSettings(copy.deepcopy(settings))
+
+        with pytest.raises(HTTPException) as missing:
+            await self._delete("gpt-5.4-mini", stored)
+        await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), stored)
+
+        assert missing.value.status_code == 404
+        assert stored.writes == 1
+        assert stored.row is not None
+        assert stored.row.param_value == {**settings, "fallbacks": [TEAM_RULE, GATEWAY_RULE]}
+
+
+class TestFallbackRoutesResolveTheirRepository:
+    @pytest.fixture
+    def stored(self) -> Iterator[_StoredRouterSettings]:
+        stored: Final = _StoredRouterSettings(None)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", _team_router()),
+            patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            yield stored
+        app.dependency_overrides.pop(user_api_key_auth, None)
+        app.dependency_overrides.pop(get_database, None)
+
+    def test_a_create_stores_the_rule_through_the_request_database(self, stored: _StoredRouterSettings) -> None:
+        app.dependency_overrides[get_database] = lambda: Database(prisma=stored.prisma_client, native=NATIVE)
+
+        response: Final = TestClient(app).post(
+            "/fallback", json={"model": "team-primary", "fallback_models": ["team-fallback"]}
+        )
+
+        assert response.status_code == 200, response.text
+        assert stored.stored_fallbacks() == [TEAM_RULE]
+
+    @pytest.mark.parametrize(
+        ("method", "path", "body"),
+        [
+            ("POST", "/fallback", {"model": "team-primary", "fallback_models": ["team-fallback"]}),
+            ("DELETE", "/fallback/team-primary", None),
+        ],
+    )
+    def test_writes_without_a_database_are_refused(
+        self, stored: _StoredRouterSettings, method: str, path: str, body: Mapping[str, JsonValue] | None
+    ) -> None:
+        app.dependency_overrides[get_database] = lambda: None
+
+        response: Final = TestClient(app).request(method, path, json=body)
+
+        assert response.status_code == 400, response.text
+        assert "Database storage not enabled" in response.text
+        assert stored.row is None
+
+    def test_an_unknown_model_is_refused_before_the_missing_database(self, stored: _StoredRouterSettings) -> None:
+        app.dependency_overrides[get_database] = lambda: None
+
+        response: Final = TestClient(app).post(
+            "/fallback", json={"model": "team-missing", "fallback_models": ["team-fallback"]}
+        )
+
+        assert response.status_code == 404, response.text
 
     async def test_a_create_reads_the_rules_from_the_writer_while_the_replica_lags(self) -> None:
         stored: Final = _StoredRouterSettings({"fallbacks": [TEAM_RULE]}, lagging_replica=True)
@@ -518,7 +623,6 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         stored: Final = _StoredRouterSettings(None)
         with (
             patch("litellm.proxy.proxy_server.llm_router", router),
-            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
         ):
@@ -527,9 +631,10 @@ class TestFallbackWritesSeeTheLatestStoredRules:
                     model="gpt-5.4-mini", fallback_models=["team-fallback"], fallback_type="content_policy"
                 ),
                 MagicMock(),
+                fallbacks=stored.fallbacks,
             )
             after_create: Final = await get_fallback("team-primary", "content_policy", MagicMock())
-            await delete_fallback("gpt-5.4-mini", "content_policy", MagicMock())
+            await delete_fallback("gpt-5.4-mini", "content_policy", MagicMock(), fallbacks=stored.fallbacks)
             after_delete: Final = await get_fallback("team-primary", "content_policy", MagicMock())
 
         assert after_create.fallback_models == ["team-fallback"]
@@ -540,7 +645,6 @@ class TestFallbackWritesSeeTheLatestStoredRules:
         stored: Final = _StoredRouterSettings({"content_policy_fallbacks": [MALFORMED_GATEWAY_RULE]})
         with (
             patch("litellm.proxy.proxy_server.llm_router", router),
-            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
         ):
@@ -549,6 +653,7 @@ class TestFallbackWritesSeeTheLatestStoredRules:
                     model="team-primary", fallback_models=["team-fallback"], fallback_type="content_policy"
                 ),
                 MagicMock(),
+                fallbacks=stored.fallbacks,
             )
             after_create: Final = await get_fallback("team-primary", "content_policy", MagicMock())
 
@@ -678,20 +783,18 @@ class TestFallbackWritesHonourTheConfigFile:
     ) -> FallbackResponse:
         with (
             patch("litellm.proxy.proxy_server.llm_router", router),
-            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
         ):
-            return await create_fallback(request, MagicMock())
+            return await create_fallback(request, MagicMock(), fallbacks=stored.fallbacks)
 
     async def _delete(self, model: str, router: Router, stored: _StoredRouterSettings) -> FallbackDeleteResponse:
         with (
             patch("litellm.proxy.proxy_server.llm_router", router),
-            patch("litellm.proxy.proxy_server.prisma_client", stored.prisma_client),
             patch("litellm.proxy.proxy_server.proxy_config", stored.proxy_config),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
         ):
-            return await delete_fallback(model, "general", MagicMock())
+            return await delete_fallback(model, "general", MagicMock(), fallbacks=stored.fallbacks)
 
     async def test_a_create_that_adds_a_rule_to_a_config_owned_list_is_refused(
         self, router: Router, stored: _StoredRouterSettings
@@ -750,10 +853,14 @@ class TestFallbackWritesHonourTheConfigFile:
         self, router: Router, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("LITELLM_TEST_UNSET_FALLBACKS", raising=False)
-        stored: Final = _StoredRouterSettings(None, config_file={"fallbacks": "os.environ/LITELLM_TEST_UNSET_FALLBACKS"})
+        stored: Final = _StoredRouterSettings(
+            None, config_file={"fallbacks": "os.environ/LITELLM_TEST_UNSET_FALLBACKS"}
+        )
 
         with pytest.raises(HTTPException) as refused:
-            await self._create(FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"]), router, stored)
+            await self._create(
+                FallbackCreateRequest(model="team-primary", fallback_models=["team-fallback"]), router, stored
+            )
         with pytest.raises(HTTPException) as not_found:
             await self._delete("team-primary", router, stored)
 
@@ -817,7 +924,9 @@ class TestFallbackWritesHonourTheConfigFile:
             {"fallbacks": [TEAM_RULE]}, config_file={"routing_strategy": "latency-based-routing"}
         )
 
-        await self._create(FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), router, stored)
+        await self._create(
+            FallbackCreateRequest(model="gpt-5.4-mini", fallback_models=["team-fallback"]), router, stored
+        )
         assert stored.row is not None
         assert stored.row.param_value == {"fallbacks": [TEAM_RULE, GATEWAY_RULE]}
 
@@ -903,15 +1012,14 @@ class TestCreateFallback:
                 True,
             ),
         ):
-            response = await create_fallback(request, mock_user_api_key_dict)
+            response = await create_fallback(
+                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+            )
 
             assert response.model == "gpt-3.5-turbo"
             assert response.fallback_models == ["gpt-4", "claude-3-haiku"]
             assert response.fallback_type == "general"
-            assert (
-                "created" in response.message.lower()
-                or "updated" in response.message.lower()
-            )
+            assert "created" in response.message.lower() or "updated" in response.message.lower()
 
             assert stored.stored_fallbacks() == [{"gpt-3.5-turbo": ["gpt-4", "claude-3-haiku"]}]
 
@@ -931,7 +1039,9 @@ class TestCreateFallback:
             ),
             pytest.raises(HTTPException) as exc_info,
         ):
-            await create_fallback(request, mock_user_api_key_dict)
+            await create_fallback(
+                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+            )
 
         assert exc_info.value.status_code == 500
         assert "Router not initialized" in str(exc_info.value.detail)
@@ -960,7 +1070,9 @@ class TestCreateFallback:
             ),
             pytest.raises(HTTPException) as exc_info,
         ):
-            await create_fallback(request, mock_user_api_key_dict)
+            await create_fallback(
+                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+            )
 
         assert exc_info.value.status_code == 404
         assert "not found in router" in str(exc_info.value.detail)
@@ -989,7 +1101,9 @@ class TestCreateFallback:
             ),
             pytest.raises(HTTPException) as exc_info,
         ):
-            await create_fallback(request, mock_user_api_key_dict)
+            await create_fallback(
+                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+            )
 
         assert exc_info.value.status_code == 400
         assert "Invalid fallback models" in str(exc_info.value.detail)
@@ -1018,14 +1132,14 @@ class TestCreateFallback:
             ),
             pytest.raises(HTTPException) as exc_info,
         ):
-            await create_fallback(request, mock_user_api_key_dict)
+            await create_fallback(
+                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+            )
 
         assert exc_info.value.status_code == 400
         assert "cannot be its own fallback" in str(exc_info.value.detail)
 
-    async def test_create_fallback_db_not_enabled(
-        self, mock_router, mock_user_api_key_dict
-    ):
+    async def test_create_fallback_db_not_enabled(self, mock_router, mock_user_api_key_dict):
         """Test error when database storage is not enabled"""
         request = FallbackCreateRequest(
             model="gpt-3.5-turbo",
@@ -1043,7 +1157,7 @@ class TestCreateFallback:
             ),
             pytest.raises(HTTPException) as exc_info,
         ):
-            await create_fallback(request, mock_user_api_key_dict)
+            await create_fallback(request, mock_user_api_key_dict, fallbacks=None)
 
         assert exc_info.value.status_code == 400
         assert "Database storage not enabled" in str(exc_info.value.detail)
@@ -1076,7 +1190,9 @@ class TestCreateFallback:
                 True,
             ),
         ):
-            response = await create_fallback(request, mock_user_api_key_dict)
+            response = await create_fallback(
+                request, mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+            )
 
             assert response.fallback_type == "context_window"
             # Verify the correct setting was updated
@@ -1105,25 +1221,19 @@ class TestGetFallback:
         """Create a mock user API key dict"""
         return MagicMock()
 
-    async def test_get_fallback_success(
-        self, mock_router_with_fallbacks, mock_user_api_key_dict
-    ):
+    async def test_get_fallback_success(self, mock_router_with_fallbacks, mock_user_api_key_dict):
         """Test successful fallback retrieval"""
         with patch(
             "litellm.proxy.proxy_server.llm_router",
             mock_router_with_fallbacks,
         ):
-            response = await get_fallback(
-                "gpt-3.5-turbo", "general", mock_user_api_key_dict
-            )
+            response = await get_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict)
 
             assert response.model == "gpt-3.5-turbo"
             assert response.fallback_models == ["gpt-4", "claude-3-haiku"]
             assert response.fallback_type == "general"
 
-    async def test_get_fallback_not_found(
-        self, mock_router_with_fallbacks, mock_user_api_key_dict
-    ):
+    async def test_get_fallback_not_found(self, mock_router_with_fallbacks, mock_user_api_key_dict):
         """Test error when fallback is not found"""
         with (
             patch(
@@ -1213,7 +1323,10 @@ class TestDeleteFallback:
             ),
         ):
             response = await delete_fallback(
-                "gpt-3.5-turbo", "general", mock_user_api_key_dict
+                "gpt-3.5-turbo",
+                "general",
+                mock_user_api_key_dict,
+                fallbacks=RouterFallbackRepository(mock_prisma_client),
             )
 
             assert response.model == "gpt-3.5-turbo"
@@ -1249,7 +1362,9 @@ class TestDeleteFallback:
             ),
             pytest.raises(HTTPException) as exc_info,
         ):
-            await delete_fallback("gpt-4", "general", mock_user_api_key_dict)
+            await delete_fallback(
+                "gpt-4", "general", mock_user_api_key_dict, fallbacks=RouterFallbackRepository(mock_prisma_client)
+            )
 
         assert exc_info.value.status_code == 404
         assert "No general fallbacks configured" in str(exc_info.value.detail)
@@ -1263,14 +1378,12 @@ class TestDeleteFallback:
             ),
             pytest.raises(HTTPException) as exc_info,
         ):
-            await delete_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict)
+            await delete_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict, fallbacks=None)
 
         assert exc_info.value.status_code == 500
         assert "Router not initialized" in str(exc_info.value.detail)
 
-    async def test_delete_fallback_db_not_enabled(
-        self, mock_router_with_fallbacks, mock_user_api_key_dict
-    ):
+    async def test_delete_fallback_db_not_enabled(self, mock_router_with_fallbacks, mock_user_api_key_dict):
         """Test error when database storage is not enabled"""
         with (
             patch(
@@ -1283,7 +1396,7 @@ class TestDeleteFallback:
             ),
             pytest.raises(HTTPException) as exc_info,
         ):
-            await delete_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict)
+            await delete_fallback("gpt-3.5-turbo", "general", mock_user_api_key_dict, fallbacks=None)
 
         assert exc_info.value.status_code == 400
         assert "Database storage not enabled" in str(exc_info.value.detail)

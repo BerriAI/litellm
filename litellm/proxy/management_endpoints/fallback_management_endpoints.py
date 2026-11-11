@@ -10,11 +10,10 @@ DELETE /fallback/{model} - Delete fallbacks for a specific model
 
 # pyright: reportMissingImports=false
 
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Final, Literal
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal
 
-from pydantic import Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -22,7 +21,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import fallback_target_model_name
 from litellm.proxy.auth.model_checks import get_all_fallbacks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.utils import PrismaClient, invalidate_config_param
+from litellm.proxy.utils import invalidate_config_param
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, Depends, HTTPException, status
@@ -36,7 +35,15 @@ else:
         # fastapi is only required for proxy, not for SDK usage
         pass
 
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.models.fallback import (
+    STORED_FALLBACKS,
+    FallbackRulesEdit,
+    FallbackRulesEditor,
+    RouterFallbackStore,
+    StoredFallback,
+)
+from litellm.proxy.deps.repositories import RouterFallbackRepositoryDep
+from litellm.repositories.router_fallback_repository import ROUTER_SETTINGS_PARAM
 from litellm.router_api import ChangeSet
 from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackCreateRequest,
@@ -48,13 +55,7 @@ from litellm.types.router import ContentPolicyFallbackRule, ContentPolicyFallbac
 
 router: Final = APIRouter()
 
-ROUTER_SETTINGS_PARAM: Final = "router_settings"
-FallbackRule = dict[str, list[str]]
-StoredFallback = Annotated[FallbackRule | dict[str, object] | str, Field(union_mode="left_to_right")]
-_STORED_FALLBACKS: Final = TypeAdapter(list[StoredFallback])
 _JSON_RULES: Final = TypeAdapter(list[JsonValue])
-_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
-_STORED_ROUTER_SETTINGS: Final = TypeAdapter(dict[str, JsonValue])
 _OPTIONAL_JSON_RULES: Final[TypeAdapter[Sequence[JsonValue] | None]] = TypeAdapter(Sequence[JsonValue] | None)
 _CONTENT_POLICY_FALLBACK_RULE: Final[TypeAdapter[ContentPolicyFallbackRule]] = TypeAdapter(ContentPolicyFallbackRule)
 _FALLBACK_TARGETS: Final[TypeAdapter[FallbackTargets]] = TypeAdapter(FallbackTargets)
@@ -136,56 +137,32 @@ async def _reload_config_file_ownership(proxy_config: "ProxyConfig") -> None:
     await proxy_config.get_config()
 
 
-def _stored_router_settings(param_value: object) -> Mapping[str, JsonValue]:
-    try:
-        decoded: Final[object] = _JSON_VALUE.validate_json(param_value) if isinstance(param_value, str) else param_value
-    except ValidationError:
-        return {}
-    if not isinstance(decoded, Mapping):
-        return {}
-    return _STORED_ROUTER_SETTINGS.validate_python(decoded)
-
-
-@dataclass(frozen=True, slots=True)
-class _EditedRules:
-    rules: Sequence[StoredFallback]
-    replaced: bool
-
-
-def _with_rule(rules: Sequence[StoredFallback], model: str, fallback_models: Sequence[str]) -> _EditedRules:
+def _with_rule(rules: Sequence[StoredFallback], model: str, fallback_models: Sequence[str]) -> FallbackRulesEdit:
     covering: Final = next((index for index, rule in enumerate(rules) if _rule_covers(rule, model)), None)
     rule: Final[StoredFallback] = {model: list(fallback_models)}
     if covering is None:
-        return _EditedRules(rules=[*rules, rule], replaced=False)
-    return _EditedRules(rules=[*rules[:covering], rule, *rules[covering + 1 :]], replaced=True)
+        return FallbackRulesEdit(rules=[*rules, rule], replaced=False)
+    return FallbackRulesEdit(rules=[*rules[:covering], rule, *rules[covering + 1 :]], replaced=True)
 
 
-def _without_rule(rules: Sequence[StoredFallback], model: str, fallback_type: str) -> _EditedRules:
+def _without_rule(rules: Sequence[StoredFallback], model: str, fallback_type: str) -> FallbackRulesEdit:
     kept: Final = [rule for rule in rules if not _rule_covers(rule, model)]
     if len(kept) == len(rules):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"error": f"No {fallback_type} fallbacks configured for model '{model}'"},
         )
-    return _EditedRules(rules=kept, replaced=True)
-
-
-def _edit_stored_rules(
-    param_value: object, fallback_key: str, edit: Callable[[Sequence[StoredFallback]], _EditedRules]
-) -> tuple[Mapping[str, JsonValue], _EditedRules]:
-    stored_settings: Final = _stored_router_settings(param_value)
-    edited: Final = edit(_STORED_FALLBACKS.validate_python(stored_settings.get(fallback_key) or []))
-    return {**stored_settings, fallback_key: _JSON_RULES.validate_python(edited.rules)}, edited
+    return FallbackRulesEdit(rules=kept, replaced=True)
 
 
 def _edit_config_file_rules(
     proxy_config: "ProxyConfig",
     llm_router: "Router",
     fallback_key: str,
-    edit: Callable[[Sequence[StoredFallback]], _EditedRules],
-) -> _EditedRules:
+    edit: FallbackRulesEditor,
+) -> FallbackRulesEdit:
     file_rules: Final = proxy_config.router_settings.get(fallback_key)
-    edited: Final = edit(_STORED_FALLBACKS.validate_python(file_rules if isinstance(file_rules, list) else []))
+    edited: Final = edit(STORED_FALLBACKS.validate_python(file_rules if isinstance(file_rules, list) else []))
     proxy_config.reject_config_owned_writes(
         section_name=ROUTER_SETTINGS_PARAM, changed_keys={fallback_key: _JSON_RULES.validate_python(edited.rules)}
     )
@@ -194,17 +171,15 @@ def _edit_config_file_rules(
 
 
 async def _write_rules(
-    prisma_client: PrismaClient,
+    fallbacks: RouterFallbackStore,
     proxy_config: "ProxyConfig",
     llm_router: "Router",
     fallback_key: str,
-    edit: Callable[[Sequence[StoredFallback]], _EditedRules],
-) -> _EditedRules:
+    edit: FallbackRulesEditor,
+) -> FallbackRulesEdit:
     if proxy_config.router_settings.owned_by_config(fallback_key):
         return _edit_config_file_rules(proxy_config, llm_router, fallback_key, edit)
-    edited: Final = await ConfigRepository(prisma_client).update_param_locked(
-        ROUTER_SETTINGS_PARAM, lambda param_value: _edit_stored_rules(param_value, fallback_key, edit)
-    )
+    edited: Final = await fallbacks.edit_rules(fallback_key, edit)
     await invalidate_config_param(ROUTER_SETTINGS_PARAM)
     _apply_fallback_rules(llm_router, fallback_key, edited.rules)
     return edited
@@ -220,6 +195,8 @@ async def _write_rules(
 async def create_fallback(
     data: FallbackCreateRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    *,
+    fallbacks: RouterFallbackRepositoryDep,
 ):
     """
     Create or update fallbacks for a specific model.
@@ -243,7 +220,6 @@ async def create_fallback(
     """
     from litellm.proxy.proxy_server import (
         llm_router,
-        prisma_client,
         proxy_config,
         store_model_in_db,
     )
@@ -287,7 +263,7 @@ async def create_fallback(
             )
 
         # Check if we need to store in DB
-        if store_model_in_db is not True or prisma_client is None:
+        if store_model_in_db is not True or fallbacks is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -305,7 +281,7 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         edited: Final = await _write_rules(
-            prisma_client,
+            fallbacks,
             proxy_config,
             llm_router,
             fallback_key,
@@ -403,6 +379,8 @@ async def delete_fallback(
     model: str,
     fallback_type: Literal["general", "context_window", "content_policy"] = "general",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    *,
+    fallbacks: RouterFallbackRepositoryDep,
 ):
     """
     Delete fallback configuration for a specific model.
@@ -418,7 +396,6 @@ async def delete_fallback(
     """
     from litellm.proxy.proxy_server import (
         llm_router,
-        prisma_client,
         proxy_config,
         store_model_in_db,
     )
@@ -430,7 +407,7 @@ async def delete_fallback(
                 detail={"error": "Router not initialized"},
             )
 
-        if store_model_in_db is not True or prisma_client is None:
+        if store_model_in_db is not True or fallbacks is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={
@@ -448,7 +425,7 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         await _write_rules(
-            prisma_client,
+            fallbacks,
             proxy_config,
             llm_router,
             fallback_key,

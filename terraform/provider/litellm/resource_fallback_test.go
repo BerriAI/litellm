@@ -189,16 +189,23 @@ type fallbackRead struct {
 	models []string
 }
 
-func fallbackServer(t *testing.T, reads []fallbackRead) (*httptest.Server, *atomic.Int32) {
+type fallbackProxy struct {
+	*httptest.Server
+	posts atomic.Int32
+	reads atomic.Int32
+}
+
+func fallbackServer(t *testing.T, reads []fallbackRead) *fallbackProxy {
 	t.Helper()
-	served := &atomic.Int32{}
+	proxy := &fallbackProxy{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/fallback", func(w http.ResponseWriter, r *http.Request) {
+		proxy.posts.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"message":"ok"}`))
 	})
 	mux.HandleFunc("/fallback/gpt-4", func(w http.ResponseWriter, r *http.Request) {
-		index := int(served.Add(1)) - 1
+		index := int(proxy.reads.Add(1)) - 1
 		if index >= len(reads) {
 			t.Errorf("unexpected read %d after the proxy served the fallback", index+1)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -212,9 +219,9 @@ func fallbackServer(t *testing.T, reads []fallbackRead) (*httptest.Server, *atom
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(FallbackGetResponse{Model: "gpt-4", FallbackModels: read.models, FallbackType: "general"})
 	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv, served
+	proxy.Server = httptest.NewServer(mux)
+	t.Cleanup(proxy.Close)
+	return proxy
 }
 
 type recordedWaits struct {
@@ -257,11 +264,11 @@ func TestFallbackWriteWaitsForTheProxyToServeIt(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, served := fallbackServer(t, tc.reads)
+			proxy := fallbackServer(t, tc.reads)
 			waits := &recordedWaits{}
 			d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3", "gpt-3.5-turbo"}, "general")
 
-			err := upsertLiteLLMFallback(context.Background(), d, NewClient(srv.URL, "test-key", true), tc.action, waits.wait)
+			err := upsertLiteLLMFallback(context.Background(), d, NewClient(proxy.URL, "test-key", true), tc.action, waits.wait)
 
 			if err != nil {
 				t.Fatalf("expected the write to succeed once the proxy serves it, got: %v", err)
@@ -272,8 +279,8 @@ func TestFallbackWriteWaitsForTheProxyToServeIt(t *testing.T) {
 			if got := d.Get("fallback_models"); !reflect.DeepEqual(got, []interface{}{"claude-3", "gpt-3.5-turbo"}) {
 				t.Fatalf("expected state to hold the written list, got %v", got)
 			}
-			if served.Load() != int32(len(tc.reads)) || len(waits.delays) != len(tc.reads)-1 {
-				t.Fatalf("expected %d reads with a wait between each, got %d reads and waits %v", len(tc.reads), served.Load(), waits.delays)
+			if proxy.reads.Load() != int32(len(tc.reads)) || len(waits.delays) != len(tc.reads)-1 {
+				t.Fatalf("expected %d reads with a wait between each, got %d reads and waits %v", len(tc.reads), proxy.reads.Load(), waits.delays)
 			}
 		})
 	}
@@ -284,11 +291,11 @@ func TestFallbackReadBackBacksOffUpToTheMaxDelay(t *testing.T) {
 	for i := range reads {
 		reads[i] = fallbackRead{status: http.StatusNotFound}
 	}
-	srv, _ := fallbackServer(t, append(reads, fallbackRead{status: http.StatusOK, models: []string{"claude-3"}}))
+	proxy := fallbackServer(t, append(reads, fallbackRead{status: http.StatusOK, models: []string{"claude-3"}}))
 	waits := &recordedWaits{}
 	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
 
-	if err := upsertLiteLLMFallback(context.Background(), d, NewClient(srv.URL, "test-key", true), "creating", waits.wait); err != nil {
+	if err := upsertLiteLLMFallback(context.Background(), d, NewClient(proxy.URL, "test-key", true), "creating", waits.wait); err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}
 
@@ -299,7 +306,7 @@ func TestFallbackReadBackBacksOffUpToTheMaxDelay(t *testing.T) {
 }
 
 func TestFallbackWriteThatNeverConvergesKeepsTheIDAndNamesTheModel(t *testing.T) {
-	srv, _ := fallbackServer(t, []fallbackRead{
+	proxy := fallbackServer(t, []fallbackRead{
 		{status: http.StatusNotFound},
 		{status: http.StatusOK, models: []string{"stale"}},
 		{status: http.StatusNotFound},
@@ -307,7 +314,7 @@ func TestFallbackWriteThatNeverConvergesKeepsTheIDAndNamesTheModel(t *testing.T)
 	waits := &recordedWaits{failAt: 3}
 	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
 
-	err := upsertLiteLLMFallback(context.Background(), d, NewClient(srv.URL, "test-key", true), "creating", waits.wait)
+	err := upsertLiteLLMFallback(context.Background(), d, NewClient(proxy.URL, "test-key", true), "creating", waits.wait)
 
 	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "gpt-4") {
 		t.Fatalf("expected a deadline error naming the model, got: %v", err)
@@ -320,17 +327,17 @@ func TestFallbackWriteThatNeverConvergesKeepsTheIDAndNamesTheModel(t *testing.T)
 func TestFallbackReadBackDoesNotRetryAnErrorResponse(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusBadRequest, http.StatusInternalServerError} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
-			srv, served := fallbackServer(t, []fallbackRead{{status: status}})
+			proxy := fallbackServer(t, []fallbackRead{{status: status}})
 			waits := &recordedWaits{}
 			d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
 
-			err := upsertLiteLLMFallback(context.Background(), d, NewClient(srv.URL, "test-key", true), "creating", waits.wait)
+			err := upsertLiteLLMFallback(context.Background(), d, NewClient(proxy.URL, "test-key", true), "creating", waits.wait)
 
 			if err == nil || !strings.Contains(err.Error(), http.StatusText(status)) {
 				t.Fatalf("expected the %d to surface as an error, got: %v", status, err)
 			}
-			if served.Load() != 1 || len(waits.delays) != 0 {
-				t.Fatalf("expected one read and no retry, got %d reads and waits %v", served.Load(), waits.delays)
+			if proxy.reads.Load() != 1 || len(waits.delays) != 0 {
+				t.Fatalf("expected one read and no retry, got %d reads and waits %v", proxy.reads.Load(), waits.delays)
 			}
 			if d.Id() != "gpt-4" {
 				t.Fatalf("expected the ID to stay, got %q", d.Id())
@@ -339,18 +346,74 @@ func TestFallbackReadBackDoesNotRetryAnErrorResponse(t *testing.T) {
 	}
 }
 
-func TestFallbackReadBackStopsWhenApplyIsCancelled(t *testing.T) {
-	srv, served := fallbackServer(t, []fallbackRead{{status: http.StatusNotFound}})
+func TestFallbackWriteSendsNothingOnceApplyIsCancelled(t *testing.T) {
+	proxy := fallbackServer(t, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
 
-	diags := resourceLiteLLMFallbackCreate(ctx, d, NewClient(srv.URL, "test-key", true))
+	diags := resourceLiteLLMFallbackCreate(ctx, d, NewClient(proxy.URL, "test-key", true))
 
 	if !diags.HasError() || !strings.Contains(diags[0].Summary, context.Canceled.Error()) {
 		t.Fatalf("expected a cancellation error, got: %v", diags)
 	}
-	if served.Load() != 1 || d.Id() != "gpt-4" {
-		t.Fatalf("expected one read and the ID kept, got %d reads and ID %q", served.Load(), d.Id())
+	if proxy.posts.Load() != 0 || proxy.reads.Load() != 0 {
+		t.Fatalf("expected no request after cancellation, got %d posts and %d reads", proxy.posts.Load(), proxy.reads.Load())
+	}
+}
+
+func TestFallbackReadBackStopsWaitingWhenApplyIsCancelled(t *testing.T) {
+	proxy := fallbackServer(t, []fallbackRead{{status: http.StatusNotFound}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelThenWait := func(ctx context.Context, delay time.Duration) error {
+		cancel()
+		return waitOrCancel(ctx, time.Hour)
+	}
+	d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+
+	err := upsertLiteLLMFallback(ctx, d, NewClient(proxy.URL, "test-key", true), "creating", cancelThenWait)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected a cancellation error, got: %v", err)
+	}
+	if proxy.reads.Load() != 1 || d.Id() != "gpt-4" {
+		t.Fatalf("expected one read and the ID kept, got %d reads and ID %q", proxy.reads.Load(), d.Id())
+	}
+}
+
+func TestFallbackWriteAbortsAHungRequestWhenApplyIsCancelled(t *testing.T) {
+	for _, hungPath := range []string{"/fallback", "/fallback/gpt-4"} {
+		t.Run(hungPath, func(t *testing.T) {
+			arrived := make(chan struct{})
+			mux := http.NewServeMux()
+			mux.HandleFunc("/fallback", func(w http.ResponseWriter, r *http.Request) {
+				if hungPath == "/fallback" {
+					close(arrived)
+					<-r.Context().Done()
+					return
+				}
+				w.Write([]byte(`{"message":"ok"}`))
+			})
+			mux.HandleFunc("/fallback/gpt-4", func(w http.ResponseWriter, r *http.Request) {
+				close(arrived)
+				<-r.Context().Done()
+			})
+			srv := httptest.NewServer(mux)
+			defer srv.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() {
+				<-arrived
+				cancel()
+			}()
+			d := newFallbackTestResourceData(t, "gpt-4", []interface{}{"claude-3"}, "general")
+
+			err := upsertLiteLLMFallback(ctx, d, NewClient(srv.URL, "test-key", true), "creating", waitOrCancel)
+
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected the hung request to end with the cancellation, got: %v", err)
+			}
+		})
 	}
 }

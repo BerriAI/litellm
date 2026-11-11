@@ -134,7 +134,6 @@ class ConfigRepository:
     async def update_param_locked(
         self, param_name: str, update: Callable[[object], tuple[Mapping[str, object], ResultT]]
     ) -> ResultT:
-        """Read-modify-write a param under the advisory lock the config section writer also takes; raising rolls back."""
         async with self._writer.tx() as transaction:
             await transaction.query_raw(CONFIG_PARAM_LOCK_SQL, param_name)
             row: Final = await transaction.litellm_config.find_unique(where={"param_name": param_name})
