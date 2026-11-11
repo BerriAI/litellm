@@ -13,13 +13,14 @@ from typing import (
     Literal,
     Optional,
     Protocol,
+    TypeVar,
     cast,  # noqa: TID251  # prisma types Json columns as fields.Json but de-serializes them to plain python on read
     get_args,
     runtime_checkable,
 )
 
 from pydantic import TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Self, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_FILE_LIST_LIMIT
@@ -619,6 +620,59 @@ def batch_deployment_id(
 def hinted_batch_deployment_id(llm_router: Optional["Router"], model: str, encoded_id: str) -> str | None:
     hint: Final = decode_deployment_from_file_id(encoded_id)
     return batch_deployment_id(llm_router, model, preferred_deployment_id=hint) if hint else None
+
+
+@dataclass(frozen=True, slots=True)
+class BatchFileListing:
+    model: str
+    deployment_id: str
+
+
+def batch_file_listing(
+    llm_router: Optional["Router"], model: str | None, purpose: str | None
+) -> BatchFileListing | None:
+    if model is None or purpose != "batch":
+        return None
+    deployment_id: Final = batch_deployment_id(llm_router, model)
+    return BatchFileListing(model=model, deployment_id=deployment_id) if deployment_id else None
+
+
+class _ListedFile(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    def model_copy(self, *, update: Mapping[str, object] | None = None, deep: bool = False) -> Self: ...
+
+
+class ListedFilePage(Protocol):
+    @property
+    def data(self) -> Sequence[_ListedFile]: ...
+
+    def model_copy(self, *, update: Mapping[str, object] | None = None, deep: bool = False) -> Self: ...
+
+
+_ListedFilePageT = TypeVar("_ListedFilePageT", bound=ListedFilePage)
+
+
+def _routable_listed_file_id(file_id: str, listing: BatchFileListing) -> str:
+    if is_base64_encoded_unified_file_id(file_id):
+        return file_id
+    return encode_file_id_with_model(file_id=file_id, model=listing.model, deployment_id=listing.deployment_id)
+
+
+def with_routable_listed_file_ids(page: _ListedFilePageT, listing: BatchFileListing | None) -> _ListedFilePageT:
+    if listing is None:
+        return page
+    files: Final = [file.model_copy(update={"id": _routable_listed_file_id(file.id, listing)}) for file in page.data]
+    cursors: Final = {
+        name: file_id
+        for name, file_id in (
+            ("first_id", files[0].id if files else None),
+            ("last_id", files[-1].id if files else None),
+        )
+        if hasattr(page, name)
+    }
+    return page.model_copy(update={"data": files, **cursors})
 
 
 def deployment_drop_params(

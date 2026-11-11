@@ -1143,37 +1143,49 @@ def test_file_content_of_a_mixed_azure_group_id_comes_from_the_deployment_its_hi
     ],
     ids=["header-batch", "header-other-purpose", "header-no-purpose", "target-batch", "target-no-purpose"],
 )
-def test_file_list_of_a_mixed_azure_group_reads_batch_files_from_where_batch_uploads_go(
+def test_files_listed_from_a_mixed_azure_group_come_from_and_open_on_the_resource_batch_uploads_use(
     mixed_azure_group: respx.MockRouter, headers: dict[str, str], query: str, reached_sku: str
 ):
+    listed_file: Final = {
+        "object": "file",
+        "bytes": 1,
+        "created_at": 0,
+        "filename": "batch.jsonl",
+        "purpose": "batch",
+        "status": "processed",
+    }
     list_routes: Final = {
         sku: mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=r"/files$").mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "object": "list",
-                    "data": [
-                        {
-                            "id": f"file-on-{sku}",
-                            "object": "file",
-                            "bytes": 1,
-                            "created_at": 0,
-                            "filename": "batch.jsonl",
-                            "purpose": "batch",
-                            "status": "processed",
-                        }
-                    ],
-                },
-            )
+            return_value=httpx.Response(200, json={"object": "list", "data": [{"id": f"file-on-{sku}", **listed_file}]})
         )
         for sku in _MIXED_GROUP_SKUS
     }
+    retrieve_routes: Final = {
+        sku: mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=rf"/files/file-on-{sku}$").mock(
+            return_value=httpx.Response(200, json={"id": f"file-on-{sku}", **listed_file})
+        )
+        for sku in _MIXED_GROUP_SKUS
+    }
+    for sku in _MIXED_GROUP_SKUS:
+        mixed_azure_group.get(host=f"{sku}.openai.azure.com", path__regex=r"/files/[^/]+$").mock(
+            return_value=httpx.Response(404, json={"error": {"message": f"not on {sku}"}})
+        )
 
-    response: Final = client.get(f"/v1/files{query}", headers={"Authorization": "Bearer test-key", **headers})
+    listing: Final = client.get(f"/v1/files{query}", headers={"Authorization": "Bearer test-key", **headers})
 
-    assert response.status_code == 200, response.text
-    assert [listed["id"] for listed in response.json()["data"]] == [f"file-on-{reached_sku}"]
+    assert listing.status_code == 200, listing.text
+    listed_ids: Final = [listed["id"] for listed in listing.json()["data"]]
+    assert [get_original_file_id(listed_id) for listed_id in listed_ids] == [f"file-on-{reached_sku}"]
     assert {sku: route.call_count for sku, route in list_routes.items()} == {
+        sku: int(sku == reached_sku) for sku in _MIXED_GROUP_SKUS
+    }
+
+    opened: Final = client.get(
+        f"/v1/files/{listed_ids[0]}", headers={"Authorization": "Bearer test-key", "x-litellm-model": "gpt-mixed"}
+    )
+
+    assert opened.status_code == 200, opened.text
+    assert {sku: route.call_count for sku, route in retrieve_routes.items()} == {
         sku: int(sku == reached_sku) for sku in _MIXED_GROUP_SKUS
     }
 

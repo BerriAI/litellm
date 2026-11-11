@@ -15,6 +15,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    BatchFileListing,
     apply_team_provider_credentials,
     apply_unified_file_ids,
     batch_deployment_id,
@@ -28,9 +29,11 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
     prepare_data_with_credentials,
+    with_routable_listed_file_ids,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import InternalUsageCache, handle_exception_on_proxy
+from litellm.types.llms.openai import FileListPage, OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -985,6 +988,30 @@ def test_batch_deployment_keeps_a_hinted_deployment_after_the_group_stops_mixing
     )
 
     assert batch_deployment_id(router, "gpt-mixed", preferred_deployment_id=preferred_deployment_id) == expected
+
+
+def _listed_file(file_id: str) -> OpenAIFileObject:
+    return OpenAIFileObject(
+        id=file_id, object="file", bytes=1, created_at=0, filename="batch.jsonl", purpose="batch", status="processed"
+    )
+
+
+def test_listed_batch_files_name_their_deployment_while_managed_file_ids_stay_as_issued():
+    managed_file_id: Final = base64.urlsafe_b64encode(b"litellm_proxy:application/json;unified_id,abc").decode()
+    page: Final = FileListPage(
+        data=[_listed_file("file-raw"), _listed_file(managed_file_id)], first_id="file-raw", last_id=managed_file_id
+    )
+
+    listed: Final = with_routable_listed_file_ids(page, BatchFileListing(model="gpt-mixed", deployment_id="batch-id"))
+
+    provider_file_id: Final = listed.data[0].id
+    assert (
+        decode_model_from_file_id(provider_file_id),
+        get_original_file_id(provider_file_id),
+        decode_deployment_from_file_id(provider_file_id),
+    ) == ("gpt-mixed", "file-raw", "batch-id")
+    assert listed.data[1].id == managed_file_id
+    assert (listed.first_id, listed.last_id) == (provider_file_id, managed_file_id)
 
 
 @pytest.mark.parametrize(

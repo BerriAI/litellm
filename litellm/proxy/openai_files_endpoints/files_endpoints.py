@@ -77,10 +77,12 @@ from litellm.proxy.openai_files_endpoints.batch_guardrails import (
     scan_batch_input_file,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    BatchFileListing,
     _is_base64_encoded_unified_file_id,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     apply_team_provider_credentials,
     authorize_model_for_key,
     batch_deployment_id,
+    batch_file_listing,
     deployment_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
@@ -91,6 +93,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
+    with_routable_listed_file_ids,
 )
 from litellm.proxy.openai_files_endpoints.file_usage_caps import (
     batch_file_record_limit,
@@ -1740,6 +1743,23 @@ def _single_target_model_name(target_model_names: str) -> str | _UnscopedFileLis
     return target_model_names_list[0]
 
 
+def _batch_file_listing(
+    llm_router: Router | None,
+    purpose: str | None,
+    list_owned_files_only: bool,
+    routed_model: str | None,
+    target_model_names: str | None,
+) -> BatchFileListing | None:
+    if list_owned_files_only:
+        return None
+    if routed_model is not None or not target_model_names:
+        return batch_file_listing(llm_router, routed_model, purpose)
+    target_model_name: Final = _single_target_model_name(target_model_names)
+    if isinstance(target_model_name, _UnscopedFileList):
+        return None
+    return batch_file_listing(llm_router, target_model_name, purpose)
+
+
 async def _requested_custom_llm_provider(request: Request, provider: str | None) -> str | None:
     return (
         provider
@@ -1956,6 +1976,13 @@ async def list_files(
             check_file_id_encoding=False,
             purpose=purpose,
         )
+        batch_listing: Final = _batch_file_listing(
+            llm_router=llm_router,
+            purpose=purpose,
+            list_owned_files_only=list_owned_files_only,
+            routed_model=model_used,
+            target_model_names=target_model_names,
+        )
 
         if list_owned_files_only:
             if after and after_id and after != after_id:
@@ -2011,7 +2038,7 @@ async def list_files(
                 model_id=target_model_name,
                 user_api_key_dict=user_api_key_dict,
                 operation_context="file list",
-                deployment_id=batch_deployment_id(llm_router, target_model_name) if purpose == "batch" else None,
+                deployment_id=batch_listing.deployment_id if batch_listing is not None else None,
             )
             prepare_data_with_credentials(data=data, credentials=credentials)
             response = await litellm.afile_list(
@@ -2060,6 +2087,9 @@ async def list_files(
         )
         if _response is not None and isinstance(_response, OpenAIFileObject):
             response = _response
+        response = with_routable_listed_file_ids(  # rebind-ok: listed ids name the batch deployment that holds them
+            response, batch_listing
+        )
 
         ### ALERTING ###
         asyncio.create_task(
