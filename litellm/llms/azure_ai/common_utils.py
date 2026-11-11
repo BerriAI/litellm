@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Literal
@@ -54,6 +55,7 @@ AZURE_AI_AGENTS_SCOPE: Final = "https://ai.azure.com/.default"
 FOUNDRY_PROJECT_PATH_PREFIX: Final = ("api", "projects")
 OPENAI_V1_PATH: Final = ("openai", "v1")
 CHAT_COMPLETIONS_PATH: Final = ("chat", "completions")
+FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
 
 
 def _path_segments(base_url: httpx.URL) -> tuple[str, ...]:
@@ -72,6 +74,10 @@ def foundry_v1_root(base_url: httpx.URL) -> tuple[str, ...] | None:
     segments: Final = _path_segments(base_url)
     route_free: Final = segments[:-2] if segments[-2:] == CHAT_COMPLETIONS_PATH else segments
     return route_free if route_free[-2:] == OPENAI_V1_PATH else None
+
+
+def foundry_resource_path(base_url: httpx.URL) -> str:
+    return FOUNDRY_ROUTE_SUFFIX.sub("", base_url.path.rstrip("/"))
 
 
 def with_foundry_project_scope(params: GenericLiteLLMParams, api_base: str | None) -> GenericLiteLLMParams:

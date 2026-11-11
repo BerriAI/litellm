@@ -1,11 +1,9 @@
-import re
 from typing import Final
 
 import httpx
 
+from litellm.llms.azure_ai.common_utils import foundry_resource_path
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
-
-_FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
 
 
 class AzureAIDecisionsConfig(BaseDecisionsConfig):
@@ -20,5 +18,5 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         url: Final = httpx.URL(api_base)
-        resource_path: Final = _FOUNDRY_ROUTE_SUFFIX.sub("", url.path.rstrip("/"))
+        resource_path: Final = foundry_resource_path(url)
         return str(url.copy_with(path=f"{resource_path}{self.path}", query=None, fragment=None))
