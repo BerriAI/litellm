@@ -6008,6 +6008,34 @@ async def test_a_responses_websocket_closed_mid_turn_keeps_its_tpm_reservation_b
 
 
 @pytest.mark.asyncio
+async def test_a_cut_responses_websocket_keeps_its_tpm_when_its_failure_row_settles_while_the_close_waits() -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    api_key: Final = hash_token("sk-responses-websocket-cut-turn-race")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, tpm_limit=100, metadata={"default_estimated_output_tokens": 60})
+    tokens_key: Final = _counter("api_key", api_key)
+    await _admit_responses_websocket(handler, cache, auth, "cut-socket")
+    reserved: Final = int(_local(handler, tokens_key) or 0)
+
+    async with get_or_create_request_stash().parallel_slot_release_lock:
+        failure_row: Final = asyncio.create_task(
+            handler.async_post_call_failure_hook(
+                request_data={"model": "gpt-4o-mini", "litellm_call_id": "cut-socket"},
+                original_exception=RuntimeError("client left mid-turn"),
+                user_api_key_dict=auth,
+            )
+        )
+        closing: Final = asyncio.create_task(
+            proxy_logging_obj.arelease_responses_websocket_slot(auth, "turn_unfinished")
+        )
+        await asyncio.sleep(0)
+    await asyncio.gather(failure_row, closing)
+
+    assert reserved > 0
+    assert int(_local(handler, tokens_key) or 0) == reserved
+
+
+@pytest.mark.asyncio
 async def test_a_responses_websocket_close_refunds_its_tpm_only_once_its_turns_logged() -> None:
     cache: Final = DualCache()
     handler, proxy_logging_obj = _responses_websocket_limiter(cache)

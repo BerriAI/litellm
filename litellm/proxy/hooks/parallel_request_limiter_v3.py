@@ -5310,7 +5310,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 "Error releasing TPM reservation on post-call failure: %s", release_error, exc_info=release_error
             )
 
-    @with_service_target("rate_limits")
+    @with_service_target(RATE_LIMITS_TARGET)
     async def async_release_responses_websocket_admission(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -5327,6 +5327,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         release_error: Final = await self._release_stashed_admission(
             lambda stash: self._settle_closed_responses_websocket(stash, close, turns_logged, parent_otel_span),
             parent_otel_span,
+            keeps_reservation=close == "turn_unfinished",
         )
         if release_error is not None:
             verbose_proxy_logger.error(
@@ -5351,9 +5352,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 await self._settle_stashed_reservations(
                     stash, MappingProxyType({}), parent_otel_span, refunds_ptu=False, guards_late_refund=True
                 )
-            case "turn_unfinished":
-                stash.mark_reservation_released()
-            case "settled_by_its_log":
+            case "turn_unfinished" | "settled_by_its_log":
                 return
             case _:
                 assert_never(close)
@@ -5362,11 +5361,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         settle: Callable[[RequestRateLimiterStash], Awaitable[None]],
         parent_otel_span: Span | None,
+        *,
+        keeps_reservation: bool = False,
     ) -> Exception | None:
         try:
             stash: Final = get_request_stash()
             if stash is None:
                 return None
+            if keeps_reservation:
+                stash.mark_reservation_released()
             await self._release_stashed_parallel_slot(stash, parent_otel_span)
             await settle(stash)
         except Exception as e:

@@ -7972,6 +7972,48 @@ async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("code", "reason"), [(1000, ""), (1006, "connection died")], ids=["normal", "abnormal"])
+async def test_websocket_passthrough_closes_the_client_before_its_release_waits_for_turn_logging(
+    code: int, reason: str
+) -> None:
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    upstream_ws: Final = ClosingUpstreamWebSocket(
+        ConnectionClosedError(rcvd=Close(code, reason), sent=None, rcvd_then_sent=None)
+    )
+    websocket: Final = _client_websocket(_pending_receive)
+    release_started: Final = asyncio.Event()
+    release_may_finish: Final = asyncio.Event()
+
+    async def release_waiting_for_turn_logging(*args: object) -> None:
+        release_started.set()
+        await release_may_finish.wait()
+
+    with _patched_websocket_passthrough_environment(upstream_ws) as proxy_logging:
+        proxy_logging.arelease_responses_websocket_slot = AsyncMock(side_effect=release_waiting_for_turn_logging)
+        session: Final = asyncio.create_task(
+            websocket_passthrough_request(
+                websocket=websocket,
+                target="wss://api.openai.com/v1/responses",
+                custom_headers={"Authorization": "Bearer sk-provider"},
+                user_api_key_dict=UserAPIKeyAuth(),
+                forward_headers=False,
+                endpoint="/openai_passthrough/v1/responses",
+                accept_websocket=False,
+                upstream_frame_kind=openai_websocket_frame_kind,
+            )
+        )
+        await asyncio.wait_for(release_started.wait(), timeout=10)
+        closes_while_the_release_waited: Final = tuple(websocket.close.await_args_list)
+        release_may_finish.set()
+        await asyncio.wait_for(session, timeout=10)
+
+    assert closes_while_the_release_waited == (call(),)
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_websocket_passthrough_rewrites_alias_of_unrecognised_upstream_model():
     llm_router = MagicMock()
     llm_router.registry.return_value.deployments.return_value = [

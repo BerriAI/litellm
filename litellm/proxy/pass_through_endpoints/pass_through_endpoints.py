@@ -3673,11 +3673,13 @@ async def websocket_passthrough_request(
         if _client_socket_is_open(websocket):
             await websocket.close(code=1011, reason="WebSocket passthrough error")
     finally:
-        await proxy_logging_obj.arelease_responses_websocket_slot(
-            user_api_key_dict, _passthrough_close(upstream_frame_kind, unfinished_turn), socket_logging.finished
-        )
-        if _client_socket_is_open(websocket):
-            await websocket.close()
+        try:
+            if _client_socket_is_open(websocket):
+                await websocket.close()
+        finally:
+            await proxy_logging_obj.arelease_responses_websocket_slot(
+                user_api_key_dict, _passthrough_close(upstream_frame_kind, unfinished_turn), socket_logging.finished
+            )
 
 
 def _content_type_header(response: httpx.Response) -> str:

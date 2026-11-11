@@ -2648,7 +2648,7 @@ class TestResponsesWSFirstFrameModelAuth:
         assert processor.common_processing_pre_call_logic.await_args.kwargs["skip_guardrails"] is True
         assert callable(routed["responses_ws_frame_guard"])
         assert mock_route_request.await_args.kwargs["route_type"] == "_aresponses_websocket"
-        ws.close.assert_not_awaited()
+        ws.close.assert_awaited_once_with()
 
     @pytest.mark.asyncio
     async def test_frame_guard_runs_the_guardrail_walk_on_the_frame_body_and_returns_its_records(self):
@@ -3593,7 +3593,7 @@ class TestResponsesWSFirstFrameModelAuth:
                 user_api_key_dict=user_api_key_dict,
             )
 
-        ws.close.assert_not_awaited()
+        ws.close.assert_awaited_once_with()
         if not provider_rejected:
             proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
             return
@@ -3691,6 +3691,71 @@ class TestResponsesWSFirstFrameModelAuth:
             "model_group": "gpt-4o-mini",
             "standard_logging_guardrail_information": [{"guardrail_cost": 0.2}, {"guardrail_cost": 0.4}],
         }
+
+    async def test_the_socket_closes_its_client_before_its_release_waits_for_turn_logging(self):
+        from starlette.websockets import WebSocketState
+
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+
+        ws: Final = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.client_state = WebSocketState.CONNECTED
+        ws.application_state = WebSocketState.CONNECTED
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.close = AsyncMock()
+        processor: Final = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        release_started: Final = asyncio.Event()
+        release_may_finish: Final = asyncio.Event()
+
+        async def release_waiting_for_turn_logging(*args: object) -> None:
+            release_started.set()
+            await release_may_finish.wait()
+
+        async def upstream_ended() -> None:
+            return None
+
+        proxy_logging_obj: Final = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(side_effect=release_waiting_for_turn_logging)
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; when the client is closed is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands back a relay whose upstream ended
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=upstream_ended(),
+            ),
+            patch(  # test-quality-ok: the release goes through the proxy's limiter hook
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            endpoint: Final = asyncio.ensure_future(
+                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=MagicMock())
+            )
+            await asyncio.wait_for(release_started.wait(), timeout=1)
+            closes_while_the_release_waited: Final = tuple(ws.close.await_args_list)
+            release_may_finish.set()
+            await asyncio.wait_for(endpoint, timeout=1)
+
+        assert closes_while_the_release_waited == (call(),)
+        ws.close.assert_awaited_once_with()
 
     @pytest.mark.parametrize(
         ("ending", "sessions_after_close", "admitted_while_its_turn_logged"),
@@ -3822,6 +3887,8 @@ class TestResponsesWSFirstFrameModelAuth:
             loop.close()
 
     async def _assert_session_limit_releases_slot_before_failure_row(self, relay_outcome: str) -> None:
+        from starlette.websockets import WebSocketState
+
         from litellm.exceptions import RateLimitError
         from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
 
@@ -3835,6 +3902,7 @@ class TestResponsesWSFirstFrameModelAuth:
             return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
         async def close_over_the_network(**kwargs):
+            ws.application_state = WebSocketState.DISCONNECTED
             await asyncio.sleep(0)
 
         ws.close = AsyncMock(side_effect=close_over_the_network)
@@ -3907,7 +3975,13 @@ class TestResponsesWSFirstFrameModelAuth:
             limit_close = call(code=1000, reason="Session duration limit reached")
             crash_close = call(code=1011, reason="Internal server error")
             crashed = relay_outcome == "crashes_despite_the_cancel"
-            assert ws.close.await_args_list == ([limit_close, crash_close] if crashed else [limit_close])
+            closes: Final = {
+                "still_relaying": [limit_close],
+                "already_returned": [call(), limit_close],
+                "returns_despite_the_cancel": [limit_close],
+                "crashes_despite_the_cancel": [limit_close, crash_close],
+            }
+            assert ws.close.await_args_list == closes[relay_outcome]
             proxy_logging_obj.arelease_responses_websocket_slot.assert_awaited_once()
             assert not row_written.is_set()
             row_may_finish.set()
@@ -3999,6 +4073,8 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     async def test_a_crashed_socket_whose_failure_row_cannot_be_built_still_gets_its_error_frame_and_close(self):
+        from starlette.websockets import WebSocketState
+
         from litellm.exceptions import RateLimitError
         from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
 
@@ -4014,7 +4090,12 @@ class TestResponsesWSFirstFrameModelAuth:
         sent = []
         closes = []
         ws.send_text = AsyncMock(side_effect=sent.append)
-        ws.close = AsyncMock(side_effect=lambda code, reason: closes.append((code, reason)))
+
+        def close(code: int, reason: str) -> None:
+            ws.application_state = WebSocketState.DISCONNECTED
+            closes.append((code, reason))
+
+        ws.close = AsyncMock(side_effect=close)
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
             return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
@@ -4068,6 +4149,8 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(self):
+        from starlette.websockets import WebSocketState
+
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
         )
@@ -4082,7 +4165,11 @@ class TestResponsesWSFirstFrameModelAuth:
             return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
         ws.send_text = AsyncMock()
-        ws.close = AsyncMock()
+
+        def close(**kwargs: object) -> None:
+            ws.application_state = WebSocketState.DISCONNECTED
+
+        ws.close = AsyncMock(side_effect=close)
 
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(

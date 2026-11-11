@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
-from starlette.websockets import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocket, WebSocketDisconnect, WebSocketState
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -2716,14 +2716,24 @@ async def _responses_websocket_session(
         try:
             failure_row: Final = await relay_and_bill_failure()
         finally:
-            await proxy_logging_obj.arelease_responses_websocket_slot(
-                user_api_key_dict,
-                "turn_unfinished" if unfinished_turn.is_set() else "turns_finished",
-                socket_logging.finished,
-            )
+            try:
+                await _close_if_open(websocket)
+            finally:
+                await proxy_logging_obj.arelease_responses_websocket_slot(
+                    user_api_key_dict,
+                    "turn_unfinished" if unfinished_turn.is_set() else "turns_finished",
+                    socket_logging.finished,
+                )
     if failure_row is not None:
         with contextlib.suppress(Exception):
             await asyncio.shield(failure_row)
+
+
+async def _close_if_open(websocket: WebSocket) -> None:
+    if WebSocketState.DISCONNECTED in (websocket.client_state, websocket.application_state):
+        return
+    with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
+        await websocket.close()
 
 
 @router.websocket("/v1/responses")
