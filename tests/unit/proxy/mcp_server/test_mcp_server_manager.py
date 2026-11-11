@@ -16436,6 +16436,12 @@ class _DiscoveryClock:
         return self.now
 
 
+def _pin_listing_clock(monkeypatch: pytest.MonkeyPatch, seconds_per_read: float = 0.0) -> None:
+    ticks: Final = SimpleNamespace(monotonic=functools.partial(next, itertools.count(100.0, seconds_per_read)))
+    monkeypatch.setattr("litellm.mcp_client.tools.time", ticks)
+    monkeypatch.setattr("litellm.mcp_client.client.time", ticks)
+
+
 from mcp.types import JSONRPCMessage, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
 from pydantic import TypeAdapter
 
@@ -16752,7 +16758,10 @@ def _server_with_tools_list_ttl(seconds: int) -> MCPServer:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cursor", (..., None), ids=("full_walk", "first_page"))
-async def test_tools_list_is_served_from_cache_within_the_upstream_ttl(cursor: str | None | EllipsisType) -> None:
+async def test_tools_list_is_served_from_cache_within_the_upstream_ttl(
+    cursor: str | None | EllipsisType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pin_listing_clock(monkeypatch)
     clock: Final = _DiscoveryClock()
     manager: Final = MCPServerManager(discovery_clock=clock)
     upstream: Final = _DiscoveryUpstream()
@@ -16760,11 +16769,11 @@ async def test_tools_list_is_served_from_cache_within_the_upstream_ttl(cursor: s
     with _mcp_upstream(upstream.respond):
         first: Final = await _list_discovery_tools(manager, cursor)
         assert [tool.name for tool in first.tools] == ["discovery-example"]
-        assert 29000 < first.ttl_ms <= 30000
-        clock.now = 29.9
+        assert first.ttl_ms == 30000
+        clock.now = 29.875
         cached: Final = await _list_discovery_tools(manager, cursor, add_prefix=False)
         assert [tool.name for tool in cached.tools] == ["example"]
-        assert 0 < cached.ttl_ms <= 100
+        assert cached.ttl_ms == 125
         assert upstream.initializes == 1
         clock.now = 30.001
         assert [tool.name for tool in (await _list_discovery_tools(manager, cursor)).tools] == ["discovery-example"]
@@ -16787,9 +16796,7 @@ async def test_tools_list_is_not_cached_without_an_upstream_ttl(cursor: str | No
 async def test_tools_list_full_walk_takes_the_shortest_page_ttl_and_pages_of_a_longer_listing_are_not_stored(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        "litellm.mcp_client.tools.time", SimpleNamespace(monotonic=functools.partial(next, itertools.count(100.0, 0.5)))
-    )
+    _pin_listing_clock(monkeypatch, seconds_per_read=0.5)
     clock: Final = _DiscoveryClock()
     manager: Final = MCPServerManager(discovery_clock=clock)
     upstream: Final = _DiscoveryUpstream()
@@ -16860,9 +16867,9 @@ async def test_tools_list_is_kept_for_the_server_ttl_whatever_the_upstream_decla
     with _mcp_upstream(upstream.respond):
         first: Final = await _list_discovery_tools(manager, cursor, server)
         assert first.ttl_ms == admin_seconds * 1000
-        clock.now = admin_seconds - 0.1
+        clock.now = admin_seconds - 0.125
         cached: Final = await _list_discovery_tools(manager, cursor, server)
-        assert 0 < cached.ttl_ms <= 100
+        assert cached.ttl_ms == 125
         assert upstream.initializes == 1
         clock.now = admin_seconds + 0.001
         assert len((await _list_discovery_tools(manager, cursor, server)).tools) == 1
@@ -17009,9 +17016,12 @@ async def test_tools_list_requests_in_flight_share_an_upstream_fetch_only_under_
     with _mcp_upstream(upstream.respond):
         listings: Final = tuple(asyncio.create_task(_list_discovery_tools(manager, server=server)) for _ in range(3))
         await upstream.entered.wait()
-        await asyncio.sleep(0.2)
+        for _ in range(200):
+            await asyncio.sleep(0)
+        in_flight: Final = sum(method == "tools/list" for method, _auth in upstream.requests)
         upstream.release.set()
         assert [len(listing.tools) for listing in await asyncio.gather(*listings)] == [1, 1, 1]
+    assert in_flight == upstream_fetches
     assert sum(method == "tools/list" for method, _auth in upstream.requests) == upstream_fetches
 
 
