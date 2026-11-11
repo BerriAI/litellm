@@ -28,7 +28,6 @@ class FeedbackEval(Frozen):
     gold_turns: int
     labeled_turns: int
     failed_turns: int
-    confident_share: float
     fine_grained_accuracy: float
     three_way_accuracy: float
     any_feedback_accuracy: float
@@ -43,7 +42,6 @@ class Mismatch(Frozen):
     turn_idx: int
     gold: FeedbackLabelName
     predicted: FeedbackLabelName
-    confident: bool
     rationale: str
 
 
@@ -58,7 +56,7 @@ def three_way(label: FeedbackLabelName) -> ThreeWay:
 
 
 def predicted_corrective(label: FeedbackLabel) -> bool:
-    return label.confident and label.label in CORRECTIVE_LABELS
+    return label.label in CORRECTIVE_LABELS
 
 
 def paired(
@@ -95,7 +93,6 @@ def evaluate(gold: Iterable[GoldFeedback], outcomes: Iterable[LabelOutcome]) -> 
         gold_turns=len(pairs) + failed,
         labeled_turns=len(pairs),
         failed_turns=failed,
-        confident_share=_share(p.confident for _, p in pairs),
         fine_grained_accuracy=_share(g is p for g, p in both),
         three_way_accuracy=_share(three_way(g) == three_way(p) for g, p in both),
         any_feedback_accuracy=_share(
@@ -121,7 +118,6 @@ def mismatches(gold: Iterable[GoldFeedback], outcomes: Iterable[LabelOutcome]) -
             turn_idx=g.turn_idx,
             gold=g.label,
             predicted=p.label,
-            confident=p.confident,
             rationale=p.rationale,
         )
         for g, p in sorted(pairs, key=lambda pair: (pair[0].session_id, pair[0].turn_idx))

@@ -43,10 +43,24 @@ class GoldFeedback(Frozen):
     label: FeedbackLabelName
 
 
-class LabelerVerdict(Frozen):
+class ChatMessage(Frozen):
+    role: str
+    content: str
+
+
+class Conversation(Frozen):
+    session_id: str
+    messages: tuple[ChatMessage, ...]
+
+
+class TurnVerdict(Frozen):
+    turn: int
     label: FeedbackLabelName
-    confident: bool
     rationale: str
+
+
+class ConversationVerdict(Frozen):
+    labels: tuple[TurnVerdict, ...]
 
 
 class FeedbackLabel(Frozen):
@@ -54,7 +68,6 @@ class FeedbackLabel(Frozen):
     session_id: str
     turn_idx: int
     label: FeedbackLabelName
-    confident: bool
     rationale: str
     labeler_model: str
     prompt_version: str

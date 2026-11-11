@@ -60,6 +60,22 @@ def test_sparse_labels_align_by_feedback_text():
     assert only.gold.label is FeedbackLabelName.REPHRASING
 
 
+def test_sparse_duplicate_labels_for_one_turn_keep_the_first():
+    parse = parse_emnlp([_row(CONVERSATION, ["NEG_1", "POS"], ["now a limerick", "a limerick"])], "sparse")
+    (only,) = parse.examples
+    assert only.gold.label is FeedbackLabelName.REPHRASING
+    assert (parse.duplicate_feedback, parse.unaligned_feedback) == (1, 0)
+
+
+def test_kept_conversations_carry_the_full_transcript_and_skipped_ones_do_not():
+    good = _row(CONVERSATION, ["NEG_2", "NEU"], ["no, it must be about rain", ""], conversation_id="good")
+    bad = _row(CONVERSATION, ["NEG_2"], ["x"], conversation_id="bad")
+    parse = parse_emnlp([good, bad], "dense")
+    (conversation,) = parse.conversations
+    assert conversation.session_id == parse.examples[0].turn.session_id
+    assert [(m.role, m.content) for m in conversation.messages] == CONVERSATION
+
+
 def test_sparse_feedback_without_a_matching_turn_is_counted_as_unaligned():
     parse = parse_emnlp([_row(CONVERSATION, ["NEG_1", "POS"], ["now a limerick", "great job"])], "sparse")
     assert len(parse.examples) == 1

@@ -15,12 +15,11 @@ def _turn(session, idx, model="haiku", group="mms", next_turn="it still fails"):
     )
 
 
-def _label(session, idx, label, confident=True):
+def _label(session, idx, label):
     return FeedbackLabel(
         session_id=session,
         turn_idx=idx,
         label=label,
-        confident=confident,
         rationale="r",
         labeler_model="m",
         prompt_version="v",
@@ -32,19 +31,19 @@ def _stats(turns, outcomes):
     return {(s.model_id, s.group_key): s for s in correction_stats(turns, outcomes)}
 
 
-def test_only_confident_neg1_to_neg3_count_as_corrections_and_neg4_is_not_observed():
+def test_neg1_to_neg3_count_as_corrections_and_neg4_is_not_observed():
     turns = [_turn("s", i) for i in range(6)]
     outcomes = [
         _label("s", 0, FeedbackLabelName.REPHRASING),
         _label("s", 1, FeedbackLabelName.MAKE_AWARE_WITH_CORRECTION),
-        _label("s", 2, FeedbackLabelName.MAKE_AWARE_WITHOUT_CORRECTION, confident=False),
+        _label("s", 2, FeedbackLabelName.MAKE_AWARE_WITHOUT_CORRECTION),
         _label("s", 3, FeedbackLabelName.ASK_FOR_CLARIFICATION),
         _label("s", 4, FeedbackLabelName.POSITIVE),
         _label("s", 5, FeedbackLabelName.NO_FEEDBACK),
     ]
     stats = _stats(turns, outcomes)[("haiku", "mms")]
-    assert (stats.correction_count, stats.correction_observations) == (2, 4)
-    assert stats.correction_rate == 0.5
+    assert (stats.correction_count, stats.correction_observations) == (3, 5)
+    assert stats.correction_rate == 0.6
 
 
 def test_turns_without_next_user_turn_label_or_with_failed_label_are_not_observed():

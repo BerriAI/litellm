@@ -19,7 +19,7 @@ def turn_key(session_id: str, turn_idx: int) -> TurnKey:
 
 
 def observed_label(turn: FeedbackTurn, outcome: LabelOutcome | None) -> FeedbackLabelName | None:
-    if turn.next_user_turn is None or not isinstance(outcome, FeedbackLabel) or not outcome.confident:
+    if turn.next_user_turn is None or not isinstance(outcome, FeedbackLabel):
         return None
     if outcome.label is FeedbackLabelName.ASK_FOR_CLARIFICATION:
         return None
