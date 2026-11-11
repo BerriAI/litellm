@@ -320,7 +320,7 @@ impl ThinkingConfig {
 #[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesRequest {
     pub model: String,
-    pub messages: Vec<Message>,
+    pub messages: Vec<Recognized<Message>>,
     #[serde(flatten)]
     pub params: MessagesOptionalParams,
 }
@@ -329,7 +329,7 @@ pub struct MessagesRequest {
 #[derive(Default)]
 pub struct MessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u64>,
+    pub max_tokens: Option<Recognized<u64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<SystemPrompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -339,11 +339,11 @@ pub struct MessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f64>,
+    pub temperature: Option<Recognized<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f64>,
+    pub top_p: Option<Recognized<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<i64>,
+    pub top_k: Option<Recognized<i64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Recognized<MessagesTool>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -447,7 +447,7 @@ mod tests {
 
         assert_eq!(
             (
-                request.params.max_tokens,
+                request.params.max_tokens.clone(),
                 request.params.stream,
                 request
                     .params
@@ -456,9 +456,35 @@ mod tests {
                     .map(String::as_str)
                     .collect::<Vec<_>>(),
             ),
-            (Some(16_u64), Some(true), vec!["safeguards"])
+            (
+                Some(Recognized::Known(16_u64)),
+                Some(true),
+                vec!["safeguards"]
+            )
         );
         assert_eq!(serde_json::to_value(request).unwrap(), body);
+    }
+
+    #[rstest]
+    #[case::numeric_string(json!({"max_tokens": "1024", "temperature": "0.5", "top_p": "x", "top_k": "5"}))]
+    #[case::floats(json!({"max_tokens": 1024.0, "top_k": 1.5}))]
+    #[case::booleans(json!({"max_tokens": true, "temperature": false}))]
+    #[case::wide_integers(json!({"max_tokens": 18_446_744_073_709_551_615_u64, "top_k": 9_223_372_036_854_775_808_u64}))]
+    #[case::nested(json!({"temperature": [1], "top_p": {"p": 1}}))]
+    fn scalar_params_of_any_type_round_trip_unchanged(#[case] params: Value) {
+        let body = Value::Object(
+            [
+                ("model".to_string(), json!("m")),
+                (
+                    "messages".to_string(),
+                    json!([{"role": "user", "content": "hi"}]),
+                ),
+            ]
+            .into_iter()
+            .chain(params.as_object().unwrap().clone())
+            .collect(),
+        );
+        assert_eq!(round_trip::<MessagesRequest>(&body), body);
     }
 
     #[test]

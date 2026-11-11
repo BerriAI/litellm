@@ -3,7 +3,7 @@ use litellm_llms_types::{
         AdaptiveThinking, EnabledThinking, Message, MessagesOptionalParams, MessagesRequest,
         ThinkingConfig, ThinkingDisplay,
     },
-    recognized::Recognized,
+    recognized::{Recognized, map_known_runs},
 };
 use serde_json::{Value, json};
 
@@ -22,9 +22,9 @@ pub fn shape_anthropic_messages_request(
 ) -> Result<MessagesRequest, Error> {
     Ok(MessagesRequest {
         messages: if options.presanitized {
-            strip_provider_specific_fields(request.messages)
+            map_known_runs(request.messages, strip_provider_specific_fields)
         } else {
-            sanitize_anthropic_messages(request.messages)
+            map_known_runs(request.messages, sanitize_anthropic_messages)
         },
         params: MessagesOptionalParams {
             metadata: request

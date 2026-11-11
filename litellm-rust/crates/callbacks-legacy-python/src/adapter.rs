@@ -9,7 +9,7 @@ use litellm_host::{
     interceptors::{RawResponse, RequestContext, RetriedRequest, RetryReason, WireRequest},
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
-use litellm_host_python::{Error as HostError, HookStep, from_py, to_py};
+use litellm_host_python::{Error as HostError, HookStep, from_py, json_from_py, json_to_py, to_py};
 use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
@@ -586,9 +586,13 @@ impl LegacyLogging {
             context,
             self.logged_request_params(context).as_ref(),
         )?;
-        let body = to_py(py, &wire.body)?
-            .into_bound(py)
-            .cast_into::<PyDict>()?;
+        let lossless = self.operation == LoggingOperation::Messages;
+        let body = if lossless {
+            json_to_py(py, &wire.body)?
+        } else {
+            to_py(py, &wire.body)?.into_bound(py)
+        }
+        .cast_into::<PyDict>()?;
         for (name, sent) in wire.body.as_object().into_iter().flatten() {
             if let Some(value) = self.caller_value(py, name, sent)? {
                 body.set_item(name, value)?;
@@ -631,7 +635,11 @@ impl LegacyLogging {
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
             .collect::<PyResult<Vec<_>>>()?;
         Ok(HookStep::Ready(Box::new(WireRequest {
-            body: from_py(&body)?,
+            body: if lossless {
+                json_from_py(body.as_any())?
+            } else {
+                from_py(&body)?
+            },
             headers,
             ..*wire
         })))

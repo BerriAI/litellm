@@ -24,6 +24,40 @@ impl<T> Recognized<T> {
             Self::Unrecognized(_) => None,
         }
     }
+
+    pub fn map_known(self, f: impl FnOnce(T) -> T) -> Self {
+        match self {
+            Self::Known(value) => Self::Known(f(value)),
+            unrecognized => unrecognized,
+        }
+    }
+}
+
+pub fn map_known_runs<T>(
+    items: Vec<Recognized<T>>,
+    mut f: impl FnMut(Vec<T>) -> Vec<T>,
+) -> Vec<Recognized<T>> {
+    let mut mapped = Vec::with_capacity(items.len());
+    let mut run = Vec::new();
+    for item in items {
+        match item {
+            Recognized::Known(value) => run.push(value),
+            unrecognized => {
+                if !run.is_empty() {
+                    mapped.extend(
+                        f(std::mem::take(&mut run))
+                            .into_iter()
+                            .map(Recognized::Known),
+                    );
+                }
+                mapped.push(unrecognized);
+            }
+        }
+    }
+    if !run.is_empty() {
+        mapped.extend(f(run).into_iter().map(Recognized::Known));
+    }
+    mapped
 }
 
 #[cfg(test)]
@@ -31,6 +65,37 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use serde_json::json;
+
+    #[test]
+    fn runs_of_known_items_are_mapped_around_unrecognized_ones() {
+        let items = vec![
+            Recognized::Known(1),
+            Recognized::Known(2),
+            Recognized::Unrecognized(json!("x")),
+            Recognized::Known(3),
+        ];
+        let mut runs = Vec::new();
+        let mapped = map_known_runs(items, |run: Vec<u64>| {
+            runs.push(run.clone());
+            run.into_iter()
+                .filter(|item| *item != 2)
+                .map(|item| item * 10)
+                .collect()
+        });
+        assert_eq!(runs, vec![vec![1, 2], vec![3]]);
+        assert_eq!(
+            mapped,
+            vec![
+                Recognized::Known(10),
+                Recognized::Unrecognized(json!("x")),
+                Recognized::Known(30),
+            ]
+        );
+        assert_eq!(
+            map_known_runs(Vec::<Recognized<u64>>::new(), |run| run),
+            vec![]
+        );
+    }
 
     #[rstest]
     #[case::known(json!(7), Recognized::Known(7))]

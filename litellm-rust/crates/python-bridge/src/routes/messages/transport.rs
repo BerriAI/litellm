@@ -6,7 +6,7 @@ use litellm_host::{
     machine::HostServices,
     protocol::{Protocol, Reply},
 };
-use litellm_host_python::to_py;
+use litellm_host_python::{json_to_py, to_py};
 use litellm_inference_messages::{
     Delivered, Error, Transport, TransportBody, TransportRequest, TransportResponse,
 };
@@ -161,7 +161,7 @@ impl HostedTransport {
                     .as_ref()
                     .ok_or(litellm_host_python::Error::MissingState)?;
                 let body = match &sent.body {
-                    TransportBody::Json(body) => to_py(py, body)?,
+                    TransportBody::Json(body) => json_to_py(py, body)?.unbind(),
                     TransportBody::Signed(bytes) => PyBytes::new(py, bytes).into_any().unbind(),
                 };
                 let awaitable = py

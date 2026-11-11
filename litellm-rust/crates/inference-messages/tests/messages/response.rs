@@ -365,7 +365,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
 }
 
 #[rstest]
-#[case::mistyped_param(json!({"model": MODEL, "messages": [], "max_tokens": "16"}))]
+#[case::mistyped_param(json!({"model": MODEL, "messages": "hello", "max_tokens": 16}))]
 #[case::missing_messages(json!({"model": MODEL, "max_tokens": 16}))]
 fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
     let error = messages_body(object(raw)).expect_err("the body is rejected");

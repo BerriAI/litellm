@@ -306,12 +306,19 @@ pub fn has_advisor_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
         .any(|tool| matches!(tool, Recognized::Known(MessagesTool::Advisor { .. })))
 }
 
-pub fn requires_native_compaction_beta(compaction: Option<&Value>, messages: &[Message]) -> bool {
+pub fn requires_native_compaction_beta(
+    compaction: Option<&Value>,
+    messages: &[Recognized<Message>],
+) -> bool {
     compaction.is_some()
-        || messages.iter().flat_map(Message::blocks).any(|block| {
-            block.is_type(ContentBlockType::Compaction)
-                && block.signature.as_deref().is_some_and(|s| !s.is_empty())
-        })
+        || messages
+            .iter()
+            .filter_map(Recognized::known)
+            .flat_map(Message::blocks)
+            .any(|block| {
+                block.is_type(ContentBlockType::Compaction)
+                    && block.signature.as_deref().is_some_and(|s| !s.is_empty())
+            })
 }
 
 fn is_blank(text: Option<&str>) -> bool {
@@ -803,7 +810,7 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
-    fn history(messages: Value) -> Vec<Message> {
+    fn history(messages: Value) -> Vec<Recognized<Message>> {
         serde_json::from_value(messages).unwrap()
     }
 

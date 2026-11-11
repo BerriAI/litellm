@@ -39,7 +39,7 @@ use super::{
 use litellm_inference::{
     caching::{CacheRequest, CallCache},
     context::CallContext,
-    outbound::outbound_request,
+    outbound::raw_leaf_outbound_request,
 };
 
 struct ProviderCall {
@@ -571,7 +571,7 @@ fn hosted_request(
         .iter()
         .map(|(name, _)| name.clone())
         .collect();
-    let signed = outbound_request(authenticated, url, body, None)?;
+    let signed = raw_leaf_outbound_request(authenticated, url, body, None)?;
     let headers = signed
         .headers()
         .iter()
@@ -696,7 +696,8 @@ async fn send(
     timeout: Duration,
     stream: bool,
 ) -> Result<reqwest::Response, Error> {
-    let request = outbound_request(authenticated, url, body, (!stream).then_some(timeout))?;
+    let request =
+        raw_leaf_outbound_request(authenticated, url, body, (!stream).then_some(timeout))?;
     if !stream {
         return Ok(litellm_inference::outbound::send(request, http).await?);
     }
@@ -1639,7 +1640,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(call.wire.url, format!("{base}{path}"));
-        let signed = outbound_request(
+        let signed = raw_leaf_outbound_request(
             Authenticated {
                 headers: call.wire.headers,
                 signer: call.signer,
