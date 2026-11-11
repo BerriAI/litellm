@@ -444,3 +444,50 @@ async def test_a_rejected_realtime_attempt_does_not_free_a_slot_it_never_took():
     await proxy_logging_obj.arelease_responses_websocket_slot(auth)
     after_socket_close = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
     assert after_socket_close["current_requests"] == 0, after_socket_close
+
+
+@pytest.mark.asyncio
+async def test_team_max_parallel_requests_is_enforced_across_keys_in_the_team():
+    from fastapi import HTTPException
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    team_id = "legacy-team"
+
+    def team_key(raw: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key=hash_token(raw), team_id=team_id, team_max_parallel_requests=2
+        )
+
+    for raw in ("sk-a", "sk-b"):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key(raw),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key("sk-a"),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+    assert "rate limit type = team" in exc_info.value.detail
+    assert "max_parallel_requests: 2" in exc_info.value.detail
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-c"),
+            team_id="other-team",
+            team_max_parallel_requests=2,
+        ),
+        cache=cache,
+        data={"model": "gpt-4o-mini"},
+        call_type="",
+    )

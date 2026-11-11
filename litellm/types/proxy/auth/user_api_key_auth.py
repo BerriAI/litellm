@@ -64,6 +64,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_tpm_limit: int | None = None
     team_rpm_limit: int | None = None
     team_tpd_limit: int | None = None
+    team_max_parallel_requests: int | None = None
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_model_max_budget: dict[str, object] | None = None

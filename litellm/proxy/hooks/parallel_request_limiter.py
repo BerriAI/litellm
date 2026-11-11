@@ -459,6 +459,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if team_id is not None:
             team_tpm_limit = user_api_key_dict.team_tpm_limit
             team_rpm_limit = user_api_key_dict.team_rpm_limit
+            team_max_parallel_requests = (
+                user_api_key_dict.team_max_parallel_requests
+                if user_api_key_dict.team_max_parallel_requests is not None
+                else sys.maxsize
+            )
 
             if team_tpm_limit is None:
                 team_tpm_limit = sys.maxsize
@@ -472,7 +477,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=sys.maxsize,  # TODO: Support max parallel requests for a team
+                max_parallel_requests=team_max_parallel_requests,
                 current=cache_objects["request_count_team_id"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=team_tpm_limit,
