@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 
 from litellm.proxy.common_utils.fips_signature import openssl_signs_whole_messages, sign_message, verify_message
@@ -73,3 +73,14 @@ def test_sign_message_and_verify_message_refuse_bytes_that_are_not_a_key() -> No
 def test_sign_message_refuses_a_digest_openssl_does_not_know() -> None:
     with pytest.raises(ValueError, match="OpenSSL refused to sign"):
         sign_message(_PRIVATE_DER, _MESSAGE, "sha257")
+
+
+@_needs_shared_openssl
+def test_verify_message_accepts_only_the_message_an_ecdsa_key_signed() -> None:
+    key: Final = ec.generate_private_key(ec.SECP256R1())
+    public_der: Final = key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    signature: Final = key.sign(_MESSAGE, ec.ECDSA(hashes.SHA256()))
+
+    assert verify_message(public_der, _MESSAGE, signature, "sha256") is True
+    assert verify_message(public_der, b"another message", signature, "sha256") is False
+    assert verify_message(public_der, _MESSAGE, signature, "sha384") is False
