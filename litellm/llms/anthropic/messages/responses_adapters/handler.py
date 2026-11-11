@@ -179,9 +179,10 @@ def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str,
 
 
 def _requests_background(forwarded_kwargs: Mapping[str, object]) -> bool:
-    extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body"))
-    return forwarded_kwargs.get("background") is not None or (
-        extra_body is not None and extra_body.get("background") is not None
+    extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
+    return any(
+        value is not None and value is not False
+        for value in (forwarded_kwargs.get("background"), extra_body.get("background"))
     )
 
 
