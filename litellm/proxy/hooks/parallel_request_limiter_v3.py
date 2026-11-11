@@ -4733,11 +4733,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         reconcile_model: Final = served_model if fell_back or reserved_model is None else reserved_model
         reconcile_models: Final = self._rate_limited_models(reconcile_model)
-        abandoned_scopes: Final = (
-            tuple(sorted(scope for scope in reserved_scopes if scope[0] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS))
-            if fell_back
-            else ()
-        )
 
         pipeline_operations: Final[list[ReservationOperation]] = []
 
@@ -4775,6 +4770,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
         charged_targets: Final = [target for target in targets if target not in key_owned_team_scopes]
+        abandoned_scopes: Final = (
+            tuple(
+                sorted(
+                    scope
+                    for scope in reserved_scopes
+                    if scope[0] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS and scope not in charged_targets
+                )
+            )
+            if fell_back
+            else ()
+        )
         if reserved_tokens > 0 and total_tokens < reserved_tokens:
             verbose_proxy_logger.debug(
                 "Releasing unused TPM budget on success: reserved=%s, actual=%s, release=%s",
