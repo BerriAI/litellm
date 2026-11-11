@@ -34,6 +34,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # 
     encrypt_value_helper,
     get_salt_key,
 )
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.mcp_server.oauth_identity_binding import (
     RefreshTokenPresented,
     credential_binding_matches,
@@ -676,15 +677,22 @@ async def find_mcp_server_identifier_conflict(
     )
 
 
+def _advisory_lock_key(name: str) -> int:
+    """Signed 64-bit Postgres advisory-lock key for ``name``: BLAKE2b-64, or the
+    first 8 bytes of SHA-256 when general_settings.fips_mode is on."""
+    digest: Final = (
+        hashlib.sha256(name.encode()).digest()[:8]
+        if fips_mode_active()
+        else hashlib.blake2b(name.encode(), digest_size=8).digest()
+    )
+    return int.from_bytes(digest, "big", signed=True)
+
+
 def _mcp_identifier_lock_keys(*identifiers: str | None) -> tuple[int, ...]:
     """Deterministic advisory-lock keys for the lowercased identifiers, sorted
     so concurrent requests for the same pair always lock in the same order."""
     return tuple(
-        int.from_bytes(
-            hashlib.blake2b(f"mcp_identifier:{normalized}".encode(), digest_size=8).digest(),
-            "big",
-            signed=True,
-        )
+        _advisory_lock_key(f"mcp_identifier:{normalized}")
         for normalized in sorted(frozenset(value.lower() for value in identifiers if value))
     )
 
@@ -2499,11 +2507,7 @@ async def merge_user_env_vars(
     so an admin retiring a user-scoped variable also clears its stored value.
     """
     allowed: Final = set(allowed_names)
-    lock_key: Final = int.from_bytes(
-        hashlib.blake2b(f"{user_id}:{server_id}".encode(), digest_size=8).digest(),
-        "big",
-        signed=True,
-    )
+    lock_key: Final = _advisory_lock_key(f"{user_id}:{server_id}")
     async with _db_transaction_manager(prisma_client) as tx:
         await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
         row: Final[prisma_db_models.LiteLLM_MCPUserEnvVars | None] = await tx.litellm_mcpuserenvvars.find_unique(
