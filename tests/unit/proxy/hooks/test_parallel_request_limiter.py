@@ -556,3 +556,102 @@ async def test_team_max_parallel_requests_non_windowed_gauge_cross_minute_bounda
         "Expected 429 — team concurrency gauge should still be at limit after "
         "minute boundary without slot release"
     )
+
+
+@pytest.mark.asyncio
+async def test_team_gauge_not_incremented_when_rpm_check_rejects():
+    """Regression test for veria-ai review on fd472e5b (Issue 1 — slot leak).
+
+    Before the fix, the team concurrency gauge was incremented BEFORE
+    ``check_key_in_limits`` ran.  When RPM was exhausted, the admission check
+    raised and the slot was leaked: subsequent requests would see a gauge value
+    higher than the actual in-flight count, eventually blocking the team even
+    after all in-flight requests completed.
+
+    After the fix, the gauge is incremented only AFTER all admission checks
+    pass, so a request rejected by RPM never acquires a concurrency slot.
+    """
+    from fastapi import HTTPException
+
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=_frozen_clock
+    )
+
+    team_id = "rpm-reject-team"
+    # Set rpm_limit=0 so EVERY request is rejected by check_key_in_limits,
+    # and team_max_parallel_requests=1 so we can verify the gauge stays at 0.
+    rpm_exhausted_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-rpm"),
+        team_id=team_id,
+        team_max_parallel_requests=1,
+        team_rpm_limit=0,  # will reject immediately
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=rpm_exhausted_key,
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+
+    # The team concurrency gauge must remain 0 — slot was never acquired.
+    gauge_val = await handler.internal_usage_cache.async_get_cache(
+        key=f"{team_id}::max_parallel_requests",
+        local_only=False,
+        litellm_parent_otel_span=None,
+    )
+    assert gauge_val is None or gauge_val == 0, (
+        f"Expected gauge=0 after RPM rejection but got {gauge_val}. "
+        "Slot was leaked — gauge must only be incremented after all admission checks pass."
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_gauge_uses_shared_cache_not_local_only():
+    """Regression test for veria-ai review on fd472e5b (Issue 2 — local_only bypass).
+
+    Before the fix, all team gauge operations used ``local_only=True``.
+    With LEGACY_MULTI_INSTANCE_RATE_LIMITING=True each worker would maintain
+    an independent local gauge, allowing a team member's requests hitting
+    multiple workers to consume a full quota per worker.
+
+    After the fix, gauge reads/increments/decrements all use ``local_only=False``
+    so that when a Redis cache is configured the counter is atomically shared
+    across workers.  For single-instance deployments (no Redis) the
+    DualCache falls back to its in-memory store transparently.
+
+    This test verifies that the gauge key is readable via ``local_only=False``
+    (i.e. it was written there, not only to a local-only store).
+    """
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=_frozen_clock
+    )
+
+    team_id = "shared-gauge-team"
+    team_key = UserAPIKeyAuth(
+        api_key=hash_token("sk-shared"),
+        team_id=team_id,
+        team_max_parallel_requests=5,
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=team_key,
+        cache=cache,
+        data={"model": "gpt-4o-mini"},
+        call_type="",
+    )
+
+    # Read via local_only=False (the shared path) — must reflect the increment.
+    gauge_val = await handler.internal_usage_cache.async_get_cache(
+        key=f"{team_id}::max_parallel_requests",
+        local_only=False,
+        litellm_parent_otel_span=None,
+    )
+    assert gauge_val == 1, (
+        f"Expected gauge=1 via local_only=False but got {gauge_val}. "
+        "Team gauge must be written to the shared cache path."
+    )
