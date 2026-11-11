@@ -1,8 +1,9 @@
 import asyncio
+import os
 import signal
-import socket
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -127,50 +128,51 @@ async def test_driver_executes_lifecycle_decisions(
     assert (executor.done, executor.events) == (done, unread)
 
 
-def _children(argv: tuple[str, ...], pass_fds: tuple[int, ...] = ()) -> MappingProxyType[Child, ChildSpec]:
-    spec: Final = ChildSpec(argv, MappingProxyType({}), current_platform().spawn_options(pass_fds))
+def _children(argv: tuple[str, ...]) -> MappingProxyType[Child, ChildSpec]:
+    spec: Final = ChildSpec(argv, MappingProxyType({}), current_platform().spawn_options(()))
     return MappingProxyType({Child.PYTHON: spec, Child.RUST: spec})
 
 
-HELD_STOP: Final = """
-import signal, socket, sys
-channel = socket.socket(fileno=int(sys.argv[1]))
+@dataclass
+class _ChildThatExitsOnceStopped:
+    stopped: anyio.Event
+    pid: int = 424242
+    stdin: None = None
+    returncode: int | None = None
 
-def stop(*_):
-    channel.sendall(b"s")
-    channel.recv(1)
-    sys.exit(0)
-
-signal.signal(signal.SIGTERM, stop)
-channel.sendall(b"r")
-channel.recv(1)
-"""
+    async def wait(self) -> int:
+        await self.stopped.wait()
+        self.returncode = 0
+        return 0
 
 
 @POSIX_ONLY
 @pytest.mark.timeout(60)
-async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops() -> None:
-    loop: Final = asyncio.get_running_loop()
-    ours, theirs = socket.socketpair()
-    with ours, theirs:
-        ours.setblocking(False)
+async def test_a_cancelled_supervisor_still_waits_for_the_child_it_stops(monkeypatch: pytest.MonkeyPatch) -> None:
+    child: Final = _ChildThatExitsOnceStopped(anyio.Event())
 
-        async def release_once_stopping() -> None:
-            assert await loop.sock_recv(ours, 1) == b"s"
-            await loop.sock_sendall(ours, b"x")
+    async def create_subprocess_exec(
+        *argv: str,
+        stdin: int,
+        env: Mapping[str, str],
+        pass_fds: tuple[int, ...],
+        start_new_session: bool,
+        creationflags: int,
+    ) -> _ChildThatExitsOnceStopped:
+        return child
 
-        children_spec: Final = _children((sys.executable, "-c", HELD_STOP, str(theirs.fileno())), (theirs.fileno(),))
-        async with anyio.create_task_group() as tasks:
-            with anyio.CancelScope() as scope:
-                async with open_children(current_platform(), children_spec, 1) as children:
-                    assert await children.spawn(Child.RUST) is None
-                    theirs.close()
-                    process: Final = children.processes[Child.RUST]
-                    assert await loop.sock_recv(ours, 1) == b"r"
-                    tasks.start_soon(release_once_stopping)
-                    scope.cancel()
-                    await anyio.lowlevel.checkpoint()
-            assert process.returncode == 0
+    def killpg(pgid: int, signum: int) -> None:
+        assert (pgid, signum) == (child.pid, signal.SIGTERM)
+        child.stopped.set()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_subprocess_exec)
+    monkeypatch.setattr(os, "killpg", killpg)
+    with anyio.CancelScope() as scope:
+        async with open_children(current_platform(), _children(("held-child",)), 1) as children:
+            assert await children.spawn(Child.RUST) is None
+            scope.cancel()
+            await anyio.lowlevel.checkpoint()
+    assert child.returncode == 0
 
 
 async def test_exiting_children_are_reported_as_events() -> None:
