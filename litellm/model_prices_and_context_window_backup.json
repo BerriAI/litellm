@@ -100106,5 +100106,282 @@
         "supports_web_search": false,
         "supports_xhigh_reasoning_effort": true,
         "use_openai_responses_path": true
+    },
+    "fal_ai/fal-ai/kling-video/v2.6/pro/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video with the default generate_audio=true ($0.14); videos without audio are $0.07 per second and videos with audio and voice control are $0.168 per second, which have no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v2.6/pro/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/vidu/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the fixed 4s clip price of $0.20 per video"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://fal.ai/models/fal-ai/vidu/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/vidu/start-end-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the fixed 4s clip price of $0.20 per video"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "source": "https://fal.ai/models/fal-ai/vidu/start-end-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/vidu/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the fixed 4s clip price of $0.40 per video"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "source": "https://fal.ai/models/fal-ai/vidu/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the 5s clip prices by resolution ($0.15 at 540p, $0.30 at 720p, $1.20 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field; HDR ($0.60 at 720p, $2.40 at 1080p per 5s) and HDR+EXR ($0.90, $3.60) are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.03,
+        "output_cost_per_second_1080p": 0.24,
+        "output_cost_per_second_720p": 0.06,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the 5s and 10s clip prices by resolution ($0.50/$1.00 at 540p, $1.00/$2.00 at 720p, $2.00/$4.00 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.1,
+        "output_cost_per_second_1080p": 0.4,
+        "output_cost_per_second_720p": 0.2,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second derived from the 5s and 10s clip prices by resolution ($0.72/$1.44 at 540p, $1.08/$2.16 at 720p, $2.16/$4.32 at 1080p); output_cost_per_second is the default resolution 540p rate, which has no tier field; HDR and HDR+EXR prices are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.144,
+        "output_cost_per_second_1080p": 0.432,
+        "output_cost_per_second_720p": 0.216,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/pixverse/v6/max/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution without audio (the default generate_audio_switch=false); output_cost_per_second is the default resolution 720p rate; 360p $0.054 and 540p $0.081 have no catalog field; with audio the rates are $0.081/$0.099/$0.135/$0.252 per second, which is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.099,
+        "output_cost_per_second_1080p": 0.198,
+        "output_cost_per_second_720p": 0.099,
+        "source": "https://fal.ai/models/pixverse/v6/max/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/pixverse/v6/max/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution without audio (the default generate_audio_switch=false); output_cost_per_second is the default resolution 720p rate; 360p $0.054 and 540p $0.081 have no catalog field; with audio the rates are $0.081/$0.099/$0.135/$0.252 per second, which is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.099,
+        "output_cost_per_second_1080p": 0.198,
+        "output_cost_per_second_720p": 0.099,
+        "source": "https://fal.ai/models/pixverse/v6/max/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/flux-2-pro": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.03 for the first output megapixel plus $0.015 per additional input or output megapixel, rounded up, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://fal.ai/models/fal-ai/flux-2-pro",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/flux-2-pro/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.03 for the first output megapixel plus $0.015 per additional input or output megapixel, rounded up, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://fal.ai/models/fal-ai/flux-2-pro/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/flux-2-pro/outpaint": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.03 for the first output megapixel plus $0.015 per additional input or output megapixel, rounded up, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://fal.ai/models/fal-ai/flux-2-pro/outpaint",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/flux-2-max": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.07 for the first processed megapixel plus $0.03 per additional megapixel, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://fal.ai/models/fal-ai/flux-2-max",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/flux-2-max/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the default 1 MP output; fal bills $0.07 for the first processed megapixel plus $0.03 per additional megapixel, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07,
+        "source": "https://fal.ai/models/fal-ai/flux-2-max/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/flux-pro/v1/erase": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per image for the first generated megapixel; fal bills $0.004 for each subsequent generated megapixel and $0.004 per reference megapixel with a 3 MP minimum, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03,
+        "source": "https://fal.ai/models/fal-ai/flux-pro/v1/erase",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/smart-resize": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per single-image request at standard resolution: $0.15 per output image plus the $0.05 minimum vision analysis fee per request; additional output images in one request ($0.15 each) and 4K outputs (charged double) are not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2,
+        "source": "https://fal.ai/models/fal-ai/smart-resize",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/bytedance/seedream/v5/pro/layerize": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per generated layer for total pixel area under 1536x1536; layers for a base image over 1536x1536 are $0.0675 each, which has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03375,
+        "source": "https://fal.ai/models/bytedance/seedream/v5/pro/layerize",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/luma/agent/uni-1/v1/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per edit with one source image ($0.042 per edit plus $0.003 per reference or source image); each additional reference image adds $0.003, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.045,
+        "source": "https://fal.ai/models/luma/agent/uni-1/v1/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/luma/agent/uni-1/v1/max/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per edit with one source image ($0.102 per edit plus $0.003 per reference or source image); each additional reference image adds $0.003, which is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.105,
+        "source": "https://fal.ai/models/luma/agent/uni-1/v1/max/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
     }
 }
