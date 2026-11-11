@@ -3578,28 +3578,35 @@ class ManagedResponsesWebSocketHandler:
         event dict, or ``None``.
         """
         terminal_event: _MutableJsonObject | None = None
-        stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
-        async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns an async stream
-            if chunk is None:
-                continue
-            # Read type from the object before serializing to avoid double JSON parse
-            chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if isinstance(chunk, dict) else None)
-            serialized = self._serialize_chunk(chunk)
-            if serialized is None:
-                continue
-            if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
+        try:
+            stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
+            async for chunk in cast(AsyncIterable[object], stream_response):  # cast-ok: aresponses returns a stream
+                if chunk is None:
+                    continue
+                # Read type from the object before serializing to avoid double JSON parse
+                chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if isinstance(chunk, dict) else None)
+                serialized = self._serialize_chunk(chunk)
+                if serialized is None:
+                    continue
+                if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
+                    try:
+                        terminal_event = _load_json_object(serialized)
+                    except Exception:
+                        pass
                 try:
-                    terminal_event = _load_json_object(serialized)
-                except Exception:
-                    pass
-            try:
-                await self.websocket.send_text(self._unmask_for_client(serialized))
-            except Exception as send_exc:
-                verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
-                if terminal_event is None and self.on_unfinished_turn is not None:
-                    self.on_unfinished_turn()
-                return terminal_event  # Client disconnected
+                    await self.websocket.send_text(self._unmask_for_client(serialized))
+                except Exception as send_exc:
+                    verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
+                    self._report_unfinished_turn(terminal_event)
+                    return terminal_event  # Client disconnected
+        except asyncio.CancelledError:
+            self._report_unfinished_turn(terminal_event)
+            raise
         return terminal_event
+
+    def _report_unfinished_turn(self, terminal_event: _MutableJsonObject | None) -> None:
+        if terminal_event is None and self.on_unfinished_turn is not None:
+            self.on_unfinished_turn()
 
     def _unmask_for_client(self, serialized: str) -> str:
         """The provider and the turn history keep Presidio's tokens, the client gets the original text back."""
