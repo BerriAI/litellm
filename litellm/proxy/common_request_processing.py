@@ -55,6 +55,8 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.host import run_legacy_hook
 from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.agentic_followup_failure import is_agentic_followup_failure
@@ -4500,6 +4502,25 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can call the production
         implementation directly rather than reimplementing the closure.
         """
+        await run_legacy_hook(
+            Hook.post_call_success,
+            lambda _patches: ProxyBaseLLMRequestProcessing._legacy_deferred_stream_guardrails(
+                captured_data=captured_data,
+                captured_user_api_key_dict=captured_user_api_key_dict,
+                captured_logging_obj=captured_logging_obj,
+                assembled_response=assembled_response,
+                cache_hit=cache_hit,
+            ),
+        )
+
+    @staticmethod
+    async def _legacy_deferred_stream_guardrails(
+        captured_data: dict[str, object],
+        captured_user_api_key_dict: "UserAPIKeyAuth",
+        captured_logging_obj: LiteLLMLoggingObj,
+        assembled_response: Any,
+        cache_hit: object,
+    ) -> None:
         _response = assembled_response
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router

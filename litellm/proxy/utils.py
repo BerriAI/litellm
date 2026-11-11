@@ -159,6 +159,8 @@ from litellm.integrations.custom_guardrail import (
     merged_guardrail_entries,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2.enums import Hook
+from litellm.integrations.custom_logger_v2.host import run_legacy_hook
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
@@ -3290,6 +3292,30 @@ class ProxyLogging:
             independent_snapshot(data) if needs_raw_request_snapshot else None
         )
 
+        return await run_legacy_hook(
+            Hook.pre_call,
+            lambda _patches: self._legacy_pre_call(
+                request_data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                guardrails_only=guardrails_only,
+                skip_guardrails=skip_guardrails,
+                endpoint_type=endpoint_type,
+                raw_request_snapshot=raw_request_snapshot,
+            ),
+        )
+
+    async def _legacy_pre_call(
+        self,
+        request_data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+        guardrails_only: bool,
+        skip_guardrails: bool,
+        endpoint_type: EndpointType,
+        raw_request_snapshot: dict[str, object] | None,
+    ) -> dict[str, object] | None:
+        data: dict[str, object] | None = request_data  # rebind-ok: hooks below replace the request dict
         try:
             if not skip_guardrails:
                 data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
@@ -3799,6 +3825,23 @@ class ProxyLogging:
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
     ):
+        return await run_legacy_hook(
+            Hook.during_call,
+            lambda _patches: self._legacy_during_call(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                guardrails_only=guardrails_only,
+            ),
+        )
+
+    async def _legacy_during_call(
+        self,
+        data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth | None,
+        call_type: CallTypesLiteral,
+        guardrails_only: bool,
+    ) -> dict[str, object]:
         caps: Final = ProxyLogging.callback_capabilities()
         if not caps.has_guardrail and not caps.has_moderation_override:
             return data
@@ -4165,6 +4208,23 @@ class ProxyLogging:
 
         redacted_traceback_str: Final = redact_string(traceback_str) if traceback_str is not None else None
 
+        return await run_legacy_hook(
+            Hook.post_call_failure,
+            lambda _patches: self._legacy_post_call_failure(
+                request_data=request_data,
+                original_exception=original_exception,
+                user_api_key_dict=user_api_key_dict,
+                redacted_traceback_str=redacted_traceback_str,
+            ),
+        )
+
+    async def _legacy_post_call_failure(
+        self,
+        request_data: dict[str, object],
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        redacted_traceback_str: str | None,
+    ) -> HTTPException | None:
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: HTTPException | None = None
 
@@ -4437,6 +4497,21 @@ class ProxyLogging:
         4. /files
         """
 
+        return await run_legacy_hook(
+            Hook.post_call_success,
+            lambda _patches: self._legacy_post_call_success(
+                data=data,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+            ),
+        )
+
+    async def _legacy_post_call_success(
+        self,
+        data: dict[str, object],
+        response: LLMResponseTypes,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> LLMResponseTypes:
         from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
@@ -4619,6 +4694,21 @@ class ProxyLogging:
         (matching the inbound ``pre_mcp_call`` behavior) rather than being
         swallowed into an unguarded result.
         """
+        return await run_legacy_hook(
+            Hook.mcp_tool_result,
+            lambda _patches: self._legacy_post_mcp_call(
+                response=response,
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict,
+            ),
+        )
+
+    async def _legacy_post_mcp_call(
+        self,
+        response: "CallToolResult",
+        request_data: Mapping[str, Any],
+        user_api_key_dict: UserAPIKeyAuth | None,
+    ) -> "CallToolResult":
         caps: Final = ProxyLogging.callback_capabilities()
         if not caps.has_guardrail:
             return response
@@ -4666,6 +4756,23 @@ class ProxyLogging:
         Returns:
             Dict[str, str]: Merged headers from all callbacks.
         """
+        return await run_legacy_hook(
+            Hook.response_headers,
+            lambda _patches: self._legacy_response_headers(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=request_headers,
+            ),
+        )
+
+    async def _legacy_response_headers(
+        self,
+        data: dict[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
+        request_headers: dict[str, str] | None,
+    ) -> dict[str, str]:
         merged_headers: Final[dict[str, str]] = {}
         # Outer call sites in common_request_processing.py already gate this
         # call with ``has_post_call_response_headers_callbacks()``. The
@@ -4712,6 +4819,17 @@ class ProxyLogging:
         return merged_headers
 
     async def hidden_by_listing_callbacks(
+        self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
+    ) -> frozenset[str]:
+        return await run_legacy_hook(
+            Hook.list_models,
+            lambda _patches: self._legacy_hidden_by_listing_callbacks(
+                user_api_key_dict=user_api_key_dict,
+                model_names=model_names,
+            ),
+        )
+
+    async def _legacy_hidden_by_listing_callbacks(
         self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
     ) -> frozenset[str]:
         filters: Final = ProxyLogging.callback_capabilities().listed_models_filters
