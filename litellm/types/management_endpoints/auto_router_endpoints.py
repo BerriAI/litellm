@@ -191,7 +191,9 @@ class AutoRouterSessionResponse(LiteLLMBaseModel):
         description="Recorded historical savings plus newer estimates, net of classifier cost. None until a turn is "
         "estimated. A turn that starts within the longest prompt-cache TTL its breakpoints use (5 minutes, or 1 hour "
         "with a 1h breakpoint) of the session's first observed turn, or of the last turn whose observation was "
-        "incomplete, is not estimated, because the baseline's cache state is unknown then"
+        "incomplete, is not estimated, because the baseline's cache state is unknown then. Two kinds of turn are "
+        "still estimated inside that window: turns that took the identical baseline path, and turns whose whole "
+        "cached prefix the session had already written"
     )
     baseline_spend: float | None = Field(description="Estimated single-model cost: spend plus recorded savings")
     savings_estimated_baseline_spend: float | None = Field(
