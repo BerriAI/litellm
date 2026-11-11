@@ -314,5 +314,10 @@
       "supports_function_calling": true,
       "supports_reasoning": true
     }
+  },
+  "openany": {
+    "base_url": "https://api.openany.si/v1",
+    "api_key_env": "OPENANY_API_KEY",
+    "api_base_env": "OPENANY_API_BASE"
   }
 }
