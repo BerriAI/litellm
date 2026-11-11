@@ -13,13 +13,13 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.model_cost_table import ModelCostVersion, model_cost_version
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_response_only_fields,
     unpack_legacy_defs,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.rust_bridge.host.model_cost import ModelCostVersion, model_cost_version
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
