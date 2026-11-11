@@ -240,6 +240,7 @@ def test_disabled_token_counter_declines_every_model(monkeypatch: pytest.MonkeyP
 
 PARITY_REQUESTS: Final[tuple[dict[str, object], ...]] = (
     {"model": MODEL, "messages": [{"role": "user", "content": "Hello, how are you today?"}]},
+    {"model": MODEL, "messages": [{"role": "user", "content": "Hello, how are you today?"}], "tool_choice": "none"},
     {
         "model": MODEL,
         "messages": [

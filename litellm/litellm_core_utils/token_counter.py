@@ -713,7 +713,10 @@ class _MessageCountParams:
         self.count_function = _get_count_function(model, custom_tokenizer)
         self.tool_section = chat_template_tool_section(model)
         self.tool_choice_tokens = _tool_choice_tokens(
-            model or "", self.tool_section, deepseek_tokenizer=huggingface_tokenizer_kind(model or "") == "deepseek"
+            model or "",
+            self.tool_section,
+            bills_no_tool_choice=huggingface_tokenizer_kind(model or "") == "deepseek"
+            or "gemini" in (model or "").lower(),
         )
         self._model = model
 
@@ -723,11 +726,11 @@ class _MessageCountParams:
 
 
 def _tool_choice_tokens(
-    model: str, tool_section: ChatTemplateToolSection | None, deepseek_tokenizer: bool
+    model: str, tool_section: ChatTemplateToolSection | None, bills_no_tool_choice: bool
 ) -> ToolChoiceTokens | None:
     if tool_section is not None:
         return chat_template_tool_choice_tokens(model, tool_section)
-    if deepseek_tokenizer:
+    if bills_no_tool_choice:
         return None
     return OPENAI_TOOL_CHOICE_TOKENS
 

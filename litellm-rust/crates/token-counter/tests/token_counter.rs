@@ -122,16 +122,28 @@ mod json {
             count(
                 r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tool_choice":"none"}"#
             ),
-            base + 1
+            base
         );
         assert_eq!(
             count(
-                r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tool_choice":"auto"}"#
+                r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tool_choice":{"type":"function","function":{"name":"f"}}}"#
             ),
             base
         );
         let with_tools = count(
             r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"name":"f"}]}"#,
+        );
+        assert_eq!(
+            count(
+                r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"name":"f"}],"tool_choice":"none"}"#
+            ),
+            with_tools + 1
+        );
+        assert_eq!(
+            count(
+                r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":[{"name":"f"}],"tool_choice":"auto"}"#
+            ),
+            with_tools
         );
         let with_tools_and_system = count(
             r#"{"model":"m","messages":[{"role":"system","content":"hi"}],"tools":[{"name":"f"}]}"#,
@@ -433,7 +445,7 @@ mod tiktoken {
             count(
                 r#"{"model":"m","messages":[{"role":"user","content":"hi"}],"tool_choice":"none"}"#
             ),
-            base + 1
+            base
         );
     }
 

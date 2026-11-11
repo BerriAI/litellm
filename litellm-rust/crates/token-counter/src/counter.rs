@@ -167,6 +167,7 @@ impl TokenCounter {
             definitions + TOOL_DEFINITIONS_TOKENS - discount
         };
         let choice_tokens = match tool_choice {
+            _ if tools.is_empty() => 0,
             Some(ToolChoice::Mode(mode)) if mode == "none" => TOOL_CHOICE_NONE_TOKENS,
             Some(ToolChoice::Mode(_)) | None => 0,
             Some(ToolChoice::Named(named)) => {

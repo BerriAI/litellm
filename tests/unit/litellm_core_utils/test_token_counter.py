@@ -721,6 +721,18 @@ def test_token_counter_tool_choice_adds_nothing_for_deepseek_v3_and_v4(model: st
     ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
 
 
+# Gemini API gemini-3.8-flash, gemini-3.1-pro-preview and gemini-3.5-flash-lite each billed 51 prompt tokens for the
+# weather tool with no toolConfig, NONE, ANY and ANY limited to the tool on 2026-11-11
+@pytest.mark.parametrize("model", ["gemini/gemini-3.8-flash", "gemini/gemini-3.1-pro-preview", "gemini-3.5-flash-lite"])
+@pytest.mark.parametrize("tool_choice", ["none", "required", {"type": "function", "function": {"name": "get_weather"}}])
+def test_token_counter_tool_choice_adds_nothing_for_gemini(model: str, tool_choice: object):
+    tools: Final = [_openai_tool(_WEATHER_FUNCTION)]
+
+    assert token_counter_new(
+        model=model, messages=list(_USER_MESSAGES), tools=tools, tool_choice=tool_choice
+    ) == token_counter_new(model=model, messages=list(_USER_MESSAGES), tools=tools)
+
+
 # xAI grok-4.3 and grok-4-1-fast-reasoning each billed 275 prompt tokens for the weather tool with no tool_choice,
 # 296 with "none", 286 with "required" and 289 with the named tool on 2026-11-10, and OpenRouter, which served
 # x-ai/grok-4.3 from xAI, billed the same on 2026-11-11
