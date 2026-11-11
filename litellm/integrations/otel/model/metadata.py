@@ -198,6 +198,13 @@ class RequestContext:
         response: Final = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
         model_group: Final = as_str(payload.get("model_group")) or as_str(raw_meta.get("model_group"))
         decision: Final = raw_meta.get("routing_decision")
+        identity: Final = RequestIdentity.from_payload(payload)
+        provider_model: Final = identity.provider_model
+        served_model: Final = (
+            provider_model.split("/", 1)[1]
+            if isinstance(provider_model, str) and "/" in provider_model
+            else provider_model
+        )
         return cls(
             # The user asked for the group, or an auto router picked one for it (the
             # proxy restamps the response model to the requested name, so that gets
@@ -205,11 +212,11 @@ class RequestContext:
             # group. Empty string (never None) so the span name builder and the mapper
             # see a plain string.
             request_model=routed_model_name(model_group, model_group, decision) or as_str(payload.get("model")) or "",
-            response_model=routed_model_name(as_str(response.get("model")), model_group, decision),
+            response_model=routed_model_name(as_str(response.get("model")), model_group, decision, served_model),
             model_group=model_group,
             model_id=as_str(payload.get("model_id")) or _model_info_id(raw_meta.get("model_info")),
             api_base=as_str(payload.get("api_base")) or as_str(hidden.get("api_base")),
-            identity=RequestIdentity.from_payload(payload),
+            identity=identity,
         )
 
 

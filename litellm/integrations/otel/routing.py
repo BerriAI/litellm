@@ -65,10 +65,18 @@ def routing_decision_attributes(decision: Mapping[str, object] | None) -> Mappin
     )
 
 
-def routed_model_name(model: _Model, requested_model: object, decision: object) -> _Model | str:
+def routed_model_name(
+    model: _Model,
+    requested_model: object,
+    decision: object,
+    served_model: str | None = None,
+) -> _Model | str:
     """The model an auto router picked when ``model`` is only the name the caller requested, else ``model``."""
     fields: Final = as_str_mapping(decision)
     routed: Final = fields.get("routed_model") if fields is not None else None
-    if model and model == requested_model and isinstance(routed, str) and routed:
-        return routed
+    if model and model == requested_model:
+        if isinstance(routed, str) and routed:
+            return routed
+        if isinstance(served_model, str) and served_model:
+            return served_model
     return model

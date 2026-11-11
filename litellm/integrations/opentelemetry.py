@@ -2617,10 +2617,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 )
 
             # The model used to generate the response.
+            served_model_arg: Final = kwargs.get("model")
             response_model: Final = routed_model_name(
                 _response_field(response_obj, "model"),
                 standard_logging_payload.get("model_group"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # kwargs is untyped
                 decision,
+                served_model_arg if isinstance(served_model_arg, str) else None,
             )
             if response_model:
                 self.safe_set_attribute(
