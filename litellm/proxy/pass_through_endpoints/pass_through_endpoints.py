@@ -3293,12 +3293,17 @@ async def websocket_passthrough_request(
     websocket_hook_data: Final = guardrail_request_data_with_streaming(
         MappingProxyType({"litellm_call_id": litellm_call_id}), is_streaming=True
     )
-    await proxy_logging_obj.pre_call_hook(
-        user_api_key_dict=user_api_key_dict,
-        data=websocket_hook_data,
-        call_type="pass_through_endpoint",
-    )
+    try:
+        await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=websocket_hook_data,
+            call_type="pass_through_endpoint",
+        )
+    except Exception:
+        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict, "refused_at_open")
+        raise
 
+    unfinished_turn: Final = asyncio.Event()
     try:
         verbose_proxy_logger.debug(
             "WebSocket passthrough (%s): Establishing upstream connection to %s", endpoint, target
@@ -3506,6 +3511,8 @@ async def websocket_passthrough_request(
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             if client_task.done() and _turn_owed(upstream_frame_kind, websocket_messages, ledger):
                 await asyncio.wait((upstream_task,), timeout=walkout_turn_drain_seconds)
+            if _turn_owed(upstream_frame_kind, websocket_messages, ledger):
+                unfinished_turn.set()
             done: Final = tuple(task for task in tasks if task.done())
             pending: Final = tuple(task for task in tasks if not task.done())
 
@@ -3598,7 +3605,9 @@ async def websocket_passthrough_request(
         if _client_socket_is_open(websocket):
             await websocket.close(code=1011, reason="WebSocket passthrough error")
     finally:
-        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+        await proxy_logging_obj.arelease_responses_websocket_slot(
+            user_api_key_dict, "turn_unfinished" if unfinished_turn.is_set() else "turns_finished"
+        )
         if _client_socket_is_open(websocket):
             await websocket.close()
 

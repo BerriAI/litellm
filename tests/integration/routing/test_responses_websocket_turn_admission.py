@@ -568,21 +568,24 @@ def test_a_closed_socket_gives_back_its_key_tpm_reservation_so_the_next_socket_i
             metadata={"default_estimated_output_tokens": SOCKET_RESERVATION},
         )
 
-        def served_and_closed() -> tuple[dict[str, JsonValue], ...]:
+        def served_and_closed() -> tuple[tuple[dict[str, JsonValue], ...], str]:
             received: Final = asyncio.run(_one_turn_socket(limited, key, deployment.name))
+            closed_in: Final = datetime.now(UTC).strftime("%H-%M")
             if received[-1].get("type") != "response.completed":
-                return received
+                return received, closed_in
             billed: Final = completed(received)["id"]
             eventually(
                 lambda: limited.rows(SPEND_ROWS_FOR_KEY, (_key_hash(key),)),
                 lambda found: any(row["request_id"] == billed for row in found),
                 seconds=70,
             )
-            return received
+            return received, closed_in
 
+        minute: Final = _fresh_minute()
         sockets: Final = tuple(served_and_closed() for _ in range(3))
 
-        assert [received[-1].get("type") for received in sockets] == ["response.completed"] * 3, sockets
+        assert [received[-1].get("type") for received, _ in sockets] == ["response.completed"] * 3, sockets
+        assert {closed_in for _, closed_in in sockets} == {minute}, sockets
         assert deployment.forwarded_turns() == 3
 
 

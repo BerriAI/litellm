@@ -4,6 +4,7 @@ Test for response_api_endpoints/endpoints.py
 
 import asyncio
 import contextlib
+import contextvars
 import dataclasses
 import datetime
 import json
@@ -3693,6 +3694,112 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        ("ending", "sessions_after_close"),
+        [
+            ("turns_finished", (True, False)),
+            ("turn_cut", (False, False)),
+            ("rate_limited_at_open", (True, False)),
+            ("refused_by_a_later_hook", (True, False)),
+        ],
+    )
+    async def test_the_socket_frees_its_tpm_reservation_unless_a_turn_was_cut(
+        self, ending: str, sessions_after_close: tuple[bool, bool]
+    ):
+        import uuid
+
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy._types import hash_token
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+        from litellm.proxy.utils import InternalUsageCache
+
+        limiter_cache: Final = DualCache()
+        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(limiter_cache))
+        release_through: Final = ProxyLogging(user_api_key_cache=DualCache())
+        release_through.proxy_hook_mapping["parallel_request_limiter"] = limiter
+        key: Final = UserAPIKeyAuth(
+            api_key=hash_token("sk-closing-socket"), tpm_limit=100, metadata={"default_estimated_output_tokens": 60}
+        )
+
+        async def admit() -> None:
+            await limiter.async_pre_call_hook(
+                user_api_key_dict=key,
+                cache=limiter_cache,
+                data={"litellm_call_id": str(uuid.uuid4())},
+                call_type="aresponses_websocket",
+            )
+
+        async def opens_another_session() -> bool:
+            try:
+                await asyncio.create_task(admit(), context=contextvars.Context())
+            except ProxyRateLimitError:
+                return False
+            return True
+
+        refusals: Final[Mapping[str, Exception]] = {
+            "rate_limited_at_open": RateLimitError(message="over the team budget", llm_provider="", model=""),
+            "refused_by_a_later_hook": HTTPException(status_code=429, detail="Max iterations exceeded"),
+        }
+
+        async def admitted_then_maybe_refused(**kwargs: object):
+            await admit()
+            if ending in refusals:
+                raise refusals[ending]
+            return {"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock()
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(side_effect=admitted_then_maybe_refused)
+
+        def route_request(data, **kwargs):
+            async def relay():
+                if ending == "turn_cut":
+                    data["responses_ws_on_unfinished_turn"]()
+
+            return relay()
+
+        proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.arelease_responses_websocket_slot = release_through.arelease_responses_websocket_slot
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy, so it admits through the real limiter only
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands the relay its unfinished-turn signal
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=route_request,
+            ),
+            patch(  # test-quality-ok: the release goes through the proxy's limiter hook
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await asyncio.create_task(
+                responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=key),
+                context=contextvars.Context(),
+            )
+
+        assert (await opens_another_session(), await opens_another_session()) == sessions_after_close
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         "relay_outcome",
         ["still_relaying", "already_returned", "returns_despite_the_cancel", "crashes_despite_the_cancel"],
     )
@@ -3746,7 +3853,7 @@ class TestResponsesWSFirstFrameModelAuth:
             side_effect=lambda user_api_key_dict, data, call_type, guardrails_only: data
         )
         proxy_logging_obj.post_call_failure_hook = AsyncMock(side_effect=slow_failure_hook)
-        async def release_over_the_network(user_api_key_dict):
+        async def release_over_the_network(user_api_key_dict, close):
             await asyncio.sleep(0.01)
 
         proxy_logging_obj.arelease_responses_websocket_slot = AsyncMock(side_effect=release_over_the_network)

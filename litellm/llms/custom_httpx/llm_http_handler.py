@@ -7242,6 +7242,7 @@ class BaseLLMHTTPHandler:
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
         turn_admission: "ResponsesWsTurnAdmission | None" = None,
         frame_guard: "ResponsesWsFrameGuard | None" = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
         **kwargs: object,
     ) -> Exception | None:
         """
@@ -7312,6 +7313,7 @@ class BaseLLMHTTPHandler:
                 turn_admission=_ws_turn_admission,
                 guardrail_callbacks=_ws_guardrail_callbacks,  # pyright: ignore[reportUnknownArgumentType]  # duck-typed callbacks from litellm.callbacks
                 frame_guard=frame_guard,
+                on_unfinished_turn=on_unfinished_turn,
                 **kwargs,
             )
             return await handler.run()
@@ -7408,6 +7410,7 @@ class BaseLLMHTTPHandler:
                     request_defaults=request_defaults,
                     turn_admission=_ws_turn_admission,
                     frame_guard=frame_guard,
+                    on_unfinished_turn=on_unfinished_turn,
                 )
                 return await streaming.bidirectional_forward()
 

@@ -2578,9 +2578,11 @@ class ResponsesWebSocketStreaming:
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
         turn_admission: ResponsesWsTurnAdmission | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
+        self.on_unfinished_turn: Callable[[], None] | None = on_unfinished_turn
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.frame_guard: ResponsesWsFrameGuard | None = frame_guard
@@ -2697,6 +2699,8 @@ class ResponsesWebSocketStreaming:
     def _log_open_turns(self) -> None:
         open_turns: Final = self._open_turns
         self._open_turns = ()
+        if open_turns and self.on_unfinished_turn is not None:
+            self.on_unfinished_turn()
         for turn in open_turns:
             if turn.events:
                 self._log_turn(turn)
@@ -3178,11 +3182,13 @@ class ManagedResponsesWebSocketHandler:
         turn_admission: ResponsesWsTurnAdmission | None = None,
         frame_guard: ResponsesWsFrameGuard | None = None,
         guardrail_callbacks: Sequence[PresidioGuardrailCallback] | None = None,
+        on_unfinished_turn: Callable[[], None] | None = None,
         **kwargs: object,
     ) -> None:
         self.websocket = websocket
         self.model = model
         self.frame_guard = frame_guard
+        self.on_unfinished_turn: Callable[[], None] | None = on_unfinished_turn
         self.guardrail_callbacks: tuple[PresidioGuardrailCallback, ...] = tuple(guardrail_callbacks or ())
         self._pii_tokens: Mapping[str, str] = {}
         self.logging_obj = logging_obj
@@ -3560,6 +3566,8 @@ class ManagedResponsesWebSocketHandler:
                 await self.websocket.send_text(self._unmask_for_client(serialized))
             except Exception as send_exc:
                 verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
+                if terminal_event is None and self.on_unfinished_turn is not None:
+                    self.on_unfinished_turn()
                 return terminal_event  # Client disconnected
         return terminal_event
 

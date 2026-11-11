@@ -46,6 +46,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitResponse,
     RequestRateLimiterStash,
     ReservationOperation,
+    ResponsesWebSocketClose,
     TagRateLimit,
     _request_stash,
     get_or_create_request_stash,
@@ -5914,7 +5915,7 @@ async def test_a_closed_responses_websocket_gives_back_its_slot_and_tpm_reservat
     assert 2 * reserved > 100
     assert handler._gauge_in_flight_from_cache_value(_local(handler, parallel_key)) == 1
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
 
     assert int(_local(handler, tokens_key) or 0) == 0
     assert handler._gauge_in_flight_from_cache_value(_local(handler, parallel_key)) == 0
@@ -5936,7 +5937,7 @@ async def test_a_responses_websocket_admission_reservation_is_refunded_exactly_o
     assert int(_local(handler, tokens_key) or 0) > 0
 
     def close() -> Awaitable[None]:
-        return proxy_logging_obj.arelease_responses_websocket_slot(auth)
+        return proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
 
     def failure_row() -> Awaitable[None]:
         return handler.async_post_call_failure_hook(
@@ -5977,9 +5978,82 @@ async def test_a_closed_responses_websocket_gives_back_its_project_token_reserva
     await _admit_responses_websocket(handler, cache, auth, "project-socket")
     assert int(_local(handler, project_keys[1]) or 0) > 0
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
 
     assert [int(_local(handler, key) or 0) for key in project_keys] == [0, 0]
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_closed_mid_turn_keeps_its_tpm_reservation_but_frees_its_slot() -> None:
+    cache: Final = DualCache()
+    handler, proxy_logging_obj = _responses_websocket_limiter(cache)
+    api_key: Final = hash_token("sk-responses-websocket-cut-turn")
+    auth: Final = UserAPIKeyAuth(
+        api_key=api_key, tpm_limit=100, max_parallel_requests=1, metadata={"default_estimated_output_tokens": 60}
+    )
+    tokens_key: Final = _counter("api_key", api_key)
+    await _admit_responses_websocket(handler, cache, auth, "cut-socket")
+    reserved: Final = int(_local(handler, tokens_key) or 0)
+
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turn_unfinished")
+    await handler.async_post_call_failure_hook(
+        request_data={"model": "gpt-4o-mini", "litellm_call_id": "cut-socket"},
+        original_exception=RuntimeError("client left mid-turn"),
+        user_api_key_dict=auth,
+    )
+
+    assert reserved > 0
+    assert int(_local(handler, tokens_key) or 0) == reserved
+    assert handler._gauge_in_flight_from_cache_value(_local(handler, RateLimitScope("api_key", api_key).gauge)) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("close", ["refused_at_open", "turns_finished", "turn_unfinished"])
+async def test_closing_a_responses_websocket_the_limiter_never_admitted_reports_no_release_error(
+    close: ResponsesWebSocketClose, caplog: pytest.LogCaptureFixture
+) -> None:
+    handler, proxy_logging_obj = _responses_websocket_limiter(DualCache())
+    _request_stash.set(None)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        await proxy_logging_obj.arelease_responses_websocket_slot(
+            UserAPIKeyAuth(api_key=hash_token("sk-never-admitted")), close
+        )
+
+    assert [record.getMessage() for record in caplog.records] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("close", "keeps_the_ptu_estimate"), [("turns_finished", True), ("refused_at_open", False)])
+async def test_a_closed_responses_websocket_keeps_the_team_ptu_estimate_only_once_it_served_turns(
+    close: ResponsesWebSocketClose, keeps_the_ptu_estimate: bool
+) -> None:
+    cache: Final = DualCache()
+    resolve, _ = _ptu_ceiling_for("t", "test-model", tpm_limit=2000, ratio=4.0)
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), ptu_team_ceiling_resolver=resolve
+    )
+    proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = handler
+    api_key: Final = hash_token("sk-responses-websocket-ptu")
+    auth: Final = UserAPIKeyAuth(api_key=api_key, team_id="t", tpm_limit=10_000)
+    ptu_key: Final = _counter("model_per_team_ptu", "t:test-model")
+    tokens_key: Final = _counter("api_key", api_key)
+    _request_stash.set(None)
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={**_ptu_request(), "litellm_call_id": "ptu-socket"},
+        call_type=CallTypes.aresponses_websocket.value,
+    )
+    ptu_reserved: Final = int(_local(handler, ptu_key) or 0)
+    key_reserved: Final = int(_local(handler, tokens_key) or 0)
+
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, close)
+
+    assert ptu_reserved > 0 and key_reserved > 0
+    assert int(_local(handler, ptu_key) or 0) == (ptu_reserved if keeps_the_ptu_estimate else 0)
+    assert int(_local(handler, tokens_key) or 0) == 0
 
 
 @dataclass
@@ -6014,7 +6088,7 @@ async def test_a_responses_websocket_close_whose_refund_fails_still_frees_its_sl
     await _admit_responses_websocket(handler, cache, auth, "socket")
     fakes.refunds_fail = True
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
 
     assert handler._gauge_in_flight_from_cache_value(_local(handler, RateLimitScope("api_key", api_key).gauge)) == 0
 
@@ -6066,7 +6140,7 @@ async def test_a_responses_websocket_that_closes_in_a_later_minute_leaves_that_m
         increments=[{"tokens": 20}],
     )
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
 
     assert int(_local(handler, _counter("api_key", api_key)) or 0) == 20
 
@@ -6084,7 +6158,7 @@ async def test_a_closed_responses_websocket_refunds_a_project_reservation_stashe
     stash.itpm_reserved_scopes = frozenset({scope})
 
     await proxy_logging_obj.arelease_responses_websocket_slot(
-        UserAPIKeyAuth(api_key=hash_token("sk-responses-websocket-windowless"))
+        UserAPIKeyAuth(api_key=hash_token("sk-responses-websocket-windowless")), "turns_finished"
     )
 
     assert int(_local(handler, counter_key) or 0) == 0

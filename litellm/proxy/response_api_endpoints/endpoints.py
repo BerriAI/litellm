@@ -2636,12 +2636,14 @@ async def _responses_websocket_session(
         )
     except RateLimitError as e:
         verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
+        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict, "refused_at_open")
         with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
             await websocket.send_text(turn_refusal_frame(e))
         await websocket.close(code=1008, reason="Rate limit exceeded")
         return
     except Exception as e:
         verbose_proxy_logger.exception("Responses WebSocket pre-call error")
+        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict, "refused_at_open")
         try:
             await websocket.send_text(
                 json.dumps(
@@ -2660,12 +2662,14 @@ async def _responses_websocket_session(
         return
 
     refused_turns: Final = _RefusedTurns()
+    unfinished_turn: Final = asyncio.Event()
     routed_data: Final = dict(
         data,
         user_api_key_dict=user_api_key_dict,
         responses_ws_frame_guard=_responses_ws_frame_guard(
             data, user_api_key_dict, proxy_logging_obj, refused_turns.add
         ),
+        responses_ws_on_unfinished_turn=unfinished_turn.set,
         **_routing_hints_from_first_ws_frame(first_message),
     )
 
@@ -2712,7 +2716,9 @@ async def _responses_websocket_session(
     try:
         failure_row: Final = await relay_and_bill_failure()
     finally:
-        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+        await proxy_logging_obj.arelease_responses_websocket_slot(
+            user_api_key_dict, "turn_unfinished" if unfinished_turn.is_set() else "turns_finished"
+        )
     if failure_row is not None:
         with contextlib.suppress(Exception):
             await asyncio.shield(failure_row)

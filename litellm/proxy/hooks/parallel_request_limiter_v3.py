@@ -29,7 +29,7 @@ from typing import (
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_503_SERVICE_UNAVAILABLE
-from typing_extensions import NotRequired, ReadOnly
+from typing_extensions import NotRequired, ReadOnly, assert_never
 
 from litellm import DualCache
 from litellm._internal_context import with_service_target
@@ -336,6 +336,8 @@ class WindowGuardedIncrement:
 
 
 ReservationOperation: TypeAlias = CounterIncrement | WindowGuardedIncrement
+
+ResponsesWebSocketClose: TypeAlias = Literal["refused_at_open", "turns_finished", "turn_unfinished"]
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -5222,9 +5224,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         relayed here with recovered partial usage settles the reservation at
         that usage instead of refunding it.
         """
+        parent_otel_span: Final = user_api_key_dict.parent_otel_span
         release_error: Final = await self._release_stashed_admission(
-            request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
-            user_api_key_dict.parent_otel_span,
+            lambda stash: self._settle_stashed_reservations(
+                stash,
+                request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is a bare dict
+                parent_otel_span,
+            ),
+            parent_otel_span,
         )
         if release_error is not None:
             verbose_proxy_logger.error(
@@ -5232,26 +5239,50 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
     @with_service_target("rate_limits")
-    async def async_release_responses_websocket_admission(self, user_api_key_dict: UserAPIKeyAuth) -> None:
-        """Free the slot and the TPM reservation a Responses WebSocket took at admission, once it closes. Its turns
-        log under their own call ids and charge their own usage, so the reservation is refunded in full."""
+    async def async_release_responses_websocket_admission(
+        self, user_api_key_dict: UserAPIKeyAuth, close: ResponsesWebSocketClose
+    ) -> None:
+        """Free the slot a Responses WebSocket took at admission once it closes, and settle its token reservations.
+        A socket refused at open sent nothing upstream, so it refunds them all. Turns log under their own call ids
+        and charge their own key TPM, but never the team PTU, so a socket whose turns all finished refunds its TPM
+        and keeps the PTU estimate. A turn cut before its terminal event charged nothing, so its socket keeps every
+        reservation until the window ends."""
+        parent_otel_span: Final = user_api_key_dict.parent_otel_span
         release_error: Final = await self._release_stashed_admission(
-            MappingProxyType({}), user_api_key_dict.parent_otel_span
+            lambda stash: self._settle_closed_responses_websocket(stash, close, parent_otel_span),
+            parent_otel_span,
         )
         if release_error is not None:
             verbose_proxy_logger.error(
                 "Error releasing a closed Responses WebSocket's admission: %s", release_error, exc_info=release_error
             )
 
+    async def _settle_closed_responses_websocket(
+        self, stash: RequestRateLimiterStash, close: ResponsesWebSocketClose, parent_otel_span: Span | None
+    ) -> None:
+        match close:
+            case "refused_at_open":
+                await self._settle_stashed_reservations(stash, MappingProxyType({}), parent_otel_span)
+            case "turns_finished":
+                await self._settle_stashed_reservations(
+                    stash, MappingProxyType({}), parent_otel_span, refunds_ptu=False
+                )
+            case "turn_unfinished":
+                stash.mark_reservation_released()
+            case _:
+                assert_never(close)
+
     async def _release_stashed_admission(
-        self, request_data: Mapping[str, object], parent_otel_span: Span | None
+        self,
+        settle: Callable[[RequestRateLimiterStash], Awaitable[None]],
+        parent_otel_span: Span | None,
     ) -> Exception | None:
         try:
             stash: Final = get_request_stash()
             if stash is None:
                 return None
             await self._release_stashed_parallel_slot(stash, parent_otel_span)
-            await self._settle_stashed_reservations(stash, request_data, parent_otel_span)
+            await settle(stash)
         except Exception as e:
             return e
         return None
@@ -5261,6 +5292,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         stash: RequestRateLimiterStash,
         request_data: Mapping[str, object],
         parent_otel_span: Span | None,
+        *,
+        refunds_ptu: bool = True,
     ) -> None:
         if stash.batch_enqueued_reservation is not None:
             await self.batch_enqueued_token_store.refund(
@@ -5295,7 +5328,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             else ()
         )
         ptu_ops: Final = (
-            self._build_ptu_failure_settlement_ops(stash, request_data, tpm_actual) if reserved_tokens > 0 else ()
+            self._build_ptu_failure_settlement_ops(stash, request_data, tpm_actual)
+            if refunds_ptu and reserved_tokens > 0
+            else ()
         )
         itpm_ops: Final = (
             self._build_project_reservation_ops(

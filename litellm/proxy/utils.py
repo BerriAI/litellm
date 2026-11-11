@@ -266,6 +266,7 @@ from litellm.proxy.hooks.parallel_request_limiter import (  # noqa: F401, RUF100
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401, RUF100  # legacy module exports
     PROXY_MaxParallelRequestsHandler_v3,
+    ResponsesWebSocketClose,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.sensitive_data_routing import (  # noqa: F401, RUF100  # legacy module exports
@@ -5293,13 +5294,15 @@ class ProxyLogging:
     arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
 
-    async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
-        """Release what a Responses WebSocket took at admission. Only call this once that admission succeeded:
-        the legacy limiter keeps no record of its acquisitions and decrements unconditionally."""
+    async def arelease_responses_websocket_slot(
+        self, user_api_key_dict: UserAPIKeyAuth, close: ResponsesWebSocketClose
+    ) -> None:
+        """Release what a Responses WebSocket took at admission. The legacy limiter keeps no record of its
+        acquisitions and decrements unconditionally, so it only releases a socket that got past every pre-call hook."""
         match self.get_proxy_hook("parallel_request_limiter"):
             case PROXY_MaxParallelRequestsHandler_v3() as limiter:
-                await limiter.async_release_responses_websocket_admission(user_api_key_dict)
-            case _PROXY_MaxParallelRequestsHandler() as legacy_limiter:
+                await limiter.async_release_responses_websocket_admission(user_api_key_dict, close)
+            case _PROXY_MaxParallelRequestsHandler() as legacy_limiter if close != "refused_at_open":
                 await legacy_limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
             case _:
                 return

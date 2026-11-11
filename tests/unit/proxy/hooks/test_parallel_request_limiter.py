@@ -441,6 +441,10 @@ async def test_a_rejected_realtime_attempt_does_not_free_a_slot_it_never_took():
     after_rejection = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
     assert after_rejection["current_requests"] == 1, after_rejection
 
-    await proxy_logging_obj.arelease_responses_websocket_slot(auth)
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "refused_at_open")
+    after_socket_refusal = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+    assert after_socket_refusal["current_requests"] == 1, after_socket_refusal
+
+    await proxy_logging_obj.arelease_responses_websocket_slot(auth, "turns_finished")
     after_socket_close = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
     assert after_socket_close["current_requests"] == 0, after_socket_close
