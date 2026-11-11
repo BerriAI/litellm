@@ -122,6 +122,11 @@ class VercelAIGatewayDecisionsConfig(OpenAIDecisionsConfig):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key
 
+    def resolve_credential(
+        self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
+    ) -> str | None:
+        return api_key
+
     def parse_response(self, payload: object, request: DecisionsIRRequest) -> DecisionsIRResponse:
         response: Final = super().parse_response(payload, request)
         metadata: Final = _validated(_GatewayDecisionResponse, payload)
