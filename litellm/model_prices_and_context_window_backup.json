@@ -81317,6 +81317,27 @@
     "github_copilot/gpt-terra-latest": {
         "alias_of": "github_copilot/gpt-6.1-terra"
     },
+    "oathbreaker/oathbreaker-glm-5.3": {
+        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "oathbreaker",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "source": "https://oathbreaker.ai/docs",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true,
+        "supports_vision": false,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ]
+    },
     "refuseless/glm-5.3-abliterated": {
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1e-06,
