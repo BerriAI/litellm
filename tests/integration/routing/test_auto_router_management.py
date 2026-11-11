@@ -153,7 +153,7 @@ def _session_response(
 
     response_state: Final = eventually(
         read_response_state,
-        lambda state: _session_total_recorded(state[0]) or state[1],
+        lambda state: _session_total_recorded(state[0]) or (state[1] and state[0].status_code != 200),
         seconds=seconds,
         return_last_on_timeout=return_last_on_timeout,
     )
