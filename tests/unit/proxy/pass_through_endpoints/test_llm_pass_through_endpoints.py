@@ -7274,7 +7274,7 @@ def _anthropic_deployment(
 
 
 def _passthrough_pricing(
-    monkeypatch: pytest.MonkeyPatch, *deployments: dict[str, object]
+    monkeypatch: pytest.MonkeyPatch, *deployments: dict[str, object], requested_model: str = "claude-haiku-5-5"
 ) -> Mapping[str, object] | None:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         anthropic_deployment_pricing_model_info,
@@ -7282,7 +7282,7 @@ def _passthrough_pricing(
 
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     router: Final = litellm.Router(model_list=[*deployments])
-    return anthropic_deployment_pricing_model_info(router, {"model": "claude-haiku-5-5"}, None)
+    return anthropic_deployment_pricing_model_info(router, {"model": requested_model}, None)
 
 
 def test_anthropic_passthrough_prices_with_the_one_deployment_serving_the_requested_model(monkeypatch):
@@ -7302,6 +7302,19 @@ def test_anthropic_passthrough_reads_custom_pricing_set_in_litellm_params(monkey
     assert model_info is not None
     assert model_info["id"] == "haiku-dep"
     assert {key: model_info[key] for key in _HAIKU_PRICING} == _HAIKU_PRICING
+
+
+def test_anthropic_passthrough_prices_a_deployment_configured_with_the_alias_the_caller_sends(monkeypatch):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch,
+        _anthropic_deployment(
+            "haiku-latest-dep", model_name="claude-haiku-latest", backend="anthropic/claude-haiku-latest"
+        ),
+        requested_model="claude-haiku-latest",
+    )
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-latest-dep"
 
 
 @pytest.mark.parametrize(

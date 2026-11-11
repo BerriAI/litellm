@@ -274,7 +274,7 @@ def _anthropic_deployment_model_info(deployment: object, model: str) -> Mapping[
         )
     except litellm.BadRequestError:
         return None
-    if provider != LlmProviders.ANTHROPIC.value or backend_model != model:
+    if provider != LlmProviders.ANTHROPIC.value or model not in (backend_model, backend.removeprefix(f"{provider}/")):
         return None
     return {
         **_object_mapping(fields.get("model_info")),
