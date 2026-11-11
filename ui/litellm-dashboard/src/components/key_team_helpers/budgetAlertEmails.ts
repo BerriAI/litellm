@@ -55,7 +55,7 @@ const storedBudgetAlertConfig = (
 const budgetAlertRowFromEntry = ([key, emails]: readonly [string, unknown]): BudgetAlertRow | null => {
   const threshold = Number(key);
   const recipients = storedRecipients(emails);
-  return /^\d+$/.test(key) && isValidThreshold(threshold) && recipients !== null
+  return /^[1-9]\d*$/.test(key) && isValidThreshold(threshold) && recipients !== null
     ? { threshold, emails: recipients.join(", ") }
     : null;
 };

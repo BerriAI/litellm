@@ -44,6 +44,13 @@ describe("budgetAlertRowsFromMetadata", () => {
     );
   });
 
+  it("leaves a zero-padded threshold to the Metadata box so it never duplicates a row", () => {
+    const metadata = { max_budget_alert_emails: { "080": ["padded@example.com"], "80": ["plain@example.com"] } };
+    expect(budgetAlertRowsFromMetadata(metadata, KEY_MAX_BUDGET_ALERT_EMAILS_KEY)).toEqual([
+      { threshold: 80, emails: "plain@example.com" },
+    ]);
+  });
+
   it("keeps API-stored comma-separated string recipients, which the backend also accepts", () => {
     const metadata = {
       max_budget_alert_emails: { "80": "finance@example.com, cto@example.com", "90": ["ops@example.com"] },
