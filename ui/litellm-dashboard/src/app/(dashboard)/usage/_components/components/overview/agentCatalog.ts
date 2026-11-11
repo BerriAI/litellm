@@ -1,4 +1,5 @@
 import anthropicLogo from "../../../../../../../public/assets/logos/anthropic.svg";
+import claudeLogo from "../../../../../../../public/assets/logos/claude.svg";
 import cursorLogo from "../../../../../../../public/assets/logos/cursor.svg";
 import copilotLogo from "../../../../../../../public/assets/logos/github_copilot.svg";
 import githubLogo from "../../../../../../../public/assets/logos/github.svg";
@@ -10,13 +11,26 @@ import openaiAgentsLogo from "../../../../../../../public/assets/logos/openai-ag
 import opencodeLogo from "../../../../../../../public/assets/moyai/logos/opencode.svg";
 import pydanticAiLogo from "../../../../../../../public/assets/logos/pydantic-ai-color.svg";
 import xaiLogo from "../../../../../../../public/assets/logos/xai.svg";
+import type { ParseKeys, TFunction } from "i18next";
 import type { components } from "@/lib/http/schema";
+import i18n from "@/i18n/i18n";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
 /** One row of `GET /tag/summary`. */
 export type TagSummaryRow = components["schemas"]["TagSummaryMetrics"];
 
 export type AgentKind = "agent" | "sdk";
+
+export enum UsageClient {
+  ClaudeDesktop = "claude-desktop",
+  ClaudeCode = "claude-code",
+}
+
+export const parseUsageClient = (value: string | null): UsageClient | null => {
+  if (value === UsageClient.ClaudeDesktop) return UsageClient.ClaudeDesktop;
+  if (value === UsageClient.ClaudeCode) return UsageClient.ClaudeCode;
+  return null;
+};
 
 export interface AgentRow {
   id: string;
@@ -35,7 +49,7 @@ export interface AgentRow {
 interface AgentFamily {
   id: string;
   label: string;
-  description: string;
+  description: ParseKeys;
   kind: AgentKind;
   logo: string | null;
   /** Matched against the user-agent with its `User-Agent: ` prefix removed, case-insensitively. */
@@ -45,22 +59,37 @@ interface AgentFamily {
 /**
  * Most specific first. Coding agents beat the SDK they are built on, so `codex_sdk_ts` lands on
  * Codex and only a bare `OpenAI/...` client falls through to the OpenAI SDK. Codex wears OpenAI's
- * mark as in the Lens trace view; Claude Code gets its own spark tile rather than Anthropic's wordmark.
+ * mark as in the Lens trace view; Claude clients use the bundled Claude brand mark.
  */
 const FAMILIES: readonly AgentFamily[] = [
   {
-    id: "claude-code",
-    label: "Claude Code",
-    description: "Anthropic's coding agent",
+    id: UsageClient.ClaudeDesktop,
+    label: "Claude Desktop",
+    description: "usage.agentCatalog.descriptions.claudeDesktop",
     kind: "agent",
-    // No Claude asset ships in the repo, so TopAgents draws the spark tile itself.
-    logo: null,
-    match: /^(claude-cli|claude-code|claude_code|claude-user)\b/i,
+    logo: claudeLogo.src,
+    match: /^claude[-_ ]desktop\b|^claude-cli\/[^\s]+\s+\((?:[^)]*,\s*)?claude-desktop-3p\s*[,)]/i,
+  },
+  {
+    id: UsageClient.ClaudeCode,
+    label: "Claude Code",
+    description: "usage.agentCatalog.descriptions.claudeCode",
+    kind: "agent",
+    logo: claudeLogo.src,
+    match: /^(claude-code|claude_code|claude-user)\b|^claude-cli\/[^\s]+\s+\((?:[^)]*,\s*)?cli\s*[,)]/i,
+  },
+  {
+    id: "claude-unspecified",
+    label: "Claude (unspecified)",
+    description: "usage.agentCatalog.descriptions.claudeUnspecified",
+    kind: "agent",
+    logo: claudeLogo.src,
+    match: /^claude-cli\b/i,
   },
   {
     id: "codex",
     label: "Codex",
-    description: "OpenAI's coding agent",
+    description: "usage.agentCatalog.descriptions.codex",
     kind: "agent",
     logo: openaiLogo.src,
     match: /^(codex[ _-]|codex$)/i,
@@ -68,7 +97,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "opencode",
     label: "OpenCode",
-    description: "Open-source terminal coding agent",
+    description: "usage.agentCatalog.descriptions.opencode",
     kind: "agent",
     logo: opencodeLogo.src,
     match: /^opencode\b/i,
@@ -76,7 +105,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "cursor",
     label: "Cursor",
-    description: "AI code editor",
+    description: "usage.agentCatalog.descriptions.cursor",
     kind: "agent",
     logo: cursorLogo.src,
     match: /^cursor\b/i,
@@ -84,7 +113,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "copilot",
     label: "GitHub Copilot",
-    description: "GitHub's coding assistant",
+    description: "usage.agentCatalog.descriptions.copilot",
     kind: "agent",
     logo: copilotLogo.src,
     match: /^(github-?copilot|copilot)\b/i,
@@ -92,16 +121,23 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "hermes",
     label: "Hermes Agent",
-    description: "Open-source agent",
+    description: "usage.agentCatalog.descriptions.hermes",
     kind: "agent",
     logo: hermesLogo.src,
     match: /^hermes\b/i,
   },
-  { id: "grok", label: "Grok", description: "xAI's assistant", kind: "agent", logo: xaiLogo.src, match: /^grok\b/i },
+  {
+    id: "grok",
+    label: "Grok",
+    description: "usage.agentCatalog.descriptions.grok",
+    kind: "agent",
+    logo: xaiLogo.src,
+    match: /^grok\b/i,
+  },
   {
     id: "cline",
     label: "Cline",
-    description: "Open-source coding agent",
+    description: "usage.agentCatalog.descriptions.cline",
     kind: "agent",
     logo: null,
     match: /^cline\b/i,
@@ -109,7 +145,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "kilo-code",
     label: "Kilo Code",
-    description: "Open-source coding agent",
+    description: "usage.agentCatalog.descriptions.kiloCode",
     kind: "agent",
     logo: null,
     match: /^kilo[- ]?code\b/i,
@@ -117,7 +153,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "aider",
     label: "Aider",
-    description: "AI pair programming in the terminal",
+    description: "usage.agentCatalog.descriptions.aider",
     kind: "agent",
     logo: null,
     match: /^aider\b/i,
@@ -125,7 +161,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "openai-agents",
     label: "OpenAI Agents",
-    description: "OpenAI Agents SDK",
+    description: "usage.agentCatalog.descriptions.openaiAgents",
     kind: "sdk",
     logo: openaiAgentsLogo.src,
     match: /^agents$/i,
@@ -133,7 +169,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "langchain",
     label: "LangChain",
-    description: "Agent framework",
+    description: "usage.agentCatalog.descriptions.langchain",
     kind: "sdk",
     logo: langchainLogo.src,
     match: /^(langchain|langgraph|deepagents)/i,
@@ -141,7 +177,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "pydantic-ai",
     label: "Pydantic AI",
-    description: "Agent framework",
+    description: "usage.agentCatalog.descriptions.pydanticAi",
     kind: "sdk",
     logo: pydanticAiLogo.src,
     match: /^pydantic-ai\b/i,
@@ -149,7 +185,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "github-actions",
     label: "GitHub Actions",
-    description: "CI workflows",
+    description: "usage.agentCatalog.descriptions.githubActions",
     kind: "sdk",
     logo: githubLogo.src,
     match: /^github-actions\b/i,
@@ -157,7 +193,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "litellm",
     label: "LiteLLM SDK",
-    description: "litellm Python SDK",
+    description: "usage.agentCatalog.descriptions.litellmSdk",
     kind: "sdk",
     logo: litellmLogo.src,
     match: /^litellm\b/i,
@@ -165,7 +201,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "openai-sdk",
     label: "OpenAI SDK",
-    description: "OpenAI client library",
+    description: "usage.agentCatalog.descriptions.openaiSdk",
     kind: "sdk",
     logo: openaiLogo.src,
     match: /^(openai|asyncopenai)\b/i,
@@ -173,7 +209,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "anthropic-sdk",
     label: "Anthropic SDK",
-    description: "Anthropic client library",
+    description: "usage.agentCatalog.descriptions.anthropicSdk",
     kind: "sdk",
     logo: anthropicLogo.src,
     match: /^anthropic\b/i,
@@ -181,7 +217,7 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "python",
     label: "Python",
-    description: "Scripts and HTTP clients",
+    description: "usage.agentCatalog.descriptions.python",
     kind: "sdk",
     logo: null,
     match: /^(python|httpx|aiohttp|urllib|requests)/i,
@@ -189,13 +225,27 @@ const FAMILIES: readonly AgentFamily[] = [
   {
     id: "node",
     label: "Node.js",
-    description: "Scripts and HTTP clients",
+    description: "usage.agentCatalog.descriptions.node",
     kind: "sdk",
     logo: null,
     match: /^(node|bun|deno|axios|undici)\b/i,
   },
-  { id: "curl", label: "curl", description: "Command line", kind: "sdk", logo: null, match: /^curl\b/i },
+  {
+    id: "curl",
+    label: "curl",
+    description: "usage.agentCatalog.descriptions.curl",
+    kind: "sdk",
+    logo: null,
+    match: /^curl\b/i,
+  },
 ];
+
+const AGENT_LABEL_KEYS: Readonly<Record<string, ParseKeys>> = {
+  "Claude (unspecified)": "usage.agentCatalog.labels.claudeUnspecified",
+};
+
+export const agentDisplayLabel = (label: string, t: TFunction): string =>
+  Object.hasOwn(AGENT_LABEL_KEYS, label) ? t(AGENT_LABEL_KEYS[label]) : label;
 
 const USER_AGENT_PREFIX = /^user[- ]agent:\s*/i;
 
@@ -209,6 +259,9 @@ export const userAgentProduct = (tag: string): string => {
 
 const familyFor = (product: string): AgentFamily | null =>
   FAMILIES.find((family) => family.match.test(product)) ?? null;
+
+export const usageClientFromUserAgent = (userAgent: string): UsageClient | null =>
+  parseUsageClient(familyFor(userAgent.trim().replace(USER_AGENT_PREFIX, ""))?.id ?? null);
 
 const isBareTag = (row: TagSummaryRow, product: string) =>
   row.tag.trim().replace(USER_AGENT_PREFIX, "").trim() === product;
@@ -228,7 +281,7 @@ const agentFor = (product: string, rows: readonly TagSummaryRow[]): AgentRow => 
   return {
     id: family?.id ?? `ua:${product.toLowerCase()}`,
     label: family?.label ?? product,
-    description: family?.description ?? "Custom client",
+    description: i18n.t(family?.description ?? "usage.agentCatalog.descriptions.customClient"),
     kind: family?.kind ?? "sdk",
     logo: family?.logo ?? null,
     spend: rows.reduce((sum, row) => sum + (row.total_spend || 0), 0),
@@ -246,8 +299,43 @@ const mergeAgents = (a: AgentRow, b: AgentRow): AgentRow => ({
   tokens: a.tokens + b.tokens,
   requests: a.requests + b.requests,
   users: Math.max(a.users, b.users),
-  tags: [...a.tags, ...b.tags],
+  tags: a.tags.length && b.tags.length ? [...a.tags, ...b.tags] : [],
 });
+
+const agentsForProduct = (product: string, rows: readonly TagSummaryRow[]): AgentRow[] => {
+  if (product.toLowerCase() !== "claude-cli") return [agentFor(product, contributingRows(product, rows))];
+  const bare = rows.find((row) => isBareTag(row, product));
+  const versions = rows.filter((row) => !isBareTag(row, product));
+  const versionAgents = versions.map((row) => agentFor(row.tag.trim().replace(USER_AGENT_PREFIX, ""), [row]));
+  if (!bare) return versionAgents;
+  const rollup = agentFor(product, [bare]);
+  if (!versions.length) return [rollup];
+  const emptyTotals = { spend: 0, tokens: 0, requests: 0, users: 0 };
+  const totals = versionAgents.reduce(
+    (sum, agent) => ({
+      spend: sum.spend + agent.spend,
+      tokens: sum.tokens + agent.tokens,
+      requests: sum.requests + agent.requests,
+      users: sum.users + agent.users,
+    }),
+    emptyTotals,
+  );
+  if (totals.spend > rollup.spend + 1e-9 || totals.tokens > rollup.tokens || totals.requests > rollup.requests) {
+    return [rollup];
+  }
+  const residual = {
+    ...rollup,
+    spend: Math.max(0, rollup.spend - totals.spend),
+    tokens: rollup.tokens - totals.tokens,
+    requests: rollup.requests - totals.requests,
+    users: Math.max(0, rollup.users - totals.users),
+    // A bare tag also selects the identified clients, so it cannot filter the residual alone.
+    tags: [],
+  };
+  return residual.spend > 1e-9 || residual.tokens > 0 || residual.requests > 0
+    ? [...versionAgents, residual]
+    : versionAgents;
+};
 
 /**
  * One row per agent from `/tag/summary`. Products are keyed case-sensitively: prod reports `python`
@@ -256,13 +344,10 @@ const mergeAgents = (a: AgentRow, b: AgentRow): AgentRow => ({
 export const topAgents = (rows: readonly TagSummaryRow[]): AgentRow[] => {
   const userAgentRows = rows.filter((row) => isUserAgentTag(row.tag) && userAgentProduct(row.tag));
   const products = [...new Set(userAgentRows.map((row) => userAgentProduct(row.tag)))];
-  const perProduct = products.map((product) =>
-    agentFor(
+  const perProduct = products.flatMap((product) =>
+    agentsForProduct(
       product,
-      contributingRows(
-        product,
-        userAgentRows.filter((row) => userAgentProduct(row.tag) === product),
-      ),
+      userAgentRows.filter((row) => userAgentProduct(row.tag) === product),
     ),
   );
   const byAgent = perProduct.reduce<ReadonlyMap<string, AgentRow>>((acc, agent) => {

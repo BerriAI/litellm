@@ -1,7 +1,7 @@
 import json
 from typing import Final
-from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from litellm.llms.azure_ai.agents.transformation import AzureAIAgentsConfig
@@ -428,15 +428,10 @@ async def test_azure_ai_agents_streaming_accumulates_annotations_from_multiple_t
         "data: [DONE]",
     ]
 
-    async def mock_aiter_lines():
-        for line in sse_lines:
-            yield line
-
-    mock_response = MagicMock()
-    mock_response.aiter_lines = MagicMock(return_value=mock_aiter_lines())
+    sse_response = httpx.Response(200, stream=httpx.ByteStream("\n".join(sse_lines).encode()))
 
     chunks = []
-    async for chunk in handler._process_sse_stream(mock_response, "azure_ai/agents/asst_123"):
+    async for chunk in handler._process_sse_stream(sse_response, "azure_ai/agents/asst_123"):
         chunks.append(chunk)
 
     final_chunk = chunks[-1]
@@ -498,15 +493,10 @@ async def test_azure_ai_agents_streaming_annotations_from_completed_message():
         "data: [DONE]",
     ]
 
-    async def mock_aiter_lines():
-        for line in sse_lines:
-            yield line
-
-    mock_response = MagicMock()
-    mock_response.aiter_lines = MagicMock(return_value=mock_aiter_lines())
+    sse_response = httpx.Response(200, stream=httpx.ByteStream("\n".join(sse_lines).encode()))
 
     chunks = []
-    async for chunk in handler._process_sse_stream(mock_response, "azure_ai/agents/asst_123"):
+    async for chunk in handler._process_sse_stream(sse_response, "azure_ai/agents/asst_123"):
         chunks.append(chunk)
 
     assert len(chunks) >= 1

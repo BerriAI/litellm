@@ -38,9 +38,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._experimental.mcp_server.utils import JSONLeafPath, json_string_leaves
 from litellm.proxy._types import SpecialHeaders
 from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+from litellm.proxy.mcp_server.utils import JSONLeafPath, json_string_leaves
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import AktoGuardrailConfigModelOptionalParams
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
@@ -793,6 +793,10 @@ class AktoGuardrail(CustomGuardrail):
         if failure is not None:
             raise failure
         return main_task.result()
+
+    @override
+    def supports_structured_messages(self) -> bool:
+        return False
 
     @override
     @log_guardrail_information

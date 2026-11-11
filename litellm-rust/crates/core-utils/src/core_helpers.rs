@@ -13,6 +13,8 @@ const FINISH_REASONS: &[(&str, &str)] = &[
     ("max_tokens", "length"),
     ("refusal", "content_filter"),
     ("compaction", "length"),
+    ("pause_turn", "length"),
+    ("model_context_window_exceeded", "length"),
     ("guardrail_intervened", "content_filter"),
     ("content_filtered", "content_filter"),
     ("content_filter", "content_filter"),
@@ -74,6 +76,8 @@ mod tests {
     #[case::end_turn("end_turn", "stop")]
     #[case::stop_sequence("stop_sequence", "stop")]
     #[case::max_tokens("max_tokens", "length")]
+    #[case::pause_turn("pause_turn", "length")]
+    #[case::model_context_window_exceeded("model_context_window_exceeded", "length")]
     #[case::refusal("refusal", "content_filter")]
     #[case::guardrail_intervened("guardrail_intervened", "content_filter")]
     #[case::content_filtered("content_filtered", "content_filter")]

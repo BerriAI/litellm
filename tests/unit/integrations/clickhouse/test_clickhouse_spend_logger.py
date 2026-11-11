@@ -20,10 +20,20 @@ from litellm.integrations.clickhouse.clickhouse_spend_logger import (
     strip_cache_hit_suffix,
 )
 from litellm.integrations.clickhouse.context import lens_analysis
+from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY,
+    USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY,
+)
+from litellm.litellm_core_utils.internal_call_metadata import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
 from litellm.litellm_core_utils import litellm_logging
 from litellm.litellm_core_utils.secret_redaction import REDACTED
 from litellm.tracing.types import SpendLogRecord
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, StandardLoggingPayload
 
 _JSON_OBJECT_ADAPTER: Final = TypeAdapter(Mapping[str, JsonValue])
 
@@ -149,6 +159,28 @@ def _standard_payload(
     return payload
 
 
+@pytest.mark.parametrize(("tracking_disabled", "expected_end_user"), [(True, ""), (None, "end-user-1")])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _payload(),
+        _payload(end_user="", metadata={**_payload()["metadata"], "user_api_key_end_user_id": "end-user-1"}),
+    ],
+    ids=["end_user_on_payload", "end_user_only_in_key_metadata"],
+)
+def test_end_user_is_stored_only_while_end_user_cost_tracking_is_on(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any], tracking_disabled: bool | None, expected_end_user: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_end_user_cost_tracking", tracking_disabled)
+
+    row: Final = spend_log_row_from_payload(cast(StandardLoggingPayload, payload), {})
+
+    assert row["end_user"] == expected_end_user
+    assert json.loads(row["metadata"])["user_api_key_end_user_id"] == (
+        None if tracking_disabled else payload["metadata"]["user_api_key_end_user_id"]
+    )
+
+
 def test_success_row_mapping():
     row: Final = spend_log_row_from_payload(cast(StandardLoggingPayload, _payload()), {"response_cost": 0.00042})
 
@@ -224,6 +256,8 @@ async def test_custom_request_metadata_is_redacted_before_clickhouse_logging(
                 "user_api_key_budget_reservation": {"token": "internal-token"},
                 "proxy_server_request": {"headers": {"authorization": "internal-auth"}},
                 "parent_otel_span": object(),
+                ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 35,
+                USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: 35,
             },
         },
     }
@@ -253,6 +287,8 @@ async def test_custom_request_metadata_is_redacted_before_clickhouse_logging(
     assert "user_api_key_auth" not in metadata
     assert "user_api_key_budget_reservation" not in metadata
     assert "proxy_server_request" not in metadata
+    assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in metadata
+    assert USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY not in metadata
     litellm_params: Final = cast(Mapping[str, object], kwargs["litellm_params"])
     request_metadata: Final = cast(Mapping[str, object], litellm_params["metadata"])
     assert request_metadata == {
@@ -325,6 +361,41 @@ def test_cache_hit_id_is_stripped_for_response_id():
     assert row["litellm_call_id"] == "gateway-call"
     assert row["cache_hit"] is True
     assert strip_cache_hit_suffix("chatcmpl-xyz") == "chatcmpl-xyz"
+
+
+@pytest.mark.parametrize(
+    "cost_kwargs",
+    (
+        pytest.param(
+            {
+                "call_type": "aget_responses",
+                "litellm_params": {
+                    "metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}
+                },
+            },
+            id="cost-poll",
+        ),
+        pytest.param(
+            {
+                "call_type": "pass_through_endpoint",
+                "litellm_params": {"metadata": {}},
+                SETTLES_BACKGROUND_RESPONSE_KWARG: BackgroundResponseSettlement.SETTLES,
+            },
+            id="passthrough-settlement",
+        ),
+    ),
+)
+def test_background_cost_row_keeps_its_own_request_id_beside_its_create(cost_kwargs: Mapping[str, object]) -> None:
+    payload: Final = cast(StandardLoggingPayload, _payload(id="resp_YWJjZA", call_type="aresponses"))
+    create_kwargs: Final[Mapping[str, object]] = {"call_type": "aresponses", "litellm_params": {"metadata": {}}}
+
+    rows: Final = [spend_log_row_from_payload(payload, kwargs) for kwargs in (create_kwargs, cost_kwargs)]
+
+    assert [row["request_id"] for row in rows] == [
+        "resp_YWJjZA",
+        f"resp_YWJjZA{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}",
+    ]
+    assert [row["response_id"] for row in rows] == ["resp_YWJjZA", "resp_YWJjZA"]
 
 
 def test_parse_traceparent_valid_missing_malformed():

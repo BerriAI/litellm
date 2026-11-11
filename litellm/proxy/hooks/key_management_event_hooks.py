@@ -2,13 +2,14 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, has_attributes
 from litellm.proxy._types import (
     GenerateKeyRequest,
     GenerateKeyResponse,
@@ -34,6 +35,10 @@ if TYPE_CHECKING:
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS: Final = "litellm/"
 
 
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
+
+
 class KeyManagementEventHooks:
     @staticmethod
     async def async_key_generated_hook(
@@ -57,13 +62,6 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        # Send email notification - non-blocking, independent operation
-        if data.send_invite_email is True:
-            try:
-                await KeyManagementEventHooks._send_key_created_email(response.model_dump(exclude_none=True))
-            except Exception as e:
-                verbose_proxy_logger.warning("Failed to send key created email: %s", e)
-
         if is_audit_logging_enabled():
             _updated_values: Final = response.model_dump_json(exclude_none=True)
             asyncio.create_task(
@@ -85,6 +83,13 @@ class KeyManagementEventHooks:
                     )
                 )
             )
+
+        # Send email notification - non-blocking, independent operation
+        if data.send_invite_email is True:
+            try:
+                await KeyManagementEventHooks._send_key_created_email(response.model_dump(exclude_none=True))
+            except Exception as e:
+                verbose_proxy_logger.warning("Failed to send key created email: %s", e)
 
         # Store the generated key in the secret manager - non-blocking, independent operation
         try:
@@ -118,16 +123,6 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
-        if data.key_alias is not None and data.key_alias != existing_key_row.key_alias:
-            try:
-                await KeyManagementEventHooks._rename_virtual_key_in_secret_manager(
-                    current_secret_name=existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}",
-                    new_secret_name=data.key_alias,
-                    team_id=existing_key_row.team_id,
-                )
-            except Exception as e:
-                verbose_proxy_logger.warning("Failed to rename virtual key in secret manager: %s", e)
-
         if is_audit_logging_enabled():
             updated_fields: Final = {
                 **data.model_dump(exclude_none=True),
@@ -156,6 +151,16 @@ class KeyManagementEventHooks:
             )
             asyncio.create_task(create_audit_log_for_update(request_data=request_data))
 
+        if data.key_alias is not None and data.key_alias != existing_key_row.key_alias:
+            try:
+                await KeyManagementEventHooks._rename_virtual_key_in_secret_manager(
+                    current_secret_name=existing_key_row.key_alias or f"virtual-key-{existing_key_row.token}",
+                    new_secret_name=data.key_alias,
+                    team_id=existing_key_row.team_id,
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning("Failed to rename virtual key in secret manager: %s", e)
+
     @staticmethod
     async def async_key_rotated_hook(
         data: RegenerateKeyRequest | None,
@@ -170,6 +175,28 @@ class KeyManagementEventHooks:
             is_audit_logging_enabled,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+        # store the audit log
+        if is_audit_logging_enabled() and existing_key_row.token is not None:
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.token,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=existing_key_row.token,
+                        action="rotated",
+                        updated_values=response.model_dump_json(exclude_none=True),
+                        before_value=existing_key_row.model_dump_json(exclude_none=True),
+                    )
+                )
+            )
 
         # Store the generated key in the secret manager - non-blocking, independent operation
         if response.token_id is not None:
@@ -204,28 +231,6 @@ class KeyManagementEventHooks:
         except Exception as e:
             verbose_proxy_logger.warning("Failed to send key rotated email: %s", e)
 
-        # store the audit log
-        if is_audit_logging_enabled() and existing_key_row.token is not None:
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.token,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=existing_key_row.token,
-                        action="rotated",
-                        updated_values=response.model_dump_json(exclude_none=True),
-                        before_value=existing_key_row.model_dump_json(exclude_none=True),
-                    )
-                )
-            )
-
     @staticmethod
     async def async_key_deleted_hook(
         data: KeyRequest,
@@ -254,39 +259,45 @@ class KeyManagementEventHooks:
         litellm_changed_by: str | None = None,
     ) -> None:
         from litellm.proxy.management_helpers.audit_logs import (
-            create_audit_log_for_update,
+            create_audit_logs_for_updates,
             get_audit_log_changed_by,
             is_audit_logging_enabled,
+            track_audit_task,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
         if not is_audit_logging_enabled():
             return
-        for key in keys_being_deleted:
-            key_row = LiteLLM_VerificationToken.model_validate(key, from_attributes=True)
-            if key_row.token is None:
-                continue
-            _key_row = key_row.model_dump_json(exclude_none=True)
-
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.token,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=key_row.token,
-                        action="deleted",
-                        updated_values="{}",
-                        before_value=_key_row,
-                    )
-                )
+        changed_by: Final = get_audit_log_changed_by(
+            litellm_changed_by=litellm_changed_by,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+        )
+        key_rows: Final = (
+            LiteLLM_VerificationToken.model_validate(key, from_attributes=True) for key in keys_being_deleted
+        )
+        audit_rows: Final = tuple(
+            LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=changed_by,
+                changed_by_api_key=user_api_key_dict.token,
+                table_name=LitellmTableNames.KEY_TABLE_NAME,
+                object_id=key_row.token,
+                action="deleted",
+                updated_values="{}",
+                before_value=key_row.model_dump_json(exclude_none=True),
             )
+            for key_row in key_rows
+            if key_row.token is not None
+        )
+        if not audit_rows:
+            return
+        track_audit_task(
+            asyncio.create_task(
+                create_audit_logs_for_updates(audit_rows), name=f"{len(audit_rows)} deleted key audit logs"
+            )
+        )
 
     @staticmethod
     async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str, team_id: str | None = None):
@@ -449,10 +460,10 @@ class KeyManagementEventHooks:
 
         try:
             from litellm.proxy import proxy_server as proxy_server_module
+            from litellm.proxy.proxy_server import prisma_client
         except ImportError:
             return None
 
-        prisma_client: Final = getattr(proxy_server_module, "prisma_client", None)
         user_api_key_cache: Final = getattr(proxy_server_module, "user_api_key_cache", None)
 
         if prisma_client is None or user_api_key_cache is None:
@@ -470,12 +481,13 @@ class KeyManagementEventHooks:
             verbose_proxy_logger.debug("Unable to load team metadata for team_id=%s: %s", team_id, exc)
             return None
 
-        metadata = getattr(team_obj, "metadata", None)
-        if metadata is None:
+        raw_metadata: Final = attribute_or_none(team_obj, "metadata")
+        if raw_metadata is None:
             return None
 
-        if hasattr(metadata, "model_dump"):
-            metadata = metadata.model_dump()
+        metadata: Final = (
+            raw_metadata.model_dump() if has_attributes(raw_metadata, _ModelDumpable, "model_dump") else raw_metadata
+        )
 
         if not isinstance(metadata, dict):
             return None

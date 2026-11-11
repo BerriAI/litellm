@@ -9,6 +9,7 @@ body. OpenAI/Anthropic reject unknown body params with HTTP 400.
 
 from unittest.mock import MagicMock
 
+from openai._legacy_response import LegacyAPIResponse
 
 import litellm
 from litellm.types.utils import all_litellm_params
@@ -47,12 +48,12 @@ def test_completion_does_not_leak_flag_into_provider_request_body():
         },
     }
 
-    mock_raw_response = MagicMock()
+    mock_raw_response = MagicMock(spec=LegacyAPIResponse)
     mock_raw_response.headers = {}
     mock_raw_response.parse.return_value = mock_response
 
     mock_client = MagicMock()
-    mock_client.chat.completions.with_raw_response.create.return_value = (
+    mock_client.post.return_value = (
         mock_raw_response
     )
 
@@ -65,7 +66,7 @@ def test_completion_does_not_leak_flag_into_provider_request_body():
     )
 
     create_kwargs = (
-        mock_client.chat.completions.with_raw_response.create.call_args.kwargs
+        mock_client.post.call_args.kwargs
     )
     assert "use_chat_completions_api" not in create_kwargs
     assert "use_chat_completions_api" not in (create_kwargs.get("extra_body") or {})

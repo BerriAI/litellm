@@ -14,7 +14,7 @@ keeps the batched-DELETE path, so existing deployments are untouched.
 """
 
 import re
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from datetime import date, datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -264,6 +264,52 @@ class SpendLogsPartitionManager:
                 SPEND_LOGS_TABLE,
             )
         return [(row["name"], parse_partition_upper_bound(row.get("bound") or "")) for row in rows]
+
+    async def drop_oldest_partitions_while(
+        self,
+        prisma_client: "PrismaClient",
+        now: datetime,
+        remaining_timeout_ms: RemainingTimeoutMs,
+        still_over_target: Callable[[], Awaitable[bool]],
+    ) -> tuple[str, ...]:
+        """
+        DROP fully elapsed partitions oldest first until `still_over_target` says the size rule is satisfied.
+
+        Only partitions whose whole range lies before `now` are candidates, so the partition receiving
+        current writes and the DEFAULT partition are never dropped. The callback runs after every drop
+        because a DROP returns its disk at once, so a re-measure is what tells the loop to stop.
+        """
+        list_budget_ms: Final = remaining_timeout_ms()
+        if list_budget_ms is None:
+            return ()
+        now_naive: Final = now.astimezone(timezone.utc).replace(tzinfo=None)
+        partitions: Final = await self._list_partitions(prisma_client, list_budget_ms)
+        elapsed: Final = sorted(
+            ((upper, name) for name, upper in partitions if upper is not None and upper <= now_naive),
+        )
+        drops: Final = self._drop_each_while(prisma_client, elapsed, remaining_timeout_ms, still_over_target)
+        return tuple([name async for name in drops])
+
+    async def _drop_each_while(
+        self,
+        prisma_client: "PrismaClient",
+        elapsed: Sequence[tuple[datetime, str]],
+        remaining_timeout_ms: RemainingTimeoutMs,
+        still_over_target: Callable[[], Awaitable[bool]],
+    ) -> AsyncIterator[str]:
+        for _, name in elapsed:
+            budget_ms: int | None = remaining_timeout_ms()
+            if budget_ms is None:
+                verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
+                return
+            try:
+                await self._execute_bounded_ddl(prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms)
+            except Exception as e:  # noqa: BLE001  # a partition this run cannot drop is left for the next one
+                verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)
+                return
+            yield name
+            if not await still_over_target():
+                return
 
     async def drop_partitions_older_than(
         self, prisma_client: "PrismaClient", cutoff: datetime, remaining_timeout_ms: RemainingTimeoutMs

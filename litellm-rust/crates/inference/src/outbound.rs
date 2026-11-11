@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_http::outbound::OutboundRequest;
+use litellm_http::outbound::{json, signed};
 use litellm_llms::base_llm::auth::Authenticated;
 use serde_json::Value;
 
@@ -11,25 +11,26 @@ use serde_json::Value;
     fields(status)
 )]
 pub async fn send(
-    request: OutboundRequest,
+    request: reqwest::Request,
     client: &litellm_http::Client,
-) -> Result<reqwest::Response, reqwest::Error> {
-    request.send(client).await.inspect(|response| {
-        tracing::Span::current().record("status", response.status().as_u16());
-    })
+) -> Result<reqwest::Response, litellm_http::Error> {
+    let response = client.execute(request).await?;
+    tracing::Span::current().record("status", response.status().as_u16());
+    Ok(response)
 }
 
 /// Header credentials are already in `headers`; SigV4 is applied here, over the
 /// bytes that are sent.
 pub fn outbound_request(
     authenticated: Authenticated,
-    url: String,
+    url: &str,
     body: &Value,
     timeout: Option<Duration>,
-) -> Result<OutboundRequest, litellm_http::Error> {
+) -> Result<reqwest::Request, litellm_http::Error> {
     let Authenticated { headers, signer } = authenticated;
+    let request = json(url, &headers, body, timeout)?;
     match signer {
-        None => OutboundRequest::json(url, headers, body, timeout),
-        Some(signer) => OutboundRequest::signed_json(url, headers, body, timeout, &signer),
+        None => Ok(request),
+        Some(signer) => signed(request, &signer),
     }
 }

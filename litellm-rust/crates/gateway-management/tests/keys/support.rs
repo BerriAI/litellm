@@ -1,10 +1,7 @@
 use std::{collections::BTreeMap, sync::Mutex};
 
 use litellm_gateway_auth::keys::KeyStatus;
-use litellm_gateway_auth::{
-    KeyError,
-    keys::{KeyHash, KeyLookup, LookupFuture},
-};
+use litellm_gateway_auth::keys::{KeyHash, KeyLookup, LookupFuture};
 use litellm_gateway_management::{
     Error,
     keys::{KeyRecord, KeyStore, NewKey, Revocation, StoreFuture},
@@ -56,7 +53,9 @@ impl KeyLookup for MemoryStore {
             self.get(hash)
                 .await
                 .map(|record| record.map(|record| record.status))
-                .map_err(|error| KeyError::Lookup(Box::new(error)))
+                .map_err(|error| {
+                    litellm_gateway_auth::Error::Unavailable(litellm_error::Source::new(error))
+                })
         })
     }
 }
@@ -64,9 +63,9 @@ impl KeyLookup for MemoryStore {
 pub struct Unavailable;
 
 fn unavailable<T>() -> Result<T, Error> {
-    Err(Error::Storage(Box::new(std::io::Error::other(
-        "backend detail",
-    ))))
+    Err(Error::Storage(litellm_error::Source::new(
+        std::io::Error::other("backend detail"),
+    )))
 }
 
 impl KeyStore for Unavailable {

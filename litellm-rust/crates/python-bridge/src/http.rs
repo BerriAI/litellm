@@ -108,13 +108,38 @@ pub(crate) fn call_config(
             Some(snapshot) => configured(&snapshot)?,
             None => HttpSettingsLayer::default(),
         },
-    ])
-    .without_missing_files(&|path: &Path| path.exists());
-    let resolution = Resolution::from(&settings);
+    ]);
+    Ok(resolved(py, settings))
+}
+
+pub(crate) fn settings_config(
+    py: Python<'_>,
+    use_http_settings: bool,
+) -> PyResult<HttpClientConfig> {
+    let snapshot = if use_http_settings {
+        PythonSettings::Http.read_or_unset(py)?
+    } else {
+        None
+    };
+    let layer = match snapshot {
+        Some(snapshot) => configured(&snapshot)?,
+        None => HttpSettingsLayer::default(),
+    };
+    let settings = HttpSettings::from_layers([
+        HttpSettingsLayer::from_environment(&ProcessEnvironment),
+        layer,
+    ]);
+    Ok(resolved(py, settings))
+}
+
+/// The client config `settings` resolve to, warning once per process about each setting the client cannot apply
+fn resolved(py: Python<'_>, settings: HttpSettings) -> HttpClientConfig {
+    let resolution =
+        Resolution::from(&settings.without_missing_files(&|path: &Path| path.exists()));
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
         crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
     }
-    Ok(resolution.config)
+    resolution.config
 }
 
 pub(crate) fn provider_client(
@@ -132,26 +157,14 @@ pub(crate) fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Cl
 }
 
 pub(crate) fn client_error(error: litellm_http::Error) -> PyErr {
-    match error {
-        litellm_http::Error::Read {
-            tls_source: TlsSource::ClientIdentity,
-            ..
-        }
-        | litellm_http::Error::InvalidPem {
-            tls_source: TlsSource::ClientIdentity,
-            ..
-        } => PyValueError::new_err(
+    match error.tls_source() {
+        Some(TlsSource::ClientIdentity) => PyValueError::new_err(
             "http_settings.ssl_certificate: expected a readable PEM certificate and private key",
         ),
-        litellm_http::Error::Read {
-            tls_source: TlsSource::CaBundle,
-            ..
+        Some(TlsSource::CaBundle) => {
+            PyValueError::new_err("http_settings.ssl_verify: expected a readable PEM CA bundle")
         }
-        | litellm_http::Error::InvalidPem {
-            tls_source: TlsSource::CaBundle,
-            ..
-        } => PyValueError::new_err("http_settings.ssl_verify: expected a readable PEM CA bundle"),
-        _ => PyValueError::new_err("http_settings: native HTTP client configuration is invalid"),
+        None => PyValueError::new_err(litellm_error::Report::new(&error).to_string()),
     }
 }
 
@@ -274,25 +287,60 @@ settings = types.SimpleNamespace(**defaults)
     fn client_error_uses_tls_source_when_paths_match() {
         Python::initialize();
         Python::attach(|py| {
-            let path = PathBuf::from("/shared.pem");
-            let ca_error = client_error(litellm_http::Error::InvalidPem {
-                path: path.clone(),
-                message: "invalid".into(),
-                tls_source: TlsSource::CaBundle,
-            });
+            let file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), b"not a certificate").unwrap();
+            let path = file.path().to_path_buf();
+            let defaults = Resolution::from(&HttpSettings::default()).config;
+            let build = |config: HttpClientConfig| {
+                HttpClientPool::new(Arc::new(PublicDnsResolver))
+                    .client(&config, ClientVariant::Provider)
+                    .map(drop)
+                    .unwrap_err()
+            };
+            let ca_error = client_error(build(HttpClientConfig {
+                verify: Verify::CaBundle(path.clone()),
+                ..defaults.clone()
+            }));
             assert_eq!(
                 ca_error.to_string(),
                 "ValueError: http_settings.ssl_verify: expected a readable PEM CA bundle"
             );
-            let client_error = client_error(litellm_http::Error::InvalidPem {
-                path,
-                message: "invalid".into(),
-                tls_source: TlsSource::ClientIdentity,
-            });
+            let client_error = client_error(build(HttpClientConfig {
+                client_certificate: Some(litellm_http::ClientIdentity::Pem(path)),
+                ..defaults
+            }));
             assert!(client_error.is_instance_of::<PyValueError>(py));
             assert_eq!(
                 client_error.to_string(),
                 "ValueError: http_settings.ssl_certificate: expected a readable PEM certificate and private key"
+            );
+        });
+    }
+
+    #[test]
+    fn client_error_without_a_tls_source_reports_the_build_failure() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = HttpClientPool::new(Arc::new(PublicDnsResolver))
+                .client(
+                    &HttpClientConfig {
+                        user_agent: Some("bad\nagent".into()),
+                        ..Resolution::from(&HttpSettings::default()).config
+                    },
+                    ClientVariant::Provider,
+                )
+                .map(drop)
+                .unwrap_err();
+            assert_eq!(error.tls_source(), None);
+            let report = litellm_error::Report::new(&error).to_string();
+
+            let failure = client_error(error);
+
+            assert!(failure.is_instance_of::<PyValueError>(py));
+            assert_eq!(failure.value(py).str().unwrap().to_string(), report);
+            assert!(
+                report.contains("could not build the HTTP client: "),
+                "{report}"
             );
         });
     }

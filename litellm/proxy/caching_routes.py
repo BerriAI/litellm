@@ -1,10 +1,13 @@
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import RedisCache
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -12,11 +15,16 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.caching import CachePingResponse, HealthCheckCacheParams
 
 masker: Final = SensitiveDataMasker()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 router: Final = APIRouter(
     prefix="/cache",
     tags=["caching"],
 )
+
+
+def _copy_cache_params(cache_params: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(**cache_params)
 
 
 def _extract_cache_params() -> dict[str, object]:
@@ -40,7 +48,9 @@ def _extract_cache_params() -> dict[str, object]:
         return {}
     try:
         cache_params: Final = vars(litellm.cache.cache)
-        cleaned_params: Final = HealthCheckCacheParams(**cache_params).model_dump() if cache_params else {}
+        cleaned_params: Final = (
+            HealthCheckCacheParams.model_validate(_copy_cache_params(cache_params)).model_dump() if cache_params else {}
+        )
         return masker.mask_dict(cleaned_params)
     except (AttributeError, TypeError) as e:
         verbose_proxy_logger.debug("Error extracting cache params: %s", e)
@@ -142,7 +152,7 @@ async def cache_delete(request: Request):
         if litellm.cache is None:
             raise HTTPException(status_code=503, detail="Cache not initialized. litellm.cache is None")
 
-        request_data: Final = await request.json()
+        request_data: Final = decoded_json_object(_DECODED_JSON.validate_python(await request.json()))
         keys: Final = request_data.get("keys", None)
 
         if litellm.cache.type == "redis":

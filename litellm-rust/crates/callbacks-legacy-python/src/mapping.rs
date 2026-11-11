@@ -235,7 +235,7 @@ python_callbacks! {
         "async_log_stream_event",
         "async_post_mcp_tool_call_hook",
     ],
-    Dispatch::Python("litellm.llms.anthropic.pass_through.messages.handler") => [
+    Dispatch::Python("litellm.llms.anthropic.messages.native.handler") => [
         "async_pre_request_hook",
     ],
     Dispatch::Python("litellm.litellm_core_utils.streaming_handler") => [

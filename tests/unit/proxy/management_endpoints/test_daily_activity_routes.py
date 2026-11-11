@@ -1,26 +1,36 @@
 import csv
 import io
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from itertools import chain
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from prisma.errors import DataError
 
 from litellm import constants
+from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.daily_activity_routes import (
     _csv_cell,
+    get_daily_activity_llm_router,
     get_daily_activity_prisma_client,
     get_daily_activity_repository,
     router,
 )
-from litellm.types.proxy.management_endpoints.common_daily_activity import KeySpendMetrics, SpendMetrics
+from litellm.router import Router
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    KeySpendMetrics,
+    SpendAnalyticsPaginatedResponse,
+    SpendMetrics,
+)
 from litellm.types.repositories.daily_activity import (
     AggregatedRows,
     DailyActivityScope,
@@ -57,6 +67,7 @@ class _Activity:
     prompt_caching_savings_spend: float
     gateway_injected_caching_savings_spend: float
     autorouter_savings_spend: float
+    guardrail_spend: float
     api_requests: int
     successful_requests: int
     failed_requests: int
@@ -99,6 +110,7 @@ def _activity_for_entity(
             prompt_caching_savings_spend=0.2,
             gateway_injected_caching_savings_spend=0.3,
             autorouter_savings_spend=0.4,
+            guardrail_spend=0.5,
             api_requests=1,
             successful_requests=1,
             failed_requests=0,
@@ -155,6 +167,7 @@ def _seeded_activity() -> tuple[_Activity, ...]:
             prompt_caching_savings_spend=0.0,
             gateway_injected_caching_savings_spend=0.0,
             autorouter_savings_spend=0.0,
+            guardrail_spend=0.0,
             api_requests=1,
             successful_requests=1,
             failed_requests=0,
@@ -178,6 +191,7 @@ def _metrics(rows: Sequence[_Activity]) -> Mapping[str, int | float]:
         "prompt_caching_savings_spend": sum(row.prompt_caching_savings_spend for row in rows),
         "gateway_injected_caching_savings_spend": sum(row.gateway_injected_caching_savings_spend for row in rows),
         "autorouter_savings_spend": sum(row.autorouter_savings_spend for row in rows),
+        "guardrail_spend": sum(row.guardrail_spend for row in rows),
         "api_requests": sum(row.api_requests for row in rows),
         "successful_requests": sum(row.successful_requests for row in rows),
         "failed_requests": sum(row.failed_requests for row in rows),
@@ -193,6 +207,7 @@ def _grouping_row(
     api_key: str | None,
     group_level: int,
     distinct_api_keys: int | None,
+    model_group: str | None = None,
 ) -> GroupingSetsRow:
     metric_values: Final = _metrics(rows)
     return GroupingSetsRow(
@@ -200,7 +215,7 @@ def _grouping_row(
         api_key=api_key,
         **metric_values,
         model=None,
-        model_group=None,
+        model_group=model_group,
         custom_llm_provider=None,
         mcp_namespaced_tool_name=None,
         endpoint=None,
@@ -214,17 +229,29 @@ def _grouping_rows_for_day(
 ) -> tuple[GroupingSetsRow, ...]:
     date_rows: Final = tuple(row for row in rows if row.date == date)
     return (
-        _grouping_row(date_rows, date=date, api_key=None, group_level=63, distinct_api_keys=distinct_api_keys),
-    ) + tuple(
-        _grouping_row(
-            tuple(row for row in date_rows if row.api_key == api_key),
-            date=date,
-            api_key=api_key,
-            group_level=31,
-            distinct_api_keys=None,
+        (_grouping_row(date_rows, date=date, api_key=None, group_level=63, distinct_api_keys=distinct_api_keys),)
+        + tuple(
+            _grouping_row(
+                tuple(row for row in date_rows if row.api_key == api_key),
+                date=date,
+                api_key=api_key,
+                group_level=31,
+                distinct_api_keys=None,
+            )
+            for api_key in top_keys
+            if any(row.api_key == api_key for row in date_rows)
         )
-        for api_key in top_keys
-        if any(row.api_key == api_key for row in date_rows)
+        + tuple(
+            _grouping_row(
+                tuple(row for row in date_rows if row.model_group == model_group),
+                date=date,
+                api_key=None,
+                group_level=55,
+                distinct_api_keys=None,
+                model_group=model_group,
+            )
+            for model_group in sorted({row.model_group for row in date_rows})
+        )
     )
 
 
@@ -232,6 +259,8 @@ class _FakeRepository:
     def __init__(self, rows: tuple[_Activity, ...]) -> None:
         self._rows: Final = rows
         self.aggregated = AsyncMock(side_effect=self._aggregated)
+        self.guardrail_spend = AsyncMock(return_value=())
+        self.customer_team_spend = AsyncMock(return_value=())
         self.key_page = AsyncMock(side_effect=self._key_page)
         self.key_page_call: tuple[DailyActivityScope, int, int] | None = None
         self.search_keys = AsyncMock(side_effect=self._search_keys)
@@ -499,6 +528,14 @@ class _PrismaTable:
         return next((row for row in self._rows if _matches(row, where)), None)
 
 
+class _FailingPrismaTable:
+    def __init__(self, failure: Exception) -> None:
+        self._failure: Final = failure
+
+    async def find_many(self, **kwargs: object) -> tuple[object, ...]:
+        raise self._failure
+
+
 def _matches(row: object, where: Mapping[str, object]) -> bool:
     return all(
         getattr(row, field_name, None) in value["in"]
@@ -508,7 +545,7 @@ def _matches(row: object, where: Mapping[str, object]) -> bool:
     )
 
 
-def _prisma_client() -> object:
+def _prisma_client(**table_overrides: object) -> object:
     user: Final = LiteLLM_UserTable(
         user_id="user-a",
         user_email="user@example.test",
@@ -531,7 +568,7 @@ def _prisma_client() -> object:
         team_alias="Team B",
         members_with_roles=[Member(user_id="user-b", role="user")],
     )
-    db: Final = SimpleNamespace(
+    default_tables: Final = SimpleNamespace(
         litellm_usertable=_PrismaTable((user, other_user)),
         litellm_teamtable=_PrismaTable((team, other_team)),
         litellm_verificationtoken=_PrismaTable((SimpleNamespace(token="key-alpha", user_id="user-a"),)),
@@ -560,13 +597,12 @@ def _prisma_client() -> object:
             )
         ),
     )
+    db: Final = SimpleNamespace(**{**vars(default_tables), **table_overrides})
     return SimpleNamespace(db=db, writer_db=db)
 
 
-@pytest.fixture
-def daily_activity_client() -> Iterator[tuple[TestClient, _FakeRepository]]:
-    repository: Final = _FakeRepository(_seeded_activity())
-    prisma_client: Final = _prisma_client()
+@contextmanager
+def _daily_activity_test_client(repository: _FakeRepository, prisma_client: object) -> Iterator[TestClient]:
     app: Final = FastAPI()
     app.include_router(router)
 
@@ -583,8 +619,16 @@ def daily_activity_client() -> Iterator[tuple[TestClient, _FakeRepository]]:
 
     app.dependency_overrides[get_daily_activity_repository] = lambda: repository
     app.dependency_overrides[get_daily_activity_prisma_client] = lambda: prisma_client
+    app.dependency_overrides[get_daily_activity_llm_router] = lambda: None
     app.dependency_overrides[user_api_key_auth] = resolve_auth
     with TestClient(app) as client:
+        yield client
+
+
+@pytest.fixture
+def daily_activity_client() -> Iterator[tuple[TestClient, _FakeRepository]]:
+    repository: Final = _FakeRepository(_seeded_activity())
+    with _daily_activity_test_client(repository, _prisma_client()) as client:
         yield client, repository
 
 
@@ -609,6 +653,105 @@ def test_aggregated_routes_return_scoped_results(
     assert body["metadata"]["total_spend"] == pytest.approx(14.5), response.text
     assert body["metadata"]["total_api_keys"] == 5, response.text
     assert len(body["results"]) == 2, response.text
+
+
+def _ptu_sized_router(
+    model_group: str, shares: Mapping[str, int] = MappingProxyType({"team-a": 30, "team-b": 20})
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2024-01-01T00:00:00Z",
+                    "ptu_shares": dict(shares),
+                },
+            }
+        ]
+    )
+
+
+def _inject_llm_router(client: TestClient, llm_router: Router) -> None:
+    app: Final = client.app
+    assert isinstance(app, FastAPI)
+    app.dependency_overrides[get_daily_activity_llm_router] = lambda: llm_router
+
+
+@pytest.mark.parametrize("attribution_enabled", [True, False])
+def test_team_aggregated_route_reports_ptu_hours_for_the_sized_model_group_only_while_attribution_is_on(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    monkeypatch: pytest.MonkeyPatch,
+    attribution_enabled: bool,
+) -> None:
+    """team-a sent one rare-group request of 10 input and 5 output tokens on 2025-01-01, so with
+    gpt-4.1's sizing that day, its model group, and the total carry those tokens normalized
+    (output at the model's output ratio) over one PTU-hour of input; the unsized popular-group,
+    the day without rare-group traffic, and the flag-off run all report zero."""
+    client, _ = daily_activity_client
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True" if attribution_enabled else "False")
+    _inject_llm_router(client, _ptu_sized_router("rare-group"))
+
+    response: Final = client.get("/team/daily/activity/aggregated", params=_entity_params("team_ids", "team-a"))
+
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    capacity: Final = AZURE_PTU_CAPACITY["gpt-4.1"]
+    expected: Final = (
+        (10 + 5 * capacity.output_to_input_ratio) / capacity.normalized_tokens_per_ptu_hour
+        if attribution_enabled
+        else 0.0
+    )
+    by_date: Final = {day["date"]: day for day in body["results"]}
+    rare_day: Final = by_date["2025-01-01"]
+    assert body["metadata"]["total_ptu_hours"] == pytest.approx(expected), response.text
+    assert rare_day["metrics"]["ptu_hours"] == pytest.approx(expected), response.text
+    assert rare_day["breakdown"]["model_groups"]["rare-group"]["metrics"]["ptu_hours"] == pytest.approx(expected)
+    assert rare_day["breakdown"]["model_groups"]["popular-group"]["metrics"]["ptu_hours"] == 0, response.text
+    assert by_date["2025-01-02"]["metrics"]["ptu_hours"] == 0, response.text
+    assert body["metadata"]["total_tokens"] == 90, response.text
+
+
+def test_team_aggregated_route_reports_no_ptu_hours_to_a_team_holding_no_share(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rare-group is split between team-b and team-c, so team-a's page alone converts none of its
+    rare-group tokens even though the group is sized."""
+    client, _ = daily_activity_client
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    _inject_llm_router(client, _ptu_sized_router("rare-group", shares=MappingProxyType({"team-b": 30, "team-c": 20})))
+
+    response: Final = client.get("/team/daily/activity/aggregated", params=_entity_params("team_ids", "team-a"))
+
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    rare_day: Final = {day["date"]: day for day in body["results"]}["2025-01-01"]
+    assert body["metadata"]["total_ptu_hours"] == 0, response.text
+    assert rare_day["breakdown"]["model_groups"]["rare-group"]["metrics"]["ptu_hours"] == 0, response.text
+    assert body["metadata"]["total_tokens"] == 90, response.text
+
+
+def test_ptu_hours_stay_zero_outside_the_team_routes(
+    daily_activity_client: tuple[TestClient, _FakeRepository], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PTU reservations are split per team, so only the team routes convert tokens to PTU-hours;
+    a user's own activity on the same sized model group keeps the field at zero."""
+    client, _ = daily_activity_client
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    _inject_llm_router(client, _ptu_sized_router("rare-group"))
+
+    response: Final = client.get("/user/daily/activity/aggregated", params=_entity_params("user_id", "user-a"))
+
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    rare_day: Final = next(day for day in body["results"] if day["date"] == "2025-01-01")
+    assert body["metadata"]["total_ptu_hours"] == 0, response.text
+    assert rare_day["breakdown"]["model_groups"]["rare-group"]["metrics"]["ptu_hours"] == 0, response.text
 
 
 @pytest.mark.parametrize(("prefix", "query_name", "entity_id"), _ENTITY_CASES)
@@ -642,6 +785,7 @@ def test_search_folds_each_entity_key_across_days(
                 "metrics": {
                     "spend": 3.0,
                     "flat_cost": 0.0,
+                    "ptu_hours": 0.0,
                     "prompt_tokens": 20,
                     "completion_tokens": 10,
                     "cache_read_input_tokens": 0,
@@ -651,6 +795,7 @@ def test_search_folds_each_entity_key_across_days(
                     "prompt_caching_savings_spend": 0.4,
                     "gateway_injected_caching_savings_spend": 0.6,
                     "autorouter_savings_spend": 0.8,
+                    "guardrail_spend": 1.0,
                     "total_tokens": 30,
                     "successful_requests": 2,
                     "failed_requests": 0,
@@ -793,6 +938,59 @@ def test_key_page_route_rejects_invalid_bounds(
     repository.key_page.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("headers", "expected_users"),
+    (
+        ({}, {"2025-01-01": {"user-a": 12.5, "user-b": 100.0}, "2025-01-02": {"user-a": 2.0}}),
+        (
+            {"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+            {"2025-01-01": {"user-a": 12.5}, "2025-01-02": {"user-a": 2.0}},
+        ),
+    ),
+)
+def test_user_aggregate_returns_scoped_spend_per_user_with_labels(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    headers: dict[str, str],
+    expected_users: dict[str, dict[str, float]],
+) -> None:
+    client, _ = daily_activity_client
+    response: Final = client.get("/user/daily/activity/aggregated", params=_DATE_PARAMS, headers=headers)
+
+    assert response.status_code == 200, response.text
+    body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(response.content)
+    assert {
+        day.date.isoformat(): {user_id: entity.metrics.spend for user_id, entity in day.breakdown.entities.items()}
+        for day in body.results
+    } == expected_users, response.text
+    labels: Final = {
+        "user-a": {"user_email": "user@example.test", "user_alias": "Alias A"},
+        "user-b": {"user_email": "other-user@example.test", "user_alias": None},
+    }
+    for day in body.results:
+        assert {user_id: entity.metadata for user_id, entity in day.breakdown.entities.items()} == {
+            user_id: labels[user_id] for user_id in expected_users[day.date.isoformat()]
+        }, response.text
+    assert sum(sum(users.values()) for users in expected_users.values()) == body.metadata.total_spend
+
+
+def test_user_aggregate_preserves_spend_when_user_metadata_is_missing(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    repository.user_metadata.return_value = {}
+    repository.user_metadata.side_effect = None
+    response: Final = client.get("/user/daily/activity/aggregated", params={**_DATE_PARAMS, "user_id": "user-a"})
+
+    assert response.status_code == 200, response.text
+    body: Final = SpendAnalyticsPaginatedResponse.model_validate_json(response.content)
+    assert {
+        day.date.isoformat(): {
+            user_id: (entity.metrics.spend, entity.metadata) for user_id, entity in day.breakdown.entities.items()
+        }
+        for day in body.results
+    } == {"2025-01-01": {"user-a": (12.5, {})}, "2025-01-02": {"user-a": (2.0, {})}}, response.text
+
+
 def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
     daily_activity_client: tuple[TestClient, _FakeRepository],
 ) -> None:
@@ -838,6 +1036,178 @@ def test_user_page_route_ranks_users_by_spend_and_attaches_metadata(
     assert user_page_call is not None
     assert user_page_call[1:] == (0, constants.USAGE_USER_PAGE_DEFAULT)
     assert repository.user_metadata.call_args.args[0] == frozenset(("user-a", "user-b"))
+
+
+_LOOKUP_DATABASE_FAILURES: Final = pytest.mark.parametrize(
+    "failure",
+    [
+        DataError({"user_facing_error": {"error_code": "P1001", "message": "Can't reach database server"}}),
+        httpx.ConnectError("the query engine refused the connection"),
+    ],
+    ids=["unreachable-database", "engine-connect-error"],
+)
+_KEY_ROWS_ROUTES: Final = pytest.mark.parametrize(
+    ("suffix", "extra_params"),
+    [
+        ("keys", {}),
+        ("search", {"search": "key"}),
+        ("model_top_keys", {"model_group": "rare-group"}),
+        ("cache_leakage_keys", {}),
+    ],
+    ids=["keys", "search", "model_top_keys", "cache_leakage_keys"],
+)
+
+
+@_LOOKUP_DATABASE_FAILURES
+@_KEY_ROWS_ROUTES
+def test_key_routes_keep_spend_when_the_key_lookup_hits_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    suffix: str,
+    extra_params: Mapping[str, str],
+    failure: Exception,
+) -> None:
+    client, repository = daily_activity_client
+    repository.key_metadata.side_effect = failure
+
+    response: Final = client.get(
+        f"/user/daily/activity/aggregated/{suffix}",
+        params={**_entity_params("user_id", "user-a"), **extra_params},
+    )
+
+    assert response.status_code == 200, response.text
+    rows: Final = response.json()["api_keys"]
+    assert rows
+    assert all(row["metrics"]["spend"] > 0 for row in rows)
+    assert {row["metadata"]["key_alias"] for row in rows} == {None}
+
+
+@_KEY_ROWS_ROUTES
+def test_key_routes_still_report_a_lookup_bug_that_is_not_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    suffix: str,
+    extra_params: Mapping[str, str],
+) -> None:
+    client, repository = daily_activity_client
+    repository.key_metadata.side_effect = AttributeError("not a database failure")
+
+    response: Final = client.get(
+        f"/user/daily/activity/aggregated/{suffix}",
+        params={**_entity_params("user_id", "user-a"), **extra_params},
+    )
+
+    assert response.status_code == 500, response.text
+    assert "not a database failure" in response.text
+
+
+@_LOOKUP_DATABASE_FAILURES
+def test_user_page_route_keeps_spend_when_the_user_lookup_hits_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    failure: Exception,
+) -> None:
+    client, repository = daily_activity_client
+    repository.user_metadata.side_effect = failure
+
+    response: Final = client.get("/user/daily/activity/aggregated/users", params=_DATE_PARAMS)
+
+    assert response.status_code == 200, response.text
+    assert [(user["user_id"], user["spend"], user["user_email"]) for user in response.json()["users"]] == [
+        ("user-b", 100.0, None),
+        ("user-a", 14.5, None),
+    ]
+
+
+def test_user_page_route_still_reports_a_lookup_bug_that_is_not_a_database_failure(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+) -> None:
+    client, repository = daily_activity_client
+    repository.user_metadata.side_effect = AttributeError("not a database failure")
+
+    response: Final = client.get("/user/daily/activity/aggregated/users", params=_DATE_PARAMS)
+
+    assert response.status_code == 500, response.text
+    assert "not a database failure" in response.text
+
+
+_ENTITY_ALIAS_LOOKUPS: Final = pytest.mark.parametrize(
+    ("prefix", "query_name", "entity_id", "alias_table", "alias"),
+    [
+        ("/team", "team_ids", "team-a", "litellm_teamtable", {"team_alias": "Team A"}),
+        ("/organization", "organization_ids", "org-a", "litellm_organizationtable", {"organization_alias": "Org A"}),
+        ("/customer", "end_user_ids", "customer-a", "litellm_endusertable", {"alias": "Customer A"}),
+        ("/agent", "agent_ids", "agent-a", "litellm_agentstable", {"agent_name": "Agent A"}),
+    ],
+    ids=["team", "organization", "customer", "agent"],
+)
+
+
+def _aggregated_entity_metadata(
+    prefix: str, query_name: str, entity_id: str, prisma_client: object
+) -> tuple[httpx.Response, tuple[Mapping[str, object], ...]]:
+    with _daily_activity_test_client(_FakeRepository(_seeded_activity()), prisma_client) as client:
+        response: Final = client.get(f"{prefix}/daily/activity/aggregated", params=_entity_params(query_name, entity_id))
+    if response.status_code != 200:
+        return response, ()
+    entities: Final = chain.from_iterable(
+        result["breakdown"]["entities"].values() for result in response.json()["results"]
+    )
+    return response, tuple(entity["metadata"] for entity in entities)
+
+
+@_LOOKUP_DATABASE_FAILURES
+@_ENTITY_ALIAS_LOOKUPS
+def test_entity_routes_keep_spend_and_blank_the_alias_when_the_alias_lookup_hits_a_database_failure(
+    prefix: str,
+    query_name: str,
+    entity_id: str,
+    alias_table: str,
+    alias: Mapping[str, object],
+    failure: Exception,
+) -> None:
+    healthy, healthy_metadata = _aggregated_entity_metadata(prefix, query_name, entity_id, _prisma_client())
+    failed, failed_metadata = _aggregated_entity_metadata(
+        prefix, query_name, entity_id, _prisma_client(**{alias_table: _FailingPrismaTable(failure)})
+    )
+
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["metadata"] == healthy.json()["metadata"]
+    assert healthy_metadata and set(map(str, healthy_metadata)) == {str(alias)}
+    assert failed_metadata and set(map(str, failed_metadata)) == {str({})}
+
+
+@_ENTITY_ALIAS_LOOKUPS
+def test_entity_routes_still_report_an_alias_lookup_bug_that_is_not_a_database_failure(
+    prefix: str,
+    query_name: str,
+    entity_id: str,
+    alias_table: str,
+    alias: Mapping[str, object],
+) -> None:
+    failed, _ = _aggregated_entity_metadata(
+        prefix,
+        query_name,
+        entity_id,
+        _prisma_client(**{alias_table: _FailingPrismaTable(AttributeError("not a database failure"))}),
+    )
+
+    assert failed.status_code == 500, failed.text
+    assert "not a database failure" in failed.text
+
+
+@_LOOKUP_DATABASE_FAILURES
+def test_team_route_fails_closed_for_a_team_member_when_the_team_lookup_hits_a_database_failure(
+    failure: Exception,
+) -> None:
+    repository: Final = _FakeRepository(_seeded_activity())
+    prisma_client: Final = _prisma_client(litellm_teamtable=_FailingPrismaTable(failure))
+    with _daily_activity_test_client(repository, prisma_client) as client:
+        response: Final = client.get(
+            "/team/daily/activity/aggregated",
+            params=_entity_params("team_ids", "team-a"),
+            headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
+        )
+
+    assert response.status_code == 500, response.text
+    repository.aggregated.assert_not_called()
 
 
 def test_user_page_route_forwards_offset_and_limit(
@@ -1153,13 +1523,15 @@ def test_team_scope_applies_membership_and_user_key_filter(
     assert repository.aggregated.call_args.kwargs["include_entity_breakdown"] is True
 
 
+@pytest.mark.parametrize("api_key", ["key-beta", "unattributed", "raw:unattributed", "raw:raw:unattributed"])
 def test_team_scope_does_not_allow_an_unowned_api_key(
     daily_activity_client: tuple[TestClient, _FakeRepository],
+    api_key: str,
 ) -> None:
     client, _ = daily_activity_client
     response: Final = client.get(
         "/team/daily/activity/aggregated",
-        params={**_entity_params("team_ids", "team-a"), "api_key": "key-beta"},
+        params={**_entity_params("team_ids", "team-a"), "api_key": api_key},
         headers={"x-user-role": LitellmUserRoles.INTERNAL_USER.value, "x-user-id": "user-a"},
     )
     assert response.status_code == 200, response.text
@@ -1507,3 +1879,17 @@ def test_export_content_disposition_is_ascii_and_built_from_canonical_dates(
     disposition: Final = response.headers["content-disposition"]
     assert disposition == 'attachment; filename="team-usage-2025-01-01-2025-01-02-daily.csv"'
     assert disposition.isascii()
+
+
+@pytest.mark.parametrize(("prefix", "query_name", "entity_id"), _ENTITY_CASES)
+def test_unattributed_key_filter_does_not_become_an_unfiltered_request(
+    daily_activity_client: tuple[TestClient, _FakeRepository], prefix: str, query_name: str, entity_id: str
+) -> None:
+    client, repository = daily_activity_client
+    response: Final = client.get(
+        f"{prefix}/daily/activity/aggregated",
+        params={**_entity_params(query_name, entity_id), "api_key": "unattributed"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["metadata"]["total_spend"] == 0
+    assert repository.aggregated.call_args.args[0].api_keys == ("",)

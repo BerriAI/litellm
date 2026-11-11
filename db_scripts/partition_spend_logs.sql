@@ -55,6 +55,8 @@ ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_session_id_idx"
     RENAME TO "LiteLLM_SpendLogs_legacy_session_id_idx";
 ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx"
     RENAME TO "LiteLLM_SpendLogs_legacy_api_key_startTime_idx";
+ALTER INDEX IF EXISTS "LiteLLM_SpendLogs_litellm_call_id_idx"
+    RENAME TO "LiteLLM_SpendLogs_legacy_litellm_call_id_idx";
 
 CREATE TABLE "LiteLLM_SpendLogs" (
     LIKE "LiteLLM_SpendLogs_legacy" INCLUDING DEFAULTS INCLUDING GENERATED

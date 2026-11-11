@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 flate2.workspace = true
+litellm-http.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 semver.workspace = true

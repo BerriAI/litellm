@@ -1,6 +1,8 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
+import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
 vi.mock("../utils/roles", async (importOriginal) => {
@@ -64,10 +66,12 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: mockUseTeams,
 }));
 
+const uiConfig = vi.hoisted(() => ({ data: { admin_ui_disabled: false, use_si_terminology: false } }));
+
 vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
   return {
     useUIConfig: () => ({
-      data: { admin_ui_disabled: false },
+      data: uiConfig.data,
       isLoading: false,
     }),
   };
@@ -149,6 +153,20 @@ describe("Sidebar (leftnav)", () => {
     });
     mockUseThemeImpl = unbrandedTheme;
     navState.pathname = "/ui/api-keys";
+    uiConfig.data = { admin_ui_disabled: false, use_si_terminology: false };
+  });
+
+  it("uses SI terminology in section and page labels when the proxy asks for it", () => {
+    uiConfig.data = { admin_ui_disabled: false, use_si_terminology: true };
+    renderWithProviders(
+      <TerminologyProvider>
+        <Sidebar {...defaultProps} />
+      </TerminologyProvider>,
+    );
+
+    expect(screen.getByText("SI GATEWAY")).toBeInTheDocument();
+    expect(screen.getByText("SI Hub")).toBeInTheDocument();
+    expect(screen.queryByText("AI Hub")).not.toBeInTheDocument();
   });
 
   it("should link the logo to the UI home route rather than the proxy origin", () => {
@@ -427,30 +445,6 @@ describe("Sidebar (leftnav)", () => {
       });
       expect(screen.queryByText("Prompts")).not.toBeInTheDocument();
     });
-
-    it("should hide Old Usage from internal users while keeping other Experimental children", async () => {
-      mockUseAuthorized.mockReturnValue(internalAuth);
-      renderWithProviders(<Sidebar {...defaultProps} />);
-
-      act(() => {
-        fireEvent.click(screen.getByText("Experimental"));
-      });
-      await waitFor(() => {
-        expect(screen.getByText("API Playground")).toBeInTheDocument();
-      });
-      expect(screen.queryByText("Old Usage")).not.toBeInTheDocument();
-    });
-
-    it("should show Old Usage to admins", async () => {
-      renderWithProviders(<Sidebar {...defaultProps} />);
-
-      act(() => {
-        fireEvent.click(screen.getByText("Experimental"));
-      });
-      await waitFor(() => {
-        expect(screen.getByText("Old Usage")).toBeInTheDocument();
-      });
-    });
   });
 
   // Workflow Runs, Memory and Guardrails Monitor render a shell and then 401
@@ -626,6 +620,14 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
   });
 
+  it.each([false, true])("links internal users to Skills with read-only=%s", (isViewOnly) => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, isViewOnly });
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByRole("link", { name: "Skills Hub" })).toHaveAttribute("href", "/ui/skills");
+  });
+
   it.each([
     { allowlist: ["teams"], visible: false },
     { allowlist: ["teams", "projects"], visible: true },
@@ -654,6 +656,13 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByRole("link", { name: /Projects/ })).toHaveAttribute("href", "/ui/projects");
   });
 
+  it.each([false, true])("keeps workspace and Chat discovery available with collapsed=%s", async (collapsed) => {
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar collapsed={collapsed} />);
+    await user.click(screen.getByRole("button", { name: "Switch workspace, current: AI Gateway" }));
+    expect(await screen.findByRole("menuitem", { name: /^Chat / })).toBeVisible();
+  });
+
   it("marks the nav item for the current route active", () => {
     navState.pathname = "/ui/logs";
     renderWithProviders(<Sidebar {...defaultProps} />);
@@ -665,6 +674,12 @@ describe("Sidebar (leftnav)", () => {
     navState.pathname = "/ui/";
     renderWithProviders(<Sidebar {...defaultProps} />);
     expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("data-active", "true");
+  });
+
+  it("does not highlight Home when the Aria workspace is active", () => {
+    navState.pathname = "/ui/aria";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Home" })).not.toHaveAttribute("data-active");
   });
 
   it("expands the parent group of the current nested route and marks the child active", () => {
@@ -686,8 +701,8 @@ describe("Sidebar (leftnav)", () => {
     expectHref("Playground", "/ui/playground");
     expectHref("Models + Endpoints", "/ui/models-and-endpoints");
     expectHref("Usage", "/ui/usage");
+    expectHref("Alerts", "/ui/alerts");
     expectHref("API Reference", "/ui/api-reference");
-    expectHref("Old Usage", "/ui/old-usage");
   });
 
   it("never links a leaf to the legacy ?page= switch", () => {
@@ -743,7 +758,6 @@ describe("getBreadcrumb", () => {
   it("resolves routes whose segment differs from the sidebar page id", () => {
     expect(getBreadcrumb("/ui/models-and-endpoints")).toEqual({ section: "AI Gateway", title: "Models + Endpoints" });
     expect(getBreadcrumb("/ui/usage")).toEqual({ section: "Observability", title: "Usage" });
-    expect(getBreadcrumb("/ui/old-usage")).toEqual({ section: "Developer Tools", title: "Old Usage" });
   });
 
   it("titles the dashboard root as Home", () => {

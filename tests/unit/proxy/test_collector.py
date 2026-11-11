@@ -49,14 +49,14 @@ class _Fallback:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport", ["unix", "tcp"])
-async def test_consumer_handles_each_producer_line_once_in_order(tmp_path: Path, transport: str):
+async def test_consumer_handles_each_producer_line_once_in_order(socket_path: Path, transport: str):
     handler: Final = _Handler(fail_on=b"event-3\n")
     consumer: Final = SpendEventConsumer(handler)
     server: Final = await consumer.serve(
-        UnixAddress(path=str(tmp_path / "spend.sock")) if transport == "unix" else TcpAddress("127.0.0.1", 0)
+        UnixAddress(path=str(socket_path)) if transport == "unix" else TcpAddress("127.0.0.1", 0)
     )
     address: Final = (
-        UnixAddress(path=str(tmp_path / "spend.sock"))
+        UnixAddress(path=str(socket_path))
         if transport == "unix"
         else TcpAddress("127.0.0.1", server.sockets[0].getsockname()[1])
     )
@@ -74,10 +74,10 @@ async def test_consumer_handles_each_producer_line_once_in_order(tmp_path: Path,
 
 
 @pytest.mark.asyncio
-async def test_consumer_discards_a_truncated_trailing_event(tmp_path: Path):
+async def test_consumer_discards_a_truncated_trailing_event(socket_path: Path):
     handler: Final = _Handler()
     consumer: Final = SpendEventConsumer(handler)
-    address: Final = UnixAddress(path=str(tmp_path / "spend.sock"))
+    address: Final = UnixAddress(path=str(socket_path))
     server: Final = await consumer.serve(address)
     _, writer = await open_collector_connection(address, timeout=1.0)
     writer.write(b"whole\npartial-without-newline")
@@ -93,9 +93,9 @@ async def test_consumer_discards_a_truncated_trailing_event(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_drain_reports_producers_still_connected_after_the_timeout(tmp_path: Path):
+async def test_drain_reports_producers_still_connected_after_the_timeout(socket_path: Path):
     consumer: Final = SpendEventConsumer(_Handler())
-    address: Final = UnixAddress(path=str(tmp_path / "spend.sock"))
+    address: Final = UnixAddress(path=str(socket_path))
     server: Final = await consumer.serve(address)
     _, writer = await open_collector_connection(address, timeout=1.0)
     await asyncio.sleep(0.05)
@@ -108,11 +108,11 @@ async def test_drain_reports_producers_still_connected_after_the_timeout(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_graceful_stop_hands_the_producer_over_to_its_fallback_without_losing_events(tmp_path: Path):
+async def test_graceful_stop_hands_the_producer_over_to_its_fallback_without_losing_events(socket_path: Path):
     handler: Final = _Handler()
     fallback: Final = _Fallback()
     consumer: Final = SpendEventConsumer(handler)
-    address: Final = UnixAddress(path=str(tmp_path / "spend.sock"))
+    address: Final = UnixAddress(path=str(socket_path))
     server: Final = await consumer.serve(address)
     producer: Final = SpendEventProducer(
         address=address, on_unavailable="fallback", buffer_size=100, connect_timeout=1.0, fallback=fallback
@@ -134,7 +134,7 @@ async def test_graceful_stop_hands_the_producer_over_to_its_fallback_without_los
 
 @pytest.mark.parametrize("loop_factory", [asyncio.new_event_loop, uvloop.new_event_loop], ids=["asyncio", "uvloop"])
 def test_drain_still_hands_over_live_producers_when_another_connection_already_died(
-    tmp_path: Path, loop_factory: Callable[[], asyncio.AbstractEventLoop]
+    socket_path: Path, loop_factory: Callable[[], asyncio.AbstractEventLoop]
 ):
     """A transport the loop force-closed under a busy handler must not abort the half-close of the others."""
 
@@ -145,7 +145,7 @@ def test_drain_still_hands_over_live_producers_when_another_connection_already_d
             await release.wait()
 
         consumer: Final = SpendEventConsumer(slow_handler)
-        address: Final = UnixAddress(path=str(tmp_path / "spend.sock"))
+        address: Final = UnixAddress(path=str(socket_path))
         server: Final = await consumer.serve(address)
         _, dead = await open_collector_connection(address, timeout=1.0)
         dead.write(b"stuck\n")

@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.prompt_cache_prediction import NativePredictionTarget, TokenCounter
 from litellm.proxy.hooks.autorouter_baseline_cache import AutoRouterBaselineCache, CapturedBaselineObservation
 from litellm.router import Router
+from litellm.router_rust.steps.prerouting import _record_routing_decision  # pyright: ignore[reportPrivateUsage]  # production trusted stamp owner
 from litellm.types.router import RetryPolicy
 from litellm.types.utils import CallTypes, StandardLoggingRoutingDecision
 
@@ -86,7 +87,7 @@ def _kwargs(logging_obj: Logging, trusted: bool = True, *, explicit_logging: boo
     context: Final = _OBJECTS.validate_json(
         '{"max_tokens":16,"litellm_metadata":{"user_api_key_hash":"test-caller-hash"}}'
     )
-    Router._record_routing_decision(  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]  # production trusted stamp owner
+    _record_routing_decision(
         context,
         StandardLoggingRoutingDecision(
             router_model_name="test-router",
@@ -499,12 +500,14 @@ async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and
     from litellm.litellm_core_utils import logging_worker
     from litellm.litellm_core_utils.logging_worker import LoggingWorker
 
-    release: Final = asyncio.Event()
+    counted: Final = asyncio.Event()
+    loop: Final = asyncio.get_running_loop()
+    real_time: Final = loop.time
+    monkeypatch.setattr(loop, "time", lambda: real_time() + (2.05 if counted.is_set() else 0.0))
 
     async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int:
-        if not release.is_set():
-            asyncio.get_running_loop().call_later(2.05, release.set)
-            await release.wait()
+        counted.set()
+        await asyncio.sleep(0.001)
         return await _count(model, api_key, body)
 
     worker: Final = LoggingWorker(timeout=8.0)
@@ -519,7 +522,6 @@ async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and
         assert observed.plan is not None and observed.plan.breakpoints[0].prefix_tokens == 5000
         assert payload["response_cost"] is not None and worker._timeout_total == 0
     finally:
-        release.set()
         await worker.stop()
 
 
@@ -1096,3 +1098,55 @@ async def test_tier_pins_never_enter_the_caller_snapshot_on_later_routing_passes
     assert context is not None and context.baseline_body is not None
     assert context.baseline_body.get("max_tokens") == 16
     assert "output_config" not in context.baseline_body and "thinking" not in context.baseline_body
+
+
+_NON_NATIVE_MODELS: Final = _MESSAGES.validate_json("""[
+    {"model_name":"test-router","litellm_params":{"model":"auto_router/complexity_router",
+      "complexity_router_config":{"tiers":{"SIMPLE":"flash","MEDIUM":"flash","COMPLEX":"flash",
+      "REASONING":"opus"},"session_affinity":false}}},
+    {"model_name":"flash","litellm_params":{"model":"cloudflare/@cf/deepseek-ai/deepseek-v4.1-flash","api_key":"test-selected",
+      "api_base":"https://chat.example.test/v1"},"model_info":{"id":"selected"}},
+    {"model_name":"opus","litellm_params":{"model":"anthropic/claude-opus-5","api_key":"test-selected"},
+      "model_info":{"id":"baseline"}}]""")
+
+
+def _chat_upstream(request: httpx.Request) -> httpx.Response:
+    stream: Final = _JSON_OBJECT.validate_json(request.content).get("stream") is True
+    chunk: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "deepseek-v4.1-flash",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
+    }
+    completion: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "deepseek-v4.1-flash",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
+    }
+    content: Final = (
+        f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode() if stream else json.dumps(completion).encode()
+    )
+    return httpx.Response(
+        200,
+        content=content,
+        request=request,
+        headers=MappingProxyType({"content-type": "text/event-stream" if stream else "application/json"}),
+    )
+
+
+@pytest.mark.parametrize("stream", (False, True))
+async def test_a_turn_routed_to_a_non_anthropic_tier_says_its_provider_is_unsupported(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    rig: Final = _Rig(monkeypatch, models=_NON_NATIVE_MODELS)
+    with respx.mock() as transport:
+        transport.route(host="chat.example.test").mock(side_effect=_chat_upstream)
+        await _call(rig.router, rig.logging(stream))
+        captured: Final = _observation(await rig.capture.payload())
+    assert captured.observation.outcome == "uncertain"
+    assert captured.observation.reason == "unsupported_selected_provider"

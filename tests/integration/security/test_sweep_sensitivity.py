@@ -85,7 +85,7 @@ def test_rig_with_an_overridden_master_key_resolves_the_config_deployment(tmp_pa
         assert overridden.proxy.key == master_key
         assert overridden.model_id
         assert overridden.proxy.request("GET", "/model/info").status_code == 200
-        assert overridden.proxy.request("GET", "/public/whats_new").status_code == 200
+        assert overridden.proxy.request("GET", "/public/litellm_blog_posts").status_code == 200
         assert overridden.egress() == ()
 
 

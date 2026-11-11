@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import socket
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -378,12 +377,6 @@ def raw_deployment(scenario: Scenario, model_name: str, litellm_params: Mapping[
     identity: Final = string_value(object_value(created["model_info"])["id"])
     scenario.cleanups.callback(scenario.delete_model, identity)
     return model_name
-
-
-def closed_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 def provider_calls(wire: Wire) -> tuple[Request, ...]:

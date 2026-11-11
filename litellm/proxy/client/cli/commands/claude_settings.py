@@ -35,7 +35,7 @@ from litellm.litellm_core_utils.private_json import (
     stage_private_json,
     write_private_bytes,
 )
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from . import statusline_script
 from .cmd_quoting import quote_for_cmd

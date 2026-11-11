@@ -388,3 +388,20 @@ class TestModelScopeConfig:
         assert msg["content"][0] == {"type": "text", "text": "What is in this image?"}
         assert msg["content"][1]["type"] == "image_url"
         assert msg["content"][1]["image_url"]["url"] == "https://example.com/cat.jpg"
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://gateway.example.com/modelscope/v1",
+        "https://gateway.example.com/modelscope/v1/",
+        "https://gateway.example.com/modelscope/v1/chat/completions/",
+    ],
+)
+def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
+    assert (
+        ModelScopeChatConfig().get_complete_url(
+            api_base=api_base, api_key=None, model="Qwen/Qwen3-8B", optional_params={}, litellm_params={}
+        )
+        == "https://gateway.example.com/modelscope/v1/chat/completions"
+    )

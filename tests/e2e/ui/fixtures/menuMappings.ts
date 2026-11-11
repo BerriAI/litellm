@@ -32,7 +32,6 @@ export const menuLabelToPage: Record<string, Page> = {
   Budgets: Page.Budgets,
   "API Playground": Page.TransformRequest,
   "Tag Management": Page.TagManagement,
-  "Old Usage": Page.Usage,
   // Tools submenu items
   "MCP Servers": Page.McpServers,
   "Vector Stores": Page.VectorStores,

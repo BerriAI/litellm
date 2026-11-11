@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/cva.config";
 import { Button } from "@/components/ui/button";
@@ -44,13 +45,16 @@ function DialogContent({
   overlayClassName,
   children,
   showCloseButton = true,
+  keepMounted = false,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean;
+  keepMounted?: boolean;
   overlayClassName?: string;
 }) {
+  const { t } = useTranslation();
   return (
-    <DialogPortal>
+    <DialogPortal keepMounted={keepMounted}>
       <DialogOverlay className={overlayClassName} forceRender={Boolean(overlayClassName)} />
       <DialogPrimitive.Popup
         data-slot="dialog-content"
@@ -67,7 +71,7 @@ function DialogContent({
             render={<Button variant="ghost" className="absolute top-4 right-4" size="icon-sm" />}
           >
             <XIcon />
-            <span className="sr-only">Close</span>
+            <span className="sr-only">{t("ui.dialog.contentClose")}</span>
           </DialogPrimitive.Close>
         )}
       </DialogPrimitive.Popup>
@@ -87,6 +91,7 @@ function DialogFooter({
 }: React.ComponentProps<"div"> & {
   showCloseButton?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       data-slot="dialog-footer"
@@ -94,7 +99,11 @@ function DialogFooter({
       {...props}
     >
       {children}
-      {showCloseButton && <DialogPrimitive.Close render={<Button variant="outline" />}>Close</DialogPrimitive.Close>}
+      {showCloseButton && (
+        <DialogPrimitive.Close render={<Button variant="outline" />}>
+          {t("ui.dialog.footerClose")}
+        </DialogPrimitive.Close>
+      )}
     </div>
   );
 }

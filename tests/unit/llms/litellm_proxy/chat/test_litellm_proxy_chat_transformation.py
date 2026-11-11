@@ -1,15 +1,17 @@
 import json
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
+import respx
 from openai import AsyncOpenAI, OpenAI
+from openai._legacy_response import LegacyAPIResponse
 from openai.types import CreateEmbeddingResponse, Embedding
 from openai.types.create_embedding_response import Usage
-import pytest
-import re
 
 import litellm
 from litellm import completion
@@ -18,13 +20,37 @@ from litellm.llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfi
 from tests._vcr_conftest_common import rewound_new_episodes_cassette
 from tests.capturing_transport import CapturingTransport
 
-
 _GATEWAY_EMBEDDING_RESPONSE: Final = CreateEmbeddingResponse(
     object="list",
     data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
     model="my-vllm-model",
     usage=Usage(prompt_tokens=2, total_tokens=2),
 )
+
+
+@pytest.mark.parametrize(
+    ("base_path", "models_path"),
+    [
+        ("", "/v1/models"),
+        ("/", "/v1/models"),
+        ("/v1", "/v1/models"),
+        ("/v1/", "/v1/models"),
+        ("/gateway/v1", "/gateway/v1/models"),
+        ("/gateway/v1/", "/gateway/v1/models"),
+    ],
+)
+@respx.mock
+def test_proxy_model_discovery_preserves_the_api_base_path_and_upstream_namespaces(
+    base_path: str, models_path: str
+) -> None:
+    respx.get(
+        f"http://upstream-listing.test:4000{models_path}",
+        headers={"Authorization": "Bearer test-proxy-key"},
+    ).mock(return_value=httpx.Response(200, json={"data": [{"id": "chat-model"}, {"id": "vendor/chat-model"}]}))
+
+    assert LiteLLMProxyChatConfig().get_models(
+        api_base=f"http://upstream-listing.test:4000{base_path}", api_key="test-proxy-key"
+    ) == ["litellm_proxy/chat-model", "litellm_proxy/vendor/chat-model"]
 
 
 async def _gateway_embedding_via_injected_client(
@@ -98,7 +124,7 @@ async def test_litellm_gateway_from_sdk():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions.with_raw_response, "create", new=MagicMock()
+        openai_client, "post", new=MagicMock()
     ) as mock_call:
         try:
             completion(
@@ -114,9 +140,9 @@ async def test_litellm_gateway_from_sdk():
 
         mock_call.assert_called_once()
 
-        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs["body"]))
 
-        assert "hello" in mock_call.call_args.kwargs["extra_body"]
+        assert "hello" in mock_call.call_args.kwargs["options"]["extra_json"]
 
 
 @pytest.mark.parametrize("is_async", (False, True))
@@ -264,7 +290,7 @@ async def test_litellm_gateway_from_sdk_rerank(is_async):
         patch_target = client.post
 
     with patch.object(client, "post", new=mock_method):
-        mock_response = MagicMock()
+        mock_response = MagicMock(spec=LegacyAPIResponse)
 
         # Create a mock response similar to OpenAI's rerank response
         mock_response.text = json.dumps(
@@ -408,7 +434,7 @@ async def test_litellm_gateway_from_sdk_structured_output():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client, "post", new=MagicMock()
     ) as mock_call:
         try:
             litellm.completion(
@@ -427,8 +453,8 @@ async def test_litellm_gateway_from_sdk_structured_output():
 
         mock_call.assert_called_once()
 
-        print("Call KWARGS - {}".format(mock_call.call_args.kwargs))
-        json_schema = mock_call.call_args.kwargs["response_format"]
+        print("Call KWARGS - {}".format(mock_call.call_args.kwargs["body"]))
+        json_schema = mock_call.call_args.kwargs["body"]["response_format"]
         assert "json_schema" in json_schema
 
 
@@ -486,7 +512,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
     openai_client = OpenAI(api_key="fake-key")
 
     # Create mock response object
-    mock_response = MagicMock()
+    mock_response = MagicMock(spec=LegacyAPIResponse)
     mock_response.headers = {"x-litellm-response-cost": "120"}
     mock_response.parse.return_value = litellm.ModelResponse(
         **{
@@ -528,8 +554,7 @@ def test_litellm_gateway_from_sdk_with_response_cost_in_additional_headers():
     )
 
     with patch.object(
-        openai_client.chat.completions.with_raw_response,
-        "create",
+        openai_client, "post",
         return_value=mock_response,
     ) as mock_call:
         response = litellm.completion(
@@ -564,7 +589,7 @@ async def test_litellm_gateway_image_generation_direct(is_async):
         "created": 1,
         "data": [{"url": "https://example.com/image.png"}],
     }
-    mock_raw_response = MagicMock()
+    mock_raw_response = MagicMock(spec=LegacyAPIResponse)
     mock_raw_response.parse.return_value = mock_openai_response
     mock_raw_response.headers = {}
 
@@ -640,3 +665,25 @@ def test_litellm_gateway_from_sdk_with_thinking_param(respx_mock):
         )
     e = exc_info.value
     assert "Connection error." in str(e)
+
+
+def test_translate_developer_role_leaves_a_later_developer_message_in_place_for_the_downstream_proxy() -> None:
+    translated: Final = LiteLLMProxyChatConfig().translate_developer_role_to_system_role(
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "Hi there"},
+            {"role": "developer", "content": "Answer with exactly one word."},
+            {"role": "user", "content": "What is the capital of France?"},
+        ],
+        model="fireworks-qwen",
+        custom_llm_provider="litellm_proxy",
+        api_base="http://inner-proxy:4000",
+        model_info=None,
+    )
+
+    assert list(translated) == [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Answer with exactly one word."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
