@@ -2632,6 +2632,62 @@ async def test_store_batch_output_file_reads_a_team_model_output_from_the_owner_
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_respx_sees_provider_calls")
+@pytest.mark.parametrize("team_id", ["team-a", "team-b"])
+@respx.mock
+async def test_afile_retrieve_refreshes_a_team_model_output_from_the_owner_team_account(team_id: str) -> None:
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    file_bytes_by_team: Final = {"team-a": 111, "team-b": 222}
+    for team, size in file_bytes_by_team.items():
+        respx.get(f"{_OPENAI_API_BASE}/files/file-output456", headers={"Authorization": f"Bearer {team}-key"}).respond(
+            200,
+            json={
+                "id": "file-output456",
+                "object": "file",
+                "bytes": size,
+                "created_at": 456,
+                "filename": "output.jsonl",
+                "purpose": "batch_output",
+                "status": "processed",
+            },
+        )
+    respx.get(f"{_OPENAI_API_BASE}/files/file-output456").respond(404, json={"error": {"message": "No such File"}})
+    router: Final = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "proxy-wide-key"}},
+            *(
+                {
+                    "model_name": f"model_name_{team}_4f2a",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": f"{team}-key"},
+                    "model_info": {"id": f"{team}-gpt-id", "team_id": team, "team_public_model_name": "team-gpt"},
+                }
+                for team in file_bytes_by_team
+            ),
+        ]
+    )
+    proxy_managed_files, _ = _managed_files_with_fake_prisma()
+
+    with patch.object(proxy_server_module, "llm_router", router):
+        await proxy_managed_files.store_batch_output_file(
+            unified_file_id="unified-output",
+            provider_file_id="file-output456",
+            model_id="team-gpt",
+            model_name="team-gpt",
+            owner=UserAPIKeyAuth(user_id="user-123", team_id=team_id),
+            litellm_parent_otel_span=None,
+            fetch_provider_details=False,
+        )
+        retrieved: Final = await proxy_managed_files.afile_retrieve("unified-output", None, llm_router=router)
+
+    assert (retrieved.id, retrieved.bytes, retrieved.filename) == (
+        "unified-output",
+        file_bytes_by_team[team_id],
+        "output.jsonl",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_respx_sees_provider_calls")
 @respx.mock
 async def test_store_batch_output_file_keeps_its_measured_size_when_a_read_refreshes_the_row_first():
     import litellm.proxy.proxy_server as proxy_server_module
@@ -3836,7 +3892,7 @@ async def test_afile_retrieve_uses_model_name_when_router_does_not_know_deployme
     assert response.bytes == 836
     retrieve.assert_awaited_once()
     router.registry.return_value.credentials.assert_called_once_with(
-        "bedrock/model-x", form="with_provider", team_id=None
+        "bedrock/model-x", form="with_provider", team_id=row.team_id
     )
     assert retrieve.await_args.kwargs["custom_llm_provider"] == "bedrock"
     assert retrieve.await_args.kwargs["max_retries"] == 0

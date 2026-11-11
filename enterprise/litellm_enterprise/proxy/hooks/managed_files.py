@@ -2504,6 +2504,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         model_id=model_id,
                         model_name=model_id,
                         llm_router=llm_router,
+                        team_id=stored_file_object.team_id,
                     )
                     if refreshed_file_object is None:
                         return _public_file_object(file_object, file_id)
@@ -2512,6 +2513,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         model_id=model_id,
                         model_name=model_id,
                         provider_file_id=provider_file_id,
+                        team_id=stored_file_object.team_id,
                     ):
                         await self._save_refreshed_file_object(stored_file_object, refreshed_file_object)
                         return _public_file_object(refreshed_file_object, file_id)
@@ -2546,6 +2548,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 llm_router=llm_router,
                 raise_on_failure=True,
                 allow_default_provider=True,
+                team_id=stored_file_object.team_id,
             )
         except Exception as e:
             raise Exception(f"Failed to retrieve file {file_id} from provider: {str(e)}") from e
