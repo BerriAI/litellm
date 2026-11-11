@@ -3092,11 +3092,12 @@ async def test_async_get_cache_answers_400_for_a_single_object_embedding_input()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("internal", [False, True])
-async def test_a_cache_hit_inside_an_internal_sub_call_fires_no_callbacks_of_its_own(
-    monkeypatch: pytest.MonkeyPatch, internal: bool
+@pytest.mark.parametrize("sub_call", ["none", "rag_sub_call", "internal_sub_call"])
+async def test_a_cache_hit_fires_no_callbacks_of_its_own_only_inside_an_internal_sub_call(
+    monkeypatch: pytest.MonkeyPatch, sub_call: str
 ) -> None:
     from litellm.integrations.custom_logger import CustomLogger
+    from litellm.rag.main import _suppressed_sub_call_billing
 
     logged: Final[list[tuple[str, object]]] = []
 
@@ -3130,7 +3131,12 @@ async def test_a_cache_hit_inside_an_internal_sub_call_fires_no_callbacks_of_its
     async_logging: Final = _build_logging_obj(CallTypes.acompletion.value, stream=False)
     sync_logging: Final = _build_logging_obj(CallTypes.completion.value, stream=False)
 
-    with internal_sub_call() if internal else nullcontext():
+    scope: Final = {
+        "none": nullcontext,
+        "rag_sub_call": _suppressed_sub_call_billing,
+        "internal_sub_call": internal_sub_call,
+    }[sub_call]
+    with scope():
         async_hit: Final = await LLMCachingHandler(
             original_function=litellm.acompletion, request_kwargs=kwargs, start_time=_FIXED_START
         ).async_get_cache(
@@ -3155,7 +3161,7 @@ async def test_a_cache_hit_inside_an_internal_sub_call_fires_no_callbacks_of_its
 
     expected: Final = (
         Counter()
-        if internal
+        if sub_call == "internal_sub_call"
         else Counter({("async", async_logging.litellm_call_id): 1, ("sync", sync_logging.litellm_call_id): 1})
     )
     for _ in range(100):

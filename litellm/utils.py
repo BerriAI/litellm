@@ -51,7 +51,7 @@ import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
-from litellm._internal_context import is_internal_call, is_resent_failure
+from litellm._internal_context import is_internal_call, is_resent_failure, logged_by_parent
 from litellm._lazy_imports import (
     _get_modified_max_tokens,
     get_default_encoding,
@@ -1375,16 +1375,17 @@ def _dispatch_success_logging(
     is_completion_with_fallbacks: bool,
     is_litellm_internal_call: bool,
 ) -> None:
-    if is_litellm_internal_call:
+    if logged_by_parent():
         return
 
-    _schedule_async_success_logging(
-        logging_obj=logging_obj,
-        result=result,
-        start_time=start_time,
-        end_time=end_time,
-        is_completion_with_fallbacks=is_completion_with_fallbacks,
-    )
+    if not is_litellm_internal_call:
+        _schedule_async_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=start_time,
+            end_time=end_time,
+            is_completion_with_fallbacks=is_completion_with_fallbacks,
+        )
     logging_obj.handle_sync_success_callbacks_for_async_calls(
         result=result,
         start_time=start_time,

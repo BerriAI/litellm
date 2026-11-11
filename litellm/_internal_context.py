@@ -38,15 +38,24 @@ _service_caller: Final[ContextVar[str | None]] = ContextVar("service_caller", de
 
 _resent_on: Final[ContextVar[Callable[[Exception], bool] | None]] = ContextVar("resent_on", default=None)
 
+_logged_by_parent: Final[ContextVar[bool]] = ContextVar("logged_by_parent", default=False)
+
 
 @contextmanager
 def internal_sub_call() -> Generator[None]:
     """A nested call the parent call logs and bills, so the parent must fold this call's cost into its own."""
-    token: Final = is_internal_call.set(True)
+    internal_token: Final = is_internal_call.set(True)
+    logged_token: Final = _logged_by_parent.set(True)
     try:
         yield
     finally:
-        is_internal_call.reset(token)
+        _logged_by_parent.reset(logged_token)
+        is_internal_call.reset(internal_token)
+
+
+def logged_by_parent() -> bool:
+    """Set only by ``internal_sub_call``. Other internal calls still log their own cache hits and sync callbacks."""
+    return _logged_by_parent.get()
 
 
 @contextmanager

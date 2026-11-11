@@ -7844,6 +7844,88 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
     assert counting_logger.logged_results[0] is inner_result
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("logged_by_parent", [False, True])
+async def test_an_internal_call_keeps_its_sync_success_callbacks_unless_its_parent_logs_it(
+    monkeypatch: pytest.MonkeyPatch, logged_by_parent: bool
+) -> None:
+    from litellm._internal_context import internal_sub_call
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.rag.main import _suppressed_sub_call_billing
+    from litellm.utils import _dispatch_success_logging
+
+    sync_handled: Final[list[object]] = []
+    async_logged: Final[list[object]] = []
+
+    class RecordingLogging(Logging):
+        def success_handler(
+            self,
+            result: object = None,
+            start_time: datetime | None = None,
+            end_time: datetime | None = None,
+            cache_hit: bool | None = None,
+            *,
+            for_async_request: bool = False,
+            **kwargs: object,
+        ) -> None:
+            sync_handled.append(result)
+
+    class AsyncRecorder(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+        ) -> None:
+            async_logged.append(response_obj)
+
+    def function_success_callback(
+        kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        pass
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [function_success_callback])
+    monkeypatch.setattr(litellm, "_async_success_callback", [AsyncRecorder()])
+    messages: Final = [{"role": "user", "content": "hello"}]
+    logging_obj: Final = RecordingLogging(
+        model="gpt-5.4",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp(),
+        litellm_call_id="sub-call-id",
+        function_id="sub-call-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={"acompletion": True},
+        optional_params={},
+        model="gpt-5.4",
+        custom_llm_provider="openai",
+        input=messages,
+    )
+    result: Final = ModelResponse(id="sub-call")
+    expected: Final = [] if logged_by_parent else [result]
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    with internal_sub_call() if logged_by_parent else _suppressed_sub_call_billing():
+        _dispatch_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=now,
+            end_time=now,
+            is_completion_with_fallbacks=False,
+            is_litellm_internal_call=True,
+        )
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    for _ in range(100):
+        if len(sync_handled) >= len(expected):
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.3)
+
+    assert async_logged == []
+    assert sync_handled == expected
+
+
 def test_basic_trimming():
     litellm.turn_on_debug()
     messages = [
