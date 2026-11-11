@@ -470,6 +470,40 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if team_rpm_limit is None:
                 team_rpm_limit = sys.maxsize
 
+            # --- Non-windowed team concurrency gauge (fix for #49070) ---
+            # `{team_id}::{precise_minute}::request_count` resets every minute,
+            # so a team member who keeps a stream open across a minute boundary
+            # would start a fresh full quota.  Track concurrency in a
+            # persistent, non-windowed slot gauge (same pattern as the global
+            # `global_max_parallel_requests` key) so in-flight requests from a
+            # previous minute are still counted.
+            if team_max_parallel_requests < sys.maxsize:
+                _team_parallel_key: Final = f"{team_id}::max_parallel_requests"
+                _current_team_parallel = await self.internal_usage_cache.async_get_cache(
+                    key=_team_parallel_key,
+                    local_only=True,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+                if _current_team_parallel is None:
+                    _current_team_parallel = 0
+                if _current_team_parallel >= team_max_parallel_requests:
+                    self.raise_rate_limit_error(
+                        additional_details=(
+                            f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. "
+                            f"Hit limit for team. Current limits: max_parallel_requests: "
+                            f"{team_max_parallel_requests}, current: {_current_team_parallel}"
+                        ),
+                        rate_limit_type=RateLimitType.CONCURRENT_REQUESTS,
+                        requested_model=data.get("model") if data else None,
+                        descriptor_key="team",
+                    )
+                await self.internal_usage_cache.async_increment_cache(
+                    key=_team_parallel_key,
+                    value=1,
+                    local_only=True,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+
             request_count_api_key = f"{team_id}::{precise_minute}::request_count"
             # print(f"Checking if {request_count_api_key} is allowed to make request for minute {precise_minute}")
             await self.check_key_in_limits(
@@ -477,7 +511,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 cache=cache,
                 data=data,
                 call_type=call_type,
-                max_parallel_requests=team_max_parallel_requests,
+                # Pass sys.maxsize so the minute-bucket is used only for RPM/TPM;
+                # concurrency is now enforced above via the persistent gauge.
+                max_parallel_requests=sys.maxsize,
                 current=cache_objects["request_count_team_id"],
                 request_count_api_key=request_count_api_key,
                 tpm_limit=team_tpm_limit,
@@ -692,6 +728,16 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 self.print_verbose(f"updated_value in success call: {new_val}, precise_minute: {precise_minute}")
                 values_to_update_in_cache.append((request_count_api_key, new_val))
 
+                # Decrement non-windowed team concurrency gauge (fix for #49070)
+                if released > 0:
+                    _team_parallel_key: Final = f"{user_api_key_team_id}::max_parallel_requests"
+                    await self.internal_usage_cache.async_increment_cache(
+                        key=_team_parallel_key,
+                        value=-released,
+                        local_only=True,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
+
             # ------------
             # Update usage - End User
             # ------------
@@ -792,6 +838,17 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     ttl=60,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )  # save in cache for up to 1 min.
+
+                # Decrement non-windowed team concurrency gauge (fix for #49070)
+                _failure_team_id: Final = _metadata.get("user_api_key_team_id", None)
+                if released > 0 and _failure_team_id is not None:
+                    _team_parallel_key_f: Final = f"{_failure_team_id}::max_parallel_requests"
+                    await self.internal_usage_cache.async_increment_cache(
+                        key=_team_parallel_key_f,
+                        value=-released,
+                        local_only=True,
+                        litellm_parent_otel_span=litellm_parent_otel_span,
+                    )
         except Exception as e:
             verbose_proxy_logger.exception("Inside Parallel Request Limiter: An exception occurred - %s", e)
 

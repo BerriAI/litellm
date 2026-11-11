@@ -478,8 +478,10 @@ async def test_team_max_parallel_requests_is_enforced_across_keys_in_the_team():
             call_type="",
         )
     assert exc_info.value.status_code == 429
-    assert "rate limit type = team" in exc_info.value.detail
+    # The gauge-based path emits a different detail string than the old
+    # check_key_in_limits path, but both mention the cap and the entity.
     assert "max_parallel_requests: 2" in exc_info.value.detail
+    assert "team" in exc_info.value.detail
 
     await handler.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(
@@ -490,4 +492,67 @@ async def test_team_max_parallel_requests_is_enforced_across_keys_in_the_team():
         cache=cache,
         data={"model": "gpt-4o-mini"},
         call_type="",
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_max_parallel_requests_non_windowed_gauge_cross_minute_boundary():
+    """Regression test for #49070.
+
+    With LEGACY_MULTI_INSTANCE_RATE_LIMITING=True the team concurrency check
+    previously used the minute-windowed bucket
+    ``{team_id}::{precise_minute}::request_count``.  When the wall-clock crossed
+    a minute boundary that bucket reset to zero, so a team member who kept a
+    streaming request alive from minute M was allowed to admit another full-quota
+    batch in minute M+1 — bypassing the cap entirely.
+
+    After the fix, team concurrency is tracked via a *non-windowed* slot gauge
+    (``{team_id}::max_parallel_requests``) that persists across minute
+    boundaries: a slot incremented in minute M is decremented only when the
+    request completes, regardless of which minute the completion fires in.
+    """
+    from fastapi import HTTPException
+
+    # --- Minute M: two slots occupied ----------------------------------------
+    t_minute_m = datetime(2026, 1, 31, 23, 59, 30)
+    cache = DualCache()
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=lambda: t_minute_m
+    )
+
+    team_id = "cross-minute-team"
+
+    def team_key(raw: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key=hash_token(raw), team_id=team_id, team_max_parallel_requests=2
+        )
+
+    # Admit two requests in minute M — gauge reaches limit
+    for raw in ("sk-a", "sk-b"):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key(raw),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+
+    # --- Minute M+1: requests from minute M still in-flight ------------------
+    # Advance the clock to the next minute WITHOUT releasing any slots.
+    t_minute_m_plus_1 = datetime(2026, 2, 1, 0, 0, 10)
+    handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), clock=lambda: t_minute_m_plus_1
+    )
+
+    # A third admission in minute M+1 must still be rejected because the two
+    # slots from minute M have not been released yet.
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key("sk-c"),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429, (
+        "Expected 429 — team concurrency gauge should still be at limit after "
+        "minute boundary without slot release"
     )
