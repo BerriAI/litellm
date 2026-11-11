@@ -1331,6 +1331,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _stamp_sequence_number(self, event: BaseLiteLLMOpenAIResponseObject) -> BaseLiteLLMOpenAIResponseObject:
         stamped: Final = event.model_copy(update={"sequence_number": self._sequence_number})
         self._sequence_number += 1
+        affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
+        if affinity_model_id is not None:
+            ResponsesAPIRequestUtils.encode_stream_event_for_affinity(stamped, affinity_model_id)
         return stamped
 
     async def __anext__(
