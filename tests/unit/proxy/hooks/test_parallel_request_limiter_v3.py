@@ -9994,28 +9994,6 @@ async def test_success_tpm_accounting_moves_the_charge_to_the_model_group_that_s
     assert charged[_counter("model_per_key", f"{auth.api_key}:primary")] == -stash.reserved_tokens
 
 
-# --- a team's PTU share on a shared Azure provisioned deployment ---------------------------
-
-
-def _ptu_ceiling_for(team_id: str, model_group: str, tpm_limit: int, ratio: float, cached_ratio: float = 0.0):
-    calls: list[tuple[str, str]] = []
-
-    def resolve(requested_team: str, requested_group: str) -> PTUTeamCeiling | None:
-        calls.append((requested_team, requested_group))
-        if (requested_team, requested_group) != (team_id, model_group):
-            return None
-        return PTUTeamCeiling(
-            model_group=model_group, tpm_limit=tpm_limit, output_to_input_ratio=ratio, cached_input_ratio=cached_ratio
-        )
-
-    return resolve, calls
-
-
-def _ptu_request(model: str = "test-model") -> dict:
-    return {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 300}
-
-
-
 @pytest.mark.asyncio
 async def test_success_tpm_accounting_settles_an_alias_to_target_fallback_once_per_counter(
     collision_limiter: tuple[DualCache, PROXY_MaxParallelRequestsHandler_v3, str, str],
