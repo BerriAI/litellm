@@ -350,7 +350,7 @@ async def count_tokens(
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     return await answered_with_litellm_call_id(
-        _count_tokens(request, user_api_key_dict, litellm_call_id), litellm_call_id, fastapi_response
+        _count_tokens(request, user_api_key_dict, litellm_call_id), litellm_call_id, request, fastapi_response
     )
 
 

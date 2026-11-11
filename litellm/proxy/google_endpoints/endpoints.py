@@ -344,7 +344,7 @@ async def google_count_tokens(request: Request, model_name: str, fastapi_respons
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     return await answered_with_litellm_call_id(
-        _google_count_tokens(request, model_name, litellm_call_id), litellm_call_id, fastapi_response
+        _google_count_tokens(request, model_name, litellm_call_id), litellm_call_id, request, fastapi_response
     )
 
 

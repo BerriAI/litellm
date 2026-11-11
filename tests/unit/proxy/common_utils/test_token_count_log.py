@@ -3,7 +3,7 @@ from collections.abc import Callable
 from typing import Final
 
 import pytest
-from fastapi import HTTPException, Response
+from fastapi import HTTPException, Request, Response
 
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, logged_token_count
@@ -16,6 +16,10 @@ class _TokenizerPanic(BaseException):
 
 async def _count_ending_in(error: BaseException) -> TokenCountResponse:
     raise error
+
+
+def _count_request() -> Request:
+    return Request({"type": "http", "method": "POST", "path": "/utils/token_counter", "headers": []})
 
 
 @pytest.mark.asyncio
@@ -53,7 +57,7 @@ async def test_an_http_error_answers_its_status_and_detail_with_the_call_id_besi
     rejection: Final = HTTPException(status_code=429, detail={"error": "slow down"}, headers={"retry-after": "3"})
 
     with pytest.raises(HTTPException) as answered:
-        await answered_with_litellm_call_id(_count_ending_in(rejection), "count-echo-http", Response())
+        await answered_with_litellm_call_id(_count_ending_in(rejection), "count-echo-http", _count_request(), Response())
 
     assert (answered.value.status_code, answered.value.detail, dict(answered.value.headers or {})) == (
         429,
@@ -68,7 +72,9 @@ async def test_a_cancelled_answer_stays_cancelled_and_names_no_call_id() -> None
     fastapi_response: Final = Response()
 
     with pytest.raises(asyncio.CancelledError) as raised:
-        await answered_with_litellm_call_id(_count_ending_in(cancelled), "count-echo-cancelled", fastapi_response)
+        await answered_with_litellm_call_id(
+            _count_ending_in(cancelled), "count-echo-cancelled", _count_request(), fastapi_response
+        )
 
     assert raised.value is cancelled
     assert LITELLM_CALL_ID_HEADER not in fastapi_response.headers

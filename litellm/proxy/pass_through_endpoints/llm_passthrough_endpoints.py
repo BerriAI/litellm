@@ -1528,7 +1528,10 @@ async def handle_bedrock_count_tokens(
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     return await answered_with_litellm_call_id(
-        _bedrock_count_tokens(user_api_key_dict, request_body, litellm_call_id), litellm_call_id, fastapi_response
+        _bedrock_count_tokens(user_api_key_dict, request_body, litellm_call_id),
+        litellm_call_id,
+        request,
+        fastapi_response,
     )
 
 

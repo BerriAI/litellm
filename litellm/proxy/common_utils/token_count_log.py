@@ -6,13 +6,12 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeVar
 
-from fastapi import HTTPException, Response, status
+from fastapi import HTTPException, Request, Response, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
-    UnhandledErrorWithCallId,
     error_status_code,
     headers_with_litellm_call_id,
     with_litellm_call_id,
@@ -142,7 +141,7 @@ async def logged_provider_token_count(
 
 
 async def answered_with_litellm_call_id(
-    answer: Awaitable[_Answer], litellm_call_id: str, fastapi_response: Response
+    answer: Awaitable[_Answer], litellm_call_id: str, request: Request, fastapi_response: Response
 ) -> _Answer:
     try:
         answered: Final = await answer
@@ -154,8 +153,9 @@ async def answered_with_litellm_call_id(
             detail=e.detail,
             headers=headers_with_litellm_call_id(e.headers, litellm_call_id),
         ) from e
-    except Exception as e:
-        raise UnhandledErrorWithCallId(e, litellm_call_id) from e
+    except Exception:
+        request.state.litellm_call_id = litellm_call_id  # rebind-ok: the crash handler reads the id from request.state
+        raise
     if isinstance(answered, Response):
         answered.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
         return answered

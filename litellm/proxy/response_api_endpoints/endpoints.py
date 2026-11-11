@@ -1793,6 +1793,7 @@ async def responses_input_tokens(
             general_settings,
         ),
         litellm_call_id,
+        request,
         fastapi_response,
     )
 
@@ -1886,8 +1887,9 @@ async def _responses_input_tokens(
             managed_files,
             user_api_key_dict,
         )
-    except ProxyException as e:
-        raise rejected_token_count(e, litellm_call_id, model_name)
+    except Exception as e:
+        rejected_token_count(e, litellm_call_id, model_name)
+        raise
     try:
         token_response: Final = await token_counter(
             request=token_request,

@@ -250,13 +250,6 @@ def litellm_call_id_headers(litellm_call_id: str | None) -> dict[str, str] | Non
     return {LITELLM_CALL_ID_HEADER: litellm_call_id}
 
 
-class UnhandledErrorWithCallId(Exception):
-    def __init__(self, error: Exception, litellm_call_id: str) -> None:
-        super().__init__(error)
-        self.error: Final = error
-        self.litellm_call_id: Final = litellm_call_id
-
-
 def with_litellm_call_id(exc: ProxyException, litellm_call_id: str | None) -> ProxyException:
     """The same error object, answering with ``x-litellm-call-id`` when it was raised without one."""
     if litellm_call_id is not None:

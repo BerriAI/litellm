@@ -584,7 +584,6 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
-    UnhandledErrorWithCallId,
     attribute_of,
     error_status_code,
     headers_with_litellm_call_id,
@@ -2590,12 +2589,11 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
-    response: Final = await _unhandled_exception_response(
-        request, exc.error if isinstance(exc, UnhandledErrorWithCallId) else exc
-    )
+    response: Final = await _unhandled_exception_response(request, exc)
     response.headers.update(trace_response_headers(getattr(request.state, "parent_otel_span", None)))
-    if isinstance(exc, UnhandledErrorWithCallId):
-        response.headers.setdefault(LITELLM_CALL_ID_HEADER, exc.litellm_call_id)
+    litellm_call_id: Final = attribute_of(request.state, "litellm_call_id")
+    if isinstance(litellm_call_id, str):
+        response.headers.setdefault(LITELLM_CALL_ID_HEADER, litellm_call_id)
     return response
 
 
@@ -16049,6 +16047,7 @@ def _system_message(system: object) -> ChatCompletionSystemMessage | None:
 )
 async def token_counter(
     request: TokenCountRequest,
+    http_request: Request,
     fastapi_response: Response,
     call_endpoint: bool = False,
     litellm_call_id: Annotated[str | None, Header(alias=LITELLM_CALL_ID_HEADER)] = None,
@@ -16056,6 +16055,7 @@ async def token_counter(
     """
     Args:
         request: TokenCountRequest
+        http_request: carries the call id to the error handler when the count fails
         fastapi_response: answers the x-litellm-call-id header the count's log line names
         call_endpoint: bool - When set to "True" it will call the token counting endpoint - e.g Anthropic or Google AI Studio Token Counting APIs.
         litellm_call_id: the x-litellm-call-id header, logged with the count so it joins the inference call's logs
@@ -16067,6 +16067,7 @@ async def token_counter(
     return await answered_with_litellm_call_id(
         count_request_tokens(request=request, call_endpoint=call_endpoint, litellm_call_id=call_id),
         call_id,
+        http_request,
         fastapi_response,
     )
 

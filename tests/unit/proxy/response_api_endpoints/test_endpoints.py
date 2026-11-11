@@ -5417,6 +5417,7 @@ class TestResponsesInputTokens:
         managed_files: object | None = None,
         headers: Mapping[str, str] = EMPTY_MAPPING,
         general_settings: Mapping[str, object] | None = None,
+        raise_server_exceptions: bool = False,
     ) -> tuple[Response, AsyncMock]:
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -5451,7 +5452,7 @@ class TestResponsesInputTokens:
         if general_settings is not None:
             app.dependency_overrides[_proxy_general_settings] = lambda: general_settings
         try:
-            client = TestClient(app, raise_server_exceptions=False)
+            client = TestClient(app, raise_server_exceptions=raise_server_exceptions)
             response = client.post(path, json=body, headers={"Authorization": "Bearer sk-9876", **headers})
             return response, token_counter_mock
         finally:
@@ -5828,6 +5829,18 @@ class TestResponsesInputTokens:
         assert (response.status_code, response.headers.get("x-litellm-call-id")) == (500, "count-echo-crashed")
         assert response.json() == {"error": {"message": "Internal server error", "type": "internal_server_error"}}
 
+    def test_a_crashed_count_reaches_error_tracking_as_the_error_it_raised(self) -> None:
+        crash: Final = RuntimeError("tokenizer crashed")
+
+        with pytest.raises(RuntimeError) as raised:
+            self._post_input_tokens(
+                {"model": "gpt-4o", "input": "hi"},
+                counter=AsyncMock(side_effect=crash),
+                raise_server_exceptions=True,
+            )
+
+        assert raised.value is crash
+
     def test_a_count_during_a_database_outage_answers_503_with_the_callers_call_id(self) -> None:
         from prisma.errors import ClientNotConnectedError
 
@@ -5859,6 +5872,28 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 403, response.text
         assert response.json()["error"]["message"] == denied
+        counter.assert_not_awaited()
+
+    def test_a_managed_file_lookup_crash_answers_the_call_id_its_count_line_names(
+        self, token_count_log_lines: Callable[[], tuple[dict[str, object], ...]]
+    ) -> None:
+        from litellm.integrations.custom_logger import CustomLogger
+
+        class ManagedFiles(CustomLogger):
+            async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+                raise RuntimeError("managed file table unreadable")
+
+        response, counter = self._post_input_tokens(
+            {
+                "model": "count-log-gpt",
+                "input": [{"role": "user", "content": [{"type": "input_file", "file_id": "litellm-managed-file"}]}],
+            },
+            managed_files=ManagedFiles(),
+        )
+
+        (line,) = token_count_log_lines()
+        assert (response.status_code, response.headers.get("x-litellm-call-id")) == (500, line["litellm_call_id"])
+        assert line["status_code"] == 500
         counter.assert_not_awaited()
 
     def test_malformed_tools_follow_the_counted_deployment_even_when_fallbacks_are_configured(self) -> None:
