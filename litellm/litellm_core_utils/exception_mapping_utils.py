@@ -2520,15 +2520,17 @@ def with_deployment_api_base(litellm_params: object) -> Mapping[str, object]:
 
 
 _DEBUG_INFO_ATTRIBUTE: Final = "litellm_debug_info"
+_DEBUG_INFO_CALL_ID_ATTRIBUTE: Final = "_litellm_debug_info_call_id"
 
 
 @dataclass(frozen=True, slots=True)
 class _RequestDebugInfo:
     with_prompt: str
     without_prompt: str
+    call_id: str
 
 
-_NO_REQUEST_DEBUG_INFO: Final = _RequestDebugInfo(with_prompt="", without_prompt="")
+_NO_REQUEST_DEBUG_INFO: Final = _RequestDebugInfo(with_prompt="", without_prompt="", call_id="")
 
 
 def _request_debug_info(model: object, extra_kwargs: object, completion_kwargs: object) -> _RequestDebugInfo:
@@ -2551,17 +2553,27 @@ def _request_debug_info(model: object, extra_kwargs: object, completion_kwargs: 
             ("vertex_location", params.get("vertex_location")),
         )
         tail: Final = "".join(f"\n{label}: `{value}`\n" for label, value in labelled_values if value is not None)
+        call_id: Final = params.get("litellm_call_id")
         return _RequestDebugInfo(
             with_prompt=add_key_name_and_team_to_alert(request_info=head + prompt + tail, metadata=metadata),
             without_prompt=add_key_name_and_team_to_alert(request_info=head + tail, metadata=metadata),
+            call_id=call_id if isinstance(call_id, str) else "",
         )
     except Exception:
         return _NO_REQUEST_DEBUG_INFO
 
 
-def _attach_debug_info(exception: Exception, debug_info: str) -> None:
-    if debug_info and getattr(exception, _DEBUG_INFO_ATTRIBUTE, None) is None:
-        setattr(exception, _DEBUG_INFO_ATTRIBUTE, debug_info)
+def _attach_debug_info(exception: Exception, request_debug_info: _RequestDebugInfo) -> None:
+    attached_call_id: Final = getattr(exception, _DEBUG_INFO_CALL_ID_ATTRIBUTE, None)
+    unset: Final = getattr(exception, _DEBUG_INFO_ATTRIBUTE, None) is None
+    from_another_call: Final = (
+        isinstance(attached_call_id, str)
+        and bool(request_debug_info.call_id)
+        and attached_call_id != request_debug_info.call_id
+    )
+    if request_debug_info.without_prompt and (unset or from_another_call):
+        setattr(exception, _DEBUG_INFO_ATTRIBUTE, request_debug_info.without_prompt)
+        setattr(exception, _DEBUG_INFO_CALL_ID_ATTRIBUTE, request_debug_info.call_id)
 
 
 def mapped_stream_exception(
@@ -2585,7 +2597,7 @@ def with_deployment_debug_info(
     if not (model or custom_llm_provider):
         return error
     request_debug_info: Final = _request_debug_info(model, with_deployment_api_base(litellm_params), _NO_LITELLM_PARAMS)
-    _attach_debug_info(error, request_debug_info.without_prompt)
+    _attach_debug_info(error, request_debug_info)
     return error
 
 
@@ -2622,7 +2634,7 @@ def exception_type(
         else _NO_REQUEST_DEBUG_INFO
     )
     if isinstance(original_exception, tuple(litellm.LITELLM_EXCEPTION_TYPES)):
-        _attach_debug_info(original_exception, request_debug_info.without_prompt)
+        _attach_debug_info(original_exception, request_debug_info)
         return original_exception
     if _is_guardrail_block(original_exception):
         return original_exception
@@ -2955,20 +2967,20 @@ def exception_type(
         # don't let an error with mapping interrupt the user from receiving an error from the llm api calls
         if exception_mapping_worked:
             setattr(e, "litellm_response_headers", litellm_response_headers)
-            _attach_debug_info(e, request_debug_info.without_prompt)
+            _attach_debug_info(e, request_debug_info)
             raise e
         else:
             for error_type in litellm.LITELLM_EXCEPTION_TYPES:
                 if isinstance(e, error_type):
                     setattr(e, "litellm_response_headers", litellm_response_headers)
-                    _attach_debug_info(e, request_debug_info.without_prompt)
+                    _attach_debug_info(e, request_debug_info)
                     raise e  # it's already mapped
             raised_exc: Final = APIConnectionError(
                 message=f"{original_exception}\n{redact_string(traceback.format_exc())}",
                 llm_provider="",
                 model="",
             )
-            _attach_debug_info(raised_exc, request_debug_info.without_prompt)
+            _attach_debug_info(raised_exc, request_debug_info)
             setattr(raised_exc, "litellm_response_headers", litellm_response_headers)
             raise raised_exc
 

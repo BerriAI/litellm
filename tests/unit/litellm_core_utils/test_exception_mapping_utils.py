@@ -337,6 +337,56 @@ def test_already_mapped_error_gains_the_deployment_debug_info(already_mapped: Ex
     assert "CONFIDENTIAL" not in debug_info
 
 
+def test_reused_error_instance_names_the_request_that_raised_it() -> None:
+    shared: Final = litellm.RateLimitError(message="mock rate limit", llm_provider="openai", model="gpt-5.4-mini")
+
+    def debug_info_for(alias: str) -> object:
+        with pytest.raises(litellm.RateLimitError) as caught:
+            completion(
+                model="openai/gpt-5.4-mini",
+                messages=[{"role": "user", "content": "hi"}],
+                mock_response=shared,
+                metadata={"user_api_key_alias": alias, "model_group": f"group-{alias}"},
+            )
+        assert caught.value is shared
+        return caught.value.litellm_debug_info
+
+    first: Final = debug_info_for("alias-a")
+    second: Final = debug_info_for("alias-b")
+    assert isinstance(first, str) and "Key Name: `alias-a`" in first
+    assert isinstance(second, str)
+    assert "Key Name: `alias-b`" in second
+    assert "model_group: `group-alias-b`" in second
+    assert "alias-a" not in second
+
+
+def test_remapping_without_the_request_keeps_the_deployment_already_named() -> None:
+    already_mapped: Final = litellm.InternalServerError(
+        message="Upstream generation aborted (finish_reason=abort)", model="gpt-5.4-mini", llm_provider="openai"
+    )
+    exception_type(
+        model="gpt-5.4-mini",
+        original_exception=already_mapped,
+        custom_llm_provider="openai",
+        extra_kwargs={
+            "litellm_call_id": "call-1",
+            "api_base": "https://relay.example/v1",
+            "metadata": {"deployment": "openai/gpt-5.4-mini"},
+        },
+    )
+    exception_type(
+        model="gpt-5.4-mini",
+        original_exception=already_mapped,
+        custom_llm_provider="openai",
+        completion_kwargs={},
+        extra_kwargs={},
+    )
+    debug_info: Final = already_mapped.litellm_debug_info
+    assert isinstance(debug_info, str)
+    assert "API Base: `https://relay.example/v1`" in debug_info
+    assert "deployment: `openai/gpt-5.4-mini`" in debug_info
+
+
 class _ErrorWhoseMessageCannotBeRead(Exception):
     @property
     def message(self) -> str:
