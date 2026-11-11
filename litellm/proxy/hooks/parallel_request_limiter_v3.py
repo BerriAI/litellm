@@ -500,6 +500,7 @@ class RequestRateLimiterStash:
     reserved_tokens: int = 0
     reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    fallback_models: frozenset[str] = field(default_factory=frozenset)
     ptu_ceiling: PTUTeamCeiling | None = None
     ptu_reserved_tokens: int = 0
     ptu_reserved_window_identities: frozenset[ReservationWindowIdentity] = field(default_factory=frozenset)
@@ -3786,6 +3787,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     ) -> bool:
         """Reserve the caller's per-model limits on a router fallback target. False when any is exhausted."""
         data: Final = MappingProxyType({**request_data, "model": model})
+        stash: Final = _request_stash.get()
         hidden_stash: Final = _request_stash.set(None)
         try:
             built: Final = await self._build_request_rate_limit_descriptors(user_api_key_dict, data, None)
@@ -3794,10 +3796,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: Final = [
             descriptor for descriptor in built if descriptor["key"] in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
         ]
-        if not descriptors:
-            return True
-        response: Final = await self.should_rate_limit(descriptors, parent_otel_span=user_api_key_dict.parent_otel_span)
-        return response["overall_code"] == "OK"
+        allowed: Final = (
+            not descriptors
+            or (await self.should_rate_limit(descriptors, parent_otel_span=user_api_key_dict.parent_otel_span))[
+                "overall_code"
+            ]
+            == "OK"
+        )
+        if allowed and stash is not None:
+            stash.fallback_models = stash.fallback_models | {model}
+        return allowed
 
     @asynccontextmanager
     async def request_capacity(
@@ -4723,13 +4731,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         served_model: Final = self._rate_limited_model(model_group)
         # ``reserved_model`` (resolved at admission, so an alias map reload
         # mid-flight cannot move the charge) settles the request unless the
-        # router fell back to another model group, which changes the requested
-        # name: then the served group is charged and the abandoned group's
-        # per-model reservation is refunded.
+        # router fell back to a group this limiter admitted as a fallback
+        # target: then the served group is charged and the abandoned group's
+        # per-model reservation is refunded. Client-supplied ``model_group``
+        # metadata alone never moves the charge.
         fell_back: Final = (
-            reserved_model is not None
+            stash is not None
+            and reserved_model is not None
             and served_model is not None
             and served_model.requested != reserved_model.requested
+            and served_model.requested in stash.fallback_models
         )
         reconcile_model: Final = served_model if fell_back or reserved_model is None else reserved_model
         reconcile_models: Final = self._rate_limited_models(reconcile_model)

@@ -8877,6 +8877,9 @@ async def test_success_tpm_accounting_moves_the_charge_to_the_model_group_that_s
     assert stash is not None
     assert stash.reserved_model == RateLimitedModel(requested="primary", group="primary")
     assert stash.reserved_tokens > 0
+    assert await handler.async_fallback_target_allowed(
+        auth, "fallback", {"messages": [{"role": "user", "content": "hello"}]}
+    )
 
     response: Final = ModelResponse(
         id="fallback-settle",
@@ -10039,6 +10042,9 @@ async def test_success_tpm_accounting_settles_an_alias_to_target_fallback_once_p
     assert stash is not None
     assert stash.reserved_model == RateLimitedModel(requested=alias, group=target)
     assert stash.reserved_tokens > 0
+    assert await handler.async_fallback_target_allowed(
+        auth, target, {"messages": [{"role": "user", "content": "hello"}]}
+    )
 
     response: Final = ModelResponse(
         id="alias-fallback-settle",
@@ -10065,3 +10071,43 @@ async def test_success_tpm_accounting_settles_an_alias_to_target_fallback_once_p
     alias_counter: Final = _counter("model_per_key", f"{auth.api_key}:{alias}")
     assert [inc.amount for inc in increments if inc.counter == target_counter] == [150 - stash.reserved_tokens]
     assert [inc.amount for inc in increments if inc.counter == alias_counter] == []
+
+
+@pytest.mark.asyncio
+async def test_success_tpm_accounting_ignores_a_client_supplied_model_group_without_a_router_fallback() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    key_metadata: Final = {"model_tpm_limit": {"primary": 1000}}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-client-model-group"), metadata=key_metadata)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": "primary", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_tokens > 0
+
+    response: Final = ModelResponse(
+        id="client-model-group",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="primary",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        "litellm_params": {"metadata": {"model_group": "uncapped", "user_api_key_metadata": key_metadata}},
+        "model": "primary",
+    }
+
+    ops: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs, response_obj=response, rate_limit_type="total"
+    )
+
+    charged: Final = {_increment_of(op).counter: _increment_of(op).amount for op in ops}
+    assert charged[_counter("model_per_key", f"{auth.api_key}:primary")] == 150 - stash.reserved_tokens
+    assert not any(":uncapped" in counter.scope.descriptor_value for counter in charged)
