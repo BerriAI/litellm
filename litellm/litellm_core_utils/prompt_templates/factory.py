@@ -71,7 +71,7 @@ from .common_utils import (
     convert_content_list_to_str,
     has_blank_redacted_data,
     infer_content_type_from_url_and_content,
-    inline_legacy_defs,
+    inline_refs_outside_root_defs,
     is_encrypted_reasoning_block,
     is_non_content_values_set,
     is_unsignable_thinking_block,
@@ -5952,8 +5952,10 @@ def _bedrock_tools_pt(
         remaining_inline_bytes = DEFS_MAX_INLINED_BYTES - inlined_bytes
         try:
             if resolves_schema_defs:
-                tool_inlined_bytes = inline_legacy_defs(parameters, remaining_inline_bytes)
-                parameters = dict(schema_without_unreferenced_defs(schema_with_root_ref_resolved(parameters)))
+                inlined, tool_inlined_bytes = inline_refs_outside_root_defs(
+                    schema_with_root_ref_resolved(parameters), remaining_inline_bytes
+                )
+                parameters = dict(schema_without_unreferenced_defs(inlined))
             else:
                 defs = parameters.pop("$defs", {})
                 defs_copy = defs if isinstance(defs, dict) else {}
@@ -5962,6 +5964,7 @@ def _bedrock_tools_pt(
                 # with circular references (see issue #19098). unpack_defs handles nested
                 # refs recursively and correctly detects/skips circular references.
                 tool_inlined_bytes = unpack_defs(parameters, defs_copy, max_inlined_bytes=remaining_inline_bytes)
+                parameters.pop("$defs", None)
         except ValueError as e:
             raise BedrockError(
                 status_code=400,

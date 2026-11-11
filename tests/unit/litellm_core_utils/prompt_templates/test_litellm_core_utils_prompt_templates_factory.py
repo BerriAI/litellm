@@ -2932,6 +2932,79 @@ def test_bedrock_tools_pt_keeps_every_claude_def_when_a_ref_may_reach_one_by_oth
     assert sent["$defs"] == defs
 
 
+def _with_root_defs_inlined(schema: object, defs: Mapping[str, object]) -> object:
+    if isinstance(schema, list):
+        return [_with_root_defs_inlined(item, defs) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    ref: Final = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        return _with_root_defs_inlined(defs[ref.removeprefix("#/$defs/")], defs)
+    return {key: _with_root_defs_inlined(value, defs) for key, value in schema.items()}
+
+
+_SHIP_TO: Final = {"type": "object", "properties": {"to": {"$ref": "#/$defs/Address"}}, "required": ["to"]}
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"$ref": "#/definitions/Ship", "definitions": {"Ship": _SHIP_TO}, "$defs": {"Address": _ADDRESS_SCHEMA}},
+        {"$ref": "#/$defs/Ship", "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}}},
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "#/%24defs/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}},
+            "required": ["ship"],
+            "$defs": {"Unused": {"type": "string"}},
+        },
+        {
+            "type": "object",
+            "properties": {
+                "ship": {
+                    "type": "object",
+                    "properties": {"gift": {"type": "boolean"}},
+                    "dependencies": {"gift": {"properties": {"to": {"$ref": "#/$defs/Address"}}}},
+                }
+            },
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+    ],
+    ids=[
+        "root_ref_into_definitions_beside_defs",
+        "root_ref_target_with_its_own_defs",
+        "percent_encoded_defs_pointer",
+        "property_with_its_own_defs",
+        "ref_under_dependencies",
+    ],
+)
+def test_bedrock_tools_pt_sends_claude_a_schema_that_means_what_full_inlining_does(
+    parameters: dict[str, object],
+) -> None:
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": parameters}}]
+
+    claude: Final = _bedrock_tools_pt(deepcopy(tools), model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]
+    inlined: Final = _bedrock_tools_pt(deepcopy(tools), model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]
+
+    claude_schema: Final = claude["inputSchema"]["json"]
+    claude_body: Final = {key: value for key, value in claude_schema.items() if key != "$defs"}
+    assert _with_root_defs_inlined(claude_body, claude_schema.get("$defs", {})) == inlined["inputSchema"]["json"]
+
+
+def test_bedrock_tools_pt_sends_no_defs_to_models_that_need_inlining() -> None:
+    parameters: Final = {"$ref": "#/$defs/Ship", "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}}}
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"to": _ADDRESS_SCHEMA}, "required": ["to"]}
+
+
 def test_bedrock_tools_pt_inlines_legacy_refs_under_a_root_defs_ref_for_claude() -> None:
     defs: Final = {
         "Home": {"type": "object", "properties": {"address": {"$ref": "#/definitions/Address"}}, "required": ["address"]}

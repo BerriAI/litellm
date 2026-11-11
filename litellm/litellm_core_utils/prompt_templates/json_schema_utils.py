@@ -16,6 +16,7 @@ _MAX_SCHEMA_FLATTEN_DEPTH: Final = 32
 _EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
 _ROOT_DEFS_POINTER: Final = "#/$defs/"
 _DYNAMIC_REF_KEYWORDS: Final = ("$dynamicRef", "$recursiveRef")
+_DEFS_CONTAINERS: Final = ("$defs", "definitions")
 
 
 def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
@@ -70,9 +71,15 @@ def _with_root_ref_inlined(schema: Mapping[str, object]) -> Mapping[str, object]
         return schema
     siblings: Final = {key: value for key, value in schema.items() if key != "$ref"}
     required: Final = dict.fromkeys((*_required_names_in_order(target), *_required_names_in_order(schema)))
+    defs: Final = {
+        container: {**(_schema_at(target, container) or {}), **(_schema_at(schema, container) or {})}
+        for container in _DEFS_CONTAINERS
+        if container in target or container in schema
+    }
     return {
         **target,
         **siblings,
+        **defs,
         "properties": {**_schema_properties(target), **_schema_properties(schema)},
         "required": list(required),
     }
@@ -94,14 +101,42 @@ def _referenced_def_names(ref: object) -> frozenset[str] | None:
     return frozenset((name, unquote(name).replace("~1", "/").replace("~0", "~")))
 
 
+def ref_points_into_defs(ref: str, defs: Mapping[str, object]) -> bool:
+    names: Final = _referenced_def_names(ref)
+    return names is not None and any(name in defs for name in names)
+
+
 def _node_ref_def_names(node: Mapping[str, object]) -> tuple[frozenset[str] | None, ...]:
     if any(keyword in node for keyword in _DYNAMIC_REF_KEYWORDS):
         return (None,)
     return (_referenced_def_names(node["$ref"]),) if "$ref" in node else ()
 
 
+def _json_object(value: object) -> Mapping[str, object] | None:
+    return _JSON_OBJECT.validate_python(value) if isinstance(value, dict) else None
+
+
+def _json_children(value: object) -> tuple[object, ...]:
+    mapping: Final = _json_object(value)
+    if mapping is not None:
+        return tuple(mapping.values())
+    return _SCHEMA_LIST.validate_python(value) if isinstance(value, list) else ()
+
+
+def _json_levels(value: object) -> Iterator[tuple[object, ...]]:
+    frontier: tuple[object, ...] = (value,)  # rebind-ok: level-order cursor, one level a round
+    while frontier:
+        yield frontier
+        frontier = tuple(chain.from_iterable(_json_children(node) for node in frontier))
+
+
+def _json_objects(value: object) -> Iterator[Mapping[str, object]]:
+    values: Final = chain.from_iterable(islice(_json_levels(value), _MAX_SCHEMA_NESTING))
+    return (node for item in values if (node := _json_object(item)) is not None)
+
+
 def _schema_ref_def_names(schema: Mapping[str, object]) -> Iterator[frozenset[str] | None]:
-    return chain.from_iterable(_node_ref_def_names(node) for node in _schema_nodes(schema))
+    return chain.from_iterable(_node_ref_def_names(node) for node in _json_objects(schema))
 
 
 def _reached_def_names(body: Mapping[str, object], defs: Mapping[str, object]) -> frozenset[str] | None:
@@ -379,6 +414,7 @@ def _schema_nodes(schema: Mapping[str, object]) -> Iterator[Mapping[str, object]
 
 
 _SCHEMA_LIST: Final = TypeAdapter(tuple[object, ...])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 def _list_at(container: Mapping[str, object], key: str) -> tuple[object, ...]:

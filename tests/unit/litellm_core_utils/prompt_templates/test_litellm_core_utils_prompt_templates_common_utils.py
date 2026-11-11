@@ -326,6 +326,22 @@ class TestUnpackLegacyDefs:
         assert "components" not in out
         assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
 
+    def test_a_defs_ref_is_inlined_from_the_legacy_block_beside_it(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        address: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+        schema: Final = {
+            "type": "object",
+            "properties": {"home": {"$ref": "#/$defs/Address"}},
+            "definitions": {"Address": address},
+        }
+
+        out: Final = unpack_legacy_defs(schema)
+
+        assert out["properties"]["home"] == address
+
     def test_memory_stays_linear_in_schema_size_with_many_definitions(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             unpack_legacy_defs,
