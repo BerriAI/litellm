@@ -17,6 +17,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         collector_key=litellm_params.collector_key,
+        api_version=litellm_params.api_version,
         unreachable_fallback=litellm_params.unreachable_fallback,
         timeout=litellm_params.timeout,
         streaming_transform_mode=litellm_params.streaming_transform_mode,

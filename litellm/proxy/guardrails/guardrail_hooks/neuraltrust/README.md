@@ -1,6 +1,6 @@
 # NeuralTrust TrustGuard
 
-Native LiteLLM guardrail. Sends chat input and output to TrustGuard `POST /v1/evaluate`.
+Native LiteLLM guardrail. Sends chat input and output to TrustGuard `POST /v1/evaluate`, or `POST /v2/evaluate` with `api_version: v2`.
 
 Setup guide, verdict mapping, and the streaming caveat:
 [docs.neuraltrust.ai/integrations/litellm](https://docs.neuraltrust.ai/integrations/litellm).
@@ -16,6 +16,7 @@ guardrails:
       api_key: os.environ/TRUSTGUARD_API_KEY
       api_base: os.environ/TRUSTGUARD_API_BASE  # default https://trustguard.neuraltrust.ai
       collector_key: os.environ/TRUSTGUARD_COLLECTOR_KEY  # tgcol_… ; optional if the API key is bound
+      api_version: v1  # v1 or v2, default v1, env TRUSTGUARD_API_VERSION
       unreachable_fallback: fail_closed
       timeout: 5
       streaming_transform_mode: incremental_diff
@@ -26,9 +27,19 @@ guardrails:
 
 Bearer `tgk_…` API key. Address the collector with `collector_key`, or omit it when the key is already bound to one.
 
+## API version
+
+`api_version` picks the TrustGuard engine. `v1` (the default) calls `/v1/evaluate`, and `v2` calls `/v2/evaluate`. Anything else fails at startup. When the field is not set, `TRUSTGUARD_API_VERSION` is read.
+
+The v2 request has no `collector_key` or `consumer_id`, so on v2 the configured `collector_key` is sent as `integration_key` and the consumer id as `attributes.user.email` when it contains `@`, else as `attributes.user.id`. An API key bound to an integration needs neither.
+
 ## Identity
 
-Each evaluate call carries `session_id` from the LiteLLM session and `consumer_id` from the virtual key: the key alias, else the key's user email, user id, or team alias. TrustGuard Activity and per-consumer policies group by that value.
+Each evaluate call carries `session_id` from the LiteLLM session and `consumer_id` from the virtual key (`attributes.user` on v2): the key alias, else the key's user email, user id, or team alias. TrustGuard Activity and per-consumer policies group by that value.
+
+## Multi-turn attacks
+
+TrustGuard's `multiturn_guard` scores the user messages of the conversation together. A chat completion or an Anthropic Messages request carries its history, so it is scored as sent. A client that sends one turn per request, such as the Responses API with `previous_response_id`, only reaches TrustGuard with its latest message, and TrustGuard rebuilds the conversation from the session. Such clients must set `litellm_session_id` or `metadata.session_id` to get multi-turn coverage.
 
 ## Verdicts
 
