@@ -567,6 +567,8 @@ def stamp_stream_head(
 def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     logger.stream = True
     logger.model_call_details["stream"] = True
+    if "httpx_response" in logger.model_call_details:
+        return
     logger.model_call_details["response_headers"] = _STREAM_HEADERS.validate_python(
         head.get("additional_headers") or {}
     )

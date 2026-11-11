@@ -2833,15 +2833,9 @@ def _logged(
     callback_kwargs: Final[Mapping[str, object]] = {
         "logged_metadata": sorted(metadata_keys) if isinstance(metadata, dict) else metadata,
         "logged_model_info": litellm_params.get("model_info"),
-        "logged_response_headers": (
-            bool(details.get("response_headers"))
-            if details.get("stream") is True
-            else {
-                name: value
-                for name, value in _mapping(details.get("response_headers")).items()
-                if name.lower() != "date"
-            }
-        ),
+        "logged_response_headers": {
+            name: value for name, value in _mapping(details.get("response_headers")).items() if name.lower() != "date"
+        },
         "logged_api_key": details.get("api_key"),
         "logged_call": {
             "custom_llm_provider": details.get("custom_llm_provider"),

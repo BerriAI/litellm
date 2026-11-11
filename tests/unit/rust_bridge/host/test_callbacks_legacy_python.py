@@ -45,6 +45,20 @@ def test_native_stream_headers_reach_spend_callbacks() -> None:
     assert logger.model_call_details["response_headers"] == {"llm_provider-request-id": "req_native"}
 
 
+def test_recorded_messages_stream_keeps_the_provider_header_names() -> None:
+    logger: Final = _supplied_logger()
+    sent: Final[tuple[str, Mapping[str, str], Mapping[str, object]]] = (
+        "http://upstream/v1/messages",
+        {},
+        {"stream": True},
+    )
+    legacy.record_response(logger, 200, [("request-id", "req_native")], "", sent)
+    legacy.stream_opened(logger, {"additional_headers": {"llm_provider-request-id": "req_native"}})
+
+    assert logger.stream is True
+    assert logger.model_call_details["response_headers"] == {"request-id": "req_native"}
+
+
 def test_setup_reuses_a_supplied_logger() -> None:
     supplied: Final = _supplied_logger()
     result: Final = setup(
