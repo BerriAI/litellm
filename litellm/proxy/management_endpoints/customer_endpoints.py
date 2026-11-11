@@ -816,6 +816,7 @@ async def delete_end_user(
     ```
     """
     from litellm.proxy.proxy_server import (
+        invalidate_spend_counter,
         prisma_client,
         set_spend_counter_with_floor_and_broadcast,
         spend_counter_store,
@@ -851,6 +852,7 @@ async def delete_end_user(
             await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
             counter_keys: Final = tuple(end_user_counter(user_id) for user_id in data.user_ids)
             for counter_key in counter_keys:
+                await invalidate_spend_counter(counter_key=counter_key)
                 await set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
             await drop_committed_spend(spend_counter_store, counter_keys)
 

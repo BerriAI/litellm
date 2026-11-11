@@ -336,13 +336,21 @@ async def test_a_failed_customer_delete_keeps_its_spend_enforced(
     assert exc_info.value.current_cost == 7.0
 
 
+@pytest.mark.parametrize(
+    ("failing", "redis_down"),
+    [
+        pytest.param(frozenset({"set"}), False, id="redis-rejects-writes"),
+        pytest.param(frozenset(), True, id="redis-down"),
+    ],
+)
+@pytest.mark.parametrize("fail_closed", [False, True])
 @pytest.mark.asyncio
-async def test_a_customer_delete_still_succeeds_and_drops_committed_spend_when_redis_rejects_the_reset(
-    monkeypatch, mock_prisma_client, mock_user_api_key_auth
+async def test_a_recreated_customer_is_admitted_when_redis_rejects_the_counter_reset(
+    monkeypatch, mock_prisma_client, mock_user_api_key_auth, failing, redis_down, fail_closed
 ):
-    spend: Final = FakeSpendCounters(redis={}, failing=frozenset({"set"}))
+    spend: Final = FakeSpendCounters(redis={}, failing=failing, fail=redis_down)
     monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_store", spend.store())
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"fail_closed_budget_enforcement": True})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"fail_closed_budget_enforcement": fail_closed})
     _over_budget_customers(spend)
     mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
         return_value=[LiteLLM_EndUserTable(user_id="cust-gone", blocked=False)]
@@ -354,8 +362,7 @@ async def test_a_customer_delete_still_succeeds_and_drops_committed_spend_when_r
     )
 
     assert response.status_code == 200, response.text
-    assert spend.redis is not None
-    assert "spend:committed:end_user:cust-gone" not in spend.redis
+    await _check_budget_of_new_customer("cust-gone")
 
 
 def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
