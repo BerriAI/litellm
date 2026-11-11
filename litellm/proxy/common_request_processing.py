@@ -3,7 +3,16 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from datetime import datetime
 from functools import lru_cache, partial
 from itertools import chain
