@@ -199,6 +199,7 @@ class _FieldMapping(LiteLLMBaseModel):
 
     type: str = "object"
     ignore_above: int | None = None
+    normalizer: str | None = None
     properties: "Mapping[str, _FieldMapping]" = Field(default_factory=dict)
     fields: "Mapping[str, _FieldMapping]" = Field(default_factory=dict)
 
@@ -235,18 +236,20 @@ def _mapped_field(mapping: _FieldMapping, key: str) -> _FieldMapping | None:
     return reduce(_child_field, key.split("."), root)
 
 
-def _exact_field(key: str, field: _FieldMapping) -> _ExactField | None:
-    if field.type not in _ANALYZED_STRING_TYPES:
+def _exact_field(key: str, field: _FieldMapping) -> _ExactField | _InexactKey:
+    if field.type not in _ANALYZED_STRING_TYPES and field.normalizer is None:
         return _ExactField(name=key, ignore_above=field.ignore_above)
     keywords: Final = sorted(
         (name != "keyword", name, subfield.ignore_above)
         for name, subfield in field.fields.items()
-        if subfield.type == "keyword"
+        if subfield.type == "keyword" and subfield.normalizer is None
     )
-    if not keywords:
-        return None
-    _, name, ignore_above = keywords[0]
-    return _ExactField(name=f"{key}.{name}", ignore_above=ignore_above)
+    if keywords:
+        _, name, ignore_above = keywords[0]
+        return _ExactField(name=f"{key}.{name}", ignore_above=ignore_above)
+    if field.normalizer is not None or any(subfield.type == "keyword" for subfield in field.fields.values()):
+        return _InexactKey(key=key, reason=f"the index normalizes every keyword mapping of {key}")
+    return _InexactKey(key=key, reason=f"the index maps {key} as text with no keyword subfield")
 
 
 def _string_values(comparison: _Equality | _Range | _Membership) -> tuple[str, ...]:
@@ -264,16 +267,35 @@ def _exact_comparison(
     mapped: Final = tuple(
         field for field in (_mapped_field(index.mappings, key) for index in mappings.values()) if field is not None
     )
-    exact: Final = frozenset(_exact_field(key, field) for field in mapped)
-    if None in exact:
-        return _InexactKey(key=key, reason=f"the index maps {key} as text with no keyword subfield")
-    names: Final = frozenset(field.name for field in exact if field is not None)
+    exact: Final = tuple(_exact_field(key, field) for field in mapped)
+    inexact: Final = next((field for field in exact if isinstance(field, _InexactKey)), None)
+    if inexact is not None:
+        return inexact
+    fields: Final = tuple(field for field in exact if isinstance(field, _ExactField))
+    names: Final = frozenset(field.name for field in fields)
     if len(names) > 1:
         return _InexactKey(key=key, reason=f"the indexes behind this store map {key} differently")
-    ignore_above: Final = min((field.ignore_above for field in exact if field and field.ignore_above), default=None)
+    ignore_above: Final = min((field.ignore_above for field in fields if field.ignore_above), default=None)
     if ignore_above is not None and any(len(value) > ignore_above for value in values):
         return _InexactKey(key=key, reason=f"the index ignores {key} values longer than {ignore_above} characters")
     return comparison.model_copy(update={"key": next(iter(names), key)})
+
+
+def _read_index_mappings(mapping: httpx.Response) -> Mapping[str, _IndexMapping] | BaseLLMException:
+    if not mapping.is_success:
+        return BaseLLMException(
+            status_code=mapping.status_code,
+            message=f"OpenSearch refused the index mapping read that string filters need: {mapping.text}",
+            headers=mapping.headers,
+        )
+    try:
+        return _INDEX_MAPPINGS.validate_json(mapping.content)
+    except ValidationError:
+        return BaseLLMException(
+            status_code=502,
+            message="OpenSearch answered the index mapping read without index mappings.",
+            headers=mapping.headers,
+        )
 
 
 def _exact_filter(search_filter: _Filter, mappings: Mapping[str, _IndexMapping]) -> _Filter | _InexactKey:
@@ -649,28 +671,17 @@ class OpenSearchVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, SignsRequ
         mapping: httpx.Response,
         litellm_params: Mapping[str, object],
     ) -> VectorStoreSearchOptionalRequestParams:
-        if not mapping.is_success:
-            raise BaseLLMException(
-                status_code=mapping.status_code,
-                message=f"OpenSearch refused the index mapping read that string filters need: {mapping.text}",
-                headers=mapping.headers,
-            )
-        try:
-            mappings: Final = _INDEX_MAPPINGS.validate_json(mapping.content)
-        except ValidationError:
-            raise BaseLLMException(
-                status_code=502,
-                message="OpenSearch answered the index mapping read without index mappings.",
-                headers=mapping.headers,
-            ) from None
-        exact: Final = _exact_filter(search_filter, mappings)
-        if not isinstance(exact, _InexactKey):
+        mappings: Final = _read_index_mappings(mapping)
+        exact: Final = mappings if isinstance(mappings, BaseLLMException) else _exact_filter(search_filter, mappings)
+        if not isinstance(exact, BaseLLMException | _InexactKey):
             return {**vector_store_search_optional_params, "filters": exact.model_dump()}
         if drops_unsupported_params(litellm_params.get("drop_params")):
             return {**vector_store_search_optional_params, "filters": None}
+        if isinstance(exact, BaseLLMException):
+            raise exact
         raise _bad_request(
-            f"filters cannot match {exact.key} exactly because {exact.reason}. Map {exact.key} as keyword or give it "
-            "a keyword subfield, or set drop_params to drop the filters."
+            f"filters cannot match {exact.key} exactly because {exact.reason}. Map {exact.key} as keyword without a "
+            "normalizer or give it such a keyword subfield, or set drop_params to drop the filters."
         )
 
     def resolve_search_params(

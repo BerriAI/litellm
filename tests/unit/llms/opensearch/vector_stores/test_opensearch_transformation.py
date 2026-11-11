@@ -686,6 +686,32 @@ async def test_filters_narrow_the_knn_query_with_the_matching_opensearch_filter(
             id="object-subfield",
         ),
         pytest.param(
+            {
+                "properties": {
+                    "tenant": {
+                        "type": "text",
+                        "fields": {
+                            "keyword": {"type": "keyword", "normalizer": "lowercase"},
+                            "raw": {"type": "keyword"},
+                        },
+                    }
+                }
+            },
+            {"type": "eq", "key": "tenant", "value": "Acme"},
+            {"term": {"tenant.raw": "Acme"}},
+            id="skips-a-normalized-keyword-subfield",
+        ),
+        pytest.param(
+            {
+                "properties": {
+                    "tenant": {"type": "keyword", "normalizer": "lowercase", "fields": {"raw": {"type": "keyword"}}}
+                }
+            },
+            {"type": "eq", "key": "tenant", "value": "Acme"},
+            {"term": {"tenant.raw": "Acme"}},
+            id="normalized-keyword-with-a-plain-subfield",
+        ),
+        pytest.param(
             {"properties": {"category": {"type": "keyword"}}},
             {"type": "eq", "key": "tenant", "value": "acme"},
             {"term": {"tenant": "acme"}},
@@ -771,6 +797,27 @@ TEXT_ONLY: Final = {"litellm-qa-docs": {"properties": {"tenant": {"type": "text"
             "the indexes behind this store map tenant differently",
             id="alias-indexes-disagree",
         ),
+        pytest.param(
+            {"litellm-qa-docs": {"properties": {"tenant": {"type": "keyword", "normalizer": "lowercase"}}}},
+            {"type": "eq", "key": "tenant", "value": "Acme"},
+            "the index normalizes every keyword mapping of tenant",
+            id="normalized-keyword",
+        ),
+        pytest.param(
+            {
+                "litellm-qa-docs": {
+                    "properties": {
+                        "tenant": {
+                            "type": "text",
+                            "fields": {"keyword": {"type": "keyword", "normalizer": "lowercase"}},
+                        }
+                    }
+                }
+            },
+            {"type": "eq", "key": "tenant", "value": "Acme"},
+            "the index normalizes every keyword mapping of tenant",
+            id="text-with-only-a-normalized-keyword-subfield",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -819,6 +866,34 @@ async def test_a_refused_index_mapping_read_keeps_its_status_and_sends_no_search
     assert "no mapping for you" in str(error.value)
     assert not _searches(respond)
     executor.call.assert_not_called()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "status,body",
+    [
+        pytest.param(403, {"status": 403, "error": {"reason": "no mapping for you", "type": "x"}}, id="refused"),
+        pytest.param(200, {"acknowledged": True}, id="unreadable"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_an_unusable_index_mapping_read_under_drop_params_drops_the_filters_and_searches_once(
+    asynchronous: bool, status: int, body: Mapping[str, object]
+) -> None:
+    respond: Final = MagicMock(
+        side_effect=[httpx.Response(status, json=body), httpx.Response(200, json=_opensearch_hits("text", "embedding"))]
+    )
+
+    response: Final = await _search(
+        asynchronous,
+        respond,
+        RecordingEmbeddingExecutor(),
+        {"filters": {"type": "eq", "key": "tenant", "value": "acme"}, "drop_params": True},
+    )
+
+    assert response["data"] == EXPECTED_RESULTS
+    (search,) = _searches(respond)
+    assert json.loads(search.content)["query"] == {"knn": {"embedding": {"vector": QUERY_VECTOR, "k": 10}}}
 
 
 def _rejection(reason: str) -> httpx.Response:
