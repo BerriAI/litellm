@@ -1,5 +1,8 @@
+import type { TFunction } from "i18next";
 import type React from "react";
 import type { Validate } from "react-hook-form";
+
+import i18n from "@/i18n/i18n";
 
 import type { MountedFieldControlProps, MountedFormValues } from "@/components/common_components/MountedFormField";
 
@@ -35,14 +38,14 @@ const toTags = (value: unknown): string[] =>
     (entry): entry is string => typeof entry === "string" && entry !== "",
   );
 
-export const tagsControl = (control: MountedFieldControlProps) => {
+export const tagsControl = (control: MountedFieldControlProps, t: TFunction = i18n.t.bind(i18n)) => {
   const value = toTags(control.value);
   return {
     id: control.id,
     options: [...new Set(value)].map((tag) => ({ label: tag, value: tag })),
     value,
     onValueChange: control.onChange,
-    emptyText: "Type to add",
+    emptyText: t("mcpServers.fieldRules.tagsControl.emptyText"),
     allowCustomValues: true,
   };
 };

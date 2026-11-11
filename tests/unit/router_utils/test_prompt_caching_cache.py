@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from typing import Final, cast
 
 import pytest
@@ -375,6 +376,32 @@ def test_extract_cacheable_prefix_mixed_string_and_list_content():
     assert result[0]["role"] == "system"
     assert result[1]["content"] == "First cached message"
     assert isinstance(result[2]["content"], list)
+
+
+def test_prompt_cache_breakpoint_marks_the_same_cacheable_prefix_as_cache_control():
+    def _messages(marker: Mapping[str, Mapping[str, str]]) -> list[AllMessageValues]:
+        return cast(  # cast-ok: the text part type does not declare the prompt_cache_breakpoint key
+            list[AllMessageValues],
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Here is the full text of a complex legal agreement" * 400, **marker}
+                    ],
+                },
+                {"role": "user", "content": "what are the key terms?"},
+            ],
+        )
+
+    marked_key: Final = PromptCachingCache.get_prompt_caching_cache_key(
+        _messages({"prompt_cache_breakpoint": {"mode": "explicit"}}), None
+    )
+
+    assert marked_key is not None
+    assert marked_key == PromptCachingCache.get_prompt_caching_cache_key(
+        _messages({"cache_control": {"type": "ephemeral"}}), None
+    )
+    assert PromptCachingCache.get_prompt_caching_cache_key(_messages({}), None) is None
 
 
 @pytest.mark.asyncio

@@ -4,8 +4,9 @@ to a writer client. Used when DATABASE_URL_READ_REPLICA is configured;
 otherwise PrismaClient uses the writer-only PrismaWrapper directly.
 """
 
+import asyncio
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
@@ -15,7 +16,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.prisma_client import PrismaWrapper
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
     from prisma.types import HttpConfig
+
+    from litellm.repositories.prisma_protocols import TableActions
 
 # Per-model action methods that read from the database. These are routed to
 # the read replica when one is configured.
@@ -233,8 +237,13 @@ class RoutingPrismaWrapper:
         await self._reader.start_token_refresh_task()
 
     async def stop_token_refresh_task(self) -> None:
-        await self._writer.stop_token_refresh_task()
-        await self._reader.stop_token_refresh_task()
+        results: Final = await asyncio.gather(
+            self._writer.stop_token_refresh_task(),
+            self._reader.stop_token_refresh_task(),
+            return_exceptions=True,
+        )
+        if (error := next((result for result in results if isinstance(result, BaseException)), None)) is not None:
+            raise error
 
     async def recreate_prisma_client(
         self,
@@ -295,6 +304,23 @@ class RoutingPrismaWrapper:
         if not reader_url:
             raise RuntimeError("DATABASE_URL_READ_REPLICA not set; cannot recreate read replica client")
         await self._reader.recreate_prisma_client(reader_url, http_client=http_client)
+
+    if TYPE_CHECKING:
+
+        async def execute_raw(self, query: str, *args: object) -> int: ...
+
+        async def query_first(self, query: str, *args: object) -> Mapping[str, object] | None: ...
+
+        @property
+        def litellm_deprecatedverificationtoken(
+            self,
+        ) -> TableActions[prisma_models.LiteLLM_DeprecatedVerificationToken]: ...
+
+        @property
+        def litellm_mcpservertable(self) -> TableActions[prisma_models.LiteLLM_MCPServerTable]: ...
+
+        @property
+        def litellm_shadowevaljob(self) -> TableActions[prisma_models.LiteLLM_ShadowEvalJob]: ...
 
     def __getattr__(self, name: str) -> Any:
         if name in _TOP_LEVEL_READ_METHODS:

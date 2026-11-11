@@ -1,6 +1,8 @@
 import OpenAI from "openai";
+import type { TFunction } from "i18next";
 import { v4 as uuid } from "uuid";
 import { getGatewayBaseUrl } from "@/components/networking";
+import i18n from "@/i18n/i18n";
 import type { ChatImageAttachment } from "./types";
 
 export const MAX_CHAT_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -37,24 +39,27 @@ export async function readChatImage(file: File): Promise<ChatImageAttachment> {
   return { id: uuid(), name: file.name, url, mimeType: file.type };
 }
 
-export async function generateChatImages({
-  prompt,
-  model,
-  accessToken,
-  signal,
-}: {
-  prompt: string;
-  model: string;
-  accessToken: string;
-  signal?: AbortSignal;
-}): Promise<ChatImageAttachment[]> {
+export async function generateChatImages(
+  {
+    prompt,
+    model,
+    accessToken,
+    signal,
+  }: {
+    prompt: string;
+    model: string;
+    accessToken: string;
+    signal?: AbortSignal;
+  },
+  t: TFunction = i18n.t.bind(i18n),
+): Promise<ChatImageAttachment[]> {
   const client = new OpenAI({ apiKey: accessToken, baseURL: getGatewayBaseUrl(), dangerouslyAllowBrowser: true });
   const response = await client.images.generate({ model, prompt }, { signal });
   const mimeType = `image/${response.output_format ?? "png"}`;
   const images = (response.data ?? []).flatMap((image, index): ChatImageAttachment[] => {
     const url = image.b64_json ? `data:${mimeType};base64,${image.b64_json}` : image.url;
     if (!url || !isChatImageUrl(url)) return [];
-    return [{ id: uuid(), name: `Generated image ${index + 1}`, url }];
+    return [{ id: uuid(), name: t("chat.imageHelpers.generatedImageName", { number: index + 1 }), url }];
   });
   if (!images.length) throw new Error("The model did not return an image. Try another prompt or image model.");
   return images;

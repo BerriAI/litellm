@@ -165,7 +165,7 @@ async def _drive_streamed_block(endpoint, outer_body, keepalive_interval):
     ):
         mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
         response = await endpoint(
-            request=MagicMock(spec=Request),
+            request=MagicMock(spec=Request, headers={}),
             fastapi_response=MagicMock(spec=Response),
             user_api_key_dict=UserAPIKeyAuth(),
         )
@@ -231,7 +231,7 @@ async def _drive_unstreamed_block(endpoint, outer_body):
     ) as mock_proxy_logging:
         mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
         response = await endpoint(
-            request=MagicMock(spec=Request),
+            request=MagicMock(spec=Request, headers={}),
             fastapi_response=MagicMock(spec=Response),
             user_api_key_dict=UserAPIKeyAuth(),
         )

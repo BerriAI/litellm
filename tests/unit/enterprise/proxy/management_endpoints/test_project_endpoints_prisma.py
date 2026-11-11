@@ -1591,7 +1591,7 @@ def test_update_quota_rejects_wildcard_left_on_project():
 async def test_new_project_flag_on_access_group_model_returns_400(monkeypatch):
     """End-to-end: the router's access groups reach the check, so an access-group entry is rejected."""
     llm_router = mock.MagicMock()
-    llm_router.get_model_access_groups.return_value = {"prod-models": ["gpt-5.5"]}
+    llm_router.registry.return_value.access_groups.return_value = {"prod-models": ["gpt-5.5"]}
     _enforced_new_project_mocks(monkeypatch, team_models=["prod-models"], llm_router=llm_router)
     data = NewProjectRequest(
         team_id="test-team",

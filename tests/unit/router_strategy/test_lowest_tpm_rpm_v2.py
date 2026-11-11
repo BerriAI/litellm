@@ -2,19 +2,22 @@
 #    This tests the router's ability to pick deployment with lowest tpm using 'usage-based-routing-v2-v2'
 
 import asyncio
+import base64
 import importlib
+import io
 import os
 import time
 import traceback
 from typing import Dict, Final, Iterator
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.utils import _invalidate_model_cost_lowercase_map
+from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 import litellm
 from litellm import Router
@@ -23,7 +26,7 @@ from litellm.caching.caching import DualCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
 )
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, RouterRateLimitError
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
@@ -345,6 +348,55 @@ def test_router_skip_rate_limited_deployments():
         pytest.fail(f"Should have raised No Models Available error")
     except Exception as e:
         print(f"An exception occurred! {str(e)}")
+
+
+def _embedding_image_uri() -> str:
+    image: Final = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(image, format="PNG", compress_level=0)
+    return f"data:image/png;base64,{base64.b64encode(image.getvalue()).decode()}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "routing_strategy",
+    ["usage-based-routing", "usage-based-routing-v2", "latency-based-routing", "cost-based-routing"],
+)
+@pytest.mark.parametrize(
+    ("litellm_params", "model_info", "admitted"),
+    [
+        ({"model": "vertex_ai/gemini-embedding-2"}, {}, True),
+        (
+            {"model": "openai/team-embedder", "api_base": "https://embedder.invalid"},
+            {"base_model": "vertex_ai/gemini-embedding-2"},
+            True,
+        ),
+        ({"model": "text-embedding-3-small"}, {}, False),
+    ],
+    ids=["image-model", "image-base-model", "text-model"],
+)
+async def test_deployment_tpm_counts_embedding_image_as_media_only_on_image_models(
+    routing_strategy: str, litellm_params: Dict[str, str], model_info: Dict[str, str], admitted: bool
+) -> None:
+    uri: Final = _embedding_image_uri()
+    assert len(uri) // 4 > 75_000
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embedder",
+                "litellm_params": {**litellm_params, "tpm": 75_000},
+                "model_info": {**model_info, "id": f"embedder-{index}"},
+            }
+            for index in range(2)
+        ],
+        routing_strategy=routing_strategy,
+    )
+
+    if not admitted:
+        with pytest.raises((litellm.RateLimitError, RouterRateLimitError)):
+            await router.select("embedder", {}, input=[uri])
+        return
+    deployment: Final = await router.select("embedder", {}, input=[uri])
+    assert deployment["model_info"]["id"] in ("embedder-0", "embedder-1")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -672,7 +724,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
-    _invalidate_model_cost_lowercase_map()
+    publish(litellm.model_cost)
 
 
 _SCALAR_DEFAULTS = {

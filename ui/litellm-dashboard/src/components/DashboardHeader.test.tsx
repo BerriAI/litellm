@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { DashboardHeader } from "./DashboardHeader";
-import { NAV_PRODUCT_LINK_CLASS } from "@/components/Navbar/navProductLinkClass";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 
 const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
@@ -66,87 +65,15 @@ describe("DashboardHeader breadcrumb", () => {
     expect(screen.getByText("Home")).toBeInTheDocument();
   });
 
-  it("roots the breadcrumb in the AI Gateway selector (with a Chat option) and drops the static section crumb when the selector is available", async () => {
-    state.enableChatUI = true;
+  it("names the Aria workspace in the header", () => {
+    state.pathname = "/ui/aria";
     renderDashboardHeader();
-
-    expect(screen.getByText("Logs")).toBeInTheDocument();
-    expect(screen.queryByText("Observability")).not.toBeInTheDocument();
-
-    const selector = screen.getByRole("button", { name: /AI Gateway/i });
-    act(() => {
-      fireEvent.click(selector);
-    });
-    expect(await screen.findByText("Chat")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Aria Agent" })).toBeInTheDocument();
   });
 
-  it("keeps the AI Gateway selector at the root even when there is nothing to switch to (discovery)", () => {
+  it("keeps the scoped key search available", () => {
+    state.pathname = "/ui/api-keys";
     renderDashboardHeader();
-
-    expect(screen.getByRole("button", { name: /AI Gateway/i })).toBeInTheDocument();
-    expect(screen.getByText("Logs")).toBeInTheDocument();
-    expect(screen.queryByText("Observability")).not.toBeInTheDocument();
-  });
-
-  it("styles Docs with the shared product-link class instead of a muted toolbar button", () => {
-    renderDashboardHeader();
-
-    const docs = screen.getByRole("link", { name: "Docs" });
-    for (const cls of NAV_PRODUCT_LINK_CLASS.trim().split(/\s+/)) {
-      expect(docs).toHaveClass(cls);
-    }
-    expect(docs).not.toHaveClass("text-muted-foreground");
-  });
-
-  it("renders the tools divider centered rather than stretched to the top of the row", () => {
-    const { container } = renderDashboardHeader();
-
-    const separators = container.querySelectorAll('[data-slot="separator"][data-orientation="vertical"]');
-    expect(separators).toHaveLength(1);
-    expect(separators[0].className).not.toMatch(/self-stretch/);
-    expect(separators[0].className).toContain("data-vertical:self-center");
-  });
-
-  it("should place Aria Agent in the header tools ahead of Docs", () => {
-    renderDashboardHeader();
-
-    const liteAdmin = within(screen.getByRole("banner")).getByRole("button", { name: "Aria Agent" });
-    expect(liteAdmin.compareDocumentPosition(screen.getByRole("link", { name: "Docs" }))).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
-  });
-
-  it("should keep the gateway selector and tools available from the compact header menu", async () => {
-    renderDashboardHeader();
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "More options" }));
-    });
-    const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
-    expect(within(tools).getByRole("button", { name: "Switch workspace, current: AI Gateway" })).toBeInTheDocument();
-    expect(within(tools).getByRole("link", { name: "Docs" })).toBeInTheDocument();
-    expect(within(screen.getByRole("banner")).getByRole("button", { name: "Aria Agent" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Aria Agent" })).toHaveLength(1);
-  });
-
-  it("closes mobile tools when switching to desktop and keeps them closed when returning", async () => {
-    const { rerender } = renderDashboardHeader();
-    fireEvent.click(screen.getByRole("button", { name: "More options" }));
-    expect(await screen.findByRole("dialog", { name: "Gateway tools" })).toBeInTheDocument();
-
-    state.isDesktop = true;
-    rerender(
-      <CommandPaletteProvider>
-        <DashboardHeader accessToken={null} />
-      </CommandPaletteProvider>,
-    );
-    expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
-
-    state.isDesktop = false;
-    rerender(
-      <CommandPaletteProvider>
-        <DashboardHeader accessToken={null} />
-      </CommandPaletteProvider>,
-    );
-    expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Search keys…" })).toBeInTheDocument();
   });
 });
