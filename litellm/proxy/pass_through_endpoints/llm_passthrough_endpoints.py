@@ -286,11 +286,12 @@ def anthropic_deployment_pricing_model_info(
     llm_router: litellm.Router | None, request_body: Mapping[str, object], team_id: str | None
 ) -> Mapping[str, object] | None:
     """
-    The pass-through forwards the body unchanged, so no deployment is selected for the call. Only a single
-    deployment in the requested model group serving that exact Anthropic model can say what it costs: with
-    several, any pick could bill another deployment's negotiated price.
+    The pass-through forwards the body (or its ``custom_body`` envelope) unchanged, so no deployment is selected
+    for the call. Only a single deployment in the forwarded model's group serving that exact Anthropic model can
+    say what it costs: with several, any pick could bill another deployment's negotiated price.
     """
-    model: Final = request_body.get("model")
+    custom_body: Final = _object_mapping(request_body.get("custom_body"))
+    model: Final = (custom_body or request_body).get("model")
     if llm_router is None or not isinstance(model, str) or not model:
         return None
     candidates: Final = tuple(

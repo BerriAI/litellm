@@ -7274,7 +7274,9 @@ def _anthropic_deployment(
 
 
 def _passthrough_pricing(
-    monkeypatch: pytest.MonkeyPatch, *deployments: dict[str, object], requested_model: str = "claude-haiku-5-5"
+    monkeypatch: pytest.MonkeyPatch,
+    *deployments: dict[str, object],
+    request_body: Mapping[str, object] = MappingProxyType({"model": "claude-haiku-5-5"}),
 ) -> Mapping[str, object] | None:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         anthropic_deployment_pricing_model_info,
@@ -7282,7 +7284,7 @@ def _passthrough_pricing(
 
     monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     router: Final = litellm.Router(model_list=[*deployments])
-    return anthropic_deployment_pricing_model_info(router, {"model": requested_model}, None)
+    return anthropic_deployment_pricing_model_info(router, request_body, None)
 
 
 def test_anthropic_passthrough_prices_with_the_one_deployment_serving_the_requested_model(monkeypatch):
@@ -7310,11 +7312,33 @@ def test_anthropic_passthrough_prices_a_deployment_configured_with_the_alias_the
         _anthropic_deployment(
             "haiku-latest-dep", model_name="claude-haiku-latest", backend="anthropic/claude-haiku-latest"
         ),
-        requested_model="claude-haiku-latest",
+        request_body={"model": "claude-haiku-latest"},
     )
 
     assert model_info is not None
     assert model_info["id"] == "haiku-latest-dep"
+
+
+def test_anthropic_passthrough_prices_the_model_in_the_forwarded_custom_body(monkeypatch):
+    model_info: Final = _passthrough_pricing(
+        monkeypatch,
+        _anthropic_deployment("haiku-dep"),
+        request_body={"model": "claude-opus-5-5", "custom_body": {"model": "claude-haiku-5-5"}},
+    )
+
+    assert model_info is not None
+    assert model_info["id"] == "haiku-dep"
+
+
+def test_anthropic_passthrough_ignores_an_outer_model_the_custom_body_does_not_forward(monkeypatch):
+    assert (
+        _passthrough_pricing(
+            monkeypatch,
+            _anthropic_deployment("haiku-dep"),
+            request_body={"model": "claude-haiku-5-5", "custom_body": {"model": "claude-opus-5-5"}},
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(
