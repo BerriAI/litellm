@@ -97061,5 +97061,976 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "fal_ai/blackforestlabs/flux-3/edit-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"the page states only the 1K (1 MP) price of $0.048 and the pricing API bills in megapixels at $0.048, so the per-pixel rate is $0.048 per megapixel and the per-image price is the default 1k output; 768sq, 1.5k, 2k and 4k outputs are priced by the per-pixel rate"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.048,
+        "output_cost_per_pixel": 4.57763671875e-08,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/edit-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/blackforestlabs/flux-3/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; the pricing API reports a $0.085 per second base price that the page does not state"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.32,
+        "output_cost_per_second_4k": 0.47,
+        "output_cost_per_second_720p": 0.17,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/blackforestlabs/flux-3/klein/edit-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per output image by resolution; output_cost_per_image is the 1K rate (image_size defaults to the input size, 1K is the page example); 768 x 768 is $0.008 and 1.5K is $0.011 per image, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.009,
+        "output_cost_per_image_1K": 0.009,
+        "output_cost_per_image_2K": 0.014,
+        "output_cost_per_image_4K": 0.036,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/klein/edit-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/blackforestlabs/flux-3/klein/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per output image by resolution; output_cost_per_image is the 1K rate (default image_size square_hd); 768 x 768 is $0.008 and 1.5K is $0.011 per image, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.009,
+        "output_cost_per_image_1K": 0.009,
+        "output_cost_per_image_2K": 0.014,
+        "output_cost_per_image_4K": 0.036,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/klein/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/blackforestlabs/flux-3/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"the page states only the 1K (1 MP) price of $0.048 and the pricing API bills in megapixels at $0.048, so the per-pixel rate is $0.048 per megapixel and the per-image price is the default 1k output; 768sq, 1.5k, 2k and 4k outputs are priced by the per-pixel rate"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.048,
+        "output_cost_per_pixel": 4.57763671875e-08,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/blackforestlabs/flux-3/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; the pricing API reports a $0.085 per second base price that the page does not state"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.17,
+        "output_cost_per_second_1080p": 0.29,
+        "output_cost_per_second_2k": 0.32,
+        "output_cost_per_second_4k": 0.47,
+        "output_cost_per_second_720p": 0.17,
+        "source": "https://fal.ai/models/blackforestlabs/flux-3/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/blackforestlabs/flux-video-upscale": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution in the default creative mode (creativity=1); output_cost_per_second is the highest tier (4K) because the output resolution depends on the source and upscale_factor; precise mode (creativity=0) is $0.084 (1080p), $0.15 (2K) and $0.33 (4K) per second and has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.474,
+        "output_cost_per_second_1080p": 0.12,
+        "output_cost_per_second_2k": 0.21,
+        "output_cost_per_second_4k": 0.474,
+        "source": "https://fal.ai/models/blackforestlabs/flux-video-upscale",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bria/fibo-2/generate": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image at the default 1MP output; the 4MP output is $0.06 per image and has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/bria/fibo-2/generate",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/fast/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video at the default resolution 720p, the only per-second rate the page states; fal bills tokens at $0.0112 per 1000 tokens, counts input video duration, and multiplies by 0.6 with video inputs"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.2419,
+        "output_cost_per_second_720p": 0.2419,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/fast/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/us/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; 1080p and 4k are not priced on the page; fal bills tokens at $0.0168 per 1000 tokens, counts input video duration, and multiplies by 0.6 with video inputs"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.37,
+        "output_cost_per_second_480p": 0.1731,
+        "output_cost_per_second_720p": 0.37,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/us/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.5/us/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 720p rate; with video references fal bills input and output duration and multiplies by 0.6"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.473,
+        "output_cost_per_second_1080p": 1.164,
+        "output_cost_per_second_480p": 0.2205,
+        "output_cost_per_second_720p": 0.473,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/us/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/bria/background/remove": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image without a prompt (prompt is optional); $0.03 per image when a prompt is given has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.018,
+        "source": "https://fal.ai/models/fal-ai/bria/background/remove",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/bytedance-upscaler/upscale/video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by target_resolution at 30fps in normal mode; output_cost_per_second is the default target_resolution 1080p rate; 6k $0.0574 and 8k $0.1148 per second have no catalog field; 30-60fps doubles, over 60fps quadruples and pro mode multiplies by 10, none of which is modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0072,
+        "output_cost_per_second_1080p": 0.0072,
+        "output_cost_per_second_2k": 0.0144,
+        "output_cost_per_second_4k": 0.0288,
+        "source": "https://fal.ai/models/fal-ai/bytedance-upscaler/upscale/video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/emu-3.5-image/edit-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default 720p resolution; 480p is $0.15 per image and has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://fal.ai/models/fal-ai/emu-3.5-image/edit-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/emu-3.5-image/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default 720p resolution; 480p is $0.15 per image and has no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.3,
+        "source": "https://fal.ai/models/fal-ai/emu-3.5-image/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/kling-video/v2.5-turbo/pro/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v2.5-turbo/pro/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/kling-video/v2.5-turbo/pro/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v2.5-turbo/pro/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/kling-video/v2.5-turbo/standard/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.042,
+        "source": "https://fal.ai/models/fal-ai/kling-video/v2.5-turbo/standard/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/hailuo-02/standard/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated video by resolution; output_cost_per_second is the default resolution 768P rate; 512P is roughly $0.017 per second and has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.045,
+        "output_cost_per_second_768p": 0.045,
+        "source": "https://fal.ai/models/fal-ai/minimax/hailuo-02/standard/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/minimax/image-01": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01,
+        "source": "https://fal.ai/models/fal-ai/minimax/image-01",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/object-removal": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default model best_quality; low_quality $0.006, medium_quality $0.012 and high_quality $0.018 per image have no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.024,
+        "source": "https://fal.ai/models/fal-ai/object-removal",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/object-removal/bbox": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default model best_quality; low_quality $0.006, medium_quality $0.012 and high_quality $0.018 per image have no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.024,
+        "source": "https://fal.ai/models/fal-ai/object-removal/bbox",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/object-removal/mask": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default model best_quality; low_quality $0.006, medium_quality $0.012 and high_quality $0.018 per image have no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.024,
+        "source": "https://fal.ai/models/fal-ai/object-removal/mask",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/recraft/v3/image-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per image at the default realistic_image style; vector styles are $0.08 per image and have no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/fal-ai/recraft/v3/image-to-image",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/scail-2": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.2,
+        "source": "https://fal.ai/models/fal-ai/scail-2",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan-vace-apps/long-reframe": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution, converted from the page rate per 2 seconds ($0.08 per 2s at 720p, $0.04 per 2s at 480p); output_cost_per_second is the 720p rate because the default resolution is auto; 580p ($0.06 per 2s) has no catalog field, 240p and 360p are not priced on the page; seconds are rounded up to a multiple of 2"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_480p": 0.02,
+        "output_cost_per_second_720p": 0.04,
+        "source": "https://fal.ai/models/fal-ai/wan-vace-apps/long-reframe",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan/v2.2-14b/animate/move": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per video second of output by resolution, where a video second is 16 frames; output_cost_per_second is the default resolution 480p rate; 580p is $0.06 per video second and has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_480p": 0.04,
+        "output_cost_per_second_720p": 0.08,
+        "source": "https://fal.ai/models/fal-ai/wan/v2.2-14b/animate/move",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/wan/v2.2-14b/animate/replace": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per video second of output by resolution, where a video second is 16 frames; output_cost_per_second is the default resolution 480p rate; 580p is $0.06 per video second and has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.04,
+        "output_cost_per_second_480p": 0.04,
+        "output_cost_per_second_720p": 0.08,
+        "source": "https://fal.ai/models/fal-ai/wan/v2.2-14b/animate/replace",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/edit": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/edit",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/extend": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/extend",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/image-to-video": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/reference-to-video": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/gemini-omni-flash/v1.2/text-to-video": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; 360p is $0.0273 per second and has no catalog field; input tokens (text, image, video) are billed at $1.50 per million"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0819,
+        "output_cost_per_second_1080p": 0.1229,
+        "output_cost_per_second_4k": 0.2457,
+        "output_cost_per_second_720p": 0.0819,
+        "source": "https://fal.ai/models/google/gemini-omni-flash/v1.2/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/google/virtual-try-on": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.075,
+        "source": "https://fal.ai/models/google/virtual-try-on",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/ideogram/v4/tiling": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per megapixel at the default rendering_speed BALANCED; TURBO is $0.03 and QUALITY is $0.10 per megapixel, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.06,
+        "output_cost_per_pixel": 5.7220458984375e-08,
+        "source": "https://fal.ai/models/ideogram/v4/tiling",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/ideogram/v4/tiling/lora": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per megapixel at the default rendering_speed BALANCED; TURBO is $0.03375 and QUALITY is $0.1125 per megapixel, no catalog field"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0675,
+        "output_cost_per_pixel": 6.437301635742188e-08,
+        "source": "https://fal.ai/models/ideogram/v4/tiling/lora",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/kling/v4/flash/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video at 720p (the only resolution) with image references; with video references fal bills $0.063 per second on the output duration plus the greater of the input and output durations, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.094,
+        "output_cost_per_second_720p": 0.094,
+        "source": "https://fal.ai/models/kling/v4/flash/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/kling/v4/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution with image references; output_cost_per_second is the default resolution 1080p rate; with video references or video elements fal bills $0.094 (720p) or $0.141 (1080p) per second on the input plus output length, which has no catalog field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.235,
+        "output_cost_per_second_1080p": 0.235,
+        "output_cost_per_second_720p": 0.157,
+        "source": "https://fal.ai/models/kling/v4/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/luma/agent/ray/v3.2/reframe": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per started source second by resolution; output_cost_per_second is the default resolution 540p rate ($0.06), which has no tier field"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.06,
+        "output_cost_per_second_1080p": 0.36,
+        "output_cost_per_second_720p": 0.12,
+        "source": "https://fal.ai/models/luma/agent/ray/v3.2/reframe",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of requested output duration by resolution; output_cost_per_second is the default resolution 768P rate; the page states no promotion for this endpoint; reference tokens above the 4,096 included per request are $0.02 per 1,000 tokens and are not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_1080p": 0.16,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/16bit-pixel": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/16bit-pixel",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/hand-drawn": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/hand-drawn",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/low-poly": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/low-poly",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/retro-toon-70s": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/retro-toon-70s",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3-max/styles/vhs": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_768p": 0.08,
+        "source": "https://fal.ai/models/minimax/h3-max/styles/vhs",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/mirelo-ai/sfx2.0/video-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of generated audio per sample; promotional 33% off rate through 2026-12-13 per the page; the standard rate of $0.015 per second applies from 2026-12-14 (ruling fal-ai-promotional-rates-apply-until-promotion-ends, 2026-11-10); mode and endpoint follow fal_ai/sonilo/v1.1/video-to-video-sound-effects"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.01,
+        "source": "https://fal.ai/models/mirelo-ai/sfx2.0/video-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/nvidia/cosmos-3-super/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image; the optional $0.02 per request prompt expansion surcharge is not modeled, and agentic generation bills every candidate image"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04,
+        "source": "https://fal.ai/models/nvidia/cosmos-3-super/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/recraft/v4/style/pro/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image when a style_id is provided; the one-time $0.005 style creation surcharge when no style_id is given is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1,
+        "source": "https://fal.ai/models/recraft/v4/style/pro/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/recraft/v4/style/pro/text-to-vector": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image when a style_id is provided; the one-time $0.005 style creation surcharge when no style_id is given is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.12,
+        "source": "https://fal.ai/models/recraft/v4/style/pro/text-to-vector",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/recraft/v4/style/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image when a style_id is provided; the one-time $0.005 style creation surcharge when no style_id is given is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.035,
+        "source": "https://fal.ai/models/recraft/v4/style/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/recraft/v4/style/text-to-vector": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"notes":"per generated image when a style_id is provided; the one-time $0.005 style creation surcharge when no style_id is given is not modeled"},
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "source": "https://fal.ai/models/recraft/v4/style/text-to-vector",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/vast/eden-live-14b-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of video generated in a live session; the 10 billable second ($0.10) minimum per session is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.01,
+        "source": "https://fal.ai/models/vast/eden-live-14b-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/vast/eden-live-5b-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of video generated in a live session; the 10 billable second ($0.035) minimum per session is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.0035,
+        "source": "https://fal.ai/models/vast/eden-live-5b-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-image/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.022,
+        "source": "https://fal.ai/models/xai/grok-imagine-image/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xai/grok-imagine-video/edit-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the 720p rate because the default resolution is auto; the $0.01 per second of input video charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/edit-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/extend-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the 720p rate because the endpoint has no resolution field; the $0.01 per second of input video charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/extend-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; the $0.002 per request image input charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 480p rate; the $0.002 per request image input charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.07,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_720p": 0.07,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/v1.5/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 720p rate; the $0.01 per reference image charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.14,
+        "output_cost_per_second_1080p": 0.25,
+        "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/v1.5/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/xai/grok-imagine-video/v1.5/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "metadata": {"comment":"per second of output video by resolution; output_cost_per_second is the default resolution 480p rate; the $0.01 per reference image charge is not modeled"},
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_480p": 0.08,
+        "output_cost_per_second_720p": 0.14,
+        "source": "https://fal.ai/models/xai/grok-imagine-video/v1.5/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
     }
 }
