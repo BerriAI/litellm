@@ -128,7 +128,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.common_utils.model_listing_utils import alias_map
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
-from litellm.proxy.common_utils.registry_read_through import is_vector_store_index_with_read_through
+from litellm.proxy.common_utils.registry_read_through import (
+    get_vector_store_with_read_through,
+    is_vector_store_index_with_read_through,
+)
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
@@ -972,16 +975,7 @@ async def milvus_proxy_route(
             detail=f"Collection name is required. Got {request_body}",
         )
 
-    if not litellm.vector_store_index_registry or not litellm.vector_store_registry:
-        raise HTTPException(
-            status_code=500,
-            detail="Unable to find Milvus vector store index registry or vector store registry.",
-        )
-
-    # check if vector store index
-    is_vector_store_index: Final = litellm.vector_store_index_registry.is_vector_store_index(
-        vector_store_index_name=collection_name
-    )
+    is_vector_store_index: Final = await is_vector_store_index_with_read_through(collection_name)
 
     if not is_vector_store_index:
         raise HTTPException(
@@ -1013,9 +1007,7 @@ async def milvus_proxy_route(
     # Update the request object with the modified collection name
     safe_set_request_parsed_body(request, request_body)
 
-    vector_store: Final = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry_by_name(
-        vector_store_name=vector_store_name
-    )
+    vector_store: Final = await get_vector_store_with_read_through(vector_store_name)
     if vector_store is None:
         raise Exception(f"Vector store not found for {vector_store_name}")
     await assert_user_can_access_vector_store(
@@ -1063,8 +1055,10 @@ async def milvus_proxy_route(
     return received_value
 
 
-def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStoreIndex:
-    registry: Final = litellm.vector_store_index_registry
+async def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStoreIndex:
+    registry: Final = (
+        litellm.vector_store_index_registry if await is_vector_store_index_with_read_through(index_name) else None
+    )
     index_object: Final = registry.get_vector_store_index_by_name(index_name) if registry is not None else None
     if index_object is None:
         raise HTTPException(
@@ -1078,8 +1072,10 @@ def _registered_vector_store_index(index_name: str) -> LiteLLM_ManagedVectorStor
 async def _opensearch_store_params(
     index_object: LiteLLM_ManagedVectorStoreIndex, user_api_key_dict: UserAPIKeyAuth
 ) -> Mapping[str, object]:
-    registry: Final = litellm.vector_store_registry
     store_name: Final = index_object.litellm_params.vector_store_name
+    registry: Final = (
+        litellm.vector_store_registry if await get_vector_store_with_read_through(store_name) is not None else None
+    )
     named_stores: Final = tuple(
         store
         for store in (registry.vector_stores if registry is not None else ())
@@ -1158,7 +1154,7 @@ async def opensearch_proxy_route(  # noqa: ANN201  # returns create_pass_through
     assert_vector_store_index_access(
         user_api_key_dict, path.index_name, operation.permission if operation is not None else None
     )
-    index_object: Final = _registered_vector_store_index(path.index_name)
+    index_object: Final = await _registered_vector_store_index(path.index_name)
     store_params: Final = await _opensearch_store_params(index_object, user_api_key_dict)
     prepared: Final = await prepare_index_request(
         config=OpenSearchVectorStoreConfig(aws=OpenSearchIndexAWS()),
@@ -2729,10 +2725,6 @@ async def azure_proxy_route(
                 )
                 if provider_config is None:
                     raise Exception("Provider config not found for Azure AI")
-                # get the index from registry
-                if litellm.vector_store_registry is None:
-                    raise Exception("Vector store registry not found")
-
                 is_allowed_to_call_vector_store_endpoint(
                     index_name=part,
                     provider=litellm.LlmProviders.AZURE_AI,
@@ -2750,9 +2742,7 @@ async def azure_proxy_route(
 
                 vector_store_name = index_object.litellm_params.vector_store_name
 
-                vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry_by_name(
-                    vector_store_name=vector_store_name
-                )
+                vector_store = await get_vector_store_with_read_through(vector_store_name)
                 if vector_store is None:
                     raise Exception(f"Vector store not found for {vector_store_name}")
                 await assert_user_can_access_vector_store(

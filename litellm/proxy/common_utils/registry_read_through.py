@@ -1,9 +1,10 @@
 """Read-through recovery for in-memory registries in multi-replica deployments.
 
-A management write (POST /model/new, /guardrails, /v1/agents, /v1/indexes) lands on one
-replica and reaches Postgres, but sibling replicas only refresh their in-memory
-registries on the periodic config reload, so a request using the new object
-immediately can land on a sibling that has never heard of it and fail 400/404.
+A management write (POST /model/new, /guardrails, /v1/agents, /vector_store/new,
+/v1/indexes) lands on one replica and reaches Postgres, but sibling replicas only
+refresh their in-memory registries on the periodic config reload, so a request
+using the new object immediately can land on a sibling that has never heard of it
+and fail 400/404.
 On a registry miss, callers here fetch the missing row from the DB and load it
 into the local registry before giving up. A short negative-result TTL per key
 plus a global resync budget per window bound the DB load from lookups of
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.agents import AgentResponse
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
     _ModelTable: TypeAlias = TableActions[prisma_models.LiteLLM_ProxyModelTable]
     _ModelRows: TypeAlias = Sequence[prisma_models.LiteLLM_ProxyModelTable]
@@ -302,19 +304,45 @@ async def _resync_agents(agent_id_or_name: str) -> bool:
 async def _resync_vector_store_indexes(index_name: str) -> bool:
     import litellm
     from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
     from litellm.vector_stores.vector_store_registry import VectorStoreIndexRegistry
 
     if not _db_backed_registries_enabled("vector_store_indexes"):
         return False
     prisma_client: Final = proxy_server.prisma_client
     assert prisma_client is not None
-    index: Final = await VectorStoreIndexRegistry.get_vector_store_index_from_db(prisma_client, index_name)
+    index: Final = await VectorStoreIndexRegistry.get_vector_store_index_from_db(
+        WriterPinnedClient(prisma_client.db), index_name
+    )
     if index is None:
         return False
     if litellm.vector_store_index_registry is None:
         litellm.vector_store_index_registry = VectorStoreIndexRegistry(vector_store_indexes=[index])
     else:
         litellm.vector_store_index_registry.upsert_vector_store_index(vector_store_index=index)
+    return True
+
+
+async def _resync_vector_stores(vector_store_name: str) -> bool:
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    if not _db_backed_registries_enabled("vector_stores"):
+        return False
+    prisma_client: Final = proxy_server.prisma_client
+    assert prisma_client is not None
+    stores: Final = await VectorStoreRegistry.get_vector_stores_by_name_from_db(
+        WriterPinnedClient(prisma_client.db), vector_store_name
+    )
+    if not stores:
+        return False
+    if litellm.vector_store_registry is None:
+        litellm.vector_store_registry = VectorStoreRegistry(vector_stores=list(stores))
+        return True
+    for store in stores:
+        litellm.vector_store_registry.add_vector_store_to_registry(vector_store=store)
     return True
 
 
@@ -343,11 +371,27 @@ def _vector_store_index_is_loaded(index_name: str) -> bool:
     return registry is not None and registry.is_vector_store_index(vector_store_index_name=index_name)
 
 
+def _vector_store_from_registry(vector_store_name: str) -> "LiteLLM_ManagedVectorStore | None":
+    import litellm
+
+    registry: Final = litellm.vector_store_registry
+    if registry is None:
+        return None
+    return registry.get_litellm_managed_vector_store_from_registry_by_name(vector_store_name=vector_store_name)
+
+
+def _vector_store_is_loaded(vector_store_name: str) -> bool:
+    return _vector_store_from_registry(vector_store_name) is not None
+
+
 model_registry_read_through: Final = RegistryReadThrough(resync=_resync_model_deployments, is_loaded=_model_is_loaded)
 guardrail_registry_read_through: Final = RegistryReadThrough(resync=_resync_guardrails, is_loaded=_guardrail_is_loaded)
 agent_registry_read_through: Final = RegistryReadThrough(resync=_resync_agents, is_loaded=_agent_is_loaded)
 vector_store_index_registry_read_through: Final = RegistryReadThrough(
     resync=_resync_vector_store_indexes, is_loaded=_vector_store_index_is_loaded
+)
+vector_store_registry_read_through: Final = RegistryReadThrough(
+    resync=_resync_vector_stores, is_loaded=_vector_store_is_loaded
 )
 
 
@@ -355,6 +399,15 @@ async def is_vector_store_index_with_read_through(index_name: str) -> bool:
     if _vector_store_index_is_loaded(index_name):
         return True
     return await vector_store_index_registry_read_through.attempt(index_name)
+
+
+async def get_vector_store_with_read_through(vector_store_name: str) -> "LiteLLM_ManagedVectorStore | None":
+    vector_store: Final = _vector_store_from_registry(vector_store_name)
+    if vector_store is not None:
+        return vector_store
+    if not await vector_store_registry_read_through.attempt(vector_store_name):
+        return None
+    return _vector_store_from_registry(vector_store_name)
 
 
 def _agent_from_registry(agent_id_or_name: str) -> "AgentResponse | None":

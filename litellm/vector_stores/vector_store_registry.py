@@ -29,11 +29,15 @@ from litellm.types.vector_stores import (
 )
 
 if TYPE_CHECKING:
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
     from litellm.proxy.utils import PrismaClient
 else:
     PrismaClient = Any
 
 _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_VECTOR_STORE_ROWS: Final = TypeAdapter(
+    tuple[LiteLLM_ManagedVectorStore, ...], config=ConfigDict(hide_input_in_errors=True)
+)
 _ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 _TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 _STORE_ID_ITEMS: Final = TypeAdapter(list[object] | tuple[object, ...], config=ConfigDict(strict=True))
@@ -136,11 +140,9 @@ class VectorStoreIndexRegistry:
 
     @staticmethod
     async def get_vector_store_index_from_db(
-        prisma_client: PrismaClient, index_name: str
+        client: "WriterPinnedClient", index_name: str
     ) -> LiteLLM_ManagedVectorStoreIndex | None:
-        row: Final = await ManagedVectorStoreIndexRepository(prisma_client).table.find_unique(
-            where={"index_name": index_name}
-        )
+        row: Final = await ManagedVectorStoreIndexRepository(client).table.find_unique(where={"index_name": index_name})
         if row is None:
             return None
         return LiteLLM_ManagedVectorStoreIndex.model_validate(_DB_ROW.validate_python(dict(row)))
@@ -555,6 +557,16 @@ class VectorStoreRegistry:
         return vector_stores_from_db
 
     _get_vector_stores_from_db = get_vector_stores_from_db
+
+    @staticmethod
+    async def get_vector_stores_by_name_from_db(
+        client: "WriterPinnedClient", vector_store_name: str
+    ) -> tuple[LiteLLM_ManagedVectorStore, ...]:
+        rows: Final = await ManagedVectorStoresRepository(client).table.find_many(
+            where={"vector_store_name": vector_store_name},
+            order={"created_at": "desc"},
+        )
+        return _VECTOR_STORE_ROWS.validate_python(tuple(dict(row) for row in rows))
 
     def get_credentials_for_vector_store(self, vector_store_id: str) -> dict[str, object]:
         """

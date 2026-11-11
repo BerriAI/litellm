@@ -470,25 +470,29 @@ def fresh_agent_read_through(monkeypatch):
 
 
 @pytest.fixture
-def fresh_vector_store_index_read_through(monkeypatch):
-    import litellm
+def fresh_vector_store_read_throughs(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy.common_utils import registry_read_through
 
-    read_through = registry_read_through.RegistryReadThrough(
+    index_read_through: Final = registry_read_through.RegistryReadThrough(
         resync=registry_read_through._resync_vector_store_indexes,
         is_loaded=registry_read_through._vector_store_index_is_loaded,
     )
-    monkeypatch.setattr(registry_read_through, "vector_store_index_registry_read_through", read_through)
+    store_read_through: Final = registry_read_through.RegistryReadThrough(
+        resync=registry_read_through._resync_vector_stores,
+        is_loaded=registry_read_through._vector_store_is_loaded,
+    )
+    monkeypatch.setattr(registry_read_through, "vector_store_index_registry_read_through", index_read_through)
+    monkeypatch.setattr(registry_read_through, "vector_store_registry_read_through", store_read_through)
     monkeypatch.setattr(litellm, "vector_store_index_registry", None)
-    return read_through
+    monkeypatch.setattr(litellm, "vector_store_registry", None)
 
 
 class FakeVectorStoreIndexRow:
     def __init__(self, index_name: str, vector_store_name: str = "config-vector-store") -> None:
-        self.index_name = index_name
-        self.vector_store_name = vector_store_name
+        self.index_name: Final = index_name
+        self.vector_store_name: Final = vector_store_name
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[tuple[str, object]]:
         return iter(
             {
                 "id": f"{self.index_name}-id",
@@ -499,6 +503,30 @@ class FakeVectorStoreIndexRow:
                 "created_by": None,
                 "updated_at": None,
                 "updated_by": None,
+            }.items()
+        )
+
+
+class FakeVectorStoreRow:
+    def __init__(self, vector_store_name: str, custom_llm_provider: str, litellm_params: dict[str, str]) -> None:
+        self.vector_store_name: Final = vector_store_name
+        self.custom_llm_provider: Final = custom_llm_provider
+        self.litellm_params: Final = litellm_params
+
+    def __iter__(self) -> Iterator[tuple[str, object]]:
+        return iter(
+            {
+                "vector_store_id": f"{self.vector_store_name}-id",
+                "custom_llm_provider": self.custom_llm_provider,
+                "vector_store_name": self.vector_store_name,
+                "vector_store_description": None,
+                "vector_store_metadata": None,
+                "created_at": None,
+                "updated_at": None,
+                "litellm_credential_name": None,
+                "litellm_params": dict(self.litellm_params),
+                "team_id": None,
+                "user_id": None,
             }.items()
         )
 

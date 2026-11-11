@@ -3798,7 +3798,7 @@ class TestMilvusProxyRoute:
     @pytest.mark.asyncio
     async def test_milvus_proxy_route_no_index_registry(self):
         """
-        Test that missing index registry raises HTTPException
+        With no index registry and no DB row, the collection is not a managed index
         """
         from fastapi import HTTPException
 
@@ -3828,8 +3828,10 @@ class TestMilvusProxyRoute:
                     user_api_key_dict=mock_user_api_key_dict,
                 )
 
-            assert exc_info.value.status_code == 500
-            assert "Unable to find Milvus vector store index registry" in str(exc_info.value.detail)
+            assert exc_info.value.status_code == 400
+            assert "Collection test-collection is not a litellm managed vector store index" in str(
+                exc_info.value.detail
+            )
 
     @pytest.mark.asyncio
     async def test_milvus_proxy_route_not_managed_index(self):
@@ -5919,105 +5921,147 @@ class TestAzureProxyRouteCrossIndexAuthorization:
             assert mock_handler.await_args.kwargs["custom_llm_provider"] == litellm.LlmProviders.AZURE
 
 
-class TestAzureProxyRouteIndexRegistryMiss:
-    """An index created with POST /v1/indexes is only in the DB until the periodic
-    registry sync, so every replica has to find it there on the first request."""
+def _serve_proxy_with_vector_store_tables(
+    monkeypatch: pytest.MonkeyPatch, find_unique: AsyncMock, find_many: AsyncMock
+) -> TestClient:
+    from litellm.proxy import proxy_server
 
-    def _request(self, method: str, path: str) -> MagicMock:
-        request = MagicMock(spec=Request)
-        request.method = method
-        request.headers = {"content-type": "application/json"}
-        request.url = MagicMock()
-        request.url.path = path
-        return request
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedvectorstoreindextable.find_unique = find_unique
+    prisma_client.db.litellm_managedvectorstorestable.find_many = find_many
+    monkeypatch.delenv("AZURE_API_BASE", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        litellm.Router(model_list=[{"model_name": "chat-model", "litellm_params": {"model": "openai/gpt-5.4-mini"}}]),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    monkeypatch.setitem(
+        proxy_server.app.dependency_overrides,
+        user_api_key_auth,
+        lambda: UserAPIKeyAuth(api_key="sk-virtual", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+    return TestClient(proxy_server.app)
 
-    def _use_index_table(self, monkeypatch: pytest.MonkeyPatch, find_unique: AsyncMock) -> None:
-        import litellm.proxy.proxy_server as proxy_server
 
-        prisma_client: Final = MagicMock()
-        prisma_client.db.litellm_managedvectorstoreindextable.find_unique = find_unique
-        monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
-        monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+@pytest.mark.usefixtures("fresh_vector_store_read_throughs")
+class TestManagedIndexCreatedOnAnotherReplica:
+    """A store from POST /vector_store/new and an index from POST /v1/indexes are only in
+    the DB until the periodic registry sync, so every replica has to find both there on
+    the first request, including one that booted with no vector stores at all."""
 
-    @pytest.mark.asyncio
-    async def test_index_only_in_the_db_reaches_its_search_service_on_the_first_call(
-        self, fresh_vector_store_index_read_through, monkeypatch: pytest.MonkeyPatch
-    ):
-        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow
+    def test_azure_ai_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow
 
-        self._use_index_table(monkeypatch, AsyncMock(return_value=FakeVectorStoreIndexRow("kb-new")))
-        vector_store: Final = {"litellm_params": {"api_base": "https://svc.search.windows.net"}}
-        search_answer: Final = Response(content=b'{"value":[{"id":"doc-1"}]}', status_code=200)
-
-        with (
-            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
-                return_value=False,
-            ),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.ProviderConfigManager.get_provider_vector_stores_config"
-            ) as mock_get_config,
-            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint"),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.assert_user_can_access_vector_store",
-                new=AsyncMock(),
-            ),
-            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str", return_value=None),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler.base_openai_pass_through_handler",
-                new=AsyncMock(return_value=search_answer),
-            ) as mock_handler,
-            patch.object(litellm, "vector_store_registry") as mock_vector_registry,
-        ):
-            mock_get_config.return_value.get_auth_credentials.return_value = {"headers": {"api-key": "k"}}
-            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = vector_store
-
-            response = await azure_proxy_route(
-                endpoint="indexes/kb-new/docs/search",
-                request=self._request("POST", "/azure_ai/indexes/kb-new/docs/search"),
-                fastapi_response=MagicMock(spec=Response),
-                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
-            )
-
-            assert response.status_code == 200
-            assert response.body == b'{"value":[{"id":"doc-1"}]}'
-            mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.assert_called_once_with(
-                vector_store_name="config-vector-store"
-            )
-            mock_handler.assert_awaited_once()
-            assert mock_handler.await_args.kwargs["base_target_url"] == "https://svc.search.windows.net"
-            assert mock_handler.await_args.kwargs["custom_llm_provider"] == litellm.LlmProviders.AZURE_AI
-
-    @pytest.mark.asyncio
-    async def test_unregistered_index_without_azure_api_base_answers_404_naming_the_index(
-        self, fresh_vector_store_index_read_through, monkeypatch: pytest.MonkeyPatch
-    ):
-        self._use_index_table(monkeypatch, AsyncMock(return_value=None))
-
-        with (
-            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
-                return_value=False,
-            ),
-            patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_secret_str", return_value=None),
-            patch(
-                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.BaseOpenAIPassThroughHandler.base_openai_pass_through_handler",
-                new=AsyncMock(return_value=Response()),
-            ) as mock_handler,
-        ):
-            with pytest.raises(HTTPException) as exc_info:
-                await azure_proxy_route(
-                    endpoint="indexes/kb-never-created/docs/search",
-                    request=self._request("POST", "/azure_ai/indexes/kb-never-created/docs/search"),
-                    fastapi_response=MagicMock(spec=Response),
-                    user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        find_unique: Final = AsyncMock(return_value=FakeVectorStoreIndexRow("kb-new", "store-made-on-a"))
+        find_many: Final = AsyncMock(
+            return_value=[
+                FakeVectorStoreRow(
+                    "store-made-on-a",
+                    "azure_ai",
+                    {"api_base": "https://svc.search.windows.net", "api_key": "search-service-key"},
                 )
+            ]
+        )
+        client: Final = _serve_proxy_with_vector_store_tables(monkeypatch, find_unique, find_many)
 
-            assert exc_info.value.status_code == 404
-            assert "'kb-never-created' is not registered" in exc_info.value.detail["error"]
-            mock_handler.assert_not_awaited()
+        with respx.mock(assert_all_called=True) as upstream:
+            search: Final = upstream.post("https://svc.search.windows.net/indexes/kb-new/docs/search").mock(
+                return_value=httpx.Response(200, json={"value": [{"id": "doc-1"}]})
+            )
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert (response.status_code, response.json()) == (200, {"value": [{"id": "doc-1"}]})
+        find_unique.assert_awaited_once_with(where={"index_name": "kb-new"})
+        find_many.assert_awaited_once_with(where={"vector_store_name": "store-made-on-a"}, order={"created_at": "desc"})
+        assert search.calls.last.request.headers["api-key"] == "search-service-key"
+        assert json.loads(search.calls.last.request.content) == {"search": "refund policy"}
+
+    def test_azure_ai_search_on_an_unregistered_index_without_azure_api_base_answers_404_naming_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch, AsyncMock(return_value=None), AsyncMock(return_value=[])
+        )
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            response: Final = client.post(
+                "/azure_ai/indexes/kb-never-created/docs/search?api-version=2024-07-01",
+                json={"search": "refund policy"},
+            )
+
+        assert response.status_code == 404
+        assert "'kb-never-created' is not registered" in response.text
+        assert upstream.calls.call_count == 0
+
+    def test_milvus_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow
+
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch,
+            AsyncMock(return_value=FakeVectorStoreIndexRow("collection-made-on-a", "milvus-store-made-on-a")),
+            AsyncMock(
+                return_value=[
+                    FakeVectorStoreRow(
+                        "milvus-store-made-on-a",
+                        "milvus",
+                        {"api_base": "https://milvus.example.test", "api_key": "milvus-key"},
+                    )
+                ]
+            ),
+        )
+
+        with respx.mock(assert_all_called=True) as upstream:
+            search: Final = upstream.post("https://milvus.example.test/vectors/search").mock(
+                return_value=httpx.Response(200, json={"code": 0, "data": []})
+            )
+            response: Final = client.post(
+                "/milvus/vectors/search", json={"collectionName": "collection-made-on-a", "data": [[0.1, 0.2]]}
+            )
+
+        assert (response.status_code, response.json()) == (200, {"code": 0, "data": []})
+        assert search.calls.last.request.headers["authorization"] == "Bearer milvus-key"
+        assert json.loads(search.calls.last.request.content)["collectionName"] == "physical-index"
+
+    def test_opensearch_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow
+
+        client: Final = _serve_proxy_with_vector_store_tables(
+            monkeypatch,
+            AsyncMock(return_value=FakeVectorStoreIndexRow("docs-made-on-a", "opensearch-store-made-on-a")),
+            AsyncMock(
+                return_value=[
+                    FakeVectorStoreRow(
+                        "opensearch-store-made-on-a",
+                        "opensearch",
+                        {
+                            "api_base": f"https://{OPENSEARCH_HOST}",
+                            "aws_access_key_id": OPENSEARCH_ACCESS_KEY,
+                            "aws_secret_access_key": OPENSEARCH_SECRET_KEY,
+                        },
+                    )
+                ]
+            ),
+        )
+
+        with respx.mock(assert_all_called=True) as upstream:
+            search: Final = upstream.post(f"https://{OPENSEARCH_HOST}/physical-index/_search").mock(
+                return_value=httpx.Response(200, json={"hits": {"hits": []}})
+            )
+            response: Final = client.post(
+                "/opensearch/docs-made-on-a/_search",
+                content=b'{"query":{"match_all":{}}}',
+                headers={"Content-Type": JSON_TYPE},
+            )
+
+        assert (response.status_code, response.json()) == (200, {"hits": {"hits": []}})
+        assert _verified_sigv4_scope(search.calls.last.request) == ("aoss", "us-east-1")
 
 
 class TestAzureProxyRouteServiceLevelIndexCreate:
