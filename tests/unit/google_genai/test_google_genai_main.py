@@ -855,8 +855,9 @@ async def test_custom_content_stream_without_stream_hook_fails_before_streaming(
     native_content_handler: NativeContentLLM, is_async: bool
 ) -> None:
     request: Final = dict(model="native_image_test/image-model", contents=[])
-    with pytest.raises(litellm.BadRequestError, match="astreaming" if is_async else "streaming"):
+    with pytest.raises(litellm.InternalServerError, match="astreaming" if is_async else "streaming") as error:
         _ = await agenerate_content_stream(**request) if is_async else generate_content_stream(**request)
+    assert error.value.status_code == 500
     assert native_content_handler.requests == ()
 
 
@@ -876,6 +877,7 @@ _IMAGE_CANDIDATE: Final = {
 _IMAGE_USAGE: Final = {"promptTokenCount": 3, "candidatesTokenCount": 5, "totalTokenCount": 8}
 _IMAGE_WIRE_BODY: Final = {"candidates": [_IMAGE_CANDIDATE], "usageMetadata": _IMAGE_USAGE}
 _DICT_WITHOUT_USAGE: Final = {"candidates": [_IMAGE_CANDIDATE]}
+_NULL_TOOL_ARGS: Final = {"end_date": None, "trip": {"return_date": None, "seats": [None, 2]}}
 _HOOK_RESPONSE_SHAPES: Final = (
     pytest.param(
         GenerateContentResponse(
@@ -897,6 +899,40 @@ _HOOK_RESPONSE_SHAPES: Final = (
         (3, 5),
         _IMAGE_WIRE_BODY,
         id="camel-case-model-with-unset-fields",
+    ),
+    pytest.param(
+        GenerateContentResponse(
+            candidates=[
+                {
+                    "content": {"role": "model", "parts": [{"function_call": {"name": "book", "args": _NULL_TOOL_ARGS}}]},
+                    "index": 0,
+                }
+            ],
+            usage_metadata={"prompt_token_count": 3, "candidates_token_count": 5, "total_token_count": 8},
+        ),
+        (3, 5),
+        {
+            "candidates": [
+                {
+                    "content": {"role": "model", "parts": [{"functionCall": {"name": "book", "args": _NULL_TOOL_ARGS}}]},
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": _IMAGE_USAGE,
+        },
+        id="sdk-object-with-null-tool-args",
+    ),
+    pytest.param(
+        GenerateContentResponse(
+            candidates=[_IMAGE_CANDIDATE],
+            usage_metadata={"prompt_token_count": 3, "candidates_token_count": 5, "total_token_count": 8},
+            sdk_http_response={"headers": {"x-upstream-trace": "abc"}},
+            automatic_function_calling_history=[{"role": "user", "parts": [{"text": "draw"}]}],
+            parsed={"answer": "draw"},
+        ),
+        (3, 5),
+        _IMAGE_WIRE_BODY,
+        id="sdk-object-with-client-side-fields",
     ),
     pytest.param(_DICT_WITHOUT_USAGE, (0, 0), _DICT_WITHOUT_USAGE, id="dict-without-usage"),
 )

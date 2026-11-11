@@ -10,7 +10,7 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 import litellm
-from litellm.constants import request_timeout
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, request_timeout
 
 # Import the adapter for fallback to completion format
 from litellm.google_genai.adapters.handler import CUSTOM_PRICING_PARAMS, GenerateContentToCompletionHandler
@@ -57,6 +57,7 @@ _CUSTOM_NATIVE_REQUEST_FIELDS: Final = (
 )
 _BUILT_IN_PROVIDERS: Final = frozenset(provider.value for provider in LlmProviders)
 _CALLER_DATA_FIELDS: Final = frozenset({"args", "response"})
+_SDK_ONLY_RESPONSE_FIELDS: Final = frozenset({"sdkHttpResponse", "automaticFunctionCallingHistory", "parsed"})
 _STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECT_SEQUENCE: Final = TypeAdapter(Sequence[object])
 _JSON_VALUE: Final = TypeAdapter[JsonValue](JsonValue)
@@ -293,7 +294,7 @@ def _require_custom_stream_hook(setup_result: GenerateContentSetupResult, is_asy
     hook_name: Final = "astreaming" if is_async else "streaming"
     if getattr(type(custom_handler), hook_name) is getattr(CustomLLM, hook_name):
         raise CustomLLMError(
-            status_code=400,
+            status_code=500,
             message=f"{setup_result.custom_llm_provider} does not implement {hook_name}, so it cannot stream generateContent",
         )
 
@@ -315,7 +316,13 @@ def _require_adapter_generation_config(setup_result: GenerateContentSetupResult)
         )
 
 
-def _gemini_wire_value(value: object, camel_case_keys: bool) -> JsonValue:
+def _plain_json_value(value: object) -> JsonValue:
+    return _JSON_VALUE.validate_python(to_jsonable_python(value, fallback=str))
+
+
+def _gemini_wire_value(value: object, camel_case_keys: bool, depth: int = 0) -> JsonValue:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return _plain_json_value(value)
     match value:
         case bytes():
             return base64.b64encode(value).decode()
@@ -324,15 +331,17 @@ def _gemini_wire_value(value: object, camel_case_keys: bool) -> JsonValue:
         case Mapping():
             return {
                 (snake_to_camel(key) if camel_case_keys else key): _gemini_wire_value(
-                    item, camel_case_keys and key not in _CALLER_DATA_FIELDS
+                    item, camel_case_keys and key not in _CALLER_DATA_FIELDS, depth + 1
                 )
                 for key, item in _STR_KEYED_MAPPING.validate_python(value).items()
-                if item is not None
+                if item is not None or not camel_case_keys
             }
         case Sequence():
-            return [_gemini_wire_value(item, camel_case_keys) for item in _OBJECT_SEQUENCE.validate_python(value)]
+            return [
+                _gemini_wire_value(item, camel_case_keys, depth + 1) for item in _OBJECT_SEQUENCE.validate_python(value)
+            ]
         case _:
-            return _JSON_VALUE.validate_python(to_jsonable_python(value, fallback=str))
+            return _plain_json_value(value)
 
 
 def _custom_generate_content_wire_body(response: object) -> Mapping[str, JsonValue]:
@@ -342,7 +351,9 @@ def _custom_generate_content_wire_body(response: object) -> Mapping[str, JsonVal
         ),
         camel_case_keys=True,
     )
-    return wire_body if isinstance(wire_body, dict) else {}
+    if not isinstance(wire_body, dict):
+        return {}
+    return {key: value for key, value in wire_body.items() if key not in _SDK_ONLY_RESPONSE_FIELDS}
 
 
 def _log_custom_generate_content_response(
