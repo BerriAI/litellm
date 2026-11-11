@@ -407,17 +407,7 @@ gateway:
     # Empty scrapes the release namespace.
     namespaceSelector:
       matchNames: []
-    # http, or https when the scrape has to go over TLS, e.g. through an Istio
-    # sidecar under STRICT mTLS.
     scheme: http
-    # Prometheus Operator TLSConfig for the endpoint, rendered as given.
-    # Istio STRICT mTLS with the Istio certs mounted into Prometheus:
-    #   scheme: https
-    #   tlsConfig:
-    #     caFile: /etc/prom-certs/root-cert.pem
-    #     certFile: /etc/prom-certs/cert-chain.pem
-    #     keyFile: /etc/prom-certs/key.pem
-    #     insecureSkipVerify: true
     tlsConfig: {}
   # Opt-in `collector` sidecar (same image, `python -m litellm.proxy.collector`)
   # that runs the post-response spend pipeline (cost calculation, spend logs,
