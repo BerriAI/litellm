@@ -33,8 +33,8 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
-    _aclose_if_supported,
-    _aiter_bytes_then_close,
+    aclose_if_supported,
+    aiter_bytes_then_close,
 )
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
@@ -912,7 +912,8 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
         )
         completion_stream: Final = aws_decoder.aiter_bytes(
-            _aiter_bytes_then_close(httpx_response), response_headers=httpx_response.headers
+            aiter_bytes_then_close(httpx_response.aiter_bytes(), httpx_response),
+            response_headers=httpx_response.headers,
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
@@ -1059,7 +1060,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                     pending_delta["usage"] = delta_usage
                 yield pending_delta
         finally:
-            await _aclose_if_supported(completion_stream)
+            await aclose_if_supported(completion_stream)
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):

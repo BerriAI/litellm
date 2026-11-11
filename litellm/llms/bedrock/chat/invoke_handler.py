@@ -1,7 +1,8 @@
+import inspect
 import json
 import types
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator, Mapping
-from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -218,28 +219,24 @@ def _stream_decoder(
     return AWSEventStreamDecoder(model=model, json_mode=json_mode)
 
 
-@runtime_checkable
-class _SupportsAclose(Protocol):
-    async def aclose(self) -> None: ...
+async def aclose_if_supported(stream: object) -> None:
+    aclose = getattr(stream, "aclose", None)
+    if callable(aclose):
+        res = aclose()
+        if inspect.isawaitable(res):
+            await res
 
 
-async def _aclose_if_supported(stream: object) -> None:
-    if isinstance(stream, _SupportsAclose):
-        await stream.aclose()
-
-
-async def _aiter_bytes_then_close(
-    response: httpx.Response, *, chunk_size: int | None = None
-) -> AsyncGenerator[bytes, None]:
+async def aiter_bytes_then_close(stream: AsyncIterator[bytes], response: object) -> AsyncGenerator[bytes, None]:
     try:
-        if chunk_size is not None:
-            async for chunk in response.aiter_bytes(chunk_size=chunk_size):
-                yield chunk
-        else:
-            async for chunk in response.aiter_bytes():
-                yield chunk
+        async for chunk in stream:
+            yield chunk
     finally:
-        await response.aclose()
+        aclose = getattr(response, "aclose", None)
+        if callable(aclose):
+            res = aclose()
+            if inspect.isawaitable(res):
+                await res
 
 
 async def make_call(
@@ -312,8 +309,9 @@ async def make_call(
                 sync_stream=False,
                 response_format_schema=response_format_schema_from_request(data, json_mode),
             )
+            stream: AsyncIterator[bytes] = response.aiter_bytes(chunk_size=stream_chunk_size)
             completion_stream = decoder.aiter_bytes(
-                _aiter_bytes_then_close(response, chunk_size=stream_chunk_size), response_headers=response.headers
+                aiter_bytes_then_close(stream, response), response_headers=response.headers
             )
 
         # LOGGING
@@ -910,7 +908,7 @@ class AWSEventStreamDecoder:
                         _data = json.loads(message)
                         yield self.chunk_parser(chunk_data=_data)
         finally:
-            await _aclose_if_supported(iterator)
+            await aclose_if_supported(iterator)
         undecoded_stream_error: Final = tally.undecoded_stream_error(response_headers)
         if undecoded_stream_error is not None:
             raise undecoded_stream_error
