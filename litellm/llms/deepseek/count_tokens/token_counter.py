@@ -4,13 +4,12 @@ DeepSeek token counting through the count_tokens route of its Anthropic-compatib
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Final
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
@@ -38,22 +37,12 @@ from litellm.types.utils import CountContextManagement, LlmProviders, TokenCount
 DEEPSEEK_TOKENIZER_TYPE: Final = "deepseek_api"
 _CHAT_REASONING_PARAMS: Final = ("thinking", "reasoning_effort")
 DEEPSEEK_COUNT_TIMEOUT_SECONDS: Final = 10.0
-_COUNT_ROUTE_MISSING: Final = frozenset({404, 405})
-_MISSING_COUNT_ROUTE_TTL_SECONDS: Final = 3600
-_ESTIMATED_COUNT_STATUSES: Final = frozenset({408, 422, 429})
+DEEPSEEK_API_HOST: Final = "api.deepseek.com"
+_ESTIMATED_COUNT_STATUSES: Final = frozenset({404, 405, 408, 422, 429})
 _TOOLS: Final = TypeAdapter(list[dict[str, JsonValue]])
 _OPTIONS: Final = TypeAdapter(dict[str, JsonValue])
 
 deepseek_count_tokens_handler: Final = AnthropicCountTokensHandler()
-
-
-class MissingCountRoutes(Protocol):
-    def get_cache(self, key: str) -> object: ...
-
-    def set_cache(self, key: str, value: bool, *, ttl: int) -> None: ...
-
-
-_MISSING_COUNT_ROUTES: Final[MissingCountRoutes] = InMemoryCache(max_size_in_memory=256)
 
 
 def _count_left_to_estimate(status_code: int) -> bool:
@@ -103,13 +92,8 @@ class DeepSeekTokenCounter(BaseTokenCounter):
     """Counts with the request DeepSeek bills: an Anthropic Messages body sent to the Anthropic-compatible
     count_tokens route, with thinking and effort mapped the way the deployment's inference maps them."""
 
-    def __init__(
-        self,
-        handler: AnthropicCountTokensHandler = deepseek_count_tokens_handler,
-        missing_count_routes: MissingCountRoutes = _MISSING_COUNT_ROUTES,
-    ) -> None:
+    def __init__(self, handler: AnthropicCountTokensHandler = deepseek_count_tokens_handler) -> None:
         self._handler: Final = handler
-        self._missing_count_routes: Final = missing_count_routes
 
     def should_use_token_counting_api(self, custom_llm_provider: str | None = None) -> bool:
         return custom_llm_provider == LlmProviders.DEEPSEEK.value
@@ -129,12 +113,13 @@ class DeepSeekTokenCounter(BaseTokenCounter):
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
         count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
-        if not messages:
+        litellm_params: Final = deployment_litellm_params(deployment)
+        api_base: Final = deepseek_anthropic_base(optional_str(litellm_params.get("api_base")))
+        if not messages or httpx.URL(api_base).host != DEEPSEEK_API_HOST:
             return None
 
         from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-        litellm_params: Final = deployment_litellm_params(deployment)
         match translated := await anthropic_count_fields(
             model_to_use,
             messages,
@@ -151,6 +136,7 @@ class DeepSeekTokenCounter(BaseTokenCounter):
                     model_to_use=model_to_use,
                     messages=translated.messages,
                     litellm_params=litellm_params,
+                    api_base=api_base,
                     request_model=request_model,
                     tools=translated.tools,
                     system=translated.system,
@@ -164,6 +150,7 @@ class DeepSeekTokenCounter(BaseTokenCounter):
                 model_to_use=model_to_use,
                 messages=messages,
                 litellm_params=litellm_params,
+                api_base=api_base,
                 request_model=request_model,
                 tools=tools,
                 system=system,
@@ -180,6 +167,7 @@ class DeepSeekTokenCounter(BaseTokenCounter):
                     model_to_use=model_to_use,
                     messages=messages,
                     litellm_params=litellm_params,
+                    api_base=api_base,
                     request_model=request_model,
                     tools=tools,
                     system=system,
@@ -191,15 +179,13 @@ class DeepSeekTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: Sequence[Mapping[str, JsonValue]],
         litellm_params: Mapping[str, object],
+        api_base: str,
         request_model: str,
         tools: Sequence[Mapping[str, JsonValue]] | None,
         system: JsonValue,
         count_options: Mapping[str, JsonValue],
     ) -> TokenCountResponse | None:
         model_info: Final = DeepSeekModelInfo()
-        api_base: Final = deepseek_anthropic_base(optional_str(litellm_params.get("api_base")))
-        if self._missing_count_routes.get_cache(api_base) is True:
-            return None
         try:
             result: Final = await self._handler.handle_count_tokens_request(
                 model=model_to_use,
@@ -219,12 +205,6 @@ class DeepSeekTokenCounter(BaseTokenCounter):
                 timeout=_count_timeout(litellm_params),
             )
         except AnthropicError as e:
-            if e.status_code in _COUNT_ROUTE_MISSING:
-                verbose_logger.debug(
-                    "DeepSeek count_tokens route answered %s, so counts on %s are estimated", e.status_code, api_base
-                )
-                self._missing_count_routes.set_cache(api_base, True, ttl=_MISSING_COUNT_ROUTE_TTL_SECONDS)
-                return None
             if _count_left_to_estimate(e.status_code):
                 verbose_logger.warning(
                     "DeepSeek count_tokens route answered %s, so the count is estimated: %s", e.status_code, e.message

@@ -5850,18 +5850,18 @@ async def test_messages_count_tokens_counts_deepseek_on_its_anthropic_count_rout
 
 
 @pytest.mark.asyncio
-async def test_messages_count_tokens_on_deepseek_estimates_when_the_count_route_is_missing(
+async def test_messages_count_tokens_on_deepseek_on_another_host_answers_the_estimate_without_a_count_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response, route = await _count_messages_body(
         monkeypatch,
-        {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-deepseek-test", "api_base": "https://gateway.example"},
+        {"model": "deepseek/deepseek-v4-pro", "api_key": "sk-other-host", "api_base": "https://gateway.example/v1"},
         {"messages": [{"role": "user", "content": "Read the README"}]},
         "https://gateway.example/anthropic/v1/messages/count_tokens",
-        httpx.Response(404, json={"error": "not found"}),
+        httpx.Response(401, json={"error": "Authentication required."}),
     )
 
-    assert route.called
+    assert not route.called
     assert isinstance(response, dict)
     assert response["litellm_count_source"] == "local_estimate"
     assert response["input_tokens"] > 0
