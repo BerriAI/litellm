@@ -18,6 +18,7 @@ The mechanism works without any cache and supports two encoding strategies:
 import datetime
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -133,6 +134,13 @@ class TestEncryptedItemIdCodec:
         assert decoded["item_id"] == original_item_id
 
 
+@dataclass(frozen=True, slots=True)
+class _ReadOnlyReasoningItem:
+    id: str
+    type: str
+    encrypted_content: str
+
+
 class TestUpdateEncryptedContentItemIds:
     def test_rewrites_encrypted_items_in_dict_response(self):
         model_id = "deployment-1"
@@ -157,6 +165,12 @@ class TestUpdateEncryptedContentItemIds:
         response = {"output": [{"id": "rs_xyz", "type": "reasoning", "encrypted_content": "secret"}]}
         result = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(response, None)
         assert result["output"][0]["id"] == "rs_xyz"
+
+    def test_leaves_read_only_output_items_as_returned(self):
+        result: Final = ResponsesAPIRequestUtils._update_encrypted_content_item_ids_in_response(
+            {"id": "resp_123", "output": [_ReadOnlyReasoningItem("rs_xyz", "reasoning", "secret")]}, "deployment-1"
+        )
+        assert result["output"] == [_ReadOnlyReasoningItem("rs_xyz", "reasoning", "secret")]
 
     @pytest.mark.parametrize(
         "item, encoded",

@@ -604,6 +604,22 @@ async def test_streamed_reasoning_item_keeps_one_id_and_replays_as_one_input_ite
     ]
 
 
+@pytest.mark.asyncio
+async def test_output_item_added_without_an_item_streams_through_under_affinity():
+    iterator: Final = _make_iterator(
+        sse_events=[
+            _sse_event({"type": "response.output_item.added", "sequence_number": 0, "output_index": 0, "item": None})
+        ],
+        logging_obj=_logging_obj_stub(),
+        config=OpenAIResponsesAPIConfig(),
+        litellm_metadata={"encrypted_content_affinity_enabled": True, "model_info": {"id": "dep-1"}},
+    )
+
+    added: Final = await iterator.__anext__()
+
+    assert (added.type, added.output_index, added.item) == (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, 0, None)
+
+
 @pytest.mark.parametrize("trailing_error", _TRAILING_ERRORS, ids=type)
 def test_sync_transport_error_before_any_output_raises_fallback_error(trailing_error):
     logging_obj: Final = _failure_tracking_logging_obj()

@@ -504,10 +504,16 @@ class BaseResponsesAPIStreamingIterator:
                         "type": ResponsesAPIStreamEvents.ERROR.value,
                     }
                 )
-                openai_responses_api_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
+                transformed_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
                     parsed_chunk=typed_chunk,
                     logging_obj=self.logging_obj,
+                )
+                affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
+                openai_responses_api_chunk: Final = (
+                    transformed_chunk
+                    if affinity_model_id is None
+                    else ResponsesAPIRequestUtils.encode_stream_event_for_affinity(transformed_chunk, affinity_model_id)
                 )
 
                 # Only when the SSE JSON carries a response body (delta events do not).
@@ -576,12 +582,6 @@ class BaseResponsesAPIStreamingIterator:
                                 self.custom_llm_provider,
                                 _stream_model_id,
                             )
-
-                affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
-                if affinity_model_id is not None:
-                    ResponsesAPIRequestUtils.encode_stream_event_for_affinity(
-                        openai_responses_api_chunk, affinity_model_id
-                    )
 
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type: Final = getattr(openai_responses_api_chunk, "type", None)

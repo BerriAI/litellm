@@ -4751,6 +4751,47 @@ class TestNativeWebSocketEncryptedContentAffinity:
         assert logged[0]["response"]["id"] == completed["response"]["id"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            {"note": "a frame without a type"},
+            {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 1, "delta": "ok"},
+            {
+                "type": "response.content_part.added",
+                "item_id": "msg_1",
+                "output_index": 1,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": ""},
+            },
+            {"type": "response.output_item.done", "output_index": 1, "item": {"type": "message", "id": "msg_1"}},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {"type": "reasoning", "id": "encitem_bGl0ZWxsbTptb2RlbF9pZDpkZXAtMTtpdGVtX2lkOnJzXzE="},
+            },
+        ],
+        ids=["no-type", "message-delta", "message-content-part", "message-item", "already-encoded-reasoning"],
+    )
+    async def test_backend_to_client_forwards_events_affinity_does_not_own_unchanged(self, frame: dict[str, object]):
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        raw_frame: Final = json.dumps(frame)
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock()
+        backend_ws: Final = MagicMock()
+        backend_ws.recv = AsyncMock(side_effect=[raw_frame, Exception("stop")])
+        handler: Final = _make_streaming(
+            websocket=websocket,
+            backend_ws=backend_ws,
+            request_data={"litellm_metadata": dict(_AFFINITY_METADATA)},
+            custom_llm_provider="openai",
+        )
+
+        await handler.backend_to_client()
+
+        assert websocket.send_text.await_args_list[0][0][0] == raw_frame
+
+    @pytest.mark.asyncio
     async def test_backend_to_client_wraps_only_response_id_without_affinity(self):
         from unittest.mock import AsyncMock
 
