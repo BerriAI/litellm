@@ -4146,6 +4146,50 @@ async def test_messages_count_tokens_counts_the_body_the_inference_polyfill_send
     assert edited == polyfilled
 
 
+class _MistralCountTokensPeer:
+    def __init__(self) -> None:
+        self.request_bodies: tuple[bytes, ...] = ()
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_bodies = (*self.request_bodies, request.content)
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 57}, request=request)
+
+
+@pytest.mark.asyncio
+async def test_messages_count_tokens_sends_mistral_the_messages_the_inference_polyfill_edits() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-agent",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-mistral-key"},
+            }
+        ]
+    )
+    unedited_body: Final[dict[str, JsonValue]] = {
+        "model": "mistral-agent",
+        "messages": _agent_turns_with_tool_results(3),
+        "tools": [_READ_FILE_TOOL],
+    }
+    polyfilled_messages: Final = await _messages_the_inference_polyfill_sends("mistral/mistral-large-4")
+    peer: Final = _MistralCountTokensPeer()
+
+    with patch.object(
+        mistral_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        for request_body in (
+            {**unedited_body, "context_management": _CLEAR_TOOL_USES},
+            {**unedited_body, "messages": polyfilled_messages},
+            unedited_body,
+        ):
+            assert await _input_tokens(router, request_body) == 57
+
+    edited, polyfilled, unedited = (json.loads(body)["input"] for body in peer.request_bodies)
+    assert edited == polyfilled
+    assert edited != unedited
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("deployment_params", "router_defaults", "request_options"),

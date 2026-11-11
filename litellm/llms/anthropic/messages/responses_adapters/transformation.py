@@ -587,6 +587,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text
         )
 
+    @classmethod
+    def system_instructions(cls, system: object) -> str | None:
+        if system is None or isinstance(system, str):
+            return system
+        return cls.system_blocks_to_instructions(system) or None
+
     @staticmethod
     def _resolve_output_format_strict(strict: bool | None) -> bool:
         if strict is None:

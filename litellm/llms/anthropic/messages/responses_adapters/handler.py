@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequenc
 from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
@@ -41,7 +42,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CountContextManagement
+from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import (
@@ -156,6 +157,33 @@ async def count_view_messages(
         kwargs={"drop_params": context_management.drop_invalid_edits},
     )
     return messages if result is None else result.messages
+
+
+async def count_messages_as_sent(
+    *,
+    model: str,
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]] | None,
+    system: object,
+    messages_format: TokenCountMessagesFormat,
+    context_management: CountContextManagement | None,
+) -> Sequence[Mapping[str, object]] | AnthropicContextManagementError:
+    match messages_format:
+        case "openai":
+            return messages
+        case "anthropic":
+            try:
+                return await count_view_messages(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    system=system,
+                    context_management=context_management,
+                )
+            except AnthropicContextManagementError as error:
+                return error
+        case _:
+            assert_never(messages_format)
 
 
 def _with_applied_edits(

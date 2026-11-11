@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -8,6 +9,7 @@ from pydantic import JsonValue
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.llms.mistral.chat.transformation import MistralConfig
 from litellm.llms.mistral.count_tokens.token_counter import MistralTokenCounter
 from litellm.llms.mistral.count_tokens.transformation import MistralCountTokensConfig
 from litellm.types.utils import TokenCountResponse
@@ -399,6 +401,23 @@ async def test_count_tokens_never_sends_the_azure_env_key_to_mistral(
 
 
 @pytest.mark.asyncio
+async def test_acount_tokens_never_sends_the_azure_env_key_to_mistral(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("MISTRAL_API_KEY", "MISTRAL_API_BASE", "MISTRAL_AZURE_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("MISTRAL_AZURE_API_KEY", "azure-test-key")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as router:
+        route: Final = router.post(COUNT_URL).mock(
+            return_value=httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 9})
+        )
+        result: Final = await litellm.acount_tokens(
+            model="mistral/mistral-large-4", messages=[{"role": "user", "content": "Hello"}]
+        )
+    assert (route.called, result.tokenizer_type) == (False, "local_tokenizer")
+
+
+@pytest.mark.asyncio
 async def test_count_tokens_mistral_env_key_takes_precedence_over_generic_litellm_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -482,7 +501,6 @@ async def test_count_tokens_sends_the_key_and_base_chat_resolves(
     ],
 )
 def test_mistral_model_info_key_and_base_match_chat(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]):
-    from litellm.llms.mistral.chat.transformation import MistralConfig
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
@@ -606,9 +624,13 @@ async def test_count_tokens_returns_the_mistral_error_status_instead_of_a_count(
     assert "Unauthorized" in (result.error_message or "")
 
 
-async def _sent_count_input(
-    monkeypatch: pytest.MonkeyPatch, model: str, messages: list[dict[str, object]]
-) -> list[object]:
+async def _sent_count_body(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]] | None = None,
+    chat_params: dict[str, JsonValue] | None = None,
+) -> Mapping[str, object]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
         route: Final = respx.post(COUNT_URL).mock(
@@ -620,9 +642,17 @@ async def _sent_count_input(
             contents=None,
             deployment={"litellm_params": {"api_key": "test-key"}},
             request_model=f"mistral/{model}",
+            tools=tools,
+            chat_params=chat_params or {},
         )
     assert result is not None and result.total_tokens == 3
-    sent_input: Final = decoded_json_object(json.loads(route.calls.last.request.content))["input"]
+    return decoded_json_object(json.loads(route.calls.last.request.content))
+
+
+async def _sent_count_input(
+    monkeypatch: pytest.MonkeyPatch, model: str, messages: list[dict[str, object]]
+) -> list[object]:
+    sent_input: Final = (await _sent_count_body(monkeypatch, model, messages))["input"]
     assert isinstance(sent_input, list)
     return sent_input
 
@@ -804,3 +834,107 @@ async def test_count_tokens_falls_back_when_mistral_answers_without_a_count(monk
     result, requests = await _count_with(monkeypatch, "mistral-large-4", {}, {"object": "response.input_tokens"})
 
     assert (result, len(requests)) == (None, 1)
+
+
+_LOOKUP_TOOL: Final[dict[str, object]] = {
+    "type": "function",
+    "function": {"name": "lookup", "description": "Look up a city", "parameters": {"type": "object"}},
+}
+_LOOKUP_ASK: Final[list[dict[str, object]]] = [{"role": "user", "content": "Look up Paris"}]
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "counted_tool_choice"),
+    [
+        ("none", "none"),
+        ("auto", "auto"),
+        ("required", "required"),
+        ("any", "required"),
+        ({"type": "function", "function": {"name": "lookup"}}, {"type": "function", "name": "lookup"}),
+    ],
+    ids=["none", "auto", "required", "mistral_any", "named_function"],
+)
+@pytest.mark.asyncio
+async def test_count_tokens_sends_the_tool_choice_chat_sends_in_the_responses_shape(
+    monkeypatch: pytest.MonkeyPatch, tool_choice: JsonValue, counted_tool_choice: JsonValue
+) -> None:
+    sent: Final = await _sent_count_body(
+        monkeypatch, "mistral-large-4", _LOOKUP_ASK, tools=[_LOOKUP_TOOL], chat_params={"tool_choice": tool_choice}
+    )
+
+    assert sent["tool_choice"] == counted_tool_choice
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_sends_no_tool_choice_without_tools_like_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: Final = await _sent_count_body(monkeypatch, "mistral-large-4", _LOOKUP_ASK, chat_params={"tool_choice": "none"})
+
+    assert "tool_choice" not in sent
+
+
+def _chat_messages(model: str, messages: list[dict[str, object]], params: dict[str, object]) -> list[object]:
+    config: Final = MistralConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params=params, optional_params={}, model=model, drop_params=False
+    )
+    sent_messages: Final = config.transform_request(
+        model=model,
+        messages=json.loads(json.dumps(messages)),
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )["messages"]
+    assert isinstance(sent_messages, list)
+    return sent_messages
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [{"role": "user", "content": "Capital of France?"}],
+        [{"role": "system", "content": "Answer in one word."}, {"role": "user", "content": "Capital of France?"}],
+        [
+            {"role": "system", "content": [{"type": "text", "text": "Answer in one word."}]},
+            {"role": "user", "content": "Capital of France?"},
+        ],
+    ],
+    ids=["no_system_message", "system_text", "system_blocks"],
+)
+@pytest.mark.asyncio
+async def test_count_tokens_counts_the_reasoning_prompt_mistral_chat_sends_to_magistral(
+    monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, object]]
+) -> None:
+    model: Final = "magistral-medium-latest"
+    chat_sent: Final = _chat_messages(model, messages, {"reasoning_effort": "high"})
+    counted: Final = await _sent_count_body(monkeypatch, model, messages, chat_params={"reasoning_effort": "high"})
+
+    counted_input: Final = counted["input"]
+    assert isinstance(counted_input, list)
+    assert counted_input[0] == chat_sent[0]
+    assert len(counted_input) == len(chat_sent)
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_sends_each_system_message_where_chat_sends_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: Final = await _sent_count_body(
+        monkeypatch,
+        "mistral-large-4",
+        [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+            {"role": "assistant", "content": "Hello."},
+            {"role": "system", "content": [{"type": "text", "text": "Now answer "}, {"type": "text", "text": "in French."}]},
+            {"role": "user", "content": "Say goodbye."},
+        ],
+    )
+
+    assert (sent["input"], "instructions" in sent) == (
+        [
+            {"role": "system", "content": "You are a terse assistant."},
+            {"role": "user", "content": "Say hello."},
+            {"role": "assistant", "content": "Hello."},
+            {"role": "system", "content": "Now answer in French."},
+            {"role": "user", "content": "Say goodbye."},
+        ],
+        False,
+    )

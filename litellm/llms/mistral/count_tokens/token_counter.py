@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
-from litellm.llms.anthropic.messages.responses_adapters.handler import count_view_messages
+from litellm.llms.anthropic.messages.responses_adapters.handler import count_messages_as_sent
 from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -40,6 +40,7 @@ mistral_count_tokens_handler: Final = MistralCountTokensHandler()
 _MISTRAL_CHAT_CONFIG: Final = MistralConfig()
 _CHAT_TO_RESPONSES: Final = LiteLLMResponsesTransformationHandler()
 _MODES_MISTRAL_COUNTS: Final = frozenset({"chat", "responses"})
+_REASONING_PROMPT_PARAMS: Final = ("reasoning_effort", "thinking")
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +65,8 @@ def _count_credential(
     api_base, api_key = get_mistral_chat_credentials(
         api_base=raw_api_base if isinstance(raw_api_base, str) else None, api_key=deployment_key
     )
-    if _is_azure_endpoint(api_base) or (deployment_key is None and get_secret_str("MISTRAL_AZURE_API_KEY")):
+    azure_key: Final = get_secret_str("MISTRAL_AZURE_API_KEY")
+    if _is_azure_endpoint(api_base) or (bool(azure_key) and api_key == azure_key):
         verbose_logger.debug(
             "Mistral native count tokens skipped for Azure deployment/credential, falling back to local: base=%s",
             api_base,
@@ -160,43 +162,53 @@ def _input_content_parts(content: object) -> tuple[object, ...]:
             return parts_of(content)
 
 
-def _chat_message_items(
-    message: Mapping[str, object], keeps_reasoning: bool
-) -> tuple[tuple[Mapping[str, object], ...], str | None]:
-    items, instructions = OpenAICountTokensConfig.messages_to_responses_input((message,))
+def _part_text(part: object) -> str:
+    match part:
+        case {"text": str(text)}:
+            return text
+        case _:
+            return ""
+
+
+def _system_text(content: object) -> str:
+    return content if isinstance(content, str) else "".join(map(_part_text, parts_of(content)))
+
+
+def _is_system_turn(message: Mapping[str, object]) -> bool:
+    return message.get("role") in ("system", "developer")
+
+
+def _chat_message_items(message: Mapping[str, object], keeps_reasoning: bool) -> tuple[Mapping[str, object], ...]:
+    if _is_system_turn(message):
+        return ({"role": "system", "content": _system_text(message.get("content"))},)
+    items, _ = OpenAICountTokensConfig.messages_to_responses_input((message,))
     file_parts: Final = _file_id_parts(message)
     sent_items: Final = (
         tuple({**item, "content": [*_input_content_parts(item.get("content")), *file_parts]} for item in items)
         if file_parts
         else tuple(items)
     )
-    return (*_replayed_reasoning_items(message, keeps_reasoning), *sent_items), instructions
+    return (*_replayed_reasoning_items(message, keeps_reasoning), *sent_items)
 
 
-async def _sent_messages(
-    model: str,
-    messages: Sequence[Mapping[str, object]],
-    tools: Sequence[Mapping[str, object]] | None,
-    system: object,
-    messages_format: TokenCountMessagesFormat,
-    context_management: CountContextManagement | None,
-) -> Sequence[Mapping[str, object]] | AnthropicContextManagementError:
-    match messages_format:
-        case "openai":
-            return messages
-        case "anthropic":
-            try:
-                return await count_view_messages(
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    system=system,
-                    context_management=context_management,
-                )
-            except AnthropicContextManagementError as error:
-                return error
+def _counted_tool_choice(tool_choice: object) -> JsonValue:
+    match MistralConfig.map_tool_choice(tool_choice):
+        case "any":
+            return "required"
+        case {"function": {"name": str(name)}}:
+            return {"type": "function", "name": name}
+        case str(choice):
+            return choice
         case _:
-            assert_never(messages_format)
+            return None
+
+
+def _with_chat_reasoning_prompt(
+    model: str, messages: Sequence[Mapping[str, object]], chat_params: Mapping[str, JsonValue]
+) -> Sequence[Mapping[str, object]]:
+    if "magistral" not in model.lower() or all(chat_params.get(name) is None for name in _REASONING_PROMPT_PARAMS):
+        return messages
+    return MistralConfig.with_reasoning_system_prompt(messages)
 
 
 class MistralTokenCounter(BaseTokenCounter):
@@ -205,12 +217,6 @@ class MistralTokenCounter(BaseTokenCounter):
         custom_llm_provider: str | None = None,
     ) -> bool:
         return custom_llm_provider == LlmProviders.MISTRAL.value
-
-    @staticmethod
-    def _system_instructions(system: object) -> str | None:
-        if system is None or isinstance(system, str):
-            return system
-        return LiteLLMAnthropicToResponsesAPIAdapter.system_blocks_to_instructions(system) or None
 
     @staticmethod
     def _responses_request_parts(
@@ -228,19 +234,18 @@ class MistralTokenCounter(BaseTokenCounter):
                 )
             case "openai":
                 keeps_reasoning: Final = _MISTRAL_CHAT_CONFIG.accepts_reasoning(model_to_use)
-                converted: Final = tuple(
-                    _chat_message_items(message, keeps_reasoning)
-                    for message in messages
-                    if not _chat_drops_turn(message)
-                )
-                instruction_parts: Final = tuple(
-                    instructions for _, instructions in converted if instructions is not None
+                input_items: Final = tuple(
+                    chain.from_iterable(
+                        _chat_message_items(message, keeps_reasoning)
+                        for message in messages
+                        if not _chat_drops_turn(message)
+                    )
                 )
                 return OpenAICountTokensConfig.count_request_parts(
-                    tuple(chain.from_iterable(items for items, _ in converted)),
-                    "\n".join(instruction_parts)
-                    if instruction_parts
-                    else MistralTokenCounter._system_instructions(system),
+                    input_items,
+                    None
+                    if any(map(_is_system_turn, messages))
+                    else LiteLLMAnthropicToResponsesAPIAdapter.system_instructions(system),
                     tools,
                 )
             case _:
@@ -283,8 +288,13 @@ class MistralTokenCounter(BaseTokenCounter):
                 rejected_before_provider_call=True,
             )
 
-        sent_messages: Final = await _sent_messages(
-            model_to_use, messages, tools, system, messages_format, context_management
+        sent_messages: Final = await count_messages_as_sent(
+            model=model_to_use,
+            messages=messages,
+            tools=tools,
+            system=system,
+            messages_format=messages_format,
+            context_management=context_management,
         )
         if isinstance(sent_messages, AnthropicContextManagementError):
             return TokenCountResponse(
@@ -306,7 +316,9 @@ class MistralTokenCounter(BaseTokenCounter):
 
         input_items, instructions, counted_tools, text = self._responses_request_parts(
             model_to_use=model_to_use,
-            messages=sent_messages,
+            messages=sent_messages
+            if messages_format == "anthropic"
+            else _with_chat_reasoning_prompt(model_to_use, sent_messages, chat_params),
             tools=tools,
             system=system,
             messages_format=messages_format,
@@ -321,6 +333,7 @@ class MistralTokenCounter(BaseTokenCounter):
             else _CHAT_TO_RESPONSES.transform_response_format_to_text_format(chat_params.get("response_format"))
         )
         timeout: Final = _deployment_timeout(deployment)
+        tool_choice: Final = _counted_tool_choice(chat_params.get("tool_choice")) if counted_tools else None
 
         return await self._counted(
             resolved,
@@ -333,6 +346,7 @@ class MistralTokenCounter(BaseTokenCounter):
                 tools=counted_tools,
                 instructions=instructions,
                 text=counted_text,
+                tool_choice=tool_choice,
             ),
             model_to_use,
             request_model,

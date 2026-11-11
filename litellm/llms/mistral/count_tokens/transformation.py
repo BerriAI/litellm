@@ -1,5 +1,7 @@
 from collections.abc import Mapping, Sequence
 
+from pydantic import JsonValue
+
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.mistral.common_utils import get_mistral_api_base
 from litellm.llms.openai.responses.count_tokens.transformation import OpenAICountTokensConfig
@@ -24,6 +26,7 @@ class MistralCountTokensConfig(OpenAICountTokensConfig):
         tools: Sequence[Mapping[str, object]] | None = None,
         instructions: str | None = None,
         text: Mapping[str, object] | None = None,
+        tool_choice: JsonValue = None,
     ) -> dict[str, object]:  # mutable-ok: matches OpenAICountTokensConfig contract
         return {
             "model": model,
@@ -35,4 +38,5 @@ class MistralCountTokensConfig(OpenAICountTokensConfig):
                 else {"tools": self._transform_tools_for_responses_api([dict(tool) for tool in tools])}
             ),
             **({} if text is None else {"text": dict(text)}),
+            **({} if tool_choice is None else {"tool_choice": tool_choice}),
         }

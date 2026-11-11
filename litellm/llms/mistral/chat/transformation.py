@@ -103,6 +103,13 @@ def _reasoning_level_and_summary(reasoning_effort: object) -> tuple[object, obje
     return requested.get("effort"), requested.get("summary")
 
 
+def _with_reasoning_prefix(reasoning_prompt: str, content: object) -> object:
+    blocks: Final = as_object_list(content)
+    if blocks is None:
+        return f"{reasoning_prompt}\n\n{content}"
+    return [{"type": "text", "text": f"{reasoning_prompt}\n\n"}, *blocks]
+
+
 def _warn_unless_reasoning_prompt_honors(param: str, value: object, model: str) -> None:
     if param == "reasoning_effort" and isinstance(value, str) and value in _DOCUMENTED_MAGISTRAL_EFFORTS:
         return
@@ -211,7 +218,7 @@ class MistralConfig(OpenAIGPTConfig):
         ]
 
     @staticmethod
-    def _map_tool_choice(tool_choice: object) -> str | ChatCompletionToolChoiceObjectParam | None:
+    def map_tool_choice(tool_choice: object) -> str | ChatCompletionToolChoiceObjectParam | None:
         match tool_choice:
             case str(choice) if choice in ("auto", "none"):
                 return choice
@@ -227,7 +234,7 @@ class MistralConfig(OpenAIGPTConfig):
     def _tool_choice_to_send(
         self, model: str, tool_choice: object, drop_params: bool
     ) -> str | ChatCompletionToolChoiceObjectParam | UnsupportedParamsError | None:
-        mapped: Final = self._map_tool_choice(tool_choice)
+        mapped: Final = self.map_tool_choice(tool_choice)
         if mapped is not None:
             return mapped
         if drop_params or litellm.drop_params is True:
@@ -559,46 +566,27 @@ class MistralConfig(OpenAIGPTConfig):
         """
         Add reasoning system prompt for Mistral magistral models when reasoning_effort is specified.
         """
-        if not optional_params.get("_add_reasoning_prompt", False):
+        if not optional_params.pop("_add_reasoning_prompt", False):
             return messages
+        return [
+            cast(AllMessageValues, message)  # cast-ok: the helper only rewrites a system message's content
+            for message in self.with_reasoning_system_prompt(messages)
+        ]
 
-        # Check if there's already a system message
-        has_system_message: Final = any(msg.get("role") == "system" for msg in messages)
-
-        if has_system_message:
-            # Prepend reasoning instructions to existing system message
-            for i, msg in enumerate(messages):
-                if msg.get("role") == "system":
-                    existing_content = msg.get("content", "")
-                    reasoning_prompt = self._get_mistral_reasoning_system_prompt()
-
-                    # Handle both string and list content, preserving original format
-                    if isinstance(existing_content, str):
-                        # String content - prepend reasoning prompt
-                        new_content: str | list = f"{reasoning_prompt}\n\n{existing_content}"
-                    elif isinstance(existing_content, list):
-                        # List content - prepend reasoning prompt as text block
-                        new_content = [{"type": "text", "text": reasoning_prompt + "\n\n"}] + existing_content
-                    else:
-                        # Fallback for any other type - convert to string
-                        new_content = f"{reasoning_prompt}\n\n{existing_content}"
-
-                    messages[i] = cast(AllMessageValues, {**msg, "content": new_content})
-                    break
-        else:
-            # Add new system message with reasoning instructions
-            reasoning_message: Final[AllMessageValues] = cast(
-                AllMessageValues,
-                {
-                    "role": "system",
-                    "content": self._get_mistral_reasoning_system_prompt(),
-                },
-            )
-            messages = [reasoning_message] + messages
-
-        # Remove the internal flag
-        optional_params.pop("_add_reasoning_prompt", None)
-        return messages
+    @classmethod
+    def with_reasoning_system_prompt(cls, messages: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+        reasoning_prompt: Final = cls._get_mistral_reasoning_system_prompt()
+        first_system: Final = next(
+            (index for index, message in enumerate(messages) if message.get("role") == "system"), None
+        )
+        if first_system is None:
+            return ({"role": "system", "content": reasoning_prompt}, *messages)
+        return tuple(
+            {**message, "content": _with_reasoning_prefix(reasoning_prompt, message.get("content", ""))}
+            if index == first_system
+            else message
+            for index, message in enumerate(messages)
+        )
 
     @classmethod
     def _clean_tool_schema_for_mistral(cls, tools: list) -> list:
