@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
 import pytest
 import respx
@@ -296,3 +297,19 @@ async def test_nagaai_anthropic_messages_request_goes_to_nagaai_natively(monkeyp
     assert body["model"] == "anthropic/claude-sonnet-5.5"
     assert body["messages"] == [{"role": "user", "content": "Say hello"}]
     assert response["content"][0]["text"] == "Hello from NagaAI"
+
+
+def test_nagaai_without_a_key_does_not_fall_back_to_the_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("NAGA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-leave")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", "sk-openai-must-not-leave")
+
+    with patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion") as sent:
+        with pytest.raises(litellm.AuthenticationError, match="NAGA_API_KEY"):
+            litellm.completion(
+                model="nagaai/anthropic/claude-sonnet-5.5",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+    sent.assert_not_called()
